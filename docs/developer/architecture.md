@@ -101,6 +101,7 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   Uploads are the only handles whose copy in the store is the authoritative source, so they are never evicted.
   A SciCat file on a mounted facility filesystem has no local copy; the mount is its disk tier.
   A result from last week and a raw file are the same thing to a request.
+  In shared mode the data store is a long-lived data service holding the memory tier under a budget and serving views (D17).
 - **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as handle plus metadata.
@@ -336,6 +337,20 @@ Handles stop being a spec concept and become a storage detail.
 **Cost.** The output side of scipp/ess#690 changes shape while the PR is open.
 Structural validation of an array output against its `ArraySpec` happens in the runner at completion, since pydantic cannot check a scipp object.
 
+### D17 Views are not runs
+
+**Decision.** A view is a request for a small piece of a handle's data for display: label-based slicing, reduction over dimensions (sum, mean), and downsampling to a display resolution.
+Views are served by the data service (or directly from memory in a notebook), are not recorded, and are never inputs to a run.
+When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow (D10).
+Anything beyond slicing, reduction, and downsampling is a workflow.
+Data larger than the memory budget is sliced by partial reads from disk, so dense arrays are stored chunked in a layout that supports that.
+Event data cannot be sliced from disk and is loaded whole or histogrammed by a workflow first.
+
+**Why.** Exploring a 4D volume by dragging through 2D slices must not create records, and the frontend must never receive the volume.
+The slice-becomes-parameter rule keeps provenance exact without making views part of it.
+
+**Cost.** A view vocabulary in the client interface, and a chunking decision at write time for dense data.
+
 ## Failure handling
 
 Kept out of the decisions above so it can be read as one piece.
@@ -364,7 +379,8 @@ Kept out of the decisions above so it can be read as one piece.
 
 ## Explicitly deferred
 
-HTTP transport, real SciCat integration, cluster launcher, slicing service for remote UIs, memory budget and spill policy, warm instances, UI framework, metrics, agent-facing API.
+HTTP transport, real SciCat integration, cluster launcher, the data service's view implementation, spill policy, warm instances, UI framework, metrics, agent-facing API.
+The memory budget itself is not deferred: the data service needs one from the start.
 
 ## Technology proposals
 
