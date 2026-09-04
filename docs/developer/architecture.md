@@ -11,7 +11,7 @@ Technology choices at the end are proposals.
 A user, a script, or an automatic trigger submits a *run request*: which workflow to run, with which parameters, on which input data.
 The *backend* checks the request, writes it down as a *run record*, and asks a *launcher* to start a *runner* somewhere: in the same process, in a subprocess, or on the cluster.
 The runner fetches the inputs, calls the scientific workflow code, and stores the results.
-Results are named by *handles*, and a handle can be the input of the next request.
+Any result of a run, whether a single number or a large array, can be an input of the next request; large results are stored separately and named by *handles*.
 Everything the backend knows is in the records, so any result can be traced back to raw data and parameters, and any result can be recomputed if it was thrown away.
 Batch reduction is many requests made from one *template*.
 Automatic reduction is a loop that makes requests from a template whenever new data appears.
@@ -27,12 +27,13 @@ The esslivedata project has its own glossary that uses some of these words diffe
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs.
   Independent of how the workflow is implemented or where it runs.
   Defined in scipp/ess#690.
-- **Handle**: a ticket naming one piece of data, without saying where the data currently is.
-- **Data reference**: a parameter type whose value is a handle.
+- **Handle**: a ticket naming one stored piece of data that is too large to keep inside a record, without saying where the data currently is.
+- **Data reference**: a parameter or output type whose value is a handle.
   A parameter of this type is what we call an **input**; there is no separate input declaration (D15).
   In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
+- **Output reference**: "output X of run Y", usable as the value of any parameter with a matching type (D16).
 - **Run request**: everything needed to execute a workflow once.
-- **Run record**: a run request plus what happened to it: status, times, who submitted it, output handles, software versions.
+- **Run record**: a run request plus what happened to it: status, times, who submitted it, output values or handles, software versions.
   Called "run", never "job", to avoid a clash with esslivedata, where a job is a running streaming workflow.
 - **Template**: a saved, versioned run request with some fields left blank.
 - **Batch**: many runs made from one template, each with small differences.
@@ -60,18 +61,20 @@ The esslivedata project has its own glossary that uses some of these words diffe
 Six kinds of data.
 All are plain, JSON-serializable values, even when passed around inside one process.
 
-- **Spec**: identity (`name`, `version`), parameter model, declared outputs.
-  Inputs are parameters of data-reference type (D15).
+- **Spec**: identity (`name`, `version`), parameter model, output model.
+  Both models use the same type vocabulary.
+  Inputs are parameters of data-reference type (D15); outputs are a typed model like parameters (D16).
 - **Handle**: `(store, id)` plus a lifecycle state: pending, available, evicted, failed.
   The state is independent of the run that produces it.
   A handle names a computation result, not particular bytes; see D5 for what pins the bytes.
+  Small output values are stored inside the record and have no handle.
 - **Run request**: spec identity, parameter values, instrument, proposal, submitter.
   Stateless and complete: sufficient to reproduce the outputs from scratch.
   Handles appear inside the parameter values, in the data-reference fields.
-  Such a field may hold a pending output of another request.
-- **Run record**: the request plus run ID, status, timestamps, output handles, the resolved parameter values including defaults, software versions of the runner environment, and optionally batch ID, template version, and the record this one retries.
+  Any field may instead hold an output reference to another request, including a pending one; the backend substitutes the value or handle when it becomes available.
+- **Run record**: the request plus run ID, status, timestamps, output values (inline when small, handles when large), the resolved parameter values including defaults, software versions of the runner environment, and optionally batch ID, template version, and the record this one retries.
   Immutable once the run completes, except status.
-  Provenance is the graph you get by following handles to the records that produced them.
+  The request keeps output references in their reference form, so provenance is the graph you get by following references and handles to the records that produced them.
 - **Template**: a stored, immutable, versioned partial run request.
   May originate from a version-controlled file (instrument defaults) or from a user saving a request.
 - **Batch**: a set of independent runs from one template with per-member overrides, tagged with a batch ID.
@@ -183,7 +186,7 @@ Facilities that went this way for the remote case eventually added a message bro
 
 **Decision.** Binding from spec identity to implementation via Python entry points.
 Parameters arrive as the validated pydantic model, with every data-reference field materialized to a local file path.
-Outputs are returned as objects; the runner serializes scipp objects to scipp HDF5, and other types (CIF, ORSO, plain JSON) must come with their own serializer, declared with the output.
+Outputs are returned as objects matching the output model; the runner validates them against it, stores vocabulary-typed small values inline, serializes scipp objects to scipp HDF5, and requires other types (CIF, ORSO) to come with their own serializer, declared with the output.
 The framework never imports sciline.
 
 **Why.** Loading NeXus is workflow-specific (which detector banks, which monitors), so the framework cannot do it.
@@ -302,6 +305,22 @@ Sharing `ArraySpec` between outputs and reference constraints makes "outputs can
 **Cost.** The backend must walk a JSON Schema, including nested models, to find reference fields.
 This is a small extension to the vocabulary in scipp/ess#690.
 
+### D16 Outputs are a typed model in the same vocabulary as parameters
+
+**Decision.** A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form.
+An array output is a data-reference field constrained by `ArraySpec`.
+A beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of kind "opaque file".
+Title and description are field metadata.
+Whether an output value is stored inline in the record or in the output store under a handle is a framework decision based on size and type, invisible in the spec.
+A downstream parameter may take an output reference to any output field whose type matches.
+
+**Why.** The spec in scipp/ess#690 allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow.
+With one vocabulary on both sides, chaining is a type check between two fields.
+Handles stop being a spec concept and become a storage detail.
+
+**Cost.** The output side of scipp/ess#690 changes shape while the PR is open.
+Structural validation of an array output against its `ArraySpec` happens in the runner at completion, since pydantic cannot check a scipp object.
+
 ## Failure handling
 
 Kept out of the decisions above so it can be read as one piece.
@@ -374,4 +393,4 @@ The full walking skeleton, all components in-process with no HTTP and no UI, fol
 
 This document was reviewed by six independent AI reviewers before being shown to the team, from these angles: architectural consistency, fit with real ess workflows, operations and failure modes, prior art at other facilities, plain-language readability, and lessons from esslivedata.
 Their findings shaped the failure-handling section, the record fields for resolved values and package versions, handle lifecycle states, the memory-versus-fan-out rule in D3, the serializer rule in D6, instrument-shared artefacts in D9, slots in D10, and the open questions.
-The unification of inputs and parameters in D15 followed from the reviewers' observation that the spec had no input declarations.
+The unification of inputs and parameters in D15, and of outputs with the same vocabulary in D16, followed from the reviewers' observation that the spec had no input declarations and no types for non-array outputs.
