@@ -146,26 +146,30 @@ Both stages typically share parameters, see the template open question.
 
 **Decision.** A handle never contains a path.
 The data store has a memory tier and a disk tier, and a copy in either tier may be evicted for any handle that has an authoritative source elsewhere.
-Data in memory lives in exactly one runner process; there is no shared memory across processes or machines.
-Where an intermediate goes depends on who consumes it:
+Data in memory lives in exactly one process; there is no shared memory across processes or machines.
+Every run's outputs have at least one consumer: the client that submitted the run, which will plot them, chain them, or both.
+Where an output goes depends on where its consumers are:
 
-- **Consumer in the same process.** The intermediate stays in memory.
-  The launcher arranges this by running a chain of dependent requests, submitted as one group, in one runner.
-- **Consumer in another process.** The producer writes the intermediate to disk before reporting completion, because disk is the only way to reach that process.
-  Fan-out (map) members run in separate processes in shared mode, so their outputs always take this path.
-- **No consumer yet.** The intermediate is not kept for a request that may come later.
-  When such a request arrives, the intermediate is recomputed from its record.
+- **Consumer in the same process.** The output stays in memory and is never written.
+  This is the notebook case: the runner is the user's process, and plotting dereferences the handle directly.
+  It is also the case of a chain of dependent requests that the launcher places in one runner.
+- **Consumer in another process.** The runner writes the output to disk before reporting completion, because disk is the only way to reach that process.
+  This covers shared mode, the subprocess launcher, and fan-out (map) members.
+  For plotting in shared mode, a long-lived data service loads the output into its memory tier on first access and serves slices from there under a memory budget: written once, loaded once, and every further plot interaction is served from memory.
+- **No consumer left.** Once retention expires, the output is dropped.
+  A later request or plot recomputes it from its record.
 
-The shared backend keeps no large long-lived data: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
+The shared backend holds large data only in that bounded, evictable cache: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
 
-**Why.** Intermediates can be huge, and writing one to disk is wasted work when the only consumer is in the same process.
+**Why.** Intermediates can be huge, and writing one to disk is wasted work when its only consumer is in the same process.
+Keeping the runner alive for plotting would be the shared warm instance rejected in D1.
 Sharing memory across machines would mean a distributed memory layer, and scipp objects are not chunk-aware, so such a layer would work badly and cost a lot.
 Recompute is often cheaper than storage.
 The cache view is also what resolved esslivedata's memory problems (scipp/esslivedata#1274).
 
 **Cost.** Placement is a launcher decision and must be explicit in its interface.
-Whether a consumer exists is only known for requests submitted together as a group (D13); everything else is the no-consumer case.
-In in-process mode the "backend" is the runner too, so the no-large-data rule applies to shared mode only.
+Whether a chained consumer exists is only known for requests submitted together as a group (D13).
+Shared mode pays one disk write and one read per plotted output; interactive work on very large outputs therefore prefers in-process mode.
 
 ### D4 Only finalized data enters SciCat
 
@@ -243,7 +247,7 @@ Without instrument-shared artefacts, every external user would need membership i
 Each selection change submits a new stateless run of the cheap stage.
 A request may carry a *slot* key chosen by the client; a new request in the same slot cancels queued requests in that slot.
 Runs in a slot are short-retention.
-Interactive stages default to a local launcher.
+Interactive stages default to the in-process launcher where one is available.
 
 **Why.** No special interactive concept in the framework.
 The slot key is the stable identity a plot needs across superseded runs; esslivedata needed the same split between a stable data key and a per-result key (scipp/esslivedata#1062).
