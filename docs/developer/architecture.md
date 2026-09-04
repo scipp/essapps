@@ -96,9 +96,10 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   Sends periodic liveness signals while running.
   Never touches the record store.
 - **Data store**: one lookup and listing for every handle, regardless of origin.
-  Each handle records its origin: the record that produced it, a SciCat PID, or an upload.
-  Derived data is tiered, memory and disk, and behaves like a cache: an evicted handle can be recomputed from its record.
-  SciCat files and uploads are authoritative and never evicted.
+  Each handle records its authoritative source: the record that produced it, a SciCat PID, or an upload.
+  Copies in memory or in a local download cache are evictable for every handle; what differs is the miss path: recompute from the record, re-download from SciCat, or nothing.
+  Uploads are the only handles whose copy in the store is the authoritative source, so they are never evicted.
+  A SciCat file on a mounted facility filesystem has no local copy; the mount is its disk tier.
   A result from last week and a raw file are the same thing to a request.
 - **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
   Carries a schema version.
@@ -144,12 +145,12 @@ Both stages typically share parameters, see the template open question.
 ### D3 Handles are opaque and data is tiered; memory never crosses a process
 
 **Decision.** A handle never contains a path.
-The data store has a memory tier and a disk tier.
+The data store has a memory tier and a disk tier, and a copy in either tier may be evicted for any handle that has an authoritative source elsewhere.
 Data in memory lives in exactly one runner process.
 Data that another process will consume is written to disk before the producing run is reported complete.
 A launcher may run a chain of dependent requests in one process so the intermediate stays in memory.
 Fan-out (map) runs execute in separate processes in shared mode, so their outputs are on disk by construction.
-The shared backend keeps no large long-lived data: retention is a policy, and recomputing from the record is what happens on a miss.
+The shared backend keeps no large long-lived data: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
 
 **Why.** Intermediates can be huge; forcing every one to disk is wasteful, and recompute is often cheaper than storage.
 Sharing memory across machines would mean a distributed memory layer, and scipp objects are not chunk-aware, so such a layer would work badly and cost a lot.
@@ -213,10 +214,10 @@ Single writer avoids the multi-client ownership problems that produced most of e
 **Decision.** Users submit references: local path, SciCat PID, or run number (per instrument).
 The backend resolves them to handles before persisting anything.
 The runner turns handles into local files at execution time.
-Local files that must reach a remote runner are uploaded into the data store first, where their origin is recorded as an upload, which exempts them from eviction.
+Local files that must reach a remote runner are uploaded into the data store first, where they are recorded as uploads and therefore never evicted.
 
 **Why.** Provenance must not depend on a search that could give a different answer later.
-Uploaded files have no producing record, so evicting them would destroy data.
+Uploaded files have no producing record and no catalogue entry, so evicting them would destroy data.
 
 ### D9 Instrument plus proposal scopes everything
 
