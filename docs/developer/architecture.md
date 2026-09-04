@@ -43,7 +43,7 @@ The esslivedata project has its own glossary that uses some of these words diffe
   In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Launcher**: decides where a run executes and starts it there.
 - **Runner**: the process that executes one run.
-- **Output store**: where results live, in memory or on disk, looked up by handle.
+- **Data store**: where all data lives, whether raw files known to SciCat, uploaded files, or results, in memory or on disk, looked up and listed by handle.
 - **Record store**: the database of run records.
 - **Dataset source**: where new datasets are discovered.
 - **Trigger loop**: watches the dataset source and submits runs automatically.
@@ -81,7 +81,7 @@ All are plain, JSON-serializable values, even when passed around inside one proc
 
 ## Components
 
-- **Backend**: validates a request against the spec's JSON Schema, finds the data-reference fields by walking that schema, resolves their values to handles, creates the record, allocates output handles in state pending, and hands the request to a launcher.
+- **Backend**: validates a request against the spec's JSON Schema, finds the data-reference fields by walking that schema, resolves their values to handles, creates the record, allocates handles for the outputs in state pending, and hands the request to a launcher.
   Single writer to the record store.
   Exactly one backend process per record store.
 - **Client interface**: the backend's Python interface.
@@ -95,15 +95,17 @@ All are plain, JSON-serializable values, even when passed around inside one proc
 - **Runner**: fetches inputs to local files, validates parameters with the real parameter class, calls the workflow, stores outputs, reports to the backend.
   Sends periodic liveness signals while running.
   Never touches the record store.
-- **Output store**: tiered, memory and disk, looked up by handle.
-  Behaves like a cache for derived data: an evicted handle can be recomputed from its record.
-  Files a user uploaded are not derived and are never evicted.
-- **Record store**: create, read, update status, and two queries: by input handle and by output handle.
+- **Data store**: one lookup and listing for every handle, regardless of origin.
+  Each handle records its origin: the record that produced it, a SciCat PID, or an upload.
+  Derived data is tiered, memory and disk, and behaves like a cache: an evicted handle can be recomputed from its record.
+  SciCat files and uploads are authoritative and never evicted.
+  A result from last week and a raw file are the same thing to a request.
+- **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as handle plus metadata.
   One real implementation (SciCat) and one fake for tests.
 - **Trigger loop**: on a new dataset or group of datasets matching a rule, instantiate a template and submit.
-- **Publisher**: writes an output handle to SciCat together with its provenance.
+- **Publisher**: writes the data behind a handle to SciCat together with its provenance.
   Idempotent: the resulting PID is recorded, and publishing the same handle again returns it.
 
 ## Decisions
@@ -142,7 +144,7 @@ Both stages typically share parameters, see the template open question.
 ### D3 Handles are opaque and data is tiered; memory never crosses a process
 
 **Decision.** A handle never contains a path.
-The output store has a memory tier and a disk tier.
+The data store has a memory tier and a disk tier.
 Data in memory lives in exactly one runner process.
 Data that another process will consume is written to disk before the producing run is reported complete.
 A launcher may run a chain of dependent requests in one process so the intermediate stays in memory.
@@ -211,7 +213,7 @@ Single writer avoids the multi-client ownership problems that produced most of e
 **Decision.** Users submit references: local path, SciCat PID, or run number (per instrument).
 The backend resolves them to handles before persisting anything.
 The runner turns handles into local files at execution time.
-Local files that must reach a remote runner are uploaded into the output store first and marked as user-provided, which exempts them from eviction.
+Local files that must reach a remote runner are uploaded into the data store first, where their origin is recorded as an upload, which exempts them from eviction.
 
 **Why.** Provenance must not depend on a search that could give a different answer later.
 Uploaded files have no producing record, so evicting them would destroy data.
@@ -311,7 +313,7 @@ This is a small extension to the vocabulary in scipp/ess#690.
 An array output is a data-reference field constrained by `ArraySpec`.
 A beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of kind "opaque file".
 Title and description are field metadata.
-Whether an output value is stored inline in the record or in the output store under a handle is a framework decision based on size and type, invisible in the spec.
+Whether an output value is stored inline in the record or in the data store under a handle is a framework decision based on size and type, invisible in the spec.
 A downstream parameter may take an output reference to any output field whose type matches.
 
 **Why.** The spec in scipp/ess#690 allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow.
@@ -379,7 +381,7 @@ Decisions the team needs to make; my recommendation in brackets.
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
 - **Memory budget semantics.** Who decides to spill, and how a runner reports memory use, including variances.
-- **Retention policy** for the output store in shared mode.
+- **Retention policy** for derived data in shared mode.
 - **SciCat push mechanism** for new datasets, if the deployment offers one.
 
 ## Next step
