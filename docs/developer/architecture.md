@@ -24,10 +24,13 @@ The esslivedata project has its own glossary that uses some of these words diffe
 
 - **Workflow**: the scientific code that turns input files into results.
   Typically a sciline pipeline, but the framework does not care.
-- **Spec**: the declared interface of a workflow: name, version, parameters, inputs, outputs.
+- **Spec**: the declared interface of a workflow: name, version, parameters, outputs.
   Independent of how the workflow is implemented or where it runs.
   Defined in scipp/ess#690.
 - **Handle**: a ticket naming one piece of data, without saying where the data currently is.
+- **Data reference**: a parameter type whose value is a handle.
+  A parameter of this type is what we call an **input**; there is no separate input declaration (D15).
+  In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
 - **Run request**: everything needed to execute a workflow once.
 - **Run record**: a run request plus what happened to it: status, times, who submitted it, output handles, software versions.
   Called "run", never "job", to avoid a clash with esslivedata, where a job is a running streaming workflow.
@@ -58,14 +61,14 @@ Six kinds of data.
 All are plain, JSON-serializable values, even when passed around inside one process.
 
 - **Spec**: identity (`name`, `version`), parameter model, declared outputs.
-  Declared inputs are not in scipp/ess#690 yet; see open questions.
+  Inputs are parameters of data-reference type (D15).
 - **Handle**: `(store, id)` plus a lifecycle state: pending, available, evicted, failed.
   The state is independent of the run that produces it.
   A handle names a computation result, not particular bytes; see D5 for what pins the bytes.
-- **Run request**: spec identity, parameter values, input handles, instrument, proposal, submitter.
+- **Run request**: spec identity, parameter values, instrument, proposal, submitter.
   Stateless and complete: sufficient to reproduce the outputs from scratch.
-  An input may be a pending output of another request.
-  A parameter value may be a handle, since some workflows produce values that are parameters of the next workflow (beam centre, direct beam, reference measurement).
+  Handles appear inside the parameter values, in the data-reference fields.
+  Such a field may hold a pending output of another request.
 - **Run record**: the request plus run ID, status, timestamps, output handles, the resolved parameter values including defaults, software versions of the runner environment, and optionally batch ID, template version, and the record this one retries.
   Immutable once the run completes, except status.
   Provenance is the graph you get by following handles to the records that produced them.
@@ -75,7 +78,7 @@ All are plain, JSON-serializable values, even when passed around inside one proc
 
 ## Components
 
-- **Backend**: validates a request against the spec's JSON Schema, resolves references to handles, creates the record, allocates output handles in state pending, and hands the request to a launcher.
+- **Backend**: validates a request against the spec's JSON Schema, finds the data-reference fields by walking that schema, resolves their values to handles, creates the record, allocates output handles in state pending, and hands the request to a launcher.
   Single writer to the record store.
   Exactly one backend process per record store.
 - **Client interface**: the backend's Python interface.
@@ -176,11 +179,10 @@ That is a small scheduler.
 Facilities that went this way for the remote case eventually added a message broker (ISIS, SNS, Diamond, ESRF).
 "No broker" is therefore an in-process-mode decision to be re-examined when the cluster launcher is built.
 
-### D6 Framework-to-workflow contract: files in, objects out
+### D6 Framework-to-workflow contract: references become files, results come back as objects
 
 **Decision.** Binding from spec identity to implementation via Python entry points.
-Inputs arrive as local file paths.
-Parameters arrive as the validated pydantic model.
+Parameters arrive as the validated pydantic model, with every data-reference field materialized to a local file path.
 Outputs are returned as objects; the runner serializes scipp objects to scipp HDF5, and other types (CIF, ORSO, plain JSON) must come with their own serializer, declared with the output.
 The framework never imports sciline.
 
@@ -285,6 +287,21 @@ UI state such as layouts and plot configuration lives in the record store, not i
 Qt would be a third UI with its own testing story.
 esslivedata's per-dashboard YAML config store was an anti-pattern (scipp/esslivedata#1076, #1070).
 
+### D15 Inputs are parameters of data-reference type
+
+**Decision.** The spec has one parameter model and no separate input section.
+The parameter vocabulary gains a data-reference type: a handle, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same `ArraySpec` that outputs declare.
+Lists of references are allowed.
+A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run.
+
+**Why.** Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, materialization to a file, provenance edges, validation timing, and which widget a UI shows.
+None of it needs a second declaration system.
+esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.
+Sharing `ArraySpec` between outputs and reference constraints makes "outputs can fulfil inputs" a check between two values of the same type.
+
+**Cost.** The backend must walk a JSON Schema, including nested models, to find reference fields.
+This is a small extension to the vocabulary in scipp/ess#690.
+
 ## Failure handling
 
 Kept out of the decisions above so it can be read as one piece.
@@ -328,10 +345,6 @@ HTTP transport, real SciCat integration, cluster launcher, slicing service for r
 
 Decisions the team needs to make; my recommendation in brackets.
 
-- **Spec input declarations.** The spec in scipp/ess#690 has a parameter model and outputs but no declared inputs.
-  Chaining and handle-valued parameters need inputs to be named roles with types.
-  esslivedata's auxiliary-source model is the shape to port.
-  [Extend the spec; this is a follow-up to scipp/ess#690.]
 - **Groups as the automatic-reduction unit.** A reflectivity curve needs four angle runs plus a reference.
   "On new dataset, instantiate template" cannot say "wait until the series is complete".
   [Trigger rules match groups, and inputs and overrides are list-valued.]
@@ -361,3 +374,4 @@ The full walking skeleton, all components in-process with no HTTP and no UI, fol
 
 This document was reviewed by six independent AI reviewers before being shown to the team, from these angles: architectural consistency, fit with real ess workflows, operations and failure modes, prior art at other facilities, plain-language readability, and lessons from esslivedata.
 Their findings shaped the failure-handling section, the record fields for resolved values and package versions, handle lifecycle states, the memory-versus-fan-out rule in D3, the serializer rule in D6, instrument-shared artefacts in D9, slots in D10, and the open questions.
+The unification of inputs and parameters in D15 followed from the reviewers' observation that the spec had no input declarations.
