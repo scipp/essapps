@@ -146,18 +146,26 @@ Both stages typically share parameters, see the template open question.
 
 **Decision.** A handle never contains a path.
 The data store has a memory tier and a disk tier, and a copy in either tier may be evicted for any handle that has an authoritative source elsewhere.
-Data in memory lives in exactly one runner process.
-Data that another process will consume is written to disk before the producing run is reported complete.
-A launcher may run a chain of dependent requests in one process so the intermediate stays in memory.
-Fan-out (map) runs execute in separate processes in shared mode, so their outputs are on disk by construction.
+Data in memory lives in exactly one runner process; there is no shared memory across processes or machines.
+Where an intermediate goes depends on who consumes it:
+
+- **Consumer in the same process.** The intermediate stays in memory.
+  The launcher arranges this by running a chain of dependent requests, submitted as one group, in one runner.
+- **Consumer in another process.** The producer writes the intermediate to disk before reporting completion, because disk is the only way to reach that process.
+  Fan-out (map) members run in separate processes in shared mode, so their outputs always take this path.
+- **No consumer yet.** The intermediate is not kept for a request that may come later.
+  When such a request arrives, the intermediate is recomputed from its record.
+
 The shared backend keeps no large long-lived data: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
 
-**Why.** Intermediates can be huge; forcing every one to disk is wasteful, and recompute is often cheaper than storage.
+**Why.** Intermediates can be huge, and writing one to disk is wasted work when the only consumer is in the same process.
 Sharing memory across machines would mean a distributed memory layer, and scipp objects are not chunk-aware, so such a layer would work badly and cost a lot.
+Recompute is often cheaper than storage.
 The cache view is also what resolved esslivedata's memory problems (scipp/esslivedata#1274).
 
 **Cost.** Placement is a launcher decision and must be explicit in its interface.
-In-process mode, the "backend" is the runner too, so the no-large-data rule applies to shared mode only.
+Whether a consumer exists is only known for requests submitted together as a group (D13); everything else is the no-consumer case.
+In in-process mode the "backend" is the runner too, so the no-large-data rule applies to shared mode only.
 
 ### D4 Only finalized data enters SciCat
 
