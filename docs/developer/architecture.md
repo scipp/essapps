@@ -23,14 +23,11 @@ Publishing a result to the data catalogue is a separate, deliberate step.
 Plain-language definitions.
 The esslivedata project has its own glossary that uses some of these words differently, see the notes.
 
-Five of these terms are easy to confuse, so the distinctions first.
+Three of these terms are easy to confuse, so the distinctions first.
 A *handle* is a value: the identity of one stored piece of data.
 A *data reference* is a field type: a parameter or output declared to hold a handle.
 An *output reference* is a second kind of value that any parameter field may hold instead of a literal: "output X of run Y", for data a run has produced or will produce.
 It exists because small outputs are stored inline and have no handle, and because requests submitted together refer to each other before run IDs exist.
-The *data store* is the backend's one durable home for data: it knows every handle's origin, owns the bytes of uploads and of results written to disk, and knows which copies exist.
-A *data cache* holds copies in memory and serves views; there are several, one per session plus a shared one, and the data store says which one to ask.
-Clients never talk to a cache; they ask the backend, which asks the cache.
 
 - **Workflow**: the scientific code that turns input files into results.
   Typically a sciline pipeline, but the framework does not care.
@@ -53,9 +50,9 @@ Clients never talk to a cache; they ask the backend, which asks the cache.
   In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Launcher**: decides where a run executes and starts it there.
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
-- **Data store**: the backend's durable home for data, whether a raw file known to SciCat, an upload, or a result: every handle's origin, the bytes on disk, and which copies exist where.
-- **Data cache**: a process holding copies of data in memory under a budget and serving views.
-  Every session has one; shared mode adds a long-lived shared cache.
+- **Data store**: where data lives, whether a raw file known to SciCat, an upload, or a result.
+  One registry and disk tier, owned by the backend, plus a memory tier in every process that holds data: each session, and the shared service in shared mode.
+  A copy in a memory tier is visible only to its process.
 - **Session**: a long-lived process belonging to one client, in which runs may be placed and which keeps their outputs, and the workflow itself, in memory.
   A cache over records: session identity never enters a record, and everything a session holds can be recomputed.
 - **Record store**: the database of run records.
@@ -65,7 +62,7 @@ Clients never talk to a cache; they ask the backend, which asks the cache.
 - **SciCat**: the facility's data catalogue. **PID**: SciCat's persistent identifier for a dataset.
 - **Pending output**: an output of a run that has not finished yet, usable as input to another request.
 - **Map and combine**: split work across many runs, then merge their outputs in one run.
-- **Local mode**: client, backend, launcher, session, and data cache all inside one Python process: a notebook, or a local application.
+- **Local mode**: client, backend, launcher, session, and data store all inside one Python process: a notebook, or a local application.
   Contrast **shared mode**: the backend runs as a service used by many people.
 - **Warm workflow**: the workflow object kept alive in a session between runs, so a rerun recomputes only what a changed parameter affects.
 - Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).
@@ -104,8 +101,7 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   Every UI, notebook, or service reaches the backend only through it.
   HTTP is a later transport for the same interface, not a second API.
   Clients observe change by pulling with a version counter, never by callbacks carrying data.
-  Views (D17) are part of it: a client never addresses a data cache.
-  The backend forwards a view request to the cache holding a copy and returns the result, which is small by construction, so there is one endpoint in every mode.
+  Views (D17) are part of it, so there is one endpoint in every mode; a view result is small by construction.
 - **Launcher**: pluggable: session, subprocess, cluster.
   Placement is relative to the session holding a run's inputs (D3).
   Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
@@ -114,20 +110,19 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   In a session it keeps the workflow callable between runs (D6).
   Sends periodic liveness signals while running.
   Never touches the record store.
-- **Session**: owns a runner and a data cache.
+- **Session**: owns a runner and a memory tier of the data store.
   Created and closed by a client; closing drops its copies.
   In local mode it is the client's own process.
   Initially sessions exist only in local mode (D1).
 - **Data store**: one lookup and listing for every handle, regardless of origin.
   Each handle's origin is the record that produced it, a SciCat PID, or an upload.
-  Records which data caches hold a copy of a handle and routes view requests there.
-  Copies in memory or in a local download cache are evictable for every handle; what differs is the miss path: recompute from the record, re-download from SciCat, or nothing.
+  The registry knows which memory tiers and which disk hold a copy.
+  A runner asks the store for an input and hands it an output; the store serves from the memory tier of that process when it can, and otherwise reads or writes disk, so the runner never knows about tiers.
+  Views (D17) are served from the memory tier holding a copy, or by partial reads from disk.
+  Every memory tier has a budget, and copies in memory or in a local download cache are evictable for every handle; what differs is the miss path: recompute from the record, re-download from SciCat, or nothing.
   Uploads are the only handles whose origin is the data store itself, so they are never evicted.
   A SciCat file on a mounted facility filesystem has no local copy; the mount is its disk tier.
   A result from last week and a raw file are the same thing to a request.
-- **Data cache**: holds copies in memory under a budget and serves views (D17).
-  Several of them: one in each session's process, and in shared mode a long-lived shared cache that loads outputs from disk on first access.
-  A session's cache also feeds inputs to the runner in that session, and writes a copy to the data store when the backend asks for it.
 - **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as handle plus metadata.
@@ -156,7 +151,7 @@ Interactive work needs the opposite of stateless execution: sub-second reruns wi
 esslivedata's experience with ephemeral identities that everything else had to compensate for (scipp/esslivedata#1042, ADR 0008) is why the session must stay invisible to the records, not a reason to avoid state.
 
 **Cost.** Two lifetimes for the workflow object in the runner: once per run, or once per session.
-Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and view routing to session processes.
+Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and a store protocol to memory tiers in other processes.
 That is why they are deferred, and why the shared web UI initially has no interactive loop.
 
 ### D2 Incremental recompute by splitting workflows, not by framework magic
@@ -179,34 +174,34 @@ For an unsplit workflow in a session, the spec does not say which parameters are
 
 **Decision.** A handle never contains a path.
 Data in memory lives in exactly one process; there is no shared memory across processes or machines.
-A data cache holds copies of handles in memory under a budget and serves views (D17); every session has one, and shared mode adds a long-lived shared cache.
-The data store records which caches hold a copy of a handle and routes view requests there.
-A copy in memory or on local disk may be evicted for any handle whose origin is elsewhere.
+The data store has one registry and disk tier, and a memory tier in every process that holds data: each session, and the shared service in shared mode.
+A copy in a memory tier is visible only to its process; a copy in memory or on local disk may be evicted for any handle whose origin is elsewhere.
 Every run's outputs have at least one consumer: the client that submitted the run, which will plot them, chain them, or both.
-Where a run executes, and where its outputs go, depends on the session holding its inputs:
+Where a run executes decides whether its data touches disk:
 
-- **In the session.** The run executes in the session process, reads its inputs from the session's cache, and leaves its outputs there; nothing is written.
+- **In the session holding its inputs.** Inputs come from that memory tier and outputs stay there; nothing is written.
   This is local mode, and also a chain of dependent requests that the launcher places in one runner.
-  When something outside the session later needs such an output, publication (D4) or a request placed elsewhere, the backend asks the cache to write the copy to the data store; if the session is gone, the output is recomputed from its record.
-- **Outside any session.** The runner writes outputs to disk before reporting completion, because disk is the only way to reach another process.
+  When something outside the session later needs such an output, publication (D4) or a request placed elsewhere, the store writes the copy out from the session; if the session is gone, the output is recomputed from its record.
+- **In a throwaway process.** The store there has no lasting memory tier, so outputs go to disk before the run reports completion.
   This covers shared mode, the subprocess launcher, and fan-out (map) members.
-  The shared data cache loads an output into memory on first access: written once, loaded once, every further view served from memory.
+  The shared service loads an output into its memory tier on first access: written once, loaded once, every further view served from memory.
 - **No consumer left.** Once retention expires, the output is dropped.
   A later request or view recomputes it from its record.
 
-The shared backend holds large data only in that bounded, evictable cache: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
-Local mode is the degenerate deployment where client, session, and data cache are one process; the client interface is the same as in shared mode.
+The shared service holds large data only in its bounded, evictable memory tier: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
+Local mode is the degenerate deployment where client, session, and the whole data store are one process; the client interface is the same as in shared mode.
 
 **Why.** Intermediates can be huge, and writing one to disk is wasted work when its only consumer is in the same process.
 Sharing memory across machines would mean a distributed memory layer, and scipp objects are not chunk-aware, so such a layer would work badly and cost a lot.
 Recompute is often cheaper than storage.
-The cache view is also what resolved esslivedata's memory problems (scipp/esslivedata#1274).
-Making the session's memory a data cache like any other, rather than a special case, is what lets a remote session be added later as one more launcher and one more cache, with views routed to it like to any other.
+Treating memory as an evictable cache is also what resolved esslivedata's memory problems (scipp/esslivedata#1274).
+Making a session's memory an ordinary tier of the store, rather than a special case, is what lets a remote session be added later as one more launcher and one more tier.
+Letting the store decide between memory and disk from the process it runs in means the launcher decides only where a run executes; whether anything is written falls out.
 
 **Cost.** Placement is a launcher decision and must be explicit in its interface.
 Whether a chained consumer exists is only known for requests submitted together as a group (D13).
 Shared mode pays one disk write and one read per output and a process start per run; interactive loops there wait for remote sessions (D1).
-The copy registry in the data store is one more thing to keep consistent, trivially so while there is one cache.
+In shared mode the data store spans processes: the registry in the backend must know which memory tiers hold a copy, trivially so while every tier is in the backend's own process.
 
 ### D4 Only finalized data enters SciCat
 
@@ -240,8 +235,8 @@ Facilities that went this way for the remote case eventually added a message bro
 The entry point returns a callable that takes the validated parameter model and returns the output model.
 A stateless runner constructs it and calls it once.
 A session runner constructs it once per spec version and calls it for every run, so the callable may keep state between calls; that is the warm workflow.
-Data-reference fields are materialized by kind: raw NeXus and opaque files arrive as local paths; scipp arrays arrive as scipp objects, loaded by the runner from scipp HDF5 unless a copy is already in memory.
-Outputs are returned as objects matching the output model; the runner validates them against it, stores vocabulary-typed small values inline, serializes scipp objects to scipp HDF5, and requires other types (CIF, ORSO) to come with their own serializer, declared with the output.
+Data-reference fields are materialized by kind: raw NeXus and opaque files arrive as local paths; scipp arrays arrive as scipp objects, served by the data store from memory when it holds a copy and from scipp HDF5 otherwise.
+Outputs are returned as objects matching the output model; the runner validates them against it, stores vocabulary-typed small values inline, and hands the rest to the data store, which serializes scipp objects to scipp HDF5 when they must reach disk and requires other types (CIF, ORSO) to come with their own serializer, declared with the output.
 The framework never imports sciline.
 
 A sciline workflow meets the contract through an adapter that diffs each call's parameters against the previous call and recomputes only what lies downstream of the change.
@@ -346,7 +341,7 @@ Fan-out whose size is only known after reading the file (grouping by rotation an
 **Decision.** Requests, records, templates, and handles are plain data even in local mode.
 In local mode a client may also turn a handle into a scipp object directly, so plopp and the full scipp API work in a notebook; that is a convenience on top of views (D17), not a second mechanism.
 No standalone local application initially; a notebook on the library is the local application.
-When one is wanted, it is the same web UI hosted in the local process, next to backend, session, and data cache, against the in-process client interface; the shared deployment is the same UI over the HTTP transport.
+When one is wanted, it is the same web UI hosted in the local process, next to backend, session, and data store, against the in-process client interface; the shared deployment is the same UI over the HTTP transport.
 The UI framework is chosen after the backend skeleton exists.
 API-first does not imply TypeScript; a Python-driven web framework satisfies it if it only uses the client interface.
 Qt is out.
@@ -392,7 +387,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 ### D17 Views are not runs
 
 **Decision.** A view is a request for a small piece of a handle's data for display: label-based slicing, reduction over dimensions (sum, mean), and downsampling to a display resolution.
-Views are served by whichever data cache holds a copy (D3), are not recorded, and are never inputs to a run.
+Views are served by the data store from the memory tier holding a copy (D3), are not recorded, and are never inputs to a run.
 When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow (D10).
 Overlaying several runs in one plot is several views; anything beyond slicing, reduction, and downsampling, including the difference of two runs, is a workflow.
 Data larger than the memory budget is sliced by partial reads from disk, so dense arrays are stored chunked in a layout that supports that.
@@ -435,11 +430,11 @@ Kept out of the decisions above so it can be read as one piece.
 
 ## Explicitly deferred
 
-HTTP transport, real SciCat integration, cluster launcher, the data cache's view implementation, spill policy, UI framework, metrics, agent-facing API.
-Remote sessions: a session launcher, a per-session memory budget and idle timeout, and view routing to session processes.
+HTTP transport, real SciCat integration, cluster launcher, the data store's view implementation, spill policy, UI framework, metrics, agent-facing API.
+Remote sessions: a session launcher, a per-session memory budget and idle timeout, and the data store's protocol between a session's memory tier and the registry.
 A hint in the spec for which parameters are cheap to change in a session, so the UI can offer live feedback.
 Provisional outputs of a running run, for progress display during chunk-wise processing.
-The memory budget itself is not deferred: every data cache needs one from the start.
+The memory budget itself is not deferred: every memory tier needs one from the start.
 
 ## Technology proposals
 
@@ -474,7 +469,7 @@ Decisions the team needs to make; my recommendation in brackets.
 ## Next step
 
 Review this document with the team before implementing.
-Then a spike on the two decisions with the most hidden risk, D3 and D13: a data store with copy routing and one local data cache, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a fan-out in several processes, exercised by a fake map-combine pair.
+Then a spike on the two decisions with the most hidden risk, D3 and D13: a memory-tiered data store, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a fan-out in several processes, exercised by a fake map-combine pair.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
 
