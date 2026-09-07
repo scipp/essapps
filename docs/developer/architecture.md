@@ -127,6 +127,7 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   A result from last week and a raw file are the same thing to a request.
 - **Data cache**: holds copies in memory under a budget and serves views (D17).
   Several of them: one in each session's process, and in shared mode a long-lived shared cache that loads outputs from disk on first access.
+  A session's cache also feeds inputs to the runner in that session, and writes a copy to the data store when the backend asks for it.
 - **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as handle plus metadata.
@@ -184,8 +185,9 @@ A copy in memory or on local disk may be evicted for any handle whose origin is 
 Every run's outputs have at least one consumer: the client that submitted the run, which will plot them, chain them, or both.
 Where a run executes, and where its outputs go, depends on the session holding its inputs:
 
-- **In the session.** The run executes in the session process, reads its inputs from memory, and leaves its outputs there; nothing is written.
+- **In the session.** The run executes in the session process, reads its inputs from the session's cache, and leaves its outputs there; nothing is written.
   This is local mode, and also a chain of dependent requests that the launcher places in one runner.
+  When something outside the session later needs such an output, publication (D4) or a request placed elsewhere, the backend asks the cache to write the copy to the data store; if the session is gone, the output is recomputed from its record.
 - **Outside any session.** The runner writes outputs to disk before reporting completion, because disk is the only way to reach another process.
   This covers shared mode, the subprocess launcher, and fan-out (map) members.
   The shared data cache loads an output into memory on first access: written once, loaded once, every further view served from memory.
