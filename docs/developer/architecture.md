@@ -5,6 +5,7 @@ Records the decisions reached so far, why they were made, and what they cost.
 Companion to [scoping.md](scoping.md), which states goals and scope.
 Nothing here is implemented yet.
 Technology choices at the end are proposals.
+A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
 
 ## The picture in one paragraph
 
