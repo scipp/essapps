@@ -23,6 +23,14 @@ Publishing a result to the data catalogue is a separate, deliberate step.
 Plain-language definitions.
 The esslivedata project has its own glossary that uses some of these words differently, see the notes.
 
+Five of these terms are easy to confuse, so the distinctions first.
+A *handle* is a value: the identity of one stored piece of data.
+A *data reference* is a field type: a parameter or output declared to hold a handle.
+An *output reference* is a second kind of value that any parameter field may hold instead of a literal: "output X of run Y", for data a run has produced or will produce.
+It exists because small outputs are stored inline and have no handle, and because requests submitted together refer to each other before run IDs exist.
+The *data store* is the backend's one registry of handles: where the authoritative bytes are and which copies exist.
+A *data service* is a process that holds copies in memory and serves views; there are several, and the data store says which one to ask.
+
 - **Workflow**: the scientific code that turns input files into results.
   Typically a sciline pipeline, but the framework does not care.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs.
