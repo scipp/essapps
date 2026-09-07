@@ -197,7 +197,7 @@
     <li><a href="#next">Deferred and next step</a></li>
     <li><a href="#open">Open questions</a></li>
     <li><a href="#glossary">Glossary</a></li>
-    <li><a href="#index">Index D1–D18</a></li>
+    <li><a href="#index">Index D1–D14</a></li>
   </ol>
 </nav>
 
@@ -212,7 +212,7 @@
 <section id="howto">
   <div class="callout">
     <h3>How to read this</h3>
-    <p>The design rests on one modelling idea and four choices. The idea comes first. The four choices follow, each with the options that were rejected, so that you can disagree with a choice rather than only with its consequences. Everything after that is consequence: the rules that fall out, the changes the workflow spec needs, the components, and how failures are handled. Decisions carry stable identifiers D1 to D18 so discussion can point at them; they are indexed at the end, next to the glossary. Terms are introduced where they are first needed.</p>
+    <p>The design rests on one modelling idea and four choices. The idea comes first. The four choices follow, each with the options that were rejected, so that you can disagree with a choice rather than only with its consequences. Everything after that is consequence: the rules that fall out, the changes the workflow spec needs, the components, and how failures are handled. Decisions carry stable identifiers D1 to D14 so discussion can point at them; they are indexed at the end, next to the glossary. Terms are introduced where they are first needed.</p>
   </div>
 </section>
 
@@ -300,12 +300,12 @@
 
 <section id="records">
   <h2>Records and references</h2>
-  <p class="lead-in">The framework has one way to name a piece of data: <em>output X of record Y</em>. This section is what follows from taking that seriously (D18).</p>
+  <p class="lead-in">The framework has one way to name a piece of data: <em>output X of record Y</em>. This section is what follows from taking that seriously (D1).</p>
   <p>A <b>run request</b> is everything needed to execute a workflow once: which spec, the parameter values, and the instrument, proposal, and submitter. A <b>spec</b> is a workflow's declared interface: name, version, parameters, outputs. It is independent of how the workflow is implemented or where it runs, and is defined in scipp/ess#690. A request is complete: sufficient to reproduce the outputs from scratch. It is plain, JSON-serializable data, even when it never leaves a process.</p>
   <p>A <b>run record</b> is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the software versions of the runner environment, and optionally a batch ID, a template version, and the record this one retries. It is immutable once the run completes, except for status. Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means. Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist. Which of the two applies is decided by type and is invisible to clients.</p>
   <p>A <b>reference</b> is a value, "output X of record Y", that any parameter field may hold instead of a literal, provided the field's type matches the output's. It is the only way a request names data. A reference never contains a path, and the data store's internal keys never appear in a request. A reference may name a <b>pending output</b>, one whose record has not completed yet; the backend holds the request until it does. The record keeps references in reference form, so <b>provenance</b>, the chain from any result back to raw data, parameters, and software, is the graph you get by following them.</p>
   <p><b>Files are records too.</b> A SciCat dataset or an uploaded file is a <b>file record</b>: a record of one built-in spec, <code>file</code>, which has no workflow and one output, the file. The dataset source creates one file record per SciCat PID; an upload creates a new one. A raw file from the catalogue and a result from last week are therefore the same thing to a request, and a new raw file and a completed processing stage are the same kind of event to automatic reduction.</p>
-  <p><b>Stand-ins resolve at submission; data materializes at execution (D8).</b> Users submit a local path, a PID, or a run number (per instrument). The backend turns each into a reference to a file record before persisting anything, creating the record if the PID has none yet, because provenance must not depend on a search that could give a different answer later. The runner materializes references at execution time: files as local paths, arrays as scipp objects. Local files that must reach a remote runner are uploaded into the data store first, which creates their file record.</p>
+  <p><b>Stand-ins resolve at submission; data materializes at execution.</b> Users submit a local path, a PID, or a run number (per instrument). The backend turns each into a reference to a file record before persisting anything, creating the record if the PID has none yet, because provenance must not depend on a search that could give a different answer later. The runner materializes references at execution time: files as local paths, arrays as scipp objects. Local files that must reach a remote runner are uploaded into the data store first, which creates their file record.</p>
   <p><b>Whether an output is usable is two questions</b>: the record's status, and whether the data store holds a copy. A missing copy is recomputed from the record.</p>
   <div class="tablewrap">
   <table>
@@ -330,7 +330,7 @@
 
 <section id="choice-state">
   <h2><span class="num">Choice 1</span>Where state lives</h2>
-  <p class="lead-in">D1, D3, D2</p>
+  <p class="lead-in">D2, D3, D4</p>
   <p><span class="k">The question</span>Batch and automatic reduction need runs that can be made without a human present, and provenance needs runs that fully describe their result. Interactive work needs the opposite: sub-second reruns over multi-gigabyte intermediates, as in SANS, kept in memory between reruns. Where does that state live, and what does a record know about it?</p>
   <ul class="options">
     <li><span class="tag">Rejected</span><b>Stateful jobs.</b> A running workflow object is the unit; clients address it by identity, and a record is whatever it reports. This is esslivedata's model, and interactive work is natural in it. Provenance and batch then have to be reconstructed from a job's history, and everything else must compensate for identities that vanish with the process (scipp/esslivedata#1042, ADR 0008).</li>
@@ -338,7 +338,7 @@
     <li><span class="tag">Rejected</span><b>Shared memory across processes.</b> A distributed object store, such as Dask's or Ray's, or a layer of our own, so that any process can reach any array. scipp objects are not chunk-aware, so such a layer would work badly and cost a lot to build and operate.</li>
     <li class="taken"><span class="tag">Taken</span><b>Stateless records, stateful sessions.</b> The record is stateless and complete. Execution may happen in a <b>session</b>: a long-lived process belonging to one client, which keeps the workflow object and the outputs of earlier runs in memory. Memory never crosses a process; anything that must reach another process goes through disk.</li>
   </ul>
-  <p><span class="k">Choice</span>The last option, with two invariants that keep it safe (D1). Session identity never appears in a record. Everything a session holds can be recomputed from records, so a session is a cache, and losing one costs only time. This is esslivedata's lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so nothing depends on this one.</p>
+  <p><span class="k">Choice</span>The last option, with two invariants that keep it safe (D2). Session identity never appears in a record. Everything a session holds can be recomputed from records, so a session is a cache, and losing one costs only time. This is esslivedata's lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so nothing depends on this one.</p>
   <figure>
     <div class="frame">
     <svg viewBox="0 0 880 290" role="img" aria-label="Two layers: a volatile session holding the warm workflow and in-memory copies, above the durable records holding request parameters, outputs and package versions. Every run writes a record; a miss recomputes from records; session identity never flows into a record.">
@@ -381,7 +381,7 @@
   <p>Initially sessions exist only in <b>local mode</b>, where client, backend, launcher, session, and data store are one Python process: a notebook, or a local application. In <b>shared mode</b> the backend runs as a service used by many people. Batch and automatic reduction run there as a stateless service, and the shared web UI submits and inspects.</p>
 
   <h3>The data store follows from the choice (D3)</h3>
-  <p>It is one component: one registry and one disk tier, owned by the backend, plus a <b>memory tier</b> in every process that holds data, which means each session and the shared service in shared mode. A copy in a memory tier is visible only to its process. Every memory tier has a budget, and copies in memory or in a local download cache are evictable, because the record can bring them back. Treating memory as an evictable cache is also what resolved esslivedata's memory problems (scipp/esslivedata#1274). A runner asks the store for an input and hands it an output; the store serves from the memory tier of that process when it can and otherwise reads or writes disk. The runner never knows about tiers, and the launcher decides only where a run executes; whether anything is written falls out of that.</p>
+  <p>It is one component: one registry and one disk tier, owned by the backend, plus a <b>memory tier</b> in every process that holds data, which means each session and the shared service in shared mode. A copy in a memory tier is visible only to its process. Every memory tier has a budget, and copies in memory or in a local download cache are evictable, because the record can bring them back. Treating memory as an evictable cache is also what resolved esslivedata's memory problems (scipp/esslivedata#1274). A runner asks the store for an input and hands it an output; the store serves from the memory tier of that process when it can and otherwise reads or writes disk. The runner never knows about tiers, and the launcher decides only where a run executes; whether anything is written falls out of that. Remote execution is a different launcher, not a different execution model.</p>
   <p>Where a run executes decides whether its data touches disk:</p>
   <ul>
     <li><b>In the session holding its inputs.</b> Inputs come from that memory tier and outputs stay there; nothing is written. This is local mode, and also a chain of dependent requests that the launcher places in one runner. When something outside the session later needs such an output, publication or a request placed elsewhere, the store writes the copy out from the session; if the session is gone, the output is recomputed from its record.</li>
@@ -537,7 +537,7 @@
     <figcaption><b>Views route by copy, inside the data store.</b> Several memory tiers, one registry, and the client sees none of it. With every tier in one process the lookup is trivial, but it exists from day one so a remote session can be registered later as one more tier and one more launcher, with no change to the client interface.</figcaption>
   </figure>
 
-  <h3>A rule that follows: reuse across requests is a workflow boundary (D2)</h3>
+  <h3>A rule that follows: reuse across requests is a workflow boundary (D4)</h3>
   <p>A value that other requests reference must be an output of a run of its own, with its own record. Workflow authors therefore cut a workflow into separate specs exactly where such a value arises, and nowhere else. Two reasons produce a cut. <em>Reuse</em>: one artefact feeds many runs, such as processed vanadium, a beam centre, or a direct beam, which sample reductions, batch, and automatic reduction all take as an input. <em>Iteration without a session</em>: an expensive stage whose result is tuned from a stateless runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.</p>
   <p>Inside a session the second reason disappears: one unsplit spec is enough, because the warm workflow recomputes only what changed, and the loaded data stays an <b>intermediate</b>, a value inside the workflow such as a sciline graph node, which the framework never sees: no record, so no reference, and it dies with the session. The first reason holds in a session too, because the artefact needs a record of its own before batch can reuse it. A <b>stage output</b> such as processed vanadium is an ordinary output with a record; the word only names the role. Splitting is the only strategy that works on a fire-and-forget remote runner, and it lets the UI tell which stage is cheap, because it is a separate workflow. Deriving the split automatically from a sciline graph is possible, as <code>ess.reduce.streaming.StreamProcessor</code> does for live data, but that is a tool on the workflow side; the framework does not know about it.</p>
   <p><span class="k">Why</span>Batch, automatic reduction, and provenance are properties of the record, not of the process that executes it, so pinning "stateless" at the record level costs them nothing. A stage output can be huge, and writing one to disk is wasted work when its only consumer is in the same process; recompute is often cheaper than storage. Making a session's memory an ordinary tier of the store, rather than a special case, is what lets a remote session be added later as one more launcher and one more tier.</p>
@@ -546,18 +546,20 @@
 
 <section id="choice-engine">
   <h2><span class="num">Choice 2</span>Own the records and the scheduling, or adopt an engine</h2>
-  <p class="lead-in">D5, D7, D11, D12, D13</p>
+  <p class="lead-in">D5, D6, D7, D8</p>
   <p><span class="k">The question</span>Something must keep the records, hold a request until the outputs it references exist, propagate failure and cancellation along a chain, and notice new datasets. Do we build that, or take it from a workflow engine or a message broker?</p>
   <ul class="options">
     <li><span class="tag">Rejected</span><b>A workflow engine</b> such as AiiDA, Snakemake, Nextflow, or Prefect. Each bakes the dependency graph into code rather than records and keeps provenance in its own model. None gives a stateless request that a notebook, a trigger loop, and a batch UI can all emit.</li>
     <li><span class="tag">Rejected</span><b>A message broker, with Kafka for dataset events.</b> Facilities that built their own scheduler for the remote case eventually added a broker (ISIS, SNS, Diamond, ESRF), so a cluster deployment may end here. Kafka for dataset discovery would couple the backend to the streaming infrastructure and reduce data that is not yet catalogued. Reliable command delivery over Kafka was a long struggle in esslivedata (scipp/esslivedata#856); it concluded that a request row in a database is the durable desired state that was missing.</li>
     <li class="taken"><span class="tag">Taken</span><b>Our own record store and a small scheduler.</b></li>
   </ul>
-  <p><span class="k">Choice</span>Our own (D5). The <b>record store</b> is SQLite on local disk in local and single-backend mode, Postgres if the backend ever scales. Records contain nothing sciline-specific. The store carries a schema version, and a stored parameter set that no longer matches its spec version must fail loudly, never be silently defaulted; schema versioning was left unresolved in esslivedata and needed hand-run migrations (scipp/esslivedata#915). A request whose content matches a completed record with the same package versions may reuse that record's outputs instead of running. That is what makes a dragged slider or a batch rerun with mostly unchanged members affordable.</p>
-  <h3>The backend is the single writer (D7)</h3>
-  <p>Exactly one backend process per record store, enforced by a startup lock. The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes. Raw files that already sit on the facility filesystem are resolved to their path by the backend at dispatch; only otherwise does the runner download, using a short-lived token issued by the backend. Remote execution is a different launcher, not a different execution model.</p>
-  <h3>One scheduling primitive: pending outputs as inputs (D13)</h3>
-  <p>Map is a batch with a shared fixed input and a per-member parameter, a file or a chunk range. Combine is one request whose inputs are references to the map outputs, submitted before they exist. A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other by local alias. The backend holds a request until every record it references has completed, fails it if any of them fails, and cancels it if any is cancelled. Groups must be acyclic; a request waiting on an input that never arrives times out. Merge strategy, memory during merge, and chunk semantics belong to the combine workflow. Batch members are independent (D12): no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.</p>
+  <p><span class="k">Choice</span>Our own record store, with the backend as its single writer (D5). The <b>record store</b> is SQLite on local disk in local and single-backend mode, Postgres if the backend ever scales. Records contain nothing sciline-specific. The store carries a schema version, and a stored parameter set that no longer matches its spec version must fail loudly, never be silently defaulted; schema versioning was left unresolved in esslivedata and needed hand-run migrations (scipp/esslivedata#915).</p>
+  <h3>Identical requests reuse outputs (D6)</h3>
+  <p>A request whose content matches a completed record with the same package versions may reuse that record's outputs instead of running. That is what makes a dragged slider or a batch rerun with mostly unchanged members affordable.</p>
+  <h3>The backend is the single writer</h3>
+  <p>Exactly one backend process per record store, enforced by a startup lock. The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes. Raw files that already sit on the facility filesystem are resolved to their path by the backend at dispatch; only otherwise does the runner download, using a short-lived token issued by the backend.</p>
+  <h3>One scheduling primitive: pending outputs as inputs (D7)</h3>
+  <p>Map is a batch with a shared fixed input and a per-member parameter, a file or a chunk range. Combine is one request whose inputs are references to the map outputs, submitted before they exist. A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other by local alias. The backend holds a request until every record it references has completed, fails it if any of them fails, and cancels it if any is cancelled. Groups must be acyclic; a request waiting on an input that never arrives times out. Merge strategy, memory during merge, and chunk semantics belong to the combine workflow. Batch members are independent: no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.</p>
   <figure>
     <div class="frame">
     <svg viewBox="0 0 900 292" role="img" aria-label="A group of three map members, each with a per-member file and a pending output, feeding one combine request submitted before the outputs exist. The backend holds combine in waiting status; failure or cancellation of any member propagates to it. Provenance follows the references back.">
@@ -602,9 +604,9 @@
       <text x="20" y="280" class="small">provenance: follow the references back to the records that produced each output</text>
     </svg>
     </div>
-    <figcaption><b>Map and combine.</b> Real combines are not sums: reflectometry uses a variance-weighted overlap fit, SANS concatenates events. Merging therefore stays a workflow concern; the framework only sequences. Batch members (D12) are the same picture without the combine.</figcaption>
+    <figcaption><b>Map and combine.</b> Real combines are not sums: reflectometry uses a variance-weighted overlap fit, SANS concatenates events. Merging therefore stays a workflow concern; the framework only sequences. Batch members are the same picture without the combine.</figcaption>
   </figure>
-  <h3>The dataset source is abstracted (D11)</h3>
+  <h3>The dataset source is abstracted (D8)</h3>
   <p>Its interface: for a proposal, yield new datasets as PID plus metadata; the backend turns each into a file record. A SciCat implementation, polling or push as the deployment allows, and an in-memory fake. Arrival may be out of order; the interface does not promise a monotonic cursor.</p>
   <p><span class="k">Why</span>No engine gives the stateless request the whole design rests on. Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs (scipp/esslivedata#1285, #714, ADR 0007), and one runner gives one code path for execution. Pending outputs as inputs is the smallest addition that covers temperature scans, angle series, mask series, and large-file chunking. Real combines are not sums: reflectometry uses a variance-weighted overlap fit, SANS concatenates events; so merging cannot be a framework concern. Two dataset-source implementations from day one keep tests off SciCat.</p>
   <p><span class="k">Cost</span>We own dependency handling, failure propagation, and cancellation: a small scheduler. "No broker" is a local-mode decision to be re-examined when the cluster launcher is built. Fan-out whose size is only known after reading the file, such as grouping by rotation angle inside one file, is not covered; see open questions.</p>
@@ -612,7 +614,7 @@
 
 <section id="choice-contract">
   <h2><span class="num">Choice 3</span>The contract with workflow code</h2>
-  <p class="lead-in">D6</p>
+  <p class="lead-in">D9</p>
   <p><span class="k">The question</span>How does the framework call scientific code, how do inputs get in and outputs out, and what does a rerun in a session reuse?</p>
   <ul class="options">
     <li><span class="tag">Rejected</span><b>The framework knows sciline.</b> It builds the pipeline, computes the requested nodes, and caches intermediates itself. That ties the framework to one engine, and caching every intermediate is not affordable with event data while the graph does not know compute cost.</li>
@@ -620,7 +622,7 @@
     <li><span class="tag">Rejected</span><b>Two protocols</b>, one for one-shot execution and one for incremental reruns. Two execution paths to test and keep consistent.</li>
     <li class="taken"><span class="tag">Taken</span><b>One callable from parameters to outputs</b>, kept between runs in a session.</li>
   </ul>
-  <p><span class="k">Choice</span>One callable (D6). Spec identity is bound to an implementation via Python entry points. The entry point returns a callable that takes the validated parameter model and returns the output model. A stateless runner constructs it and calls it once. A session runner constructs it once per spec version and calls it for every run, so the callable may keep state between calls; that is the warm workflow. The framework never imports sciline.</p>
+  <p><span class="k">Choice</span>One callable (D9). Spec identity is bound to an implementation via Python entry points. The entry point returns a callable that takes the validated parameter model and returns the output model. A stateless runner constructs it and calls it once. A session runner constructs it once per spec version and calls it for every run, so the callable may keep state between calls; that is the warm workflow. The framework never imports sciline.</p>
   <figure>
     <div class="frame">
     <svg viewBox="0 0 900 250" role="img" aria-label="A stateless runner constructs the callable, calls it once and exits. A session runner constructs it once per spec version and calls it for every run, so the callable may keep state and diff parameters between calls.">
@@ -720,13 +722,13 @@
     </div>
     <figcaption><b>Three kinds of parameter, on the workflow side.</b> Compared with esslivedata, the "data stream" axis is gone: every run has complete inputs. Dynamic keys survive for lists that grow, which covers incremental sums over runs. Chunk-wise processing of one large file, as the NMX workflow does, is inside the callable and invisible here.</figcaption>
   </figure>
-  <p><span class="k">Why</span>Arrays arriving as objects is what lets a chain in a session stay in memory while workflow code looks the same in every mode. One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept. Reuse inside the adapter is correct by construction from the sciline graph, which is stronger than the record-level reuse rule of choice 2. The declaration of cheap parameters cannot be avoided, because caching every intermediate is not affordable and the graph does not know compute cost. Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.</p>
+  <p><span class="k">Why</span>Arrays arriving as objects is what lets a chain in a session stay in memory while workflow code looks the same in every mode. One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept. Reuse inside the adapter is correct by construction from the sciline graph, which is stronger than the record-level reuse rule of D6. The declaration of cheap parameters cannot be avoided, because caching every intermediate is not affordable and the graph does not know compute cost. Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.</p>
   <p><span class="k">Cost</span>Two validation points, with the runner's being the authoritative one. The runner loads scipp arrays whole. Accumulation over a list is exact only when nothing else changed; the adapter must reset otherwise, and nothing outside it can check that it does.</p>
 </section>
 
 <section id="choice-clients">
   <h2><span class="num">Choice 4</span>How clients reach the system</h2>
-  <p class="lead-in">D14, D10, D17</p>
+  <p class="lead-in">D10, D11</p>
   <p><span class="k">The question</span>A notebook, a local application, a shared web UI, and eventually agents all need to submit, inspect, and plot. What is the API, and what may a UI touch?</p>
   <ul class="options">
     <li><span class="tag">Rejected</span><b>The UI reaches into backend internals.</b> Fastest to start, and the source of esslivedata's cross-session races (scipp/esslivedata#1046, #1098, ADR 0007).</li>
@@ -734,10 +736,10 @@
     <li><span class="tag">Rejected</span><b>An HTTP API and a TypeScript frontend from day one.</b> API-first, but it front-loads a transport and a second language before there is a backend to serve, and needs a plotting stack other than plopp.</li>
     <li class="taken"><span class="tag">Taken</span><b>The backend's Python interface is the API.</b></li>
   </ul>
-  <p><span class="k">Choice</span>The Python client interface is the API (D14). Every UI, notebook, or service reaches the backend only through it; HTTP is a later transport for the same interface, not a second API. Requests, records, templates, and references are plain data even in local mode. Clients observe change by pulling with a version counter, never by callbacks carrying data. No standalone local application initially: a notebook on the library is the local application. When one is wanted, it is the same web UI hosted in the local process against the in-process interface; the shared deployment is the same UI over the HTTP transport. The UI framework is chosen after the backend skeleton exists; a Python-driven web framework satisfies API-first if it only uses the client interface. Qt is out. UI state such as layouts and plot configuration lives in the record store, not in a second per-dashboard store, which was an anti-pattern in esslivedata (scipp/esslivedata#1076, #1070).</p>
-  <h3>Views are not runs (D17)</h3>
+  <p><span class="k">Choice</span>The Python client interface is the API (D10). Every UI, notebook, or service reaches the backend only through it; HTTP is a later transport for the same interface, not a second API. Requests, records, templates, and references are plain data even in local mode. Clients observe change by pulling with a version counter, never by callbacks carrying data. No standalone local application initially: a notebook on the library is the local application. When one is wanted, it is the same web UI hosted in the local process against the in-process interface; the shared deployment is the same UI over the HTTP transport. The UI framework is chosen after the backend skeleton exists; a Python-driven web framework satisfies API-first if it only uses the client interface. Qt is out. UI state such as layouts and plot configuration lives in the record store, not in a second per-dashboard store, which was an anti-pattern in esslivedata (scipp/esslivedata#1076, #1070).</p>
+  <h3>Views are not runs (D11)</h3>
   <p>A view is a request for a small piece of an output's data for display: label-based slicing, reduction over dimensions such as sum or mean, and downsampling to a display resolution. Views are part of the client interface, so there is one endpoint in every mode, and a view result is small by construction. They are served by the data store from the memory tier holding a copy, are not recorded, and are never inputs to a run. When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow. Overlaying several runs in one plot is several views; anything beyond slicing, reduction, and downsampling, including the difference of two runs, is a workflow. Data larger than the memory budget is sliced by partial reads from disk, so dense arrays are stored chunked in a layout that supports that. Event data cannot be sliced from disk and is loaded whole or histogrammed by a workflow first. In local mode a client may also turn a reference into a scipp object directly, so plopp and the full scipp API work in a notebook; that is a convenience on top of views, not a second mechanism.</p>
-  <h3>Plot selections are ordinary parameters (D10)</h3>
+  <h3>Plot selections are ordinary parameters (also D11)</h3>
   <p>Interactive tools bind to parameters of shared vocabulary types: range, rectangle, polygon. Each selection change submits a new stateless run of the cheap stage. A request may carry a <em>slot</em> key chosen by the client; a new request in the same slot cancels queued requests in that slot, and runs in a slot are short-retention. Slot runs are placed in the submitter's session, which until remote sessions exist means local mode.</p>
   <p><span class="k">Why</span>One API keeps the UI out of backend internals. Exploring a 4D volume by dragging through 2D slices must not create records, and the frontend must never receive the volume; the slice-becomes-parameter rule keeps provenance exact without making views part of it. No special interactive concept in the framework: the slot key is the stable identity a plot needs across superseded runs, the same split between a stable data key and a per-result key that esslivedata needed (scipp/esslivedata#1062).</p>
   <p><span class="k">Cost</span>A local application in one process shares the interpreter between UI and runs, so a long run blocks the UI unless the session moves to a subprocess, which needs the remote-session machinery. A view vocabulary in the client interface, and a chunking decision at write time for dense data. Through the client interface a user explores declared outputs only; a notebook can compute any node of a sciline workflow. Interactive feedback is restricted to sessions, and initially to local mode.</p>
@@ -746,20 +748,20 @@
 <section id="ownership">
   <h2>Ownership and publication</h2>
   <p class="lead-in">Two rules that do not belong to any choice above.</p>
-  <h3>Only finalized data enters SciCat (D4)</h3>
+  <h3>Only finalized data enters SciCat (D12)</h3>
   <p>Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API. Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule. The PID is recorded on the output, which now has a second durable copy, so a miss on it becomes a download rather than a recompute. The dataset source recognizes such a PID and does not create a file record for it; otherwise the same data would exist twice and a rule that fires on new datasets would fire on our own output.</p>
-  <h3>Instrument plus proposal scopes everything (D9)</h3>
+  <h3>Instrument plus proposal scopes everything (D13)</h3>
   <p>Both are mandatory on every record. Run-number resolution, UI navigation, templates, and authorization by SciCat membership operate within a <b>proposal</b>, the experiment allocation that owns data and defines who may access it. Instrument scientists and commissioning use long-lived proposals. Artefacts produced there and consumed by every user proposal (direct beam, beam centre, processed vanadium, masks, lookup tables) are marked instrument-shared and readable from any proposal on that instrument; without that, every external user would need membership in the commissioning proposal.</p>
 </section>
 
 <section id="spec">
   <h2>Changes needed in the workflow spec</h2>
   <p class="lead-in">The spec in scipp/ess#690 is assumed merged as-is, with these extensions. They are small in the vocabulary and change the shape of the output side while the PR is open.</p>
-  <h3>Inputs are parameters of data-reference type (D15)</h3>
+  <h3>Inputs are parameters of data-reference type (D14)</h3>
   <p>The spec has one parameter model and no separate input section. The parameter vocabulary gains a <b>data reference</b> type: a field holding a reference to a file or array output, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same <code>ArraySpec</code> that outputs declare. A parameter of this type is what we call an <b>input</b>. The file output of a file record satisfies any kind: the consumer's kind decides how it is materialized, and loading a file as a scipp array fails if it is not scipp HDF5. Lists of references are allowed; comparing or combining runs is a workflow with such a list as input. A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run. Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, materialization to a file, provenance edges, validation timing, and which widget a UI shows. esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.</p>
-  <h3>Outputs are a typed model in the same vocabulary (D16)</h3>
+  <h3>Outputs are a typed model in the same vocabulary (also D14)</h3>
   <p>A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form. An array output is a data-reference field constrained by <code>ArraySpec</code>; a beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of kind "opaque file". Title and description are field metadata. A downstream parameter may take a reference to any output field whose type matches, so chaining is a type check between two fields of the same vocabulary. The spec as proposed allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow. Storage placement, inline or in the data store, stops being a spec concept.</p>
-  <h3>One built-in spec, <code>file</code> (D18)</h3>
+  <h3>One built-in spec, <code>file</code> (D1)</h3>
   <p>No workflow, one output of file type, and no kind, so the rule above that a file satisfies any kind is checked at materialization rather than at submission.</p>
   <p><span class="k">Cost</span>The backend must walk the request's values to find references and the spec's JSON Schema, including nested models, to check them. Structural validation of an array output against its <code>ArraySpec</code> happens in the runner at completion, since pydantic cannot check a scipp object.</p>
 </section>
@@ -838,11 +840,11 @@
   <h2>Execution modes mapped onto the model</h2>
   <ul class="modes">
     <li><b>Manual</b><span>Submit one request, inspect outputs, resubmit with changed parameters.</span></li>
-    <li><b>Interactive</b><span>Manual inside a session (D1), with a warm workflow (D6) driven by plot selections in a slot (D10). Local mode only until remote sessions exist.</span></li>
-    <li><b>Batch</b><span>Template plus overrides (D12).</span></li>
-    <li><b>Automatic</b><span>Trigger loop plus template (D11).</span></li>
-    <li><b>Map, combine, chunking</b><span>Batch plus dependent combine (D13).</span></li>
-    <li><b>Publication</b><span>Explicit publish of an output (D4).</span></li>
+    <li><b>Interactive</b><span>Manual inside a session (D2), with a warm workflow (D9) driven by plot selections in a slot (D11). Local mode only until remote sessions exist.</span></li>
+    <li><b>Batch</b><span>Template plus overrides (D7).</span></li>
+    <li><b>Automatic</b><span>Trigger loop plus template (D8).</span></li>
+    <li><b>Map, combine, chunking</b><span>Batch plus dependent combine (D7).</span></li>
+    <li><b>Publication</b><span>Explicit publish of an output (D12).</span></li>
   </ul>
 </section>
 
@@ -850,7 +852,7 @@
   <h2>Deferred, and the next step</h2>
   <p><b>Deferred.</b> HTTP transport, real SciCat integration, cluster launcher, the data store's view implementation, spill policy, UI framework, metrics, agent-facing API. Remote sessions: a session launcher, a per-session memory budget and idle timeout, and the data store's protocol between a session's memory tier and the registry. A hint in the spec for which parameters are cheap to change in a session, so the UI can offer live feedback. Provisional outputs of a running run, for progress display during chunk-wise processing. The memory budget itself is not deferred: every memory tier needs one from the start.</p>
   <p><b>Technology proposals.</b> pydantic for all data models (the spec already requires it); standard-library sqlite3 for the record store, Postgres later; scipp HDF5 for stored scipp data, with pluggable serializers for other output types; scitacean for SciCat access; FastAPI for the HTTP transport when it comes. No workflow engine, no Dask, no message broker in local mode.</p>
-  <p><b>Next step.</b> Review this document with the team before implementing. Then a spike on the two decisions with the most hidden risk, D3 and D13: a memory-tiered data store, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a fan-out in several processes, exercised by a fake map-combine pair. The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton. The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.</p>
+  <p><b>Next step.</b> Review this document with the team before implementing. Then a spike on the two decisions with the most hidden risk, D3 and D7: a memory-tiered data store, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a fan-out in several processes, exercised by a fake map-combine pair. The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton. The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.</p>
 </section>
 
 <section id="open">
@@ -905,29 +907,25 @@
 
 <section id="index">
   <h2>Index of decisions</h2>
-  <p class="lead-in">Numbering is stable and chronological; add at the end.</p>
+  <p class="lead-in">Numbering follows reading order. It is provisional until the wider review and stable after it; then add at the end.</p>
   <div class="tablewrap">
   <table class="index">
     <thead><tr><th></th><th>Decision</th><th>Where</th></tr></thead>
     <tbody>
-      <tr><td class="mono">D1</td><td>Requests are stateless; execution may be stateful inside a session</td><td><a href="#choice-state">Choice 1</a></td></tr>
-      <tr><td class="mono">D2</td><td>Reuse across requests means a workflow boundary; no caching inside a workflow</td><td><a href="#choice-state">Choice 1</a></td></tr>
-      <tr><td class="mono">D3</td><td>Data is tiered; memory never crosses a process</td><td><a href="#choice-state">Choice 1</a></td></tr>
-      <tr><td class="mono">D4</td><td>Only finalized data enters SciCat</td><td><a href="#ownership">Ownership and publication</a></td></tr>
-      <tr><td class="mono">D5</td><td>The record store is ours, small, and implementation-agnostic</td><td><a href="#choice-engine">Choice 2</a></td></tr>
-      <tr><td class="mono">D6</td><td>Framework-to-workflow contract: a callable from parameters to outputs</td><td><a href="#choice-contract">Choice 3</a></td></tr>
-      <tr><td class="mono">D7</td><td>One runner, pluggable launch, backend as single writer</td><td><a href="#choice-engine">Choice 2</a></td></tr>
-      <tr><td class="mono">D8</td><td>Stand-ins resolve at submission, data materializes at execution</td><td><a href="#records">Records and references</a></td></tr>
-      <tr><td class="mono">D9</td><td>Instrument plus proposal scopes everything</td><td><a href="#ownership">Ownership and publication</a></td></tr>
-      <tr><td class="mono">D10</td><td>Plot selections are ordinary parameters</td><td><a href="#choice-clients">Choice 4</a></td></tr>
-      <tr><td class="mono">D11</td><td>The dataset source is abstracted</td><td><a href="#choice-engine">Choice 2</a></td></tr>
-      <tr><td class="mono">D12</td><td>Batch members are independent</td><td><a href="#choice-engine">Choice 2</a></td></tr>
-      <tr><td class="mono">D13</td><td>Map, combine, and chunking use one primitive: pending outputs as inputs</td><td><a href="#choice-engine">Choice 2</a></td></tr>
-      <tr><td class="mono">D14</td><td>The client interface is the API; HTTP later; notebook first</td><td><a href="#choice-clients">Choice 4</a></td></tr>
-      <tr><td class="mono">D15</td><td>Inputs are parameters of data-reference type</td><td><a href="#spec">Spec changes</a></td></tr>
-      <tr><td class="mono">D16</td><td>Outputs are a typed model in the same vocabulary as parameters</td><td><a href="#spec">Spec changes</a></td></tr>
-      <tr><td class="mono">D17</td><td>Views are not runs</td><td><a href="#choice-clients">Choice 4</a></td></tr>
-      <tr><td class="mono">D18</td><td>Every value is an output of a record; files are records too</td><td><a href="#records">Records and references</a></td></tr>
+      <tr><td class="mono">D1</td><td>Every value is an output of a record; files are records too; stand-ins resolve at submission</td><td><a href="#records">Records and references</a></td></tr>
+      <tr><td class="mono">D2</td><td>Requests are stateless; execution may be stateful inside a session</td><td><a href="#choice-state">Choice 1</a></td></tr>
+      <tr><td class="mono">D3</td><td>Data is tiered; memory never crosses a process; one runner, pluggable launch</td><td><a href="#choice-state">Choice 1</a></td></tr>
+      <tr><td class="mono">D4</td><td>Reuse across requests means a workflow boundary; no caching inside a workflow</td><td><a href="#choice-state">Choice 1</a></td></tr>
+      <tr><td class="mono">D5</td><td>The record store is ours, small, and implementation-agnostic; the backend is its single writer</td><td><a href="#choice-engine">Choice 2</a></td></tr>
+      <tr><td class="mono">D6</td><td>Identical requests with identical package versions reuse outputs</td><td><a href="#choice-engine">Choice 2</a></td></tr>
+      <tr><td class="mono">D7</td><td>Map, combine, and chunking use one primitive: pending outputs as inputs; batch members are independent</td><td><a href="#choice-engine">Choice 2</a></td></tr>
+      <tr><td class="mono">D8</td><td>The dataset source is abstracted; not Kafka</td><td><a href="#choice-engine">Choice 2</a></td></tr>
+      <tr><td class="mono">D9</td><td>Framework-to-workflow contract: a callable from parameters to outputs</td><td><a href="#choice-contract">Choice 3</a></td></tr>
+      <tr><td class="mono">D10</td><td>The client interface is the API; HTTP later; notebook first</td><td><a href="#choice-clients">Choice 4</a></td></tr>
+      <tr><td class="mono">D11</td><td>Interactive plotting: views are not runs, plot selections are ordinary parameters</td><td><a href="#choice-clients">Choice 4</a></td></tr>
+      <tr><td class="mono">D12</td><td>Only finalized data enters SciCat</td><td><a href="#ownership">Ownership and publication</a></td></tr>
+      <tr><td class="mono">D13</td><td>Instrument plus proposal scopes everything</td><td><a href="#ownership">Ownership and publication</a></td></tr>
+      <tr><td class="mono">D14</td><td>One type vocabulary: inputs are data-reference parameters, outputs a typed model</td><td><a href="#spec">Spec changes</a></td></tr>
     </tbody>
   </table>
   </div>
