@@ -66,6 +66,11 @@ It exists because small outputs are stored inline and have no handle, and becaus
 - **Local mode**: client, backend, launcher, session, and data store all inside one Python process: a notebook, or a local application.
   Contrast **shared mode**: the backend runs as a service used by many people.
 - **Warm workflow**: the workflow object kept alive in a session between runs, so a rerun recomputes only what a changed parameter affects.
+  A session holds one per spec.
+- **Intermediate**: a value inside a workflow, such as a node of a sciline graph, held by the warm workflow.
+  The framework never sees it: no handle, no record.
+- **Stage output**: an output of one spec that requests of another spec take as input, such as processed vanadium or a beam centre.
+  An ordinary output with a record; the word only names the role (D2).
 - Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).
 
 ## Core model
@@ -141,6 +146,7 @@ Numbering is stable; add at the end.
 
 **Decision.** The stateless run request is the only unit the backend and the record store know.
 Execution may be stateful: a run placed in a session may reuse the workflow object and the data that earlier runs in that session left in memory.
+A session holds one warm workflow per spec, so tuning a stage output and its consumer together, such as vanadium processing and a sample reduction, uses two, chained through handles in the session's memory tier.
 Two invariants keep this safe.
 Session identity never appears in a record.
 Everything a session holds can be recomputed from records, so a session is a cache, and losing it costs only time.
@@ -155,19 +161,23 @@ esslivedata's experience with ephemeral identities that everything else had to c
 Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and a store protocol to memory tiers in other processes.
 That is why they are deferred, and why the shared web UI initially has no interactive loop.
 
-### D2 Incremental recompute by splitting workflows, not by framework magic
+### D2 Reuse across requests means a workflow boundary; the framework does not cache inside a workflow
 
-**Decision.** Workflow authors split an expensive stage from a cheap, tweakable stage into separate specs when the consumer of the intermediate is not in the same session: batch, automatic reduction, and artefacts shared between runs such as processed vanadium.
-The intermediate is an ordinary output, usable as input to the next stage.
-Inside a session the split is unnecessary: a warm workflow recomputes only what a changed parameter affects (D6).
+**Decision.** A value that other requests reference must be an output of a run of its own, with its own record.
+Workflow authors therefore cut a workflow into separate specs exactly where such a value arises, and nowhere else.
+Two reasons produce a cut.
+Reuse: one artefact feeds many runs, such as processed vanadium, a beam centre, or a direct beam, which sample reductions, batch, and automatic reduction all take as an input.
+Iteration without a session: an expensive stage whose result is tuned from a stateless runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
+Inside a session the second reason disappears: one unsplit spec is enough, because the warm workflow recomputes only what a changed parameter affects (D6), and the loaded data stays an intermediate the framework never sees.
+The first reason holds in a session too, because the artefact needs a record of its own before batch can reuse it; a session then holds one warm workflow per spec, chained through handles in its memory tier.
 
-**Why.** Splitting is the only strategy that works on a fire-and-forget remote runner.
-Provenance of intermediates is exact.
+**Why.** A stage output has exact provenance and one record; an intermediate inside a warm workflow has neither, so it cannot be shared and dies with the session.
+Splitting is the only strategy that works on a fire-and-forget remote runner.
 The UI can tell which stage is cheap, because it is a separate workflow.
 Deriving the split automatically from a sciline graph is possible, as `ess.reduce.streaming.StreamProcessor` does for live data, but that is a tool on the workflow side; the framework does not know about it.
 
 **Cost.** The author chooses where to cut, and the cut is not always clean.
-For example, processed vanadium in diffraction is binned on the sample's edges, so the intermediate must be oversampled.
+For example, processed vanadium in diffraction is binned on the sample's edges, so the stage output must be oversampled.
 Both stages typically share parameters, see the template open question.
 For an unsplit workflow in a session, the spec does not say which parameters are cheap to change, so the UI cannot choose a slider over a run button; see deferred.
 
@@ -192,7 +202,7 @@ Where a run executes decides whether its data touches disk:
 The shared service holds large data only in its bounded, evictable memory tier: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
 Local mode is the degenerate deployment where client, session, and the whole data store are one process; the client interface is the same as in shared mode.
 
-**Why.** Intermediates can be huge, and writing one to disk is wasted work when its only consumer is in the same process.
+**Why.** A stage output can be huge, and writing one to disk is wasted work when its only consumer is in the same process.
 Sharing memory across machines would mean a distributed memory layer, and scipp objects are not chunk-aware, so such a layer would work badly and cost a lot.
 Recompute is often cheaper than storage.
 Treating memory as an evictable cache is also what resolved esslivedata's memory problems (scipp/esslivedata#1274).
@@ -206,7 +216,7 @@ In shared mode the data store spans processes: the registry in the backend must 
 
 ### D4 Only finalized data enters SciCat
 
-**Decision.** Intermediates and unreviewed outputs stay in our store.
+**Decision.** Stage outputs and unreviewed outputs stay in our store.
 Publication is an explicit, idempotent operation on a handle, triggered by a user after inspection or by an automatic-reduction rule.
 SciCat inputs are handles with origin `scicat` and the PID as ID, so raw files and our outputs are the same type to a workflow.
 

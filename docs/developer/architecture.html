@@ -329,7 +329,9 @@
     <li><b>Proposal</b> · the experiment allocation that owns data and defines access. <b>SciCat</b> · the catalogue; <b>PID</b> its identifier.</li>
     <li><b>Pending output</b> · an output of a run that has not finished, usable as an input already.</li>
     <li><b>Local mode</b> · client, backend, launcher, session, data store in one Python process. <b>Shared mode</b> · backend as a service for many people.</li>
-    <li><b>Warm workflow</b> · the workflow object kept alive in a session, so a rerun recomputes only what changed.</li>
+    <li><b>Warm workflow</b> · the workflow object kept alive in a session, so a rerun recomputes only what changed. One per spec.</li>
+    <li><b>Intermediate</b> · a value inside a workflow, such as a sciline graph node, held by the warm workflow. The framework never sees it: no handle, no record.</li>
+    <li><b>Stage output</b> · an output of one spec that another spec takes as input: processed vanadium, a beam centre. An ordinary output with a record; the word only names the role (D2).</li>
   </ul>
 </section>
 
@@ -574,9 +576,10 @@
     </div>
     <figcaption><b>Stateless at the record level, stateful at the execution level.</b> This is the esslivedata lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so the session is kept invisible to the records rather than avoided altogether.</figcaption>
   </figure>
+  <p>A session holds one warm workflow per spec. Tuning vanadium processing while watching a reduced sample uses two, chained through a handle in the session's memory tier (D2).</p>
 
   <h3>Why local-only first</h3>
-  <p>Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and a store protocol to memory tiers in other processes. Batch and automatic reduction run as a stateless service and the shared web UI submits and inspects, which covers those needs without any of that. A local application is the same web UI hosted in one process next to backend, session, and data cache; the shared deployment is the same UI over HTTP (D14).</p>
+  <p>Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and a store protocol to memory tiers in other processes. Batch and automatic reduction run as a stateless service and the shared web UI submits and inspects, which covers those needs without any of that. A local application is the same web UI hosted in one process next to backend, session, and data store; the shared deployment is the same UI over HTTP (D14).</p>
 </section>
 
 <section id="contract">
@@ -806,12 +809,13 @@
       <p><span class="k">Why</span>Batch, automatic reduction, and provenance need complete requests; those are properties of the record, not the process. Interactive work needs sub-second reruns with multi-gigabyte intermediates in memory.</p>
       <p class="cost"><span class="k">Cost</span>Two lifetimes for the workflow object. Remote sessions need budgets, caps, idle timeouts, and view routing, so they are deferred and the shared web UI has no interactive loop yet.</p></article>
 
-    <article class="dec"><div class="id">D2</div><h3>Incremental recompute by splitting workflows, when the consumer is outside the session</h3>
-      <p><span class="k">Why</span>Splitting is the only strategy that works on a fire-and-forget remote runner, and shared artefacts like processed vanadium are genuinely separate workflows. Inside a session the warm workflow makes the split unnecessary.</p>
+    <article class="dec"><div class="id">D2</div><h3>Reuse across requests means a workflow boundary; the framework does not cache inside a workflow</h3>
+      <p>A value that other requests reference is an output of a run of its own. Authors cut a workflow into specs exactly there: where an artefact feeds many runs (vanadium, beam centre, direct beam), or where an expensive stage is iterated on without a session. Inside a session only the first reason remains; the warm workflow covers the second.</p>
+      <p><span class="k">Why</span>A stage output has exact provenance and one record; an intermediate inside a warm workflow has neither, so it cannot be shared and dies with the session. Splitting is the only strategy that works on a fire-and-forget remote runner.</p>
       <p class="cost"><span class="k">Cost</span>The cut is not always clean (vanadium must be oversampled). Both stages share parameters. The spec does not yet say which parameters are cheap, so the UI cannot pick a slider over a run button.</p></article>
 
     <article class="dec"><div class="id">D3</div><h3>Handles are opaque and data is tiered; memory never crosses a process</h3>
-      <p><span class="k">Why</span>Writing a huge intermediate is wasted work when its consumer is in the same process. A distributed memory layer would work badly with scipp objects and cost a lot. Recompute is often cheaper than storage. Making a session's memory an ordinary tier of the store is what lets a remote session be added later, and letting the store pick memory or disk from the process it runs in means the launcher decides only where a run executes.</p>
+      <p><span class="k">Why</span>Writing a huge stage output is wasted work when its consumer is in the same process. A distributed memory layer would work badly with scipp objects and cost a lot. Recompute is often cheaper than storage. Making a session's memory an ordinary tier of the store is what lets a remote session be added later, and letting the store pick memory or disk from the process it runs in means the launcher decides only where a run executes.</p>
       <p class="cost"><span class="k">Cost</span>Placement is explicit in the launcher interface. Shared mode pays a disk write, a read, and a process start per run. In shared mode the store spans processes, and its registry must know which memory tiers hold a copy.</p></article>
 
     <article class="dec"><div class="id">D4</div><h3>Only finalized data enters SciCat</h3>
