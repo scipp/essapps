@@ -30,6 +30,7 @@ An *output reference* is a second kind of value that any parameter field may hol
 It exists because small outputs are stored inline and have no handle, and because requests submitted together refer to each other before run IDs exist.
 The *data store* is the backend's one durable home for data: it knows every handle's origin, owns the bytes of uploads and of results written to disk, and knows which copies exist.
 A *data cache* holds copies in memory and serves views; there are several, one per session plus a shared one, and the data store says which one to ask.
+Clients never talk to a cache; they ask the backend, which asks the cache.
 
 - **Workflow**: the scientific code that turns input files into results.
   Typically a sciline pipeline, but the framework does not care.
@@ -103,7 +104,8 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   Every UI, notebook, or service reaches the backend only through it.
   HTTP is a later transport for the same interface, not a second API.
   Clients observe change by pulling with a version counter, never by callbacks carrying data.
-  Views (D17) are part of it.
+  Views (D17) are part of it: a client never addresses a data cache.
+  The backend forwards a view request to the cache holding a copy and returns the result, which is small by construction, so there is one endpoint in every mode.
 - **Launcher**: pluggable: session, subprocess, cluster.
   Placement is relative to the session holding a run's inputs (D3).
   Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
