@@ -12,7 +12,8 @@ A reading edition with diagrams is [architecture.html](architecture.html); its w
 A user, a script, or an automatic trigger submits a *run request*: which workflow to run, with which parameters, on which input data.
 The *backend* checks the request, writes it down as a *run record*, and asks a *launcher* to start a *runner* somewhere: in the same process, in a subprocess, or on the cluster.
 The runner fetches the inputs, calls the scientific workflow code, and stores the results.
-Any result of a run, whether a single number or a large array, can be an input of the next request; large results are stored separately and named by *handles*.
+Any output of a record, whether a single number or a large array, can be an input of the next request, named as *output X of record Y*.
+Raw files from the catalogue and uploaded files are records too, so every input is named the same way.
 Interactive work happens in a *session*: a long-lived process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run.
 Everything the backend knows is in the records, so any result can be traced back to raw data and parameters, and any result can be recomputed if it was thrown away.
 Batch reduction is many requests made from one *template*.
@@ -24,24 +25,24 @@ Publishing a result to the data catalogue is a separate, deliberate step.
 Plain-language definitions.
 The esslivedata project has its own glossary that uses some of these words differently, see the notes.
 
-Three of these terms are easy to confuse, so the distinctions first.
-A *handle* is a value: the identity of one stored piece of data.
-A *data reference* is a field type: a parameter or output declared to hold a handle.
-An *output reference* is a second kind of value that any parameter field may hold instead of a literal: "output X of run Y", for data a run has produced or will produce.
-It exists because small outputs are stored inline and have no handle, and because requests submitted together refer to each other before run IDs exist.
+Two of these terms are easy to confuse, so the distinction first.
+A *reference* is a value: "output X of record Y", which any parameter field may hold instead of a literal, for data a record has produced or will produce.
+A *data reference* is a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal.
 
 - **Workflow**: the scientific code that turns input files into results.
   Typically a sciline pipeline, but the framework does not care.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs.
   Independent of how the workflow is implemented or where it runs.
   Defined in scipp/ess#690.
-- **Handle**: a ticket naming one stored piece of data that is too large to keep inside a record, without saying where the data currently is.
-- **Data reference**: a parameter or output type whose value is a handle.
+- **Reference**: "output X of record Y", usable as the value of any parameter whose type matches (D16).
+  The only way a request names data (D18).
+- **Data reference**: a parameter or output type whose value is a reference to a file or array output.
   A parameter of this type is what we call an **input**; there is no separate input declaration (D15).
   In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
-- **Output reference**: "output X of run Y", usable as the value of any parameter with a matching type (D16).
+- **File record**: a record of the built-in `file` spec, which has no workflow.
+  It stands for one file that exists outside our computation, a SciCat dataset or an upload, and its single output is that file (D18).
 - **Run request**: everything needed to execute a workflow once.
-- **Run record**: a run request plus what happened to it: status, times, who submitted it, output values or handles, software versions.
+- **Run record**: a run request plus what happened to it: status, times, who submitted it, output values, software versions.
   Called "run", never "job", to avoid a clash with esslivedata, where a job is a running streaming workflow.
 - **Template**: a saved, versioned run request with some fields left blank.
 - **Batch**: many runs made from one template, each with small differences.
@@ -51,55 +52,54 @@ It exists because small outputs are stored inline and have no handle, and becaus
   In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Launcher**: decides where a run executes and starts it there.
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
-- **Data store**: where data lives, whether a raw file known to SciCat, an upload, or a result.
+- **Data store**: where the bytes of large outputs live, whether a raw file known to SciCat, an upload, or a result.
   One registry and disk tier, owned by the backend, plus a memory tier in every process that holds data: each session, and the shared service in shared mode.
   A copy in a memory tier is visible only to its process.
 - **Session**: a long-lived process belonging to one client, in which runs may be placed and which keeps their outputs, and the workflow itself, in memory.
   A cache over records: session identity never enters a record, and everything a session holds can be recomputed.
-- **Record store**: the database of run records.
-- **Dataset source**: where new datasets are discovered.
-- **Trigger loop**: watches the dataset source and submits runs automatically.
+- **Record store**: the database of records.
+- **Dataset source**: where new datasets are discovered; each becomes a file record.
+- **Trigger loop**: watches for completed records that match a rule and submits runs automatically.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
 - **SciCat**: the facility's data catalogue. **PID**: SciCat's persistent identifier for a dataset.
-- **Pending output**: an output of a run that has not finished yet, usable as input to another request.
+- **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Map and combine**: split work across many runs, then merge their outputs in one run.
 - **Local mode**: client, backend, launcher, session, and data store all inside one Python process: a notebook, or a local application.
   Contrast **shared mode**: the backend runs as a service used by many people.
 - **Warm workflow**: the workflow object kept alive in a session between runs, so a rerun recomputes only what a changed parameter affects.
   A session holds one per spec.
 - **Intermediate**: a value inside a workflow, such as a node of a sciline graph, held by the warm workflow.
-  The framework never sees it: no handle, no record.
+  The framework never sees it: no record, so no reference.
 - **Stage output**: an output of one spec that requests of another spec take as input, such as processed vanadium or a beam centre.
   An ordinary output with a record; the word only names the role (D2).
 - Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).
 
 ## Core model
 
-Six kinds of data.
+Five kinds of data.
 All are plain, JSON-serializable values, even when passed around inside one process.
 
 - **Spec**: identity (`name`, `version`), parameter model, output model.
   Both models use the same type vocabulary.
   Inputs are parameters of data-reference type (D15); outputs are a typed model like parameters (D16).
-- **Handle**: `(origin, id)` plus a lifecycle state: pending, available, evicted, failed.
-  The origin is a run, SciCat, or an upload, and it determines the miss path.
-  The state is independent of the run that produces it.
-  A handle names a computation result, not particular bytes; see D5 for what pins the bytes.
-  Small output values are stored inside the record and have no handle.
+  One built-in spec, `file`, has no workflow: its single output is a file, and its records stand for SciCat datasets and uploads (D18).
 - **Run request**: spec identity, parameter values, instrument, proposal, submitter.
   Stateless and complete: sufficient to reproduce the outputs from scratch.
-  Handles appear inside the parameter values, in the data-reference fields.
-  Any field may instead hold an output reference to another request, including a pending one; the backend substitutes the value or handle when it becomes available.
-- **Run record**: the request plus run ID, status, timestamps, output values (inline when small, handles when large), the resolved parameter values including defaults, software versions of the runner environment, and optionally batch ID, template version, and the record this one retries.
+  Any field may hold a reference, "output X of record Y", instead of a literal, including a reference to an output that does not exist yet; the backend holds the request until it does.
+  Inputs are references to file or array outputs; there is no other way to name data.
+- **Run record**: the request plus run ID, status, timestamps, output values, the resolved parameter values including defaults, software versions of the runner environment, and optionally batch ID, template version, and the record this one retries.
+  Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.
   Immutable once the run completes, except status.
-  The request keeps output references in their reference form, so provenance is the graph you get by following references and handles to the records that produced them.
+  The request keeps references in their reference form, so provenance is the graph you get by following them to the records that produced each output.
+  Whether an output is usable is two questions: the record's status, and whether the data store holds a copy.
+  A missing copy is recomputed from the record; for a file record that means downloading again.
 - **Template**: a stored, immutable, versioned partial run request.
   May originate from a version-controlled file (instrument defaults) or from a user saving a request.
 - **Batch**: a set of independent runs from one template with per-member overrides, tagged with a batch ID.
 
 ## Components
 
-- **Backend**: validates a request against the spec's JSON Schema, finds the data-reference fields by walking that schema, resolves their values to handles, creates the record, allocates handles for the outputs in state pending, and hands the request to a launcher.
+- **Backend**: validates a request against the spec's JSON Schema, finds the references by walking the request's values, checks each against the type of the output it names, resolves stand-ins to file records (D8), creates the record, and hands the request to a launcher.
   Single writer to the record store.
   Exactly one backend process per record store.
 - **Client interface**: the backend's Python interface.
@@ -120,22 +120,24 @@ All are plain, JSON-serializable values, even when passed around inside one proc
   Created and closed by a client; closing drops its copies.
   In local mode it is the client's own process.
   Initially sessions exist only in local mode (D1).
-- **Data store**: one lookup and listing for every handle, regardless of origin.
-  Each handle's origin is the record that produced it, a SciCat PID, or an upload.
+- **Data store**: one lookup and listing for every large output, addressed as record plus output name.
+  Its internal keys never appear in a request.
   The registry knows which memory tiers and which disk hold a copy.
   A runner asks the store for an input and hands it an output; the store serves from the memory tier of that process when it can, and otherwise reads or writes disk, so the runner never knows about tiers.
   Views (D17) are served from the memory tier holding a copy, or by partial reads from disk.
-  Every memory tier has a budget, and copies in memory or in a local download cache are evictable for every handle; what differs is the miss path: recompute from the record, re-download from SciCat, or nothing.
-  Uploads are the only handles whose origin is the data store itself, so they are never evicted.
+  Every memory tier has a budget, and copies in memory or in a local download cache are evictable; a miss is served by recomputing from the record, which for a file record from SciCat means downloading again.
+  An upload has nothing to download from, so its disk copy is pinned.
   A SciCat file on a mounted facility filesystem has no local copy; the mount is its disk tier.
   A result from last week and a raw file are the same thing to a request.
-- **Record store**: create, read, update status, and two queries: records that consumed a handle, and the record that produced a handle.
+- **Record store**: create, read, update status, and one query: records that reference output X of record Y.
+  The producer of an output needs no query, because the reference names it.
   Carries a schema version.
-- **Dataset source**: yields new datasets for a proposal as handle plus metadata.
+- **Dataset source**: yields new datasets for a proposal as PID plus metadata; the backend creates one file record per PID, and none for a PID that one of our own records already carries because we published it (D4).
   One real implementation (SciCat) and one fake for tests.
-- **Trigger loop**: on a new dataset or group of datasets matching a rule, instantiate a template and submit.
-- **Publisher**: writes the data behind a handle to SciCat together with its provenance.
-  Idempotent: the resulting PID is recorded, and publishing the same handle again returns it.
+- **Trigger loop**: on a completed record, or a group of them, matching a rule, instantiate a template and submit.
+  A new raw file and a finished processing stage are the same kind of event.
+- **Publisher**: writes an output to SciCat together with its provenance.
+  Idempotent: the resulting PID is recorded on the output, and publishing it again returns the PID.
 
 ## Decisions
 
@@ -146,7 +148,7 @@ Numbering is stable; add at the end.
 
 **Decision.** The stateless run request is the only unit the backend and the record store know.
 Execution may be stateful: a run placed in a session may reuse the workflow object and the data that earlier runs in that session left in memory.
-A session holds one warm workflow per spec, so tuning a stage output and its consumer together, such as vanadium processing and a sample reduction, uses two, chained through handles in the session's memory tier.
+A session holds one warm workflow per spec, so tuning a stage output and its consumer together, such as vanadium processing and a sample reduction, uses two, chained through the session's memory tier.
 Two invariants keep this safe.
 Session identity never appears in a record.
 Everything a session holds can be recomputed from records, so a session is a cache, and losing it costs only time.
@@ -169,7 +171,7 @@ Two reasons produce a cut.
 Reuse: one artefact feeds many runs, such as processed vanadium, a beam centre, or a direct beam, which sample reductions, batch, and automatic reduction all take as an input.
 Iteration without a session: an expensive stage whose result is tuned from a stateless runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
 Inside a session the second reason disappears: one unsplit spec is enough, because the warm workflow recomputes only what a changed parameter affects (D6), and the loaded data stays an intermediate the framework never sees.
-The first reason holds in a session too, because the artefact needs a record of its own before batch can reuse it; a session then holds one warm workflow per spec, chained through handles in its memory tier.
+The first reason holds in a session too, because the artefact needs a record of its own before batch can reuse it; a session then holds one warm workflow per spec, chained through its memory tier.
 
 **Why.** A stage output has exact provenance and one record; an intermediate inside a warm workflow has neither, so it cannot be shared and dies with the session.
 Splitting is the only strategy that works on a fire-and-forget remote runner.
@@ -181,12 +183,12 @@ For example, processed vanadium in diffraction is binned on the sample's edges, 
 Both stages typically share parameters, see the template open question.
 For an unsplit workflow in a session, the spec does not say which parameters are cheap to change, so the UI cannot choose a slider over a run button; see deferred.
 
-### D3 Handles are opaque and data is tiered; memory never crosses a process
+### D3 Data is tiered; memory never crosses a process
 
-**Decision.** A handle never contains a path.
+**Decision.** A reference never contains a path.
 Data in memory lives in exactly one process; there is no shared memory across processes or machines.
 The data store has one registry and disk tier, and a memory tier in every process that holds data: each session, and the shared service in shared mode.
-A copy in a memory tier is visible only to its process; a copy in memory or on local disk may be evicted for any handle whose origin is elsewhere.
+A copy in a memory tier is visible only to its process; a copy in memory or on local disk may be evicted whenever the record can bring it back.
 Every run's outputs have at least one consumer: the client that submitted the run, which will plot them, chain them, or both.
 Where a run executes decides whether its data touches disk:
 
@@ -199,7 +201,7 @@ Where a run executes decides whether its data touches disk:
 - **No consumer left.** Once retention expires, the output is dropped.
   A later request or view recomputes it from its record.
 
-The shared service holds large data only in its bounded, evictable memory tier: retention is a policy, and a miss is served by recomputing from the record or re-downloading from SciCat.
+The shared service holds large data only in its bounded, evictable memory tier: retention is a policy, and a miss is served by recomputing from the record, which for a file record means downloading again.
 Local mode is the degenerate deployment where client, session, and the whole data store are one process; the client interface is the same as in shared mode.
 
 **Why.** A stage output can be huge, and writing one to disk is wasted work when its only consumer is in the same process.
@@ -217,8 +219,10 @@ In shared mode the data store spans processes: the registry in the backend must 
 ### D4 Only finalized data enters SciCat
 
 **Decision.** Stage outputs and unreviewed outputs stay in our store.
-Publication is an explicit, idempotent operation on a handle, triggered by a user after inspection or by an automatic-reduction rule.
-SciCat inputs are handles with origin `scicat` and the PID as ID, so raw files and our outputs are the same type to a workflow.
+Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule.
+The PID is recorded on the output, which now has a second durable copy, so a miss on it becomes a download rather than a recompute.
+The dataset source recognizes such a PID and does not create a file record for it; otherwise the same data would exist twice and a rule that fires on new datasets would fire on our own output.
+Raw files enter as file records (D18), so raw files and our outputs are the same thing to a workflow.
 
 **Why.** Data in SciCat cannot be removed through the regular API.
 
@@ -279,15 +283,15 @@ The backend takes a startup lock so a second instance cannot open the same recor
 **Why.** One code path for execution.
 Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs (scipp/esslivedata#1285, #714, ADR 0007).
 
-### D8 References resolve at submission, handles materialize at execution
+### D8 Stand-ins resolve at submission, data materializes at execution
 
-**Decision.** Users submit references: local path, SciCat PID, or run number (per instrument).
-The backend resolves them to handles before persisting anything.
-The runner turns handles into local files at execution time.
-Local files that must reach a remote runner are uploaded into the data store first, where they are recorded as uploads and therefore never evicted.
+**Decision.** Users submit stand-ins: a local path, a SciCat PID, or a run number (per instrument).
+The backend resolves each to a reference to a file record before persisting anything, creating the record if the PID has none yet.
+The runner materializes references at execution time: files as local paths, arrays as scipp objects.
+Local files that must reach a remote runner are uploaded into the data store first, which creates their file record.
 
 **Why.** Provenance must not depend on a search that could give a different answer later.
-Uploaded files have no producing record and no catalogue entry, so evicting them would destroy data.
+An upload cannot be recomputed and has no catalogue entry, so its copy is pinned.
 
 ### D9 Instrument plus proposal scopes everything
 
@@ -314,7 +318,7 @@ The slot key is the stable identity a plot needs across superseded runs; esslive
 
 ### D11 The dataset source is abstracted
 
-**Decision.** Interface: for a proposal, yield new datasets with metadata.
+**Decision.** Interface: for a proposal, yield new datasets with metadata; the backend turns each into a file record.
 A SciCat implementation, polling or push as the deployment allows, and an in-memory fake.
 Arrival may be out of order; the interface does not promise a monotonic cursor.
 Not Kafka.
@@ -334,9 +338,9 @@ Rerunning a member is a new record with the same batch ID.
 ### D13 Map, combine, and chunking use one primitive: pending outputs as inputs
 
 **Decision.** Map is a batch with a shared fixed input and a per-member parameter (file, or chunk range).
-Combine is one request whose inputs are the map outputs, submitted before they exist.
+Combine is one request whose inputs are references to the map outputs, submitted before they exist.
 A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other by local alias.
-The backend holds a request until its pending inputs are available, fails it if any input fails, and cancels it if any input is cancelled.
+The backend holds a request until every record it references has completed, fails it if any of them fails, and cancels it if any is cancelled.
 Groups must be acyclic; a request waiting on an input that never arrives times out.
 Merge strategy, memory during merge, and chunk semantics belong to the combine workflow.
 
@@ -349,8 +353,8 @@ Fan-out whose size is only known after reading the file (grouping by rotation an
 
 ### D14 The client interface is the API; HTTP later; notebook first
 
-**Decision.** Requests, records, templates, and handles are plain data even in local mode.
-In local mode a client may also turn a handle into a scipp object directly, so plopp and the full scipp API work in a notebook; that is a convenience on top of views (D17), not a second mechanism.
+**Decision.** Requests, records, templates, and references are plain data even in local mode.
+In local mode a client may also turn a reference into a scipp object directly, so plopp and the full scipp API work in a notebook; that is a convenience on top of views (D17), not a second mechanism.
 No standalone local application initially; a notebook on the library is the local application.
 When one is wanted, it is the same web UI hosted in the local process, next to backend, session, and data store, against the in-process client interface; the shared deployment is the same UI over the HTTP transport.
 The UI framework is chosen after the backend skeleton exists.
@@ -367,7 +371,8 @@ esslivedata's per-dashboard YAML config store was an anti-pattern (scipp/esslive
 ### D15 Inputs are parameters of data-reference type
 
 **Decision.** The spec has one parameter model and no separate input section.
-The parameter vocabulary gains a data-reference type: a handle, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same `ArraySpec` that outputs declare.
+The parameter vocabulary gains a data-reference type: a reference to a file or array output, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same `ArraySpec` that outputs declare.
+The file output of a file record satisfies any kind: the consumer's kind decides how it is materialized, and loading a file as a scipp array fails if it is not scipp HDF5.
 Lists of references are allowed; comparing or combining runs is a workflow with such a list as input.
 A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run.
 
@@ -376,7 +381,8 @@ None of it needs a second declaration system.
 esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.
 Sharing `ArraySpec` between outputs and reference constraints makes "outputs can fulfil inputs" a check between two values of the same type.
 
-**Cost.** The backend must walk a JSON Schema, including nested models, to find reference fields.
+**Cost.** The backend must walk the request's values to find references and the spec's JSON Schema, including nested models, to check them.
+A file's kind is checked at materialization, not at submission.
 This is a small extension to the vocabulary in scipp/ess#690.
 
 ### D16 Outputs are a typed model in the same vocabulary as parameters
@@ -385,19 +391,19 @@ This is a small extension to the vocabulary in scipp/ess#690.
 An array output is a data-reference field constrained by `ArraySpec`.
 A beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of kind "opaque file".
 Title and description are field metadata.
-Whether an output value is stored inline in the record or in the data store under a handle is a framework decision based on size and type, invisible in the spec.
-A downstream parameter may take an output reference to any output field whose type matches.
+Whether an output value is stored inline in the record or in the data store is a framework decision based on type, invisible in the spec and to clients, who name every output the same way (D18).
+A downstream parameter may take a reference to any output field whose type matches.
 
 **Why.** The spec in scipp/ess#690 allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow.
 With one vocabulary on both sides, chaining is a type check between two fields.
-Handles stop being a spec concept and become a storage detail.
+Storage placement stops being a spec concept.
 
 **Cost.** The output side of scipp/ess#690 changes shape while the PR is open.
 Structural validation of an array output against its `ArraySpec` happens in the runner at completion, since pydantic cannot check a scipp object.
 
 ### D17 Views are not runs
 
-**Decision.** A view is a request for a small piece of a handle's data for display: label-based slicing, reduction over dimensions (sum, mean), and downsampling to a display resolution.
+**Decision.** A view is a request for a small piece of an output's data for display: label-based slicing, reduction over dimensions (sum, mean), and downsampling to a display resolution.
 Views are served by the data store from the memory tier holding a copy (D3), are not recorded, and are never inputs to a run.
 When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow (D10).
 Overlaying several runs in one plot is several views; anything beyond slicing, reduction, and downsampling, including the difference of two runs, is a workflow.
@@ -409,6 +415,24 @@ The slice-becomes-parameter rule keeps provenance exact without making views par
 
 **Cost.** A view vocabulary in the client interface, and a chunking decision at write time for dense data.
 Through the client interface a user explores declared outputs only; a notebook can compute any node of a sciline workflow.
+
+### D18 Every value is an output of a record; files are records too
+
+**Decision.** A request names data only as "output X of record Y".
+SciCat datasets and uploads are records of one built-in spec, `file`, which has no workflow and one output: the file.
+The dataset source creates one file record per PID; an upload creates a new one.
+Whether an output's bytes live inline in the record or in the data store is decided by type in the runner and is invisible to clients; the data store's keys never appear in a request.
+Whether an output is usable is two questions: the record's status, and whether the store holds a copy.
+A missing copy is recomputed from the record; for a file record that means downloading again, and for an upload nothing can be recomputed, so its copy is pinned.
+
+**Why.** One addressing scheme for inputs, views, publication, and provenance, and one kind of dependency for the scheduler.
+The "record that produced it" query disappears, because the reference names it.
+The trigger loop gets one event stream: a new raw file and a completed processing stage are both a record reaching completed, so automatic reduction can chain stages without a new concept.
+A handle with its own origin and lifecycle would be three special cases of this: the origin is the producing record, and the lifecycle is record status plus copy availability.
+
+**Cost.** One record per dataset the source discovers, so the record store holds a dataset table; "small" in D5 is about the schema.
+The file record's output has no kind, so D15 gains the rule that a file satisfies any data-reference kind, checked at materialization rather than submission.
+A published output must not come back as a second record: the dataset source checks PIDs against records.
 
 ## Failure handling
 
@@ -426,7 +450,7 @@ Kept out of the decisions above so it can be read as one piece.
 - **Failure surfacing** is in scope from the start: a user must see why a run failed without reading logs.
   Facilities that built automatic reduction report that the monitoring UI was most of the value.
 - **Slow or missing shared filesystem.** Fetching inputs has a timeout and a distinct failure status.
-- **Multi-tenancy.** The backend checks proposal access on every handle dereference, not only at submission.
+- **Multi-tenancy.** The backend checks proposal access on every reference it resolves or serves, not only at submission.
   Cluster jobs run under the submitting user's account.
 
 ## Execution modes mapped onto the model
@@ -437,7 +461,7 @@ Kept out of the decisions above so it can be read as one piece.
 - **Batch**: template plus overrides (D12).
 - **Automatic**: trigger loop plus template (D11).
 - **Map, combine, chunking**: batch plus dependent combine (D13).
-- **Publication**: explicit publish of a handle (D4).
+- **Publication**: explicit publish of an output (D4).
 
 ## Explicitly deferred
 
@@ -487,6 +511,6 @@ The full walking skeleton, all components in local mode with no HTTP and no UI, 
 ## Review log
 
 This document was reviewed by six independent AI reviewers before being shown to the team, from these angles: architectural consistency, fit with real ess workflows, operations and failure modes, prior art at other facilities, plain-language readability, and lessons from esslivedata.
-Their findings shaped the failure-handling section, the record fields for resolved values and package versions, handle lifecycle states, the memory-versus-fan-out rule in D3, the serializer rule in D6, instrument-shared artefacts in D9, slots in D10, and the open questions.
+Their findings shaped the failure-handling section, the record fields for resolved values and package versions, the memory-versus-fan-out rule in D3, the serializer rule in D6, instrument-shared artefacts in D9, slots in D10, and the open questions.
 The unification of inputs and parameters in D15, and of outputs with the same vocabulary in D16, followed from the reviewers' observation that the spec had no input declarations and no types for non-array outputs.
 A later pass on interactive use found that the file-based contract in D6 contradicted the in-memory chain in D3, and that stateless execution made interactive loops disk-bound in shared mode; the session model in D1, D3, and D6 is the result.

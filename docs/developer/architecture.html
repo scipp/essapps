@@ -189,7 +189,7 @@
     <li><a href="#chaining">Chaining and groups</a></li>
     <li><a href="#failure">Failure handling</a></li>
     <li><a href="#modes">Execution modes</a></li>
-    <li><a href="#decisions">Decisions D1–D17</a></li>
+    <li><a href="#decisions">Decisions D1–D18</a></li>
     <li><a href="#open">Open questions</a></li>
     <li><a href="#next">Deferred and next step</a></li>
   </ol>
@@ -205,7 +205,7 @@
 
 <section id="picture">
   <h2>The picture in one paragraph</h2>
-  <p>A user, a script, or an automatic trigger submits a <em>run request</em>: which workflow, with which parameters, on which input data. The <em>backend</em> checks it, writes it down as a <em>run record</em>, and asks a <em>launcher</em> to start a <em>runner</em>: in the same process, in a subprocess, or on the cluster. The runner fetches inputs, calls the workflow, and stores results. Any result, a single number or a large array, can be an input of the next request; large results live in the data store and are named by <em>handles</em>. Interactive work happens in a <em>session</em>: a long-lived process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run. Everything the backend knows is in the records, so any result can be traced back to raw data and recomputed if it was thrown away. Batch reduction is many requests from one <em>template</em>; automatic reduction is a loop that makes requests whenever new data appears. Publishing to SciCat is a separate, deliberate step.</p>
+  <p>A user, a script, or an automatic trigger submits a <em>run request</em>: which workflow, with which parameters, on which input data. The <em>backend</em> checks it, writes it down as a <em>run record</em>, and asks a <em>launcher</em> to start a <em>runner</em>: in the same process, in a subprocess, or on the cluster. The runner fetches inputs, calls the workflow, and stores results. Any output of a record, a single number or a large array, can be an input of the next request, named as <em>output X of record Y</em>. Raw files from the catalogue and uploaded files are records too, so every input is named the same way. Interactive work happens in a <em>session</em>: a long-lived process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run. Everything the backend knows is in the records, so any result can be traced back to raw data and recomputed if it was thrown away. Batch reduction is many requests from one <em>template</em>; automatic reduction is a loop that makes requests whenever new data appears. Publishing to SciCat is a separate, deliberate step.</p>
 
   <figure>
     <div class="frame">
@@ -267,7 +267,7 @@
       <line x1="860" y1="114" x2="760" y2="218" class="edge" marker-end="url(#a1)"/>
       <text x="830" y="175" class="lbl">outputs</text>
       <line x1="700" y1="218" x2="800" y2="114" class="edge-dash" marker-end="url(#a1)"/>
-      <text x="720" y="200" text-anchor="end" class="lbl">inputs by handle</text>
+      <text x="720" y="200" text-anchor="end" class="lbl">inputs by reference</text>
 
       <!-- data store and scicat -->
       <line x1="770" y1="240" x2="818" y2="240" class="edge" marker-end="url(#a1)"/>
@@ -282,7 +282,7 @@
       <text x="495" y="158" text-anchor="middle" class="lbl mem">view results: a small piece, never the volume</text>
     </svg>
     </div>
-    <figcaption><b>The request path.</b> The backend is the single writer to the record store; the runner never touches it and reports through the backend's API instead. The data store is where data lives: one registry and disk tier owned by the backend, plus a memory tier in every process that holds data. A runner asks it for inputs and hands it outputs without knowing which tier serves them. Views come back through the backend, so the client has one endpoint. Raw files in SciCat and results are the same kind of thing to a request: a handle. Dashed edges are lookups, solid edges carry the run forward.</figcaption>
+    <figcaption><b>The request path.</b> The backend is the single writer to the record store; the runner never touches it and reports through the backend's API instead. The data store is where data lives: one registry and disk tier owned by the backend, plus a memory tier in every process that holds data. A runner asks it for inputs and hands it outputs without knowing which tier serves them. Views come back through the backend, so the client has one endpoint. Raw files in SciCat and results are the same kind of thing to a request: an output of a record. Dashed edges are lookups, solid edges carry the run forward.</figcaption>
   </figure>
 </section>
 
@@ -303,19 +303,18 @@
   <h2>Terms</h2>
   <p class="lead-in">Plain-language definitions. esslivedata uses some of these words differently; the clashes are noted.</p>
   <div class="callout">
-    <h3>Three terms that look alike</h3>
+    <h3>Two terms that look alike</h3>
     <ul>
-      <li><b>Handle</b> is a <em>value</em>: the identity of one stored piece of data.</li>
-      <li><b>Data reference</b> is a <em>field type</em>: a parameter or output declared to hold a handle.</li>
-      <li><b>Output reference</b> is a second kind of <em>value</em> that any parameter field may hold instead of a literal: "output X of run Y", for data a run has produced or will produce. It exists because small outputs are stored inline and have no handle, and because requests submitted together refer to each other before run IDs exist.</li>
+      <li><b>Reference</b> is a <em>value</em>: "output X of record Y", which any parameter field may hold instead of a literal, for data a record has produced or will produce.</li>
+      <li><b>Data reference</b> is a <em>field type</em>: a parameter or output declared to hold a reference to a file or an array rather than a literal.</li>
     </ul>
   </div>
   <ul class="terms">
     <li><b>Workflow</b> · the scientific code that turns inputs into results. Typically sciline; the framework does not care.</li>
     <li><b>Spec</b> · the declared interface of a workflow: name, version, parameters, outputs. scipp/ess#690.</li>
-    <li><b>Handle</b> · a ticket naming one stored piece of data, without saying where it currently is.</li>
-    <li><b>Data reference</b> · a parameter or output type whose value is a handle. Such a parameter is an <b>input</b>.</li>
-    <li><b>Output reference</b> · "output X of run Y", usable as any parameter with a matching type.</li>
+    <li><b>Reference</b> · "output X of record Y", usable as any parameter whose type matches. The only way a request names data (D18).</li>
+    <li><b>Data reference</b> · a parameter or output type whose value is a reference to a file or array output. Such a parameter is an <b>input</b>.</li>
+    <li><b>File record</b> · a record of the built-in <code>file</code> spec, which has no workflow. Stands for one SciCat dataset or upload; its single output is that file (D18).</li>
     <li><b>Run request</b> · everything needed to execute a workflow once.</li>
     <li><b>Run record</b> · the request plus what happened: status, outputs, versions. Never "job" (esslivedata clash).</li>
     <li><b>Template</b> · a saved, versioned request with blanks. <b>Batch</b> · many runs from one template.</li>
@@ -324,57 +323,31 @@
     <li><b>Launcher</b> · decides where a run executes. <b>Runner</b> · the process that executes runs: one and exit, or many in a session.</li>
     <li><b>Data store</b> · where data lives. One registry and disk tier owned by the backend, plus a memory tier in every process that holds data. A copy in a memory tier is visible only to its process.</li>
     <li><b>Session</b> · a long-lived process of one client that executes runs placed in it and keeps outputs and workflow in memory. A cache over records.</li>
-    <li><b>Record store</b> · the database of run records.</li>
-    <li><b>Dataset source</b> · where new datasets are discovered. <b>Trigger loop</b> · watches it and submits runs.</li>
+    <li><b>Record store</b> · the database of records.</li>
+    <li><b>Dataset source</b> · where new datasets are discovered; each becomes a file record. <b>Trigger loop</b> · watches for completed records matching a rule and submits runs.</li>
     <li><b>Proposal</b> · the experiment allocation that owns data and defines access. <b>SciCat</b> · the catalogue; <b>PID</b> its identifier.</li>
-    <li><b>Pending output</b> · an output of a run that has not finished, usable as an input already.</li>
+    <li><b>Pending output</b> · an output of a record that has not completed, usable as an input already.</li>
     <li><b>Local mode</b> · client, backend, launcher, session, data store in one Python process. <b>Shared mode</b> · backend as a service for many people.</li>
     <li><b>Warm workflow</b> · the workflow object kept alive in a session, so a rerun recomputes only what changed. One per spec.</li>
-    <li><b>Intermediate</b> · a value inside a workflow, such as a sciline graph node, held by the warm workflow. The framework never sees it: no handle, no record.</li>
+    <li><b>Intermediate</b> · a value inside a workflow, such as a sciline graph node, held by the warm workflow. The framework never sees it: no record, so no reference.</li>
     <li><b>Stage output</b> · an output of one spec that another spec takes as input: processed vanadium, a beam centre. An ordinary output with a record; the word only names the role (D2).</li>
   </ul>
 </section>
 
 <section id="model">
   <h2>Core model</h2>
-  <p>Six kinds of data, all plain JSON-serializable values even inside one process: <b>spec</b>, <b>handle</b>, <b>run request</b>, <b>run record</b>, <b>template</b>, <b>batch</b>. A request is stateless and complete: sufficient to reproduce its outputs from scratch. Handles appear inside parameter values in data-reference fields, and any field may instead hold an output reference to another request, including a pending one. A record adds run ID, status, timestamps, output values, the resolved parameters including defaults, and the software versions the runner used.</p>
+  <p>Five kinds of data, all plain JSON-serializable values even inside one process: <b>spec</b>, <b>run request</b>, <b>run record</b>, <b>template</b>, <b>batch</b>. A request is stateless and complete: sufficient to reproduce its outputs from scratch. Any field may hold a reference, "output X of record Y", instead of a literal, including a reference to an output that does not exist yet; inputs are references to file or array outputs, and there is no other way to name data (D18). A record adds run ID, status, timestamps, output values, the resolved parameters including defaults, and the software versions the runner used. Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.</p>
 
-  <figure>
-    <div class="frame">
-    <svg viewBox="0 0 760 150" role="img" aria-label="Handle lifecycle: pending becomes available or failed; available can be evicted and comes back to available by recompute or re-download; uploads are never evicted.">
-      <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker></defs>
-      <rect x="20" y="40" width="130" height="44" rx="22" class="pend"/>
-      <text x="85" y="67" text-anchor="middle">pending</text>
-      <rect x="250" y="40" width="130" height="44" rx="22" class="state"/>
-      <text x="315" y="67" text-anchor="middle">available</text>
-      <rect x="500" y="40" width="130" height="44" rx="22" class="state-end"/>
-      <text x="565" y="67" text-anchor="middle">evicted</text>
-      <rect x="250" y="106" width="130" height="34" rx="17" class="state-end"/>
-      <text x="315" y="128" text-anchor="middle">failed</text>
-
-      <line x1="150" y1="62" x2="248" y2="62" class="edge" marker-end="url(#a2)"/>
-      <text x="199" y="55" text-anchor="middle" class="lbl">run completes</text>
-      <path d="M150,70 L200,70 L200,123 L248,123" class="edge" marker-end="url(#a2)"/>
-      <text x="205" y="112" class="lbl">run fails</text>
-      <line x1="380" y1="54" x2="498" y2="54" class="edge" marker-end="url(#a2)"/>
-      <text x="439" y="47" text-anchor="middle" class="lbl">copy dropped</text>
-      <line x1="498" y1="72" x2="380" y2="72" class="edge-dash" marker-end="url(#a2)"/>
-      <text x="439" y="90" text-anchor="middle" class="lbl">recompute · re-download</text>
-      <text x="680" y="58" class="small">uploads:</text>
-      <text x="680" y="72" class="small">never evicted</text>
-    </svg>
-    </div>
-    <figcaption><b>A handle names a computation result, not particular bytes.</b> Its state is independent of the run that produces it. Eviction drops a copy, never the data: the miss path depends on the origin.</figcaption>
-  </figure>
+  <p>SciCat datasets and uploads are records too, of one built-in spec, <code>file</code>, which has no workflow and one output: the file. So every input, view, publication, and provenance edge is addressed the same way, and the scheduler knows one kind of dependency. Whether an output is usable is two questions: the record's status, and whether the data store holds a copy. A missing copy is always recovered from the record.</p>
 
   <div class="tablewrap">
   <table>
-    <thead><tr><th>Origin</th><th>Where the truth lives</th><th>On a miss</th><th>Evictable copies</th></tr></thead>
+    <thead><tr><th>Output of</th><th>Where the truth lives</th><th>On a missing copy</th><th>Copies evictable</th></tr></thead>
     <tbody>
-      <tr><td>Result of a run</td><td>The record that produced it</td><td>Recompute from the record</td><td>Yes</td></tr>
-      <tr><td>SciCat dataset</td><td>SciCat PID (mounted filesystem is its disk tier)</td><td>Re-download</td><td>Yes</td></tr>
-      <tr><td>Upload</td><td>The copy in the data store itself</td><td>Nothing to fall back to</td><td>No</td></tr>
-      <tr><td>Small value</td><td>Inline in the record, no handle</td><td>n/a</td><td>n/a</td></tr>
+      <tr><td>A run record</td><td>The record: parameters, references, versions</td><td>Recompute</td><td>Yes</td></tr>
+      <tr><td>A file record from SciCat</td><td>The PID (a mounted filesystem is its disk tier)</td><td>Download again</td><td>Yes</td></tr>
+      <tr><td>A file record from an upload</td><td>The copy in the data store</td><td>Nothing to recover from</td><td>No: pinned</td></tr>
+      <tr><td>A published run record</td><td>The record, and now also the PID</td><td>Download rather than recompute</td><td>Yes</td></tr>
     </tbody>
   </table>
   </div>
@@ -382,7 +355,7 @@
 
 <section id="placement">
   <h2>Where data lives</h2>
-  <p class="lead-in">D3. A handle never contains a path. Data in memory lives in exactly one process; there is no shared memory across processes or machines. The data store has one registry and disk tier, and a memory tier in every process that holds data. Where a run executes decides whether its data touches disk.</p>
+  <p class="lead-in">D3. A reference never contains a path. Data in memory lives in exactly one process; there is no shared memory across processes or machines. The data store has one registry and disk tier, and a memory tier in every process that holds data. Where a run executes decides whether its data touches disk.</p>
   <div class="legend"><span class="l-mem">memory, stays in one process</span><span class="l-disk">disk, the only way to another process</span><span class="l-ink">control</span></div>
 
   <figure>
@@ -496,7 +469,7 @@
 
   <figure>
     <div class="frame">
-    <svg viewBox="0 0 900 300" role="img" aria-label="The backend, asked by a client for a view of a handle, consults the data store, which looks up which memory tier holds a copy and serves the request from there; if no copy exists, the miss path recomputes from the record or re-downloads from SciCat; the small result goes back to the client through the backend.">
+    <svg viewBox="0 0 900 300" role="img" aria-label="The backend, asked by a client for a view of an output, consults the data store, which looks up which memory tier holds a copy and serves the request from there; if no copy exists, the miss path recomputes from the record or re-downloads from SciCat; the small result goes back to the client through the backend.">
       <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
       <marker id="a4m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-mem"/></marker></defs>
       <rect x="20" y="110" width="170" height="64" rx="4" class="box"/>
@@ -506,10 +479,10 @@
       <rect x="270" y="80" width="230" height="130" rx="4" class="box-soft"/>
       <text x="385" y="102" text-anchor="middle" class="title">Data store registry</text>
       <line x1="285" y1="112" x2="485" y2="112" class="edge" style="stroke: var(--line-strong)"/>
-      <text x="290" y="132" class="small">h1 → session A · memory</text>
-      <text x="290" y="150" class="small">h2 → shared · memory</text>
-      <text x="290" y="168" class="small">h3 → disk (shared can load)</text>
-      <text x="290" y="186" class="small">h4 → no copy</text>
+      <text x="290" y="132" class="small">r12.result → session A · memory</text>
+      <text x="290" y="150" class="small">r9.result → shared · memory</text>
+      <text x="290" y="168" class="small">r7.file → disk (shared can load)</text>
+      <text x="290" y="186" class="small">r3.result → no copy</text>
 
       <rect x="590" y="20" width="200" height="56" rx="4" class="box-mem"/>
       <text x="690" y="43" text-anchor="middle" class="title">Session A memory tier</text>
@@ -558,9 +531,9 @@
       <rect x="20" y="196" width="840" height="76" rx="6" class="box-soft"/>
       <text x="36" y="218" class="title">Records · durable · stateless</text>
       <rect x="36" y="230" width="230" height="32" rx="4" class="box"/>
-      <text x="151" y="251" text-anchor="middle" class="small">request: resolved params, input handles</text>
+      <text x="151" y="251" text-anchor="middle" class="small">request: resolved params, references</text>
       <rect x="286" y="230" width="230" height="32" rx="4" class="box"/>
-      <text x="401" y="251" text-anchor="middle" class="small">outputs: inline values, handles</text>
+      <text x="401" y="251" text-anchor="middle" class="small">outputs: inline, or in the data store</text>
       <rect x="536" y="230" width="180" height="32" rx="4" class="box"/>
       <text x="626" y="251" text-anchor="middle" class="small">package versions, status</text>
 
@@ -576,7 +549,7 @@
     </div>
     <figcaption><b>Stateless at the record level, stateful at the execution level.</b> This is the esslivedata lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so the session is kept invisible to the records rather than avoided altogether.</figcaption>
   </figure>
-  <p>A session holds one warm workflow per spec. Tuning vanadium processing while watching a reduced sample uses two, chained through a handle in the session's memory tier (D2).</p>
+  <p>A session holds one warm workflow per spec. Tuning vanadium processing while watching a reduced sample uses two, chained through the session's memory tier (D2).</p>
 
   <h3>Why local-only first</h3>
   <p>Remote sessions need a memory budget per session, a cap on sessions, idle timeouts, and a store protocol to memory tiers in other processes. Batch and automatic reduction run as a stateless service and the shared web UI submits and inspects, which covers those needs without any of that. A local application is the same web UI hosted in one process next to backend, session, and data store; the shared deployment is the same UI over HTTP (D14).</p>
@@ -731,7 +704,7 @@
       <text x="764" y="154" class="small">combine fails</text>
       <text x="764" y="176" class="small">any cancelled →</text>
       <text x="764" y="190" class="small">combine cancelled</text>
-      <text x="20" y="280" class="small">provenance: follow the references back to the records that produced each handle</text>
+      <text x="20" y="280" class="small">provenance: follow the references back to the records that produced each output</text>
     </svg>
     </div>
     <figcaption><b>Map and combine.</b> Real combines are not sums: reflectometry uses a variance-weighted overlap fit, SANS concatenates events. Merging therefore stays a workflow concern; the framework only sequences. Batch members (D12) are the same picture without the combine.</figcaption>
@@ -784,7 +757,7 @@
     <li><b>Session loss.</b> A closed or crashed session drops its memory tier and its warm workflow. Runs in flight there fail and the client resubmits; anything else is recomputed on demand.</li>
     <li><b>Failure surfacing</b> is in scope from the start: a user must see why a run failed without reading logs. Facilities with automatic reduction report the monitoring UI was most of the value.</li>
     <li><b>Slow or missing shared filesystem.</b> Fetching inputs has a timeout and a distinct failure status.</li>
-    <li><b>Multi-tenancy.</b> Proposal access is checked on every handle dereference, not only at submission. Cluster jobs run under the submitting user's account.</li>
+    <li><b>Multi-tenancy.</b> Proposal access is checked on every reference resolved or served, not only at submission. Cluster jobs run under the submitting user's account.</li>
   </ul>
 </section>
 
@@ -796,7 +769,7 @@
     <li><b>Batch</b><span>Template plus per-member overrides, independent records (D12).</span></li>
     <li><b>Automatic</b><span>Trigger loop plus template (D11).</span></li>
     <li><b>Map, combine, chunking</b><span>Batch plus a dependent combine (D13).</span></li>
-    <li><b>Publication</b><span>Explicit publish of a handle to SciCat (D4).</span></li>
+    <li><b>Publication</b><span>Explicit publish of an output to SciCat (D4).</span></li>
   </ul>
 </section>
 
@@ -814,12 +787,12 @@
       <p><span class="k">Why</span>A stage output has exact provenance and one record; an intermediate inside a warm workflow has neither, so it cannot be shared and dies with the session. Splitting is the only strategy that works on a fire-and-forget remote runner.</p>
       <p class="cost"><span class="k">Cost</span>The cut is not always clean (vanadium must be oversampled). Both stages share parameters. The spec does not yet say which parameters are cheap, so the UI cannot pick a slider over a run button.</p></article>
 
-    <article class="dec"><div class="id">D3</div><h3>Handles are opaque and data is tiered; memory never crosses a process</h3>
+    <article class="dec"><div class="id">D3</div><h3>Data is tiered; memory never crosses a process</h3>
       <p><span class="k">Why</span>Writing a huge stage output is wasted work when its consumer is in the same process. A distributed memory layer would work badly with scipp objects and cost a lot. Recompute is often cheaper than storage. Making a session's memory an ordinary tier of the store is what lets a remote session be added later, and letting the store pick memory or disk from the process it runs in means the launcher decides only where a run executes.</p>
       <p class="cost"><span class="k">Cost</span>Placement is explicit in the launcher interface. Shared mode pays a disk write, a read, and a process start per run. In shared mode the store spans processes, and its registry must know which memory tiers hold a copy.</p></article>
 
     <article class="dec"><div class="id">D4</div><h3>Only finalized data enters SciCat</h3>
-      <p><span class="k">Why</span>Data in SciCat cannot be removed through the regular API. Publication is explicit and idempotent; SciCat inputs are handles with the PID as ID, so raw files and our outputs are the same type.</p>
+      <p><span class="k">Why</span>Data in SciCat cannot be removed through the regular API. Publication is explicit and idempotent. The PID is recorded on the output, which then has a second durable copy, and the dataset source must not turn that PID into a second record. Raw files enter as file records (D18), so raw files and our outputs are the same thing to a workflow.</p>
       <p class="cost"><span class="k">Cost</span>A separate step the user or a rule must take.</p></article>
 
     <article class="dec"><div class="id">D5</div><h3>The record store is ours, small, and implementation-agnostic</h3>
@@ -834,8 +807,8 @@
       <p><span class="k">Why</span>One code path for execution. Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs. No database credentials on compute nodes; short-lived download tokens instead.</p>
       <p class="cost"><span class="k">Cost</span>A startup lock, and every runner report goes through the backend's API.</p></article>
 
-    <article class="dec"><div class="id">D8</div><h3>References resolve at submission, handles materialize at execution</h3>
-      <p><span class="k">Why</span>Provenance must not depend on a search that could give a different answer later. Uploaded files have no producing record and no catalogue entry, so they are never evicted.</p>
+    <article class="dec"><div class="id">D8</div><h3>Stand-ins resolve at submission, data materializes at execution</h3>
+      <p><span class="k">Why</span>A run number, path, or PID becomes a reference to a file record before anything is persisted, because provenance must not depend on a search that could give a different answer later. An upload cannot be recomputed and has no catalogue entry, so its copy is pinned.</p>
       <p class="cost"><span class="k">Cost</span>Local files bound for a remote runner are uploaded first.</p></article>
 
     <article class="dec"><div class="id">D9</div><h3>Instrument plus proposal scopes everything</h3>
@@ -847,7 +820,7 @@
       <p class="cost"><span class="k">Cost</span>Slot runs go to the submitter's session, which initially means local mode only.</p></article>
 
     <article class="dec"><div class="id">D11</div><h3>The dataset source is abstracted</h3>
-      <p><span class="k">Why</span>Two implementations from day one: SciCat and an in-memory fake. Kafka would couple the backend to streaming infrastructure and reduce uncatalogued data; a request row in a database is the durable desired state esslivedata's command struggle concluded was needed.</p>
+      <p><span class="k">Why</span>Two implementations from day one: SciCat and an in-memory fake; each new dataset becomes a file record. Kafka would couple the backend to streaming infrastructure and reduce uncatalogued data; a request row in a database is the durable desired state esslivedata's command struggle concluded was needed.</p>
       <p class="cost"><span class="k">Cost</span>Arrival may be out of order; no monotonic cursor is promised.</p></article>
 
     <article class="dec"><div class="id">D12</div><h3>Batch members are independent</h3>
@@ -863,16 +836,21 @@
       <p class="cost"><span class="k">Cost</span>A local app in one process shares the interpreter between UI and runs; moving the session to a subprocess needs the remote-session machinery.</p></article>
 
     <article class="dec"><div class="id">D15</div><h3>Inputs are parameters of data-reference type</h3>
-      <p><span class="k">Why</span>Every difference between an input and a parameter here is behaviour selected by the field's type. Lists of references are allowed; comparing or combining runs is a workflow with such a list as input.</p>
-      <p class="cost"><span class="k">Cost</span>The backend walks a JSON Schema to find reference fields. A small extension to the vocabulary in scipp/ess#690.</p></article>
+      <p><span class="k">Why</span>Every difference between an input and a parameter here is behaviour selected by the field's type. Lists of references are allowed; comparing or combining runs is a workflow with such a list as input. A file record's output satisfies any kind; the consumer's kind decides how it is materialized.</p>
+      <p class="cost"><span class="k">Cost</span>The backend walks the request's values to find references and the schema to check them; a file's kind is checked at materialization. A small extension to the vocabulary in scipp/ess#690.</p></article>
 
     <article class="dec"><div class="id">D16</div><h3>Outputs are a typed model in the same vocabulary as parameters</h3>
-      <p><span class="k">Why</span>The spec allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for beam centres and direct beams. With one vocabulary, chaining is a type check between two fields.</p>
+      <p><span class="k">Why</span>The spec allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for beam centres and direct beams. With one vocabulary, chaining is a type check between two fields, and whether a value is stored inline or in the data store is invisible to the spec and to clients.</p>
       <p class="cost"><span class="k">Cost</span>The output side of scipp/ess#690 changes shape while the PR is open. Structural validation of arrays happens in the runner.</p></article>
 
     <article class="dec"><div class="id">D17</div><h3>Views are not runs</h3>
       <p><span class="k">Why</span>Exploring a 4D volume by dragging through slices must not create records, and the frontend must never receive the volume. Views are served from the memory tier holding a copy. Overlaying runs is several views; a difference of runs is a workflow.</p>
       <p class="cost"><span class="k">Cost</span>A view vocabulary, and a chunking decision at write time for dense data. Through the interface a user explores declared outputs only; a notebook can compute any sciline node.</p></article>
+
+    <article class="dec"><div class="id">D18</div><h3>Every value is an output of a record; files are records too</h3>
+      <p>A request names data only as "output X of record Y". SciCat datasets and uploads are records of the built-in <code>file</code> spec, one per PID, a new one per upload. Where an output's bytes live, inline or in the data store, is decided by type in the runner and invisible to clients.</p>
+      <p><span class="k">Why</span>One addressing scheme for inputs, views, publication, and provenance, and one kind of dependency for the scheduler. The producer of an output needs no query. The trigger loop gets one event stream: a new raw file and a completed processing stage are both a record reaching completed, so automatic reduction chains stages with no new concept.</p>
+      <p class="cost"><span class="k">Cost</span>One record per dataset discovered, so the record store holds a dataset table. A file output has no kind, so its kind is checked at materialization. A published output must not come back as a second record.</p></article>
 
   </div>
 </section>
