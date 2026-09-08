@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+The record store: SQLite, one writer, schema-versioned (D5).
+
+Holds run records, the reference edges between them, and the registry of disk
+copies (the part of the data store that knows where bytes are). Records are never
+deleted one at a time.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import sqlite3
+from collections.abc import Iterator
+from datetime import datetime
+from pathlib import Path
+from typing import IO, Self
+
+from .records import RunRecord, Status
+from .spec import Ref, SpecId
+
+SCHEMA_VERSION = 1
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS records (
+    id TEXT PRIMARY KEY,
+    spec_name TEXT NOT NULL,
+    spec_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    proposal TEXT NOT NULL,
+    instrument TEXT NOT NULL,
+    slot TEXT,
+    batch TEXT,
+    member_key TEXT,
+    created TEXT NOT NULL,
+    doc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS records_proposal ON records (proposal, created);
+CREATE INDEX IF NOT EXISTS records_slot ON records (proposal, slot, created);
+CREATE INDEX IF NOT EXISTS records_batch ON records (batch, member_key);
+CREATE TABLE IF NOT EXISTS refs (
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    output TEXT NOT NULL,
+    key TEXT
+);
+CREATE INDEX IF NOT EXISTS refs_to ON refs (to_id, output);
+CREATE INDEX IF NOT EXISTS refs_from ON refs (from_id);
+CREATE TABLE IF NOT EXISTS registry (
+    record_id TEXT NOT NULL,
+    output TEXT NOT NULL,
+    key TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL,
+    store_owned INTEGER NOT NULL,
+    PRIMARY KEY (record_id, output, key)
+);
+"""
+
+
+class StoreLockedError(RuntimeError):
+    """Another backend holds this store."""
+
+
+class RecordStore:
+    """Single-writer store of records; open it in exactly one backend process."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock: IO[str] = open(self.path.with_suffix('.lock'), 'w')
+        try:
+            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as e:
+            self._lock.close()
+            raise StoreLockedError(f'{self.path} is held by another backend') from e
+        self._db = sqlite3.connect(self.path, isolation_level=None)
+        self._db.execute('PRAGMA journal_mode=WAL')
+        self._db.executescript(_SCHEMA)
+        row = self._db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+        if row is None:
+            self._db.execute(
+                "INSERT INTO meta VALUES ('schema', ?)", (str(SCHEMA_VERSION),)
+            )
+        elif int(row[0]) != SCHEMA_VERSION:
+            raise RuntimeError(
+                f'{self.path} has schema {row[0]}, this code needs {SCHEMA_VERSION}'
+            )
+
+    def close(self) -> None:
+        self._db.close()
+        fcntl.flock(self._lock, fcntl.LOCK_UN)
+        self._lock.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # Records
+
+    def add(self, record: RunRecord) -> None:
+        req = record.request
+        with self._db:
+            self._db.execute(
+                'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                (
+                    record.id,
+                    req.spec.name,
+                    req.spec.version,
+                    record.status.value,
+                    req.proposal,
+                    req.instrument,
+                    req.slot,
+                    req.batch,
+                    req.member_key,
+                    record.created.isoformat(),
+                    record.model_dump_json(),
+                ),
+            )
+            self._db.executemany(
+                'INSERT INTO refs VALUES (?,?,?,?)',
+                [(record.id, r.record, r.output, r.key) for r in req.refs()],
+            )
+
+    def update(self, record: RunRecord) -> None:
+        with self._db:
+            cur = self._db.execute(
+                'UPDATE records SET status=?, doc=? WHERE id=?',
+                (record.status.value, record.model_dump_json(), record.id),
+            )
+        if cur.rowcount != 1:
+            raise KeyError(record.id)
+
+    def get(self, record_id: str) -> RunRecord:
+        row = self._db.execute(
+            'SELECT doc FROM records WHERE id=?', (record_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(record_id)
+        return RunRecord.model_validate_json(row[0])
+
+    def __contains__(self, record_id: str) -> bool:
+        return (
+            self._db.execute(
+                'SELECT 1 FROM records WHERE id=?', (record_id,)
+            ).fetchone()
+            is not None
+        )
+
+    def list(
+        self,
+        *,
+        proposal: str | None = None,
+        spec: SpecId | None = None,
+        status: Status | None = None,
+        slot: str | None = None,
+        batch: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[RunRecord]:
+        """Records matching every given filter, oldest first."""
+        clauses, args = [], []
+        for column, value in (
+            ('proposal', proposal),
+            ('status', status.value if status else None),
+            ('slot', slot),
+            ('batch', batch),
+        ):
+            if value is not None:
+                clauses.append(f'{column}=?')
+                args.append(value)
+        if spec is not None:
+            clauses.append('spec_name=? AND spec_version=?')
+            args += [spec.name, spec.version]
+        if since is not None:
+            clauses.append('created>=?')
+            args.append(since.isoformat())
+        where = f'WHERE {" AND ".join(clauses)}' if clauses else ''
+        tail = f'LIMIT {int(limit)}' if limit else ''
+        rows = self._db.execute(
+            f'SELECT doc FROM records {where} ORDER BY created, rowid {tail}',  # noqa: S608
+            args,
+        )
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
+
+    def latest(self, slot: str, proposal: str) -> RunRecord | None:
+        """The newest record with this slot label, whatever its status."""
+        row = self._db.execute(
+            'SELECT doc FROM records WHERE proposal=? AND slot=? '
+            'ORDER BY created DESC, rowid DESC LIMIT 1',
+            (proposal, slot),
+        ).fetchone()
+        return None if row is None else RunRecord.model_validate_json(row[0])
+
+    def referencing(self, record_id: str, output: str | None = None) -> list[str]:
+        """IDs of records that reference an output of ``record_id``."""
+        if output is None:
+            rows = self._db.execute(
+                'SELECT DISTINCT from_id FROM refs WHERE to_id=?', (record_id,)
+            )
+        else:
+            rows = self._db.execute(
+                'SELECT DISTINCT from_id FROM refs WHERE to_id=? AND output=?',
+                (record_id, output),
+            )
+        return [r[0] for r in rows]
+
+    def by_status(self, *statuses: Status) -> Iterator[RunRecord]:
+        marks = ','.join('?' * len(statuses))
+        rows = self._db.execute(
+            f'SELECT doc FROM records WHERE status IN ({marks}) '  # noqa: S608
+            'ORDER BY created, rowid',
+            [s.value for s in statuses],
+        )
+        return (RunRecord.model_validate_json(r[0]) for r in rows)
+
+    # Registry of disk copies
+
+    def register(self, ref: Ref, path: Path, *, store_owned: bool) -> None:
+        with self._db:
+            self._db.execute(
+                'INSERT OR REPLACE INTO registry VALUES (?,?,?,?,?)',
+                (ref.record, ref.output, ref.key or '', str(path), int(store_owned)),
+            )
+
+    def location(self, ref: Ref) -> tuple[Path, bool] | None:
+        """Registered path of a copy and whether the store wrote it."""
+        row = self._db.execute(
+            'SELECT path, store_owned FROM registry '
+            'WHERE record_id=? AND output=? AND key=?',
+            (ref.record, ref.output, ref.key or ''),
+        ).fetchone()
+        return None if row is None else (Path(row[0]), bool(row[1]))
+
+    def unregister(self, ref: Ref) -> None:
+        with self._db:
+            self._db.execute(
+                'DELETE FROM registry WHERE record_id=? AND output=? AND key=?',
+                (ref.record, ref.output, ref.key or ''),
+            )

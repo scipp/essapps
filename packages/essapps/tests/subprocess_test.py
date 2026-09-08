@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""The throwaway shape: every run a subprocess, outputs to disk, marker, reconcile."""
+
+from pathlib import Path
+
+import pytest
+
+from ess.apps.client import Client, local
+from ess.apps.examples import FAIL, LOAD, SUM, write_run
+from ess.apps.records import Status
+from ess.apps.spec import Ref
+
+
+@pytest.fixture
+def client(tmp_path: Path):
+    client = local(
+        tmp_path / 'store',
+        instrument='dream',
+        proposal='p1',
+        submitter='simon',
+        registry='ess.apps.examples:registry',
+        throwaway=True,
+    )
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def run_ref(client: Client, tmp_path: Path) -> Ref:
+    return client.file(write_run(tmp_path / 'run1.h5', [1.0, 2.0, 3.0, 4.0]))
+
+
+def test_run_is_dispatched_then_reconciled_from_the_marker(
+    client: Client, run_ref: Ref
+) -> None:
+    record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
+    assert record.status == Status.DISPATCHED
+    assert record.launcher_job is not None
+    (done,) = client.wait([record])
+    assert done.status == Status.COMPLETED, done.failure
+    assert done.outputs == {'total': {'value': 20.0, 'unit': 'counts'}}
+    assert not done.reused
+    data_ref = Ref(record=done.id, output='data')
+    assert client.backend.data.has_copy(data_ref)
+    assert not client.backend.data.in_cache(data_ref)
+    assert client.output(data_ref).sum().value == 20.0
+    assert client.backend.data.in_cache(data_ref)
+
+
+def test_map_combine_runs_through_subprocesses(client: Client, run_ref: Ref) -> None:
+    group = client.submit_group(
+        {
+            'a': client.request(LOAD, {'run': run_ref}, batch='b1', member_key='a'),
+            'b': client.request(
+                LOAD, {'run': run_ref, 'scale': 3.0}, batch='b1', member_key='b'
+            ),
+            'sum': client.request(
+                SUM,
+                {
+                    'runs': [
+                        Ref(record='@a', output='data'),
+                        Ref(record='@b', output='data'),
+                    ]
+                },
+            ),
+        }
+    )
+    assert group['sum'].status == Status.WAITING
+    done = dict(zip(group, client.wait(group.values()), strict=True))
+    assert {k: v.status for k, v in done.items()} == dict.fromkeys(
+        group, Status.COMPLETED
+    )
+    assert client.output(Ref(record=done['sum'].id, output='total')).sum().value == 40.0
+    assert [r.request.member_key for r in client.records(batch='b1')] == ['a', 'b']
+
+
+def test_failure_in_subprocess_carries_the_reason(client: Client) -> None:
+    record = client.run(FAIL, {'message': 'bad file'})
+    (done,) = client.wait([record])
+    assert done.status == Status.FAILED
+    assert done.failure.kind == 'RuntimeError'
+    assert done.failure.message == 'bad file'
+    assert 'RuntimeError' in done.failure.traceback
+
+
+def test_cancel_kills_the_process_and_dependents(client: Client, run_ref: Ref) -> None:
+    group = client.submit_group(
+        {
+            'a': client.request(LOAD, {'run': run_ref}),
+            'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data')]}),
+        }
+    )
+    client.cancel(group['a'])
+    assert client.record(group['a'].id).status == Status.CANCELLED
+    assert client.record(group['sum'].id).status == Status.CANCELLED

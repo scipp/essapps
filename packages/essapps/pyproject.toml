@@ -1,0 +1,72 @@
+[build-system]
+requires = [
+  "setuptools>=77",
+  "setuptools_scm[toml]>=8.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "essapps"
+description = "Framework for ESS data-reduction applications: records, sessions, and scheduling"
+authors = [{ name = "Scipp contributors" }]
+license = "BSD-3-Clause"
+readme = "README.md"
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+requires-python = ">=3.12"
+
+dynamic = ["version"]
+
+dependencies = [
+    "pydantic>=2.10",
+    "sciline>=25.11.0",
+    "scipp>=26.3.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.0",
+    "pytest-xdist>=3.6",
+]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/scipp/essapps/issues"
+"Source" = "https://github.com/scipp/essapps/tree/main/packages/essapps"
+
+[tool.setuptools_scm]
+root = "../.."
+tag_regex = "^essapps/(?P<version>.*)$"
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "essapps/*[0-9]*"]
+fallback_version = "0.0.0"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = """
+--strict-config
+--strict-markers
+--import-mode=importlib
+-ra
+"""
+testpaths = "tests"
+filterwarnings = [
+  "error",
+]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+]
+warn_unreachable = true
