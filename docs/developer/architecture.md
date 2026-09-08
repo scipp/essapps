@@ -42,7 +42,7 @@ A request is complete: sufficient to reproduce the outputs from scratch.
 It is plain, JSON-serializable data, even when it never leaves a process.
 
 A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the software versions of the runner environment, and optionally a batch ID, a template version, and the record this one retries.
-It is immutable once the run completes, except for status.
+It is immutable once the run completes, except for status, and it may be dropped once past its retention and referenced by nothing (choice 1).
 Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
 Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.
 Which of the two applies is decided by type and is invisible to clients.
@@ -126,6 +126,11 @@ This is esslivedata's lesson applied the other way round: ephemeral identities a
 A session holds one **warm workflow** per spec: the workflow object kept alive between runs, so a rerun recomputes only what a changed parameter affects.
 Tuning a stage output and its consumer together, such as vanadium processing and a sample reduction, uses two, chained through the session's memory.
 
+From the framework's side there is one kind of rerun: a new, complete request.
+Changing a threshold and adding one more run to a list of runs to sum look the same, a full parameter set that differs from the previous one in one field, and the record of each rerun stands on its own.
+Whether the session reuses unchanged intermediates or folds a new list element into an accumulator is a difference the workflow's adapter discovers by comparing the two parameter sets (choice 3), not a kind of request.
+The list is resent whole on every rerun; it holds references, not data, so at the few thousand entries expected it stays under a megabyte.
+
 Initially sessions exist only in **local mode**, where client, backend, launcher, session, and data store are one Python process: a notebook, or a local application.
 In **shared mode** the backend runs as a service used by many people.
 Batch and automatic reduction run there as a stateless service, and the shared web UI submits and inspects.
@@ -148,6 +153,7 @@ Where a run executes decides whether its data touches disk:
   The shared service loads an output into its memory tier on first access: written once, loaded once, every further view served from memory.
 - **No consumer left.** Once retention expires, the output is dropped.
   A later request or view recomputes it from its record.
+  A record has a retention of its own and is dropped once past it and referenced by nothing; references are the only way to name data, so that is a reachability check.
 
 Every run's outputs have at least one consumer: the client that submitted the run, which will plot them, chain them, or both.
 Local mode is the degenerate deployment where client, session, and the whole data store are one process; the client interface is the same as in shared mode.
@@ -179,6 +185,7 @@ In shared mode the registry must know which memory tiers hold a copy, trivially 
 The author chooses where to cut a workflow, and the cut is not always clean: processed vanadium in diffraction is binned on the sample's edges, so the stage output must be oversampled.
 Both stages of a split workflow typically share parameters; see the open question on templates.
 For an unsplit workflow in a session the spec does not say which parameters are cheap to change, so the UI cannot choose a slider over a run button; see deferred.
+Every rerun in a session is a complete record, so a series of N slider moves or N appended runs is N records, and only the last is ever needed; slots (choice 4) and record retention keep that from being what a person sees.
 
 ### Choice 2: Own the records and the scheduling, or adopt an engine (D5, D6, D7, D8)
 
@@ -292,6 +299,7 @@ Serialization of outputs must be pluggable because the outputs that get publishe
 Two validation points, with the runner's being the authoritative one.
 The runner loads scipp arrays whole.
 Accumulation over a list is exact only when nothing else changed; the adapter must reset otherwise, and nothing outside it can check that it does.
+Incremental accumulation is also exact only for quantities that combine element by element; anything that depends on the whole list, such as normalisation by the summed monitor counts, must be an accumulator on the right node, which is the workflow author's job and not checkable from outside.
 
 ### Choice 4: How clients reach the system (D10, D11)
 
@@ -333,13 +341,22 @@ In local mode a client may also turn a reference into a scipp object directly, s
 **Plot selections are ordinary parameters (also D11).**
 Interactive tools bind to parameters of shared vocabulary types: range, rectangle, polygon.
 Each selection change submits a new stateless run of the cheap stage.
-A request may carry a *slot* key chosen by the client; a new request in the same slot cancels queued requests in that slot, and runs in a slot are short-retention.
+
+**Interactive reruns live in slots (also D11).**
+A *slot* is a series of runs that supersede each other: a slider moving a threshold, a selection being dragged, or a list of runs to sum growing by one.
+A request may carry a slot key.
+The client interface supplies one whenever a request reruns a warm workflow, so a notebook user gets a slot without asking for one, and can opt out or fork a slot from its current record to compare two variants side by side.
+Forking must be a one-line client operation, or people will skip slots.
+A new request in a slot cancels queued requests in that slot.
+A slot has a current record and a history; superseded records are short-retention and dropped once nothing references them.
+Tools address slots, not records: a listing shows one row per slot, replay replays its current record, and inspection shows the current record with its diff against the previous one, which is "one more file" for an accumulation series and "one value changed" for a slider.
 Slot runs are placed in the submitter's session, which until remote sessions exist means local mode.
 
 **Why.**
 One API keeps the UI out of backend internals.
 Exploring a 4D volume by dragging through 2D slices must not create records, and the frontend must never receive the volume; the slice-becomes-parameter rule keeps provenance exact without making views part of it.
-No special interactive concept in the framework: the slot key is the stable identity a plot needs across superseded runs, the same split between a stable data key and a per-result key that esslivedata needed (scipp/esslivedata#1062).
+The slot is the one interactive concept in the framework, and it is one field on the request: the stable identity that a plot, a record browser, and a replay tool all need across superseded runs, the same split between a stable data key and a per-result key that esslivedata needed (scipp/esslivedata#1062).
+Without it a session's reruns are hundreds of complete, near-identical records, which is the right model for provenance and the wrong thing to show a person.
 
 **Cost.**
 A local application in one process shares the interpreter between UI and runs, so a long run blocks the UI unless the session moves to a subprocess, which needs the remote-session machinery.
@@ -459,6 +476,7 @@ HTTP transport, real SciCat integration, cluster launcher, the data store's view
 Remote sessions: a session launcher, a per-session memory budget and idle timeout, and the data store's protocol between a session's memory tier and the registry.
 A hint in the spec for which parameters are cheap to change in a session, so the UI can offer live feedback.
 Provisional outputs of a running run, for progress display during chunk-wise processing.
+A versioned collection record, appended to by the client and referenced by version, if lists of runs to accumulate grow well beyond a few thousand entries and resending them whole becomes a cost.
 The memory budget itself is not deferred: every memory tier needs one from the start.
 
 ## Technology proposals
@@ -488,7 +506,7 @@ Decisions the team needs to make; my recommendation in brackets.
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
 - **Memory budget semantics.** Who decides to spill, and how a runner reports memory use, including variances.
-- **Retention policy** for derived data in shared mode.
+- **Retention policy** for outputs and records in shared mode: how long each kind is kept before it may be dropped, with slot history the shortest and automatic-reduction records the longest.
 - **SciCat push mechanism** for new datasets, if the deployment offers one.
 
 ## Next step
@@ -523,6 +541,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
 - **SciCat**: the facility's data catalogue. **PID**: SciCat's persistent identifier for a dataset.
 - **Session**: a long-lived process belonging to one client, keeping the outputs of its runs and the workflow itself in memory. A cache over records.
+- **Slot**: a series of runs in one session that supersede each other, with a current record and a history. The unit of interactive work, and what tools list and replay.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs. Defined in scipp/ess#690.
 - **Stage output**: an output of one spec that requests of another spec take as input. An ordinary output; the word names the role.
 - **Template**: a saved, versioned run request with some fields left blank.
@@ -547,7 +566,7 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D8 | The dataset source is abstracted; not Kafka | Choice 2 |
 | D9 | Framework-to-workflow contract: a callable from parameters to outputs | Choice 3 |
 | D10 | The client interface is the API; HTTP later; notebook first | Choice 4 |
-| D11 | Interactive plotting: views are not runs, plot selections are ordinary parameters | Choice 4 |
+| D11 | Interactive plotting: views are not runs, plot selections are ordinary parameters, reruns live in slots | Choice 4 |
 | D12 | Only finalized data enters SciCat | Ownership and publication |
 | D13 | Instrument plus proposal scopes everything | Ownership and publication |
 | D14 | One type vocabulary: inputs are data-reference parameters, outputs a typed model | Spec changes |
