@@ -23,7 +23,7 @@ A user, a script, or an automatic trigger submits a *run request*: which workflo
 The *backend* checks the request, writes it down as a *run record*, and asks a *launcher* to start a *runner* somewhere: in the same process, in a subprocess, or on the cluster.
 The runner fetches the inputs, calls the scientific workflow code, and stores the results.
 Any output of a record, whether a single number or a large array, can be an input of the next request, named as *output X of record Y*.
-Raw files from the catalogue and uploaded files are records too, so every input is named the same way.
+Raw files from the catalogue and files on a user's disk are records too, so every input is named the same way.
 Interactive work happens in a *session*: a process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run.
 Everything the backend knows is in the records, so any result can be traced back to raw data and parameters, and any result can be recomputed if its data was thrown away.
 Batch reduction is many requests made from one *template*.
@@ -57,16 +57,18 @@ A reference may name a **pending output**, one whose record has not completed ye
 The record keeps references in reference form, so **provenance**, the chain from any result back to raw data, parameters, and software, is the graph you get by following them.
 
 **Files are records too.**
-A SciCat dataset or an uploaded file is a **file record**: a record of one built-in spec, `file`, which has no workflow and one output, the file.
-The dataset source creates one file record per SciCat PID, and the PID is the unique key: a dataset delivered twice is a no-op.
-An upload creates a new file record.
+A SciCat dataset or a file on a user's disk is a **file record**: a record of one built-in spec, `file`, which has no workflow and one output, the file.
+A file record has an origin, which is its identity for provenance, and one or more locations, which are where its bytes can be opened.
+The origin is a PID, or a local path with the file's checksum; a location is a path on a named filesystem, such as the facility mount or a user's machine, or a copy in the data store.
+The dataset source creates one file record per SciCat PID with the mount path as its location, and the PID is the unique key: a dataset delivered twice is a no-op.
+Listing a folder in a local application creates one file record per file, a row each and no bytes moved; the checksum is taken the first time a runner reads the file and stored on the record then.
 A raw file from the catalogue and a result from last week are therefore the same thing to a request, and a new raw file and a completed processing stage are the same kind of event to automatic reduction.
 
 **Stand-ins resolve at submission.**
 Users submit a local path, a PID, or a run number (per instrument).
 The backend turns each into a reference to a file record before persisting anything, creating the record if the PID has none yet, because provenance must not depend on a search that could give a different answer later.
-A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path is an upload.
-Local files that must reach a remote runner are uploaded into the data store first.
+A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path becomes a file record with that path as its origin.
+Nothing is downloaded or copied at submission.
 
 **Whether an output is usable is two questions**: the record's status, and whether the data store holds a copy.
 A missing copy is reported as such, never silently recomputed.
@@ -76,8 +78,8 @@ Recompute is exact only in the environment the record names, and refuses to run 
 | Output of | Where the truth lives | On a missing copy | Copies evictable |
 |---|---|---|---|
 | A run record | The record: parameters, references, versions | Recompute, explicitly | Yes |
-| A file record from SciCat | The PID; a mounted facility filesystem is its copy | Download again | Yes |
-| A file record from an upload | The copy in the data store | Nothing to recover from | Only by an explicit drop |
+| A file record from SciCat | The PID; the facility mount is its location | Download again | Yes |
+| A file record from a local path | The path and checksum | Nothing to recover from, unless a store copy was made | A store copy, only by an explicit drop |
 | A published run record | The record, and now also the PID | Download rather than recompute | Yes |
 
 Two more kinds of data complete the model.
@@ -150,6 +152,7 @@ The registry knows disk copies only.
 A memory cache is invisible to every other process, is never registered, and nothing is ever pulled out of a session by anyone but the session's own client.
 A runner asks the store for an input and hands it an output; the store serves from the cache of that process when it can and otherwise reads or writes disk.
 The runner never knows about caches, and the launcher decides only where a run executes.
+A run executes where every input has a reachable location; when an input has none there, the client first makes one, copying a local file into the data store or fetching a catalogue file onto a machine without the mount, which are one action in opposite directions.
 
 There are two execution shapes, and a group of requests submitted together runs in one of them, never mixed:
 
@@ -166,8 +169,8 @@ A session is a process with an operating-system limit, owned by its client; its 
 The shared service's cache has a byte budget and evicts least recently used first, with outputs superseded in a slot (choice 4) before anything else.
 Disk copies have a retention policy per kind of run, an open question; when it expires the bytes are dropped and the record stays.
 A dropped copy is a missing copy, under the rule in "Records and references".
-Uploads are exempt: their copy is the truth, so it is dropped only by an explicit operation on the file record, after which the record stays as a marker and every record that reaches it through references is no longer recomputable.
-Uploads count against a per-proposal quota.
+Store copies of local files are exempt: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the file record, after which every record that reaches it through references is no longer recomputable.
+They count against a per-proposal quota.
 
 **A rule that follows: reuse across requests is a workflow boundary (D4).**
 A value that other requests reference must be an output of a run of its own, with its own record.
@@ -221,7 +224,7 @@ The store carries a schema version, and a stored parameter set that no longer ma
 Exactly one backend process per record store, enforced by a lock that a live backend renews and a dead one loses.
 In local mode every notebook is its own backend with its own store; a second notebook that wants the same store is a client of the first.
 The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes.
-The backend resolves references to storage locations at dispatch: a file on the facility filesystem is handed to the runner as its path, anything else the runner fetches from the data store.
+The backend resolves references to locations at dispatch: a file record's reachable path is handed to the runner as is, anything else the runner fetches from the data store.
 
 **One scheduling primitive: pending outputs as inputs (D6).**
 A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other's outputs before they exist.
@@ -459,8 +462,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
   In local mode it is the client's own process.
 - **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
-  An upload has nothing to download from, so its copy is kept until dropped explicitly.
-  A SciCat file on a mounted facility filesystem has no local copy; the mount is its copy.
+  A file record's locations are paths the store did not write, on the facility mount or a user's machine, plus any copy made in the store; a store copy of a local file is kept until dropped explicitly.
 - **Record store**: create, read, update status, and two queries: records that reference output X of record Y, and the latest record with a slot label.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as PID plus metadata; the backend creates one file record per PID, and none for a PID that one of our own records carries because we are publishing or have published it.
@@ -558,7 +560,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset source**: where new datasets are discovered; each new PID becomes a file record.
-- **File record**: a record of the built-in `file` spec, standing for one SciCat dataset or upload; its single output is that file.
+- **File record**: a record of the built-in `file` spec, standing for one SciCat dataset or one file on a user's disk, with an origin for identity and locations where its bytes can be opened; its single output is that file.
 - **Group**: several requests submitted atomically that may reference each other's outputs before they exist.
 - **Input**: a parameter of data-reference type. In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
 - **Launcher**: decides where a run executes and starts it there.
