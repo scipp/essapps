@@ -101,29 +101,32 @@ class RecordStore:
 
     # Records
 
-    def add(self, record: RunRecord) -> None:
-        req = record.request
+    def add(self, *records: RunRecord) -> None:
+        """Insert records in one transaction: all of them or none."""
         with self._db:
-            self._db.execute(
-                'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                (
-                    record.id,
-                    req.spec.name,
-                    req.spec.version,
-                    record.status.value,
-                    req.proposal,
-                    req.instrument,
-                    req.slot,
-                    req.batch,
-                    req.member_key,
-                    record.created.isoformat(),
-                    record.model_dump_json(),
-                ),
-            )
-            self._db.executemany(
-                'INSERT INTO refs VALUES (?,?,?,?)',
-                [(record.id, r.record, r.output, r.key) for r in req.refs()],
-            )
+            self._db.execute('BEGIN')
+            for record in records:
+                req = record.request
+                self._db.execute(
+                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    (
+                        record.id,
+                        req.spec.name,
+                        req.spec.version,
+                        record.status.value,
+                        req.proposal,
+                        req.instrument,
+                        req.slot,
+                        req.batch,
+                        req.member_key,
+                        record.created.isoformat(),
+                        record.model_dump_json(),
+                    ),
+                )
+                self._db.executemany(
+                    'INSERT INTO refs VALUES (?,?,?,?)',
+                    [(record.id, r.record, r.output, r.key) for r in req.refs()],
+                )
 
     def update(self, record: RunRecord) -> None:
         with self._db:

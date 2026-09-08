@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """What a warm workflow reuses (D8)."""
 
+from typing import NewType
+
 import pytest
 import sciline
 import scipp as sc
@@ -12,6 +14,7 @@ from ess.apps.examples import (
     LOAD,
     Bins,
     Filtered,
+    Histogram,
     HistogramParams,
     RawData,
     Threshold,
@@ -72,10 +75,29 @@ def test_session_reruns_of_a_sciline_workflow_record_reuse(
     client: Client, run_ref: Ref
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
-    data = Ref(record=loaded.id, output='data')
+    data = loaded.ref('data')
     first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, slot='hist')
     second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, slot='hist')
     assert not first.reused
     assert second.reused
     assert client.output(second).sizes == {'x': 8}
     assert client.latest('hist').id == second.id
+
+
+def test_reuse_keeps_outputs_that_no_cheap_parameter_feeds() -> None:
+    Total = NewType('Total', float)
+
+    def total(data: RawData) -> Total:
+        return Total(float(data.sum().value))
+
+    pipeline = sciline.Pipeline([filter_data, histogram, total])
+    workflow = WarmPipeline(
+        pipeline,
+        keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
+        targets={'histogram': Histogram, 'total': Total},
+        cheap={'bins'},
+    )
+    first = workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
+    second = workflow(HistogramParams(data=raw(), threshold=1.5, bins=4))
+    assert workflow.reused
+    assert first['total'] == second['total'] == 14.0

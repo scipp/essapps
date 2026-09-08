@@ -5,9 +5,11 @@ Binding specs to code (D8).
 
 A workflow is one callable from the validated params model to the outputs model.
 A factory makes the callable; a throwaway runner calls it once, a session runner
-keeps it. Specs come from entry points in the group ``ess.apps.workflows``, each
-resolving to a ``(spec, factory)`` pair, or are bound in-process by a notebook,
-which may not shadow an installed spec.
+keeps it. Installed packages provide specs through the entry-point group
+``ess.apps.specs`` and factories through ``ess.apps.workflows`` under the same
+entry-point name, so a backend can load every spec without importing any
+workflow code; only a runner asks for a factory. A notebook may bind a spec
+in-process, but may not shadow an installed one.
 """
 
 from __future__ import annotations
@@ -24,52 +26,62 @@ from .spec import FILE_SPEC, SpecId, WorkflowSpec
 
 Workflow = Callable[[BaseModel], BaseModel | dict[str, Any]]
 Factory = Callable[[], Workflow]
-ENTRY_POINT_GROUP = 'ess.apps.workflows'
+Loader = Callable[[], Factory]
+SPEC_GROUP = 'ess.apps.specs'
+WORKFLOW_GROUP = 'ess.apps.workflows'
+How = Literal['entry_point', 'in_process']
 
 
 @dataclass(frozen=True)
 class Binding:
     spec: WorkflowSpec
     factory: Factory | None
-    how: Literal['entry_point', 'in_process', 'file']
+    how: How | Literal['file']
 
 
 class Registry:
-    """The specs an environment can run, with the factory for each."""
+    """The specs an environment knows, and how a runner gets the code for each."""
 
     def __init__(self) -> None:
-        self._bindings: dict[SpecId, Binding] = {
-            FILE_SPEC.id: Binding(FILE_SPEC, None, 'file')
-        }
+        self._specs: dict[SpecId, WorkflowSpec] = {FILE_SPEC.id: FILE_SPEC}
+        self._how: dict[SpecId, How | Literal['file']] = {FILE_SPEC.id: 'file'}
+        self._loaders: dict[SpecId, Loader] = {}
 
-    def bind(
-        self,
-        spec: WorkflowSpec,
-        factory: Factory,
-        *,
-        how: Literal['entry_point', 'in_process'] = 'in_process',
-    ) -> None:
-        existing = self._bindings.get(spec.id)
-        if existing is not None and existing.how != 'in_process':
+    def bind(self, spec: WorkflowSpec, factory: Factory) -> None:
+        """Bind in this process; refused if an installed package provides the spec."""
+        if self._how.get(spec.id, 'in_process') != 'in_process':
             raise ValueError(f'{spec.id} is provided by an installed package')
-        self._bindings[spec.id] = Binding(spec, factory, how)
+        self._specs[spec.id] = spec
+        self._how[spec.id] = 'in_process'
+        self._loaders[spec.id] = lambda: factory
 
-    def load_entry_points(self, group: str = ENTRY_POINT_GROUP) -> None:
-        for ep in entry_points(group=group):
-            spec, factory = ep.load()
-            self._bindings[spec.id] = Binding(spec, factory, 'entry_point')
+    def load_entry_points(self) -> None:
+        """Load every installed spec; workflow code stays unimported until asked."""
+        factories = {ep.name: ep for ep in entry_points(group=WORKFLOW_GROUP)}
+        for ep in entry_points(group=SPEC_GROUP):
+            spec: WorkflowSpec = ep.load()
+            self._specs[spec.id] = spec
+            self._how[spec.id] = 'entry_point'
+            if ep.name in factories:
+                self._loaders[spec.id] = factories[ep.name].load
 
     def __contains__(self, spec_id: SpecId) -> bool:
-        return spec_id in self._bindings
+        return spec_id in self._specs
 
-    def __getitem__(self, spec_id: SpecId) -> Binding:
+    def spec(self, spec_id: SpecId) -> WorkflowSpec:
         try:
-            return self._bindings[spec_id]
+            return self._specs[spec_id]
         except KeyError:
-            raise KeyError(f'No workflow bound for {spec_id}') from None
+            raise KeyError(f'No spec {spec_id}') from None
+
+    def binding(self, spec_id: SpecId) -> Binding:
+        """Spec plus factory, importing the workflow code; runner side only."""
+        spec = self.spec(spec_id)
+        loader = self._loaders.get(spec_id)
+        return Binding(spec, None if loader is None else loader(), self._how[spec_id])
 
     def specs(self) -> Iterable[WorkflowSpec]:
-        return [b.spec for b in self._bindings.values()]
+        return list(self._specs.values())
 
 
 def import_object(path: str) -> Any:

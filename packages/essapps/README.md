@@ -18,14 +18,14 @@ run = client.file(write_run('/tmp/run1.h5', [1.0, 5.0, 2.0, 6.0]))
 
 # A run in the session: the output stays in memory, the record is complete.
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
-data = Ref(record=loaded.id, output='data')
+data = loaded.ref('data')
 
 # Interactive reruns of a sciline pipeline; 'bins' is declared cheap, so the
 # second run reuses the warm workflow. Both are records in the slot 'hist'.
 first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, slot='hist')
 second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, slot='hist')
 assert second.reused and client.latest('hist').id == second.id
-client.view(Ref(record=second.id, output='histogram'))  # plain numpy arrays
+client.view(second.ref('histogram'))  # plain numpy arrays
 
 # A group with pending outputs: map two loads, combine them, submitted together.
 group = client.submit_group({

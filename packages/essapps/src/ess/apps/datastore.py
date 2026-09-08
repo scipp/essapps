@@ -142,7 +142,12 @@ class DataStore:
             value = self.serializers.load(self._disk_path(ref))
             self._cache[ref] = value
             return value
+        if ref in self._cache and not self.has_copy(ref):
+            return self.write_out(ref)
         return self._disk_path(ref)
+
+    def available(self, ref: Ref) -> bool:
+        return ref in self._cache or self.has_copy(ref)
 
     def _disk_path(self, ref: Ref) -> Path:
         loc = self._records.location(ref)

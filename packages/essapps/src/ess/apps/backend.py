@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from .binding import Registry
 from .datastore import DataStore
-from .launcher import Launcher, SessionLauncher
+from .launcher import Launcher
 from .records import Derivation, Failure, RunRecord, RunRequest, Status
 from .spec import (
     FILE_SPEC,
@@ -133,7 +133,7 @@ class Backend:
             return ValidationReport(
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
             )
-        spec = self.registry[request.spec].spec
+        spec = self.registry.spec(request.spec)
         try:
             spec.params.model_validate(request.params)
         except ValidationError as e:
@@ -172,7 +172,7 @@ class Backend:
             return [f'{ref}: belongs to proposal {producer_proposal}']
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
-        outputs = self.registry[producer_spec].spec.outputs
+        outputs = self.registry.spec(producer_spec).outputs
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
         produced = data_ref_fields(outputs).get(ref.output)
@@ -202,6 +202,11 @@ class Backend:
         the group.
         """
         reports = {name: self.validate(req, group) for name, req in group.items()}
+        for name in _cycle(group):
+            reports[name] = ValidationReport(
+                layers=reports[name].layers,
+                errors=(*reports[name].errors, 'part of a cycle within the group'),
+            )
         if any(not r.ok for r in reports.values()):
             raise SubmitError({n: r for n, r in reports.items() if not r.ok})
         ids = {name: RunRecord(request=req).id for name, req in group.items()}
@@ -211,8 +216,7 @@ class Backend:
             records[name] = RunRecord(
                 id=ids[name], request=req.model_copy(update={'params': params})
             )
-        for record in records.values():
-            self.records.add(record)
+        self.records.add(*records.values())
         self._pump()
         return {name: self.records.get(r.id) for name, r in records.items()}
 
@@ -316,49 +320,33 @@ class Backend:
         self.records.update(record)
 
     def _dispatch(self, record: RunRecord) -> None:
-        spec = self.registry[record.spec].spec
-        data_fields = data_ref_fields(spec.params)
+        data_fields = data_ref_fields(self.registry.spec(record.spec).params)
         locations: dict[Ref, Path] = {}
         literals: dict[str, Any] = {}
         for path, ref in walk_refs(record.request.params):
             producer = self.records.get(ref.record)
+            failure = None
             if ref.key is not None and ref.key not in (
                 producer.output_keys(ref.output) or set()
             ):
-                self._finish(
-                    record,
-                    Status.FAILED,
-                    Failure(
-                        kind='missing-key',
-                        message=f'{ref}: producer has no such element',
-                    ),
-                )
-                self._propagate(record)
-                return
-            if path.split('.')[0].split('[')[0] in data_fields:
-                if not isinstance(self.launcher, SessionLauncher):
-                    if not self.data.has_copy(ref):
-                        if not self.data.in_cache(ref):
-                            self._finish(
-                                record,
-                                Status.FAILED,
-                                Failure(
-                                    kind='missing-copy',
-                                    message=f'{ref}: no copy; recompute the producer',
-                                ),
-                            )
-                            self._propagate(record)
-                            return
-                        self.data.write_out(ref)
+                failure = Failure(kind='missing-key', message=f'{ref}: no such element')
+            elif path.split('.')[0].split('[')[0] in data_fields:
+                if not self.data.available(ref):
+                    failure = Failure(
+                        kind='missing-copy',
+                        message=f'{ref}: no copy; recompute the producer',
+                    )
+                elif self.launcher.needs_disk_inputs:
                     locations[ref] = self.data.get(ref, Kind.OPAQUE)
             else:
-                literals[str(ref)] = producer.outputs[ref.output]
+                value = producer.outputs[ref.output]
+                literals[str(ref)] = value[ref.key] if ref.key is not None else value
+            if failure is not None:
+                self._finish(record, Status.FAILED, failure)
+                self._propagate(record)
+                return
         params = _inline(record.request.params, literals)
-        for_run = record.model_copy(
-            update={'request': record.request.model_copy(update={'params': params})}
-        )
-        done = self.launcher.start(for_run, locations)
-        done.request = record.request
+        done = self.launcher.start(record, params, locations)
         self.records.update(done)
         if done.status.terminal:
             self._propagate(done)
@@ -376,7 +364,7 @@ class Backend:
                 f'{record.id} has no output {ref.output!r}'
                 + (f' key {ref.key!r}' if ref.key else '')
             )
-        kind = data_ref_fields(self.registry[record.spec].spec.outputs)[ref.output].kind
+        kind = data_ref_fields(self.registry.spec(record.spec).outputs)[ref.output].kind
         return self.data.get(ref, kind)
 
     def view(self, ref: Ref, spec: ViewSpec) -> dict[str, Any]:
@@ -424,15 +412,38 @@ class Backend:
             raise ValueError(f'{record.id} reused a warm workflow; recompute it first')
         if record.binding == 'in_process' and not allow_reused:
             raise ValueError(f'{record.id} was bound in-process; not reproducible')
-        if not self.data.has_copy(ref):
-            self.data.write_out(ref)
         path = self.data.get(ref, Kind.OPAQUE)
-        record.published[ref.output] = 'pending'
-        self.records.update(record)
+        if ref.output not in record.publishing:
+            record.publishing.append(ref.output)
+            self.records.update(record)
         pid = publisher.publish(path, self.provenance(record.id))
+        record.publishing.remove(ref.output)
         record.published[ref.output] = pid
         self.records.update(record)
         return pid
+
+
+def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
+    """Members of the group that lie on a cycle of ``@name`` references."""
+    edges = {
+        name: {
+            r.record[len(GROUP_PREFIX) :]
+            for r in req.refs()
+            if r.record.startswith(GROUP_PREFIX)
+        }
+        for name, req in group.items()
+    }
+    on_cycle: set[str] = set()
+    for start in edges:
+        stack, seen = [start], set()
+        while stack:
+            for nxt in edges.get(stack.pop(), ()):
+                if nxt == start:
+                    on_cycle.add(start)
+                elif nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+    return on_cycle
 
 
 def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:

@@ -88,7 +88,8 @@ class DataRef:
 
 
 NexusFile = Annotated[Ref | Path, DataRef(kind=Kind.NEXUS)]
-OpaqueFile = Annotated[Ref | Path, DataRef(kind=Kind.OPAQUE)]
+OpaqueFile = Annotated[Ref | Path | bytes, DataRef(kind=Kind.OPAQUE)]
+"""A file the framework cannot read; a workflow returns one as bytes."""
 
 
 def Array(spec: ArraySpec | None = None) -> Any:

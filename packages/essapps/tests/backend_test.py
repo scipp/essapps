@@ -10,13 +10,9 @@ import scipp as sc
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client
 from ess.apps.datastore import MissingCopyError
-from ess.apps.examples import FAIL, LOAD, REBIN, SUM
+from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM
 from ess.apps.records import Status
 from ess.apps.spec import FILE_SPEC, Ref, SpecId
-
-
-def ref(record, output, key=None) -> Ref:
-    return Ref(record=record.id, output=output, key=key)
 
 
 def test_file_record_is_created_once_per_path(client: Client, run_file: Path) -> None:
@@ -35,12 +31,12 @@ def test_run_completes_with_inline_and_stored_outputs(
     record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     assert record.status == Status.COMPLETED
     assert record.outputs == {'total': {'value': 72.0, 'unit': 'counts'}}
-    assert record.stored_outputs == [ref(record, 'data')]
+    assert record.stored_outputs == [record.ref('data')]
     assert record.resolved_params['scale'] == 2.0
     assert record.binding == 'in_process'
     assert 'essapps' in record.package_versions
     assert client.output(record, 'data').sum().value == 72.0
-    assert client.output(ref(record, 'total')) == {'value': 72.0, 'unit': 'counts'}
+    assert client.output(record.ref('total')) == {'value': 72.0, 'unit': 'counts'}
 
 
 def test_session_outputs_stay_in_memory_until_written_out(
@@ -48,11 +44,11 @@ def test_session_outputs_stay_in_memory_until_written_out(
 ) -> None:
     record = client.run(LOAD, {'run': run_ref})
     data = client.backend.data
-    assert data.in_cache(ref(record, 'data'))
-    assert not data.has_copy(ref(record, 'data'))
-    path = client.write_out(ref(record, 'data'))
+    assert data.in_cache(record.ref('data'))
+    assert not data.has_copy(record.ref('data'))
+    path = client.write_out(record.ref('data'))
     assert path.exists()
-    assert data.has_copy(ref(record, 'data'))
+    assert data.has_copy(record.ref('data'))
 
 
 def test_chaining_through_memory_and_literal_outputs(
@@ -60,7 +56,7 @@ def test_chaining_through_memory_and_literal_outputs(
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     rebinned = client.run(
-        REBIN, {'data': ref(loaded, 'data'), 'bins': 2, 'offset': ref(loaded, 'total')}
+        REBIN, {'data': loaded.ref('data'), 'bins': 2, 'offset': loaded.ref('total')}
     )
     assert rebinned.status == Status.COMPLETED, rebinned.failure
     assert rebinned.request.params['offset'] == {
@@ -103,9 +99,9 @@ def test_group_with_pending_outputs_runs_in_dependency_order(
     assert {k: v.status for k, v in group.items()} == dict.fromkeys(
         group, Status.COMPLETED
     )
-    total = client.output(ref(group['sum'], 'total'))
+    total = client.output(group['sum'].ref('total'))
     assert total.sum().value == 36.0 * 3
-    per_run = client.output(ref(group['sum'], 'per_run', '1'))
+    per_run = client.output(group['sum'].ref('per_run', '1'))
     assert per_run.sum().value == 72.0
     assert group['sum'].request.params['runs'][0]['record'] == group['a'].id
 
@@ -147,21 +143,21 @@ def test_validation_reports_errors_before_any_record_exists(
 def test_validation_checks_reference_types(client: Client, run_ref: Ref) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     literal_into_data = client.validate(
-        client.request(REBIN, {'data': ref(loaded, 'total')})
+        client.request(REBIN, {'data': loaded.ref('total')})
     )
     assert any(
         'literal output cannot fill a data field' in e for e in literal_into_data.errors
     )
     data_into_literal = client.validate(
         client.request(
-            REBIN, {'data': ref(loaded, 'data'), 'offset': ref(loaded, 'data')}
+            REBIN, {'data': loaded.ref('data'), 'offset': loaded.ref('data')}
         )
     )
     assert any(
         'data cannot fill a literal field' in e for e in data_into_literal.errors
     )
     missing_output = client.validate(
-        client.request(REBIN, {'data': ref(loaded, 'nope')})
+        client.request(REBIN, {'data': loaded.ref('nope')})
     )
     assert any('no output' in e for e in missing_output.errors)
     unknown_spec = client.validate(client.request(SpecId(name='nope', version=1)))
@@ -199,7 +195,7 @@ def test_missing_collection_key_fails_the_consumer_only(
             'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data')]}),
         }
     )['sum']
-    consumer = client.run(SUM, {'runs': [ref(summed, 'per_run', '7')]})
+    consumer = client.run(SUM, {'runs': [summed.ref('per_run', '7')]})
     assert consumer.status == Status.FAILED
     assert consumer.failure.kind == 'missing-key'
     assert client.record(summed.id).status == Status.COMPLETED
@@ -225,7 +221,7 @@ def test_cancel_terminal_record_is_a_no_op(client: Client, run_ref: Ref) -> None
 
 def test_missing_copy_is_reported_after_eviction(client: Client, run_ref: Ref) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
-    client.backend.data.evict(ref(loaded, 'data'))
+    client.backend.data.evict(loaded.ref('data'))
     with pytest.raises(MissingCopyError):
         client.output(loaded, 'data')
     assert client.recompute(loaded).status == Status.COMPLETED
@@ -233,8 +229,8 @@ def test_missing_copy_is_reported_after_eviction(client: Client, run_ref: Ref) -
 
 def test_drop_keeps_the_record(client: Client, run_ref: Ref) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
-    client.write_out(ref(loaded, 'data'))
-    client.drop(ref(loaded, 'data'))
+    client.write_out(loaded.ref('data'))
+    client.drop(loaded.ref('data'))
     assert client.record(loaded.id).status == Status.COMPLETED
     with pytest.raises(MissingCopyError):
         client.output(loaded, 'data')
@@ -242,9 +238,65 @@ def test_drop_keeps_the_record(client: Client, run_ref: Ref) -> None:
 
 def test_view_returns_plain_arrays(client: Client, run_ref: Ref) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
-    v = client.view(ref(loaded, 'data'))
+    v = client.view(loaded.ref('data'))
     assert v['dims'] == ['x']
     assert v['unit'] == 'counts'
     assert list(v['values']) == [1, 2, 3, 4, 5, 6, 7, 8]
     assert list(v['coords']['x']) == list(range(8))
     assert not isinstance(v['values'], sc.Variable)
+
+
+def test_record_ref_names_the_single_output_or_demands_a_name(
+    client: Client, run_ref: Ref
+) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
+    with pytest.raises(ValueError, match="has outputs \\['data', 'total'\\]"):
+        loaded.ref()
+    assert loaded.ref('data') == Ref(record=loaded.id, output='data')
+    rebinned = client.run(REBIN, {'data': loaded.ref('data')})
+    assert rebinned.ref() == Ref(record=rebinned.id, output='result')
+    failed = client.run(FAIL)
+    with pytest.raises(ValueError, match='is failed'):
+        failed.ref()
+
+
+def test_element_of_a_literal_collection_output_is_inlined(
+    client: Client, run_ref: Ref
+) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
+    summed = client.run(SUM, {'runs': [loaded.ref('data'), loaded.ref('data')]})
+    rebinned = client.run(
+        REBIN,
+        {'data': loaded.ref('data'), 'offset': summed.ref('totals', 'x')},
+    )
+    assert rebinned.status == Status.COMPLETED, rebinned.failure
+    assert rebinned.resolved_params['offset'] == {'value': 72.0, 'unit': 'counts'}
+
+
+def test_cyclic_group_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match='cycle'):
+        client.submit_group(
+            {
+                'a': client.request(SUM, {'runs': [Ref(record='@b', output='total')]}),
+                'b': client.request(SUM, {'runs': [Ref(record='@a', output='total')]}),
+            }
+        )
+    assert client.records() == []
+
+
+def test_session_file_output_is_readable(client: Client, run_ref: Ref) -> None:
+    exported = client.run(
+        EXPORT, {'data': client.run(LOAD, {'run': run_ref}).ref('data')}
+    )
+    assert exported.status == Status.COMPLETED, exported.failure
+    assert client.output(exported).read_bytes().startswith(b'x,')
+
+
+def test_evicted_session_input_is_a_missing_copy_status(
+    client: Client, run_ref: Ref
+) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
+    client.backend.data.evict(loaded.ref('data'))
+    rebinned = client.run(REBIN, {'data': loaded.ref('data')})
+    assert rebinned.status == Status.FAILED
+    assert rebinned.failure.kind == 'missing-copy'

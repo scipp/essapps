@@ -65,6 +65,22 @@ class Failure(BaseModel, frozen=True):
     traceback: str | None = None
 
 
+class RunResult(BaseModel):
+    """What a runner reports back; the backend applies it to its own record."""
+
+    status: Status
+    started: datetime
+    finished: datetime
+    resolved_params: dict[str, Any] | None = None
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    stored_outputs: list[Ref] = Field(default_factory=list)
+    package_versions: dict[str, str] = Field(default_factory=dict)
+    environment: str | None = None
+    binding: Literal['entry_point', 'in_process'] | None = None
+    reused: bool = False
+    failure: Failure | None = None
+
+
 class RunRecord(BaseModel):
     """
     A run request plus what happened to it.
@@ -90,9 +106,28 @@ class RunRecord(BaseModel):
     derives_from: Derivation | None = None
     failure: Failure | None = None
     launcher_job: str | None = None
+    publishing: list[str] = Field(
+        default_factory=list, description="Outputs whose publication was begun."
+    )
     published: dict[str, str] = Field(
         default_factory=dict, description="PID per published output."
     )
+
+    def apply(self, result: RunResult) -> None:
+        for name, value in result:
+            setattr(self, name, value)
+
+    def ref(self, output: str | None = None, key: str | None = None) -> Ref:
+        """A reference to an output; the output name may be omitted if there is one."""
+        if output is None:
+            names = sorted(self.output_names())
+            if len(names) != 1:
+                what = (
+                    f'is {self.status.value}' if not names else f'has outputs {names}'
+                )
+                raise ValueError(f'{self.id} {what}; name the output')
+            output = names[0]
+        return Ref(record=self.id, output=output, key=key)
 
     @property
     def spec(self) -> SpecId:

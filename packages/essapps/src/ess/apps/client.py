@@ -14,7 +14,7 @@ from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import RunRecord, RunRequest, Status
+from .records import RunRecord, RunRequest
 from .spec import Ref, SpecId, WorkflowSpec
 from .store import RecordStore
 from .views import ViewSpec
@@ -134,7 +134,7 @@ class Client:
         self, ref: Ref | RunRecord, output: str | None = None, key: str | None = None
     ) -> Any:
         if isinstance(ref, RunRecord):
-            ref = Ref(record=ref.id, output=output or _first_output(ref), key=key)
+            ref = ref.ref(output, key)
         return self.backend.output(ref)
 
     def view(self, ref: Ref, **spec: Any) -> dict[str, Any]:
@@ -151,15 +151,6 @@ class Client:
 
     def provenance(self, record: RunRecord | str) -> dict[str, Any]:
         return self.backend.provenance(record if isinstance(record, str) else record.id)
-
-
-def _first_output(record: RunRecord) -> str:
-    if record.status != Status.COMPLETED:
-        raise ValueError(f'{record.id} is {record.status.value}: {record.failure}')
-    names = sorted(record.output_names())
-    if len(names) != 1:
-        raise ValueError(f'{record.id} has outputs {names}; name one')
-    return names[0]
 
 
 def local(

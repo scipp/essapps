@@ -43,6 +43,8 @@ def frontier(pipeline: sciline.Pipeline, cheap: Iterable[Key]) -> set[Key]:
 
 
 def equal(a: Any, b: Any) -> bool:
+    if a is b:
+        return True
     if isinstance(a, sc.Variable | sc.DataArray | sc.Dataset | sc.DataGroup):
         return type(a) is type(b) and sc.identical(a, b)
     if isinstance(a, list | tuple) and isinstance(b, list | tuple):
@@ -88,16 +90,14 @@ class WarmPipeline:
         values = {name: getattr(params, name) for name in self._keys}
         expensive = {n: v for n, v in values.items() if n not in self._cheap}
         pipeline = self._pipeline.copy()
+        for name, key in self._keys.items():
+            pipeline[key] = values[name]
         if self._cache is not None and equal(expensive, self._expensive):
             for key, value in self._cache.items():
                 pipeline[key] = value
-            for name in self._cheap:
-                pipeline[self._keys[name]] = values[name]
             results = pipeline.compute(list(self._targets.values()))
             self.reused = True
         else:
-            for name, key in self._keys.items():
-                pipeline[key] = values[name]
             wanted = set(self._targets.values()) | self.frontier
             results = pipeline.compute(list(wanted))
             self._cache = {k: results[k] for k in self.frontier}

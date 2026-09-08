@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from ess.apps.client import Client, local
-from ess.apps.examples import FAIL, LOAD, SUM, write_run
+from ess.apps.examples import FAIL, LOAD, REBIN, SUM, write_run
 from ess.apps.records import Status
 from ess.apps.spec import Ref
 
@@ -41,7 +41,7 @@ def test_run_is_dispatched_then_reconciled_from_the_marker(
     assert done.status == Status.COMPLETED, done.failure
     assert done.outputs == {'total': {'value': 20.0, 'unit': 'counts'}}
     assert not done.reused
-    data_ref = Ref(record=done.id, output='data')
+    data_ref = done.ref('data')
     assert client.backend.data.has_copy(data_ref)
     assert not client.backend.data.in_cache(data_ref)
     assert client.output(data_ref).sum().value == 20.0
@@ -71,7 +71,7 @@ def test_map_combine_runs_through_subprocesses(client: Client, run_ref: Ref) -> 
     assert {k: v.status for k, v in done.items()} == dict.fromkeys(
         group, Status.COMPLETED
     )
-    assert client.output(Ref(record=done['sum'].id, output='total')).sum().value == 40.0
+    assert client.output(done['sum'].ref('total')).sum().value == 40.0
     assert [r.request.member_key for r in client.records(batch='b1')] == ['a', 'b']
 
 
@@ -94,3 +94,29 @@ def test_cancel_kills_the_process_and_dependents(client: Client, run_ref: Ref) -
     client.cancel(group['a'])
     assert client.record(group['a'].id).status == Status.CANCELLED
     assert client.record(group['sum'].id).status == Status.CANCELLED
+
+
+def test_persisted_request_keeps_reference_form(client: Client, run_ref: Ref) -> None:
+    (loaded,) = client.wait([client.run(LOAD, {'run': run_ref})])
+    rebinned = client.run(
+        REBIN, {'data': loaded.ref('data'), 'offset': loaded.ref('total')}
+    )
+    (done,) = client.wait([rebinned])
+    assert done.status == Status.COMPLETED, done.failure
+    assert done.request.params['offset'] == {
+        'record': loaded.id,
+        'output': 'total',
+        'key': None,
+    }
+    assert done.resolved_params['offset'] == {'value': 10.0, 'unit': 'counts'}
+    assert client.provenance(done)['inputs'][0]['spec'] == 'load/v1'
+
+
+def test_dead_runner_without_marker_is_failed(client: Client, run_ref: Ref) -> None:
+    record = client.run(LOAD, {'run': run_ref})
+    proc = client.backend.launcher._procs.pop(record.id)
+    proc.kill()
+    proc.wait()
+    (done,) = client.wait([record])
+    assert done.status == Status.FAILED
+    assert done.failure.kind == 'runner-exit'

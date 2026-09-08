@@ -6,7 +6,8 @@ The runner: materialize inputs, call the workflow, validate and store outputs.
 One code path for both execution shapes. In a session the runner keeps the
 callable between runs (the warm workflow); in a throwaway process it is
 constructed, called once, and the process exits after writing a completion
-marker. The runner never touches the record store.
+marker. The runner never touches the record store and never sees a record: it
+gets a record ID and parameters and reports a :class:`RunResult`.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ValidationError
 
 from .binding import Binding, Factory, Workflow, import_object
-from .records import Failure, RunRecord, Status
+from .records import Failure, RunResult, Status
 from .spec import DataRef, Kind, Ref, SpecId, WorkflowSpec, data_ref_fields
 
 MARKER = 'done.json'
@@ -96,58 +97,70 @@ class Runner:
         self._warm.pop(spec_id, None)
 
     def run(
-        self, record: RunRecord, binding: Binding, inputs: Inputs, outputs: Outputs
-    ) -> RunRecord:
-        """Execute ``record`` and return it with the result fields filled in."""
+        self,
+        record_id: str,
+        params: dict[str, Any],
+        binding: Binding,
+        inputs: Inputs,
+        outputs: Outputs,
+    ) -> RunResult:
+        """Execute the request ``params`` of ``record_id`` and report what happened."""
         if binding.factory is None:
             raise ValueError(f'{binding.spec.id} has no workflow to run')
         spec = binding.spec
-        record = record.model_copy(deep=True)
-        record.status = Status.RUNNING
-        record.started = datetime.now(UTC)
-        record.package_versions = package_versions()
-        record.environment = environment_name()
-        record.binding = binding.how
+        result = RunResult(
+            status=Status.RUNNING,
+            started=datetime.now(UTC),
+            finished=datetime.now(UTC),
+            package_versions=package_versions(),
+            environment=environment_name(),
+            binding=binding.how,
+        )
         try:
-            params = spec.params.model_validate(record.request.params)
-            record.resolved_params = params.model_dump(mode='json')
-            materialized = params.model_dump()
+            validated = spec.params.model_validate(params)
+            result.resolved_params = validated.model_dump(mode='json')
+            materialized = validated.model_dump()
             for name, ref in data_ref_fields(spec.params).items():
                 if materialized.get(name) is not None:
                     materialized[name] = _materialize(materialized[name], ref, inputs)
-            workflow, record.reused = self._callable(spec, binding.factory)
-            result = workflow(spec.params.model_validate(materialized))
-            result_model = (
-                result
-                if isinstance(result, BaseModel)
-                else spec.outputs.model_validate(result)
+            workflow, result.reused = self._callable(spec, binding.factory)
+            returned = workflow(spec.params.model_validate(materialized))
+            model = (
+                returned
+                if isinstance(returned, BaseModel)
+                else spec.outputs.model_validate(returned)
             )
-            self._store(record, spec, result_model, outputs)
-            record.status = Status.COMPLETED
+            self._store(record_id, result, spec, model, outputs)
+            result.status = Status.COMPLETED
         except Exception as e:
-            record.status = Status.FAILED
-            record.failure = Failure(
+            result.status = Status.FAILED
+            result.failure = Failure(
                 kind='validation'
                 if isinstance(e, ValidationError)
                 else type(e).__name__,
                 message=str(e),
                 traceback=traceback.format_exc(),
             )
-        record.finished = datetime.now(UTC)
-        return record
+        result.finished = datetime.now(UTC)
+        return result
 
     def _store(
-        self, record: RunRecord, spec: WorkflowSpec, result: BaseModel, outputs: Outputs
+        self,
+        record_id: str,
+        result: RunResult,
+        spec: WorkflowSpec,
+        model: BaseModel,
+        outputs: Outputs,
     ) -> None:
         stored = data_ref_fields(spec.outputs)
-        for name in type(result).model_fields:
-            value = getattr(result, name)
+        for name in type(model).model_fields:
+            value = getattr(model, name)
             if value is None:
                 continue
             if name in stored:
-                record.stored_outputs += _store_output(record.id, name, value, outputs)
+                result.stored_outputs += _store_output(record_id, name, value, outputs)
             else:
-                record.outputs[name] = result.model_dump(mode='json', include={name})[
+                result.outputs[name] = model.model_dump(mode='json', include={name})[
                     name
                 ]
 
@@ -164,7 +177,7 @@ class FileInputs:
         return self._load(path) if kind is Kind.ARRAY else path
 
 
-class FileOutputs:
+class WorkdirOutputs:
     """Outputs of a throwaway runner: written into its work directory."""
 
     def __init__(self, workdir: Path, save: Any) -> None:
@@ -182,16 +195,18 @@ def main(workdir: Path) -> None:
     from .datastore import Serializers
 
     job = json.loads((workdir / JOB).read_text())
-    record = RunRecord.model_validate(job['record'])
     registry = import_object(job['registry'])()
+    binding = registry.binding(SpecId.model_validate(job['spec']))
     serializers = Serializers()
     inputs = FileInputs(
         {k: Path(v) for k, v in job['locations'].items()}, serializers.load
     )
-    outputs = FileOutputs(workdir, serializers.save)
-    done = Runner(keep=False).run(record, registry[record.spec], inputs, outputs)
+    outputs = WorkdirOutputs(workdir, serializers.save)
+    result = Runner(keep=False).run(
+        job['record'], job['params'], binding, inputs, outputs
+    )
     marker = {
-        'record': done.model_dump(mode='json'),
+        'result': result.model_dump(mode='json'),
         'paths': {k: str(v) for k, v in outputs.paths.items()},
     }
     tmp = workdir / (MARKER + '.tmp')

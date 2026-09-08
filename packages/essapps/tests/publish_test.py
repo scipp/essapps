@@ -14,9 +14,9 @@ def test_publish_writes_out_and_carries_a_provenance_snapshot(
     client: Client, run_ref: Ref
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
-    rebinned = client.run(REBIN, {'data': Ref(record=loaded.id, output='data')})
+    rebinned = client.run(REBIN, {'data': loaded.ref('data')})
     publisher = FakePublisher()
-    ref = Ref(record=rebinned.id, output='result')
+    ref = rebinned.ref('result')
     pid = client.publish(ref, publisher, allow_reused=True)
     assert client.record(rebinned.id).published == {'result': pid}
     assert client.backend.data.has_copy(ref)
@@ -33,7 +33,7 @@ def test_publish_writes_out_and_carries_a_provenance_snapshot(
 def test_publish_is_idempotent(client: Client, run_ref: Ref) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     publisher = FakePublisher()
-    ref = Ref(record=loaded.id, output='data')
+    ref = loaded.ref('data')
     first = client.publish(ref, publisher, allow_reused=True)
     assert client.publish(ref, publisher, allow_reused=True) == first
     assert len(publisher.entries) == 1
@@ -46,7 +46,23 @@ def test_publish_refuses_reused_and_in_process_records_by_default(
     second = client.run(LOAD, {'run': run_ref, 'scale': 2.0}, slot='s')
     assert second.reused
     with pytest.raises(ValueError, match='reused'):
-        client.publish(Ref(record=second.id, output='data'), FakePublisher())
+        client.publish(second.ref('data'), FakePublisher())
     first = client.records(slot='s')[0]
     with pytest.raises(ValueError, match='in-process'):
-        client.publish(Ref(record=first.id, output='data'), FakePublisher())
+        client.publish(first.ref('data'), FakePublisher())
+
+
+class CrashingPublisher:
+    def publish(self, path, snapshot):
+        raise ConnectionError('catalogue down')
+
+
+def test_failed_publish_can_be_retried(client: Client, run_ref: Ref) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
+    with pytest.raises(ConnectionError):
+        client.publish(loaded.ref('data'), CrashingPublisher(), allow_reused=True)
+    assert client.record(loaded.id).publishing == ['data']
+    assert client.record(loaded.id).published == {}
+    pid = client.publish(loaded.ref('data'), FakePublisher(), allow_reused=True)
+    assert client.record(loaded.id).published == {'data': pid}
+    assert client.record(loaded.id).publishing == []

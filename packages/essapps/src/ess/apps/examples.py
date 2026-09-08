@@ -94,6 +94,7 @@ class SumParams(BaseModel):
 class SumOutputs(BaseModel):
     total: Array(ArraySpec(dims=('x',), unit='counts'))
     per_run: dict[str, Array(ArraySpec(dims=('x',), unit='counts'))]
+    totals: dict[str, Quantity]
 
 
 def sum_workflow() -> Any:
@@ -102,7 +103,11 @@ def sum_workflow() -> Any:
         for r in params.runs[1:]:
             total += r
         return SumOutputs(
-            total=total, per_run={str(i): r for i, r in enumerate(params.runs)}
+            total=total,
+            per_run={str(i): r for i, r in enumerate(params.runs)},
+            totals={
+                'x': Quantity(value=float(total.sum().value), unit=str(total.unit))
+            },
         )
 
     return run
@@ -115,6 +120,33 @@ SUM = WorkflowSpec(
     description='Combine runs by summation; the combine half of map-combine.',
     params=SumParams,
     outputs=SumOutputs,
+)
+
+
+class ExportParams(BaseModel):
+    data: Array(ArraySpec(dims=('x',), unit='counts'))
+
+
+class ExportOutputs(BaseModel):
+    csv: OpaqueFile
+
+
+def export_workflow() -> Any:
+    def run(params: ExportParams) -> ExportOutputs:
+        rows = zip(params.data.coords['x'].values, params.data.values, strict=True)
+        text = 'x,counts\n' + ''.join(f'{x},{y}\n' for x, y in rows)
+        return ExportOutputs(csv=text.encode())
+
+    return run
+
+
+EXPORT = WorkflowSpec(
+    name='export',
+    version=1,
+    title='Export',
+    description='Write a run as CSV; an opaque file output.',
+    params=ExportParams,
+    outputs=ExportOutputs,
 )
 
 
@@ -147,6 +179,7 @@ def registry() -> Registry:
         (SUM, sum_workflow),
         (FAIL, fail_workflow),
         (HISTOGRAM, histogram_workflow),
+        (EXPORT, export_workflow),
     ):
         reg.bind(spec, factory)
     return reg
