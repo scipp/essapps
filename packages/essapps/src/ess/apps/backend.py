@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -27,6 +27,7 @@ from .spec import (
     DataRef,
     Kind,
     LocalOrigin,
+    PidOrigin,
     Ref,
     data_ref_fields,
     walk_refs,
@@ -35,6 +36,10 @@ from .store import RecordStore
 from .views import ViewSpec, view
 
 GROUP_PREFIX = '@'
+
+
+class Publisher(Protocol):
+    def publish(self, path: Path, snapshot: dict[str, Any]) -> str: ...
 
 
 class ValidationReport(BaseModel, frozen=True):
@@ -78,14 +83,34 @@ class Backend:
     ) -> RunRecord:
         """The file record for a local path, created on first reference."""
         path = Path(path).resolve()
+        origin = LocalOrigin(path=path)
+        return self._file_record(origin, path, instrument, proposal, submitter)
+
+    def dataset_record(
+        self, pid: str, path: Path, *, instrument: str, proposal: str, submitter: str
+    ) -> RunRecord:
+        """The file record for a catalogue dataset, created on first reference."""
+        return self._file_record(
+            PidOrigin(pid=pid), path, instrument, proposal, submitter
+        )
+
+    def _file_record(
+        self,
+        origin: LocalOrigin | PidOrigin,
+        path: Path,
+        instrument: str,
+        proposal: str,
+        submitter: str,
+    ) -> RunRecord:
+        params = {'origin': origin.model_dump(mode='json')}
         for existing in self.records.list(proposal=proposal, spec=FILE_SPEC.id):
-            if existing.request.params['origin'].get('path') == str(path):
+            if existing.request.params == params:
                 return existing
-        if not path.is_file():
+        if not Path(path).is_file():
             raise FileNotFoundError(path)
         request = RunRequest(
             spec=FILE_SPEC.id,
-            params={'origin': LocalOrigin(path=path).model_dump(mode='json')},
+            params=params,
             instrument=instrument,
             proposal=proposal,
             submitter=submitter,
@@ -94,7 +119,7 @@ class Backend:
         record.finished = record.created
         record.stored_outputs = [Ref(record=record.id, output='file')]
         self.records.add(record)
-        self.data.adopt(record.stored_outputs[0], path, store_owned=False)
+        self.data.adopt(record.stored_outputs[0], Path(path), store_owned=False)
         return record
 
     # Validation
@@ -356,6 +381,58 @@ class Backend:
 
     def view(self, ref: Ref, spec: ViewSpec) -> dict[str, Any]:
         return view(self.data.get(ref, Kind.ARRAY), spec)
+
+    # Publication (D11)
+
+    def provenance(self, record_id: str) -> dict[str, Any]:
+        """A self-contained snapshot: raw origins, resolved params, spec, versions."""
+        record = self.records.get(record_id)
+        raw: list[dict[str, Any]] = []
+        inputs: list[dict[str, Any]] = []
+        for ref in record.request.refs():
+            producer = self.records.get(ref.record)
+            if producer.spec == FILE_SPEC.id:
+                raw.append(producer.request.params['origin'])
+            else:
+                inputs.append(self.provenance(producer.id))
+        return {
+            'record': record.id,
+            'spec': str(record.spec),
+            'params': record.resolved_params,
+            'package_versions': record.package_versions,
+            'environment': record.environment,
+            'binding': record.binding,
+            'raw': raw,
+            'inputs': inputs,
+        }
+
+    def publish(
+        self, ref: Ref, publisher: Publisher, *, allow_reused: bool = False
+    ) -> str:
+        """
+        Publish an output: idempotent, from a disk copy, with a provenance snapshot.
+
+        A record whose workflow object was reused is refused unless allowed, so
+        that what is published was computed cold.
+        """
+        record = self.records.get(ref.record)
+        if ref.output in record.published:
+            return record.published[ref.output]
+        if record.status != Status.COMPLETED:
+            raise ValueError(f'{record.id} is {record.status.value}')
+        if record.reused and not allow_reused:
+            raise ValueError(f'{record.id} reused a warm workflow; recompute it first')
+        if record.binding == 'in_process' and not allow_reused:
+            raise ValueError(f'{record.id} was bound in-process; not reproducible')
+        if not self.data.has_copy(ref):
+            self.data.write_out(ref)
+        path = self.data.get(ref, Kind.OPAQUE)
+        record.published[ref.output] = 'pending'
+        self.records.update(record)
+        pid = publisher.publish(path, self.provenance(record.id))
+        record.published[ref.output] = pid
+        self.records.update(record)
+        return pid
 
 
 def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:

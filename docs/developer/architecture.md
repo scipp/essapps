@@ -3,7 +3,7 @@
 Living document.
 Records the choices made so far, the alternatives that were on the table, why each choice was made, and what it costs.
 Companion to [scoping.md](scoping.md), which states goals and scope.
-Nothing here is implemented yet.
+A walking skeleton of it exists under `packages/essapps`; see "Next step".
 Technology choices at the end are proposals.
 A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
 
@@ -574,6 +574,7 @@ Then a spike on the two decisions with the most hidden risk, D3 and D6: a data s
 Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
+The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier and a real instrument workflow are not in it yet.
 
 ## Glossary
 

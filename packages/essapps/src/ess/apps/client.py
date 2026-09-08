@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .backend import Backend, ValidationReport
+from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
@@ -90,6 +90,17 @@ class Client:
         )
         return Ref(record=record.id, output='file')
 
+    def dataset(self, pid: str, path: Path | str) -> Ref:
+        """The reference standing for a catalogue dataset with bytes at ``path``."""
+        record = self.backend.dataset_record(
+            pid,
+            Path(path),
+            instrument=self.instrument,
+            proposal=self.proposal,
+            submitter=self.submitter,
+        )
+        return Ref(record=record.id, output='file')
+
     def files(self, folder: Path | str, pattern: str = '*') -> dict[str, Ref]:
         """One file record per file in a folder, by file name; no bytes moved."""
         return {
@@ -134,6 +145,12 @@ class Client:
 
     def drop(self, ref: Ref) -> None:
         self.backend.data.drop(ref)
+
+    def publish(self, ref: Ref, publisher: Publisher, **kwargs: Any) -> str:
+        return self.backend.publish(ref, publisher, **kwargs)
+
+    def provenance(self, record: RunRecord | str) -> dict[str, Any]:
+        return self.backend.provenance(record if isinstance(record, str) else record.id)
 
 
 def _first_output(record: RunRecord) -> str:

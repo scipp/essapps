@@ -90,6 +90,9 @@ class RunRecord(BaseModel):
     derives_from: Derivation | None = None
     failure: Failure | None = None
     launcher_job: str | None = None
+    published: dict[str, str] = Field(
+        default_factory=dict, description="PID per published output."
+    )
 
     @property
     def spec(self) -> SpecId:

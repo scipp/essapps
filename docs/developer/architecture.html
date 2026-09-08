@@ -205,7 +205,7 @@
 <header class="top">
   <p class="eyebrow">Architecture sketch</p>
   <h1>ESS data-reduction applications</h1>
-  <p class="lede">The choices made so far, the alternatives that were on the table, why each choice was made, and what it costs. Nothing here is implemented. The wording is canonical in <code>docs/developer/architecture.md</code>; this page follows it and adds diagrams.</p>
+  <p class="lede">The choices made so far, the alternatives that were on the table, why each choice was made, and what it costs. A walking skeleton exists under <code>packages/essapps</code>. The wording is canonical in <code>docs/developer/architecture.md</code>; this page follows it and adds diagrams.</p>
   <div class="meta"><span>Companion to scoping.md</span><span>Spec assumed: scipp/ess#690</span><span>Branch architecture-sketch</span></div>
 </header>
 
@@ -875,7 +875,7 @@
 
 <section id="next">
   <h2>Next step</h2>
-  <p>Review this document with the team before implementing. Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake map-combine pair. Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip. The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton. The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.</p>
+  <p>Review this document with the team before implementing. Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake map-combine pair. Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip. The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton. The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds. The skeleton exists as the package <code>essapps</code> under <code>packages/</code>, import <code>ess.apps</code>, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier and a real instrument workflow are not in it yet.</p>
 </section>
 
 <section id="open">

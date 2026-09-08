@@ -9,13 +9,15 @@ without instrument code. ``registry`` is importable by the subprocess launcher.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NewType
 
+import sciline
 import scipp as sc
 from pydantic import BaseModel, Field
 
 from .binding import Registry
 from .spec import Array, ArraySpec, OpaqueFile, Quantity, Ref, WorkflowSpec
+from .warm import WarmPipeline
 
 
 class LoadParams(BaseModel):
@@ -26,6 +28,11 @@ class LoadParams(BaseModel):
 class LoadOutputs(BaseModel):
     data: Array(ArraySpec(dims=('x',), unit='counts'))
     total: Quantity
+
+
+def edges(data: sc.DataArray, bins: int) -> sc.Variable:
+    """Bin edges covering every point of an integer-spaced x coordinate."""
+    return sc.linspace('x', 0.0, float(data.sizes['x']), bins + 1, unit='m')
 
 
 def load_workflow() -> Any:
@@ -64,10 +71,7 @@ def rebin_workflow() -> Any:
         data = params.data
         if params.offset is not None:
             data = data + sc.scalar(params.offset.value, unit=params.offset.unit)
-        edges = sc.linspace(
-            'x', data.coords['x'].min(), data.coords['x'].max(), params.bins + 1
-        )
-        return RebinOutputs(result=data.hist(x=edges))
+        return RebinOutputs(result=data.hist(x=edges(data, params.bins)))
 
     return run
 
@@ -142,6 +146,7 @@ def registry() -> Registry:
         (REBIN, rebin_workflow),
         (SUM, sum_workflow),
         (FAIL, fail_workflow),
+        (HISTOGRAM, histogram_workflow),
     ):
         reg.bind(spec, factory)
     return reg
@@ -155,3 +160,55 @@ def write_run(path: Path, values: list[float]) -> Path:
     )
     data.save_hdf5(path)
     return path
+
+
+# A sciline pipeline behind the contract: threshold is expensive, bins is cheap.
+
+RawData = NewType('RawData', sc.DataArray)
+Threshold = NewType('Threshold', float)
+Filtered = NewType('Filtered', sc.DataArray)
+Bins = NewType('Bins', int)
+Histogram = NewType('Histogram', sc.DataArray)
+
+
+def filter_data(data: RawData, threshold: Threshold) -> Filtered:
+    """Stands in for the expensive stage: loading, masking, coordinate conversion."""
+    kept = data.data > sc.scalar(threshold, unit=data.unit)
+    filtered = data.copy()
+    filtered.data = sc.where(kept, data.data, sc.scalar(0.0, unit=data.unit))
+    return Filtered(filtered)
+
+
+def histogram(data: Filtered, bins: Bins) -> Histogram:
+    return Histogram(data.hist(x=edges(data, bins)))
+
+
+class HistogramParams(BaseModel):
+    data: Array(ArraySpec(dims=('x',), unit='counts'))
+    threshold: float = 0.0
+    bins: int = Field(default=4, ge=1)
+
+
+class HistogramOutputs(BaseModel):
+    histogram: Array(ArraySpec(dims=('x',), unit='counts'))
+
+
+def histogram_workflow() -> WarmPipeline:
+    pipeline = sciline.Pipeline([filter_data, histogram])
+    return WarmPipeline(
+        pipeline,
+        keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
+        targets={'histogram': Histogram},
+        cheap=HISTOGRAM.cheap,
+    )
+
+
+HISTOGRAM = WorkflowSpec(
+    name='histogram',
+    version=1,
+    title='Histogram',
+    description='Filter then histogram; a sciline pipeline kept warm in a session.',
+    params=HistogramParams,
+    outputs=HistogramOutputs,
+    cheap=frozenset({'bins'}),
+)
