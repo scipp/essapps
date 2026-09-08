@@ -6,6 +6,7 @@ Companion to [scoping.md](scoping.md), which states goals and scope.
 A walking skeleton of it exists under `packages/essapps`; see "Next step".
 Technology choices at the end are proposals.
 A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
+Two review notes read this document against the delivery order: [staging.md](staging.md), on what each phase needs, and [stateless.md](stateless.md), on what a design without sessions would remove and cost.
 
 ## How to read this
 
