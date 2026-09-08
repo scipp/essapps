@@ -46,7 +46,7 @@ Optionally it carries a batch ID, a template version, and one link to the record
 A failed run carries a structured failure reason, so that a user sees why without reading logs.
 Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
 The environment is recorded as an opaque name and revision, at ESS a conda environment, so that a recompute can be checked against it; the framework does no more with it than record and compare.
-A record is immutable once the run completes, except for status, and is never deleted.
+A record is immutable once the run completes, except for status, and is never deleted on its own.
 Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.
 Which of the two applies is decided by type and is invisible to clients.
 
@@ -61,15 +61,16 @@ The record keeps references in reference form, so **provenance**, the chain from
 A SciCat dataset or a file on a user's disk is a **file record**: a record of one built-in spec, `file`, which has no workflow and one output, the file.
 A file record has an origin, which is its identity for provenance, and one or more locations, which are where its bytes can be opened.
 The origin is a PID, or a local path with the file's checksum; a location is a path on a named filesystem, such as the facility mount or a user's machine, or a copy in the data store.
-The dataset source creates one file record per SciCat PID with the mount path as its location, and the PID is the unique key: a dataset delivered twice is a no-op.
+A file record for a catalogue file is created when a request first references it, never by discovery, and holds only what resolution and authorization need: the PID, its proposal and instrument; the PID is the unique key.
+Where its bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable; a location the store did not write is SciCat's answer or the user's path, never a copy of the catalogue.
 Listing a folder in a local application creates one file record per file, a row each and no bytes moved; the checksum is taken the first time a runner reads the file and stored on the record then.
 A raw file from the catalogue and a result from last week are therefore the same thing to a request, and a new raw file and a completed processing stage are the same kind of event to automatic reduction.
 
 **Stand-ins resolve at submission.**
 Users submit a local path, a PID, or a run number, which is unique within an instrument and proposal.
-The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a PID that one of our own records published resolves to that record's output, and any other PID to a file record, created if it has none yet.
+The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a run number is looked up in SciCat; a PID whose entry carries our provenance snapshot resolves to the run record named there while the store still has it, and any other PID to a file record, created if it has none yet.
 A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path becomes a file record with that path as its origin.
-Nothing is downloaded or copied at submission.
+Nothing is downloaded or copied at submission, and SciCat is not needed again once a reference exists.
 
 **Whether an output is usable is two questions**: the record's status, and whether the data store holds a copy.
 A missing copy is reported as such, never silently recomputed.
@@ -79,7 +80,7 @@ Recompute is exact only in the environment the record names, and refuses to run 
 | Output of | Where the truth lives | On a missing copy | Copies evictable |
 |---|---|---|---|
 | A run record | The record: parameters, references, versions | Recompute, explicitly | Yes |
-| A file record from SciCat | The PID; the facility mount is its location | Download again | Yes |
+| A file record from SciCat | The PID; SciCat says where the bytes are | Download again | Yes |
 | A file record from a local path | The path and checksum | Nothing to recover from, unless a store copy was made | A store copy, only by an explicit drop |
 | A published run record | The PID, whose entry carries the provenance snapshot | Download rather than recompute | Yes |
 
@@ -93,11 +94,11 @@ A **batch** is a set of independent runs from one template with per-member overr
 One addressing scheme serves inputs, views, publication, and provenance, and the scheduler has one kind of dependency.
 There is no "which record produced this" query, because the reference names the record.
 A handle with its own origin and lifecycle would be three special cases of this: the origin is the producing record, and the lifecycle is record status plus copy availability.
-Records are never deleted because every field that can hold a record ID would otherwise be an edge in a garbage collector, and a row per run costs nothing; what is bounded is bytes, under "Retention" in choice 1.
+Records are never deleted one at a time, because every field that can hold a record ID would otherwise be an edge in a garbage collector, and a row per run costs nothing; a proposal's records are dropped together, under "Lifetimes" in choice 1.
 
 **Cost.**
-One record per dataset the source discovers, so the record store holds a dataset table.
-A published output must not come back as a second record, so the dataset source checks PIDs against records.
+The record store could become a second catalogue by accretion: a row per dataset discovered, metadata copied for display, paths that go stale.
+The rules that stop it are under "The record store is not a catalogue".
 
 ## The four choices
 
@@ -167,13 +168,18 @@ There are two execution shapes, and a group of requests submitted together runs 
   This is every run in shared mode.
   The shared service loads an output into its cache on first access: written once, loaded once, every further view served from memory.
 
-**Retention.**
-A session is a process with an operating-system limit, owned by its client; its cache has no budget of its own, because the store's copy of an output and the warm workflow's intermediate are the same object and evicting one frees nothing.
+**Lifetimes.**
+There are three, and none is set by the framework.
+Memory lives as long as a session: a process with an operating-system limit, owned by its client; its cache has no budget of its own, because the store's copy of an output and the warm workflow's intermediate are the same object and evicting one frees nothing.
 The shared service's cache has a byte budget and evicts least recently used first, with outputs superseded in a slot (choice 4) before anything else.
-Disk copies have a retention policy per kind of run, an open question; when it expires the bytes are dropped and the record stays.
+Records live as long as their proposal plus an analysis window set by the facility: long enough to find last week's result and to chain to yesterday's vanadium, and no longer, because what is worth keeping longer was published, and a published entry carries its own provenance (D11).
+A proposal's records and disk copies are dropped together, exported as one JSON bundle first; nothing is deleted one record at a time.
+This is safe because references never cross proposals except into instrument-shared artefacts, whose commissioning proposals are long-lived, so no reference can point into a dropped proposal.
+Within a proposal, disk copies have a retention policy per kind of run, an open question; when it expires the bytes are dropped and the record stays.
 A dropped copy is a missing copy, under the rule in "Records and references".
-Store copies of local files are exempt: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the file record, after which every record that reaches it through references is no longer recomputable.
+Store copies of local files are exempt from that policy: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the file record or with its proposal, after which every record that reaches it through references is no longer recomputable.
 They count against a per-proposal quota.
+A login, a batch, or an application start is not a lifetime: what a user comes back for outlives all three, and automatic reduction has none of them.
 
 **A rule that follows: reuse across requests is a workflow boundary (D4).**
 A value that other requests reference must be an output of a run of its own, with its own record.
@@ -227,7 +233,7 @@ The store carries a schema version, and a stored parameter set that no longer ma
 Exactly one backend process per record store, enforced by a lock that a live backend renews and a dead one loses.
 In local mode every notebook is its own backend with its own store, at a location the client chooses with a per-user default; a second notebook must use another location, and referencing records across notebooks waits for a local transport (open questions).
 The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes.
-The backend resolves references to locations at dispatch: a file record's reachable path is handed to the runner as is, anything else the runner fetches from the data store.
+The backend resolves references to locations at dispatch: a file record's path, asked of SciCat for a catalogue file, is handed to the runner as is, anything else the runner fetches from the data store.
 
 **One scheduling primitive: pending outputs as inputs (D6).**
 A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other's outputs before they exist.
@@ -242,7 +248,8 @@ Batch members are independent: no ordering between them, and rerunning a member 
 A batch is validated whole before any record is created, and cancelled whole by its batch ID, queued and running members alike.
 
 **The dataset source is abstracted (D7).**
-Its interface: for a proposal, yield new datasets as PID plus metadata; the backend turns each into a file record.
+Its interface: for a proposal, yield new datasets as PID plus the metadata a trigger rule can match on.
+It persists nothing: a dataset becomes a file record only when a rule fires and the submission it makes references the PID, like any other stand-in, and a rule that waits for a group keeps the datasets it has seen as its own state, rebuilt from SciCat after a restart.
 A SciCat implementation, polling or push as the deployment allows, and an in-memory fake.
 Arrival may be out of order and repeated; the interface does not promise a monotonic cursor.
 
@@ -387,6 +394,12 @@ Every workflow that ends in events carries a dense twin, one histogram call in t
 
 ## Ownership, publication, and deployment
 
+**The record store is not a catalogue (also D11).**
+Our store answers what was computed; SciCat answers what was measured and what was finalized.
+A record holds nothing from SciCat that it did not need to make a decision, so a UI that wants a sample name or the list of a proposal's runs asks SciCat, and a batch member key such as a temperature is supplied by the submitter, not looked up.
+SciCat is needed at two moments, resolving a stand-in and publishing; a resolved reference never needs it again, so work on data already referenced continues when the catalogue is slow.
+Local mode is the one place where our store is the only catalogue, and there it is a row per file in a folder.
+
 **Only finalized data enters SciCat (D11).**
 Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
 Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule.
@@ -394,7 +407,7 @@ The SciCat entry carries a self-contained provenance snapshot: the raw PIDs the 
 A publication may name the PID it supersedes, which the snapshot records, since an entry in SciCat is never removed.
 It reads a disk copy: an output that exists only in a session is first written out, and a record whose workflow object was reused is first recomputed in a throwaway process, so that what enters SciCat was computed cold and the record describes it exactly.
 The backend records the intent to publish before writing to SciCat and the PID after; the output then has a second durable copy, so a miss on it becomes a download rather than a recompute.
-The dataset source recognizes a PID in either state and does not create a file record for it, and a trigger rule never fires on records made from its own template; otherwise the same data would exist twice and automatic reduction would reprocess its own output.
+The trigger loop recognizes a published output by the snapshot in its SciCat entry, not by a table of ours, and never fires on it or on records made from its own template; otherwise automatic reduction would reprocess its own output.
 A record bound in-process from a notebook is refused for publication unless the client overrides.
 
 **Instrument plus proposal scopes everything (D12).**
@@ -470,12 +483,12 @@ Structural validation of an array output against its `ArraySpec` happens in the 
   In local mode it is the client's own process.
 - **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
-  A file record's locations are paths the store did not write, on the facility mount or a user's machine, plus any copy made in the store; a store copy of a local file is kept until dropped explicitly.
+  A catalogue file's location comes from SciCat at dispatch and a local file's is its path; a store copy of a local file is kept until dropped explicitly or with its proposal.
 - **Record store**: create, read, update status, and queries: records by proposal, time, batch ID and member key, or slot label; records that reference output X of record Y.
-  Carries a schema version.
-- **Dataset source**: yields new datasets for a proposal as PID plus metadata; the backend creates one file record per PID, and none for a PID that one of our own records carries because we are publishing or have published it.
+  Carries a schema version; drops a proposal's records together, never one.
+- **Dataset source**: yields new datasets for a proposal as PID plus matchable metadata to the trigger loop, and persists nothing; a dataset becomes a file record when a request references it.
   One real implementation (SciCat) and one fake for tests.
-- **Trigger loop**: on a completed record, or a group of them, matching a rule, instantiate a template and submit.
+- **Trigger loop**: on a new dataset or a completed record, or a group of either, matching a rule, instantiate a template and submit; never on a dataset whose SciCat entry carries our snapshot.
   Bound to one template version; moving it to a new version is a deliberate operation, and records say which version made them.
   Has its own visible status: last fire, last refusal with its structured errors.
 - **Publisher**: writes an output to SciCat together with its provenance snapshot.
@@ -547,8 +560,8 @@ Decisions the team needs to make; my recommendation in brackets.
   [Decide once local sessions exist.]
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
-- **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest.
-- **Origin paths after a drop.** A local file's path stays on its record after its bytes are dropped, because records are never deleted.
+- **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest, and the analysis window after which a proposal's records are dropped.
+- **Origin paths after a drop.** A local file's path stays on its record after its bytes are dropped, until the proposal is dropped.
   [Keep it: a path is not data, and provenance needs it.]
 - **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
   [Separate stores now; a local socket form of the HTTP transport later, which also serves the local application.]
@@ -572,7 +585,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
-- **Dataset source**: where new datasets are discovered; each new PID becomes a file record.
+- **Dataset source**: where new datasets are discovered; persists nothing, a dataset becomes a file record when a request references it.
 - **File record**: a record of the built-in `file` spec, standing for one SciCat dataset or one file on a user's disk, with an origin for identity and locations where its bytes can be opened; its single output is that file.
 - **Group**: several requests submitted atomically that may reference each other's outputs before they exist.
 - **Input**: a parameter of data-reference type. In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
@@ -582,9 +595,9 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
 - **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
 - **Recompute**: an explicit operation that runs a record's request again and yields a new record linked to the old one.
-- **Record store**: the database of records. Records are never deleted.
+- **Record store**: the database of records. Records are never deleted one at a time; a proposal's records are dropped together.
 - **Reference**: a value, "output X of record Y", optionally with an element key, usable as any parameter whose type matches. The only way a request names data.
-- **Retention**: how long a disk copy is kept; it applies to bytes, never to records.
+- **Retention**: how long a disk copy is kept within its proposal's lifetime; it applies to bytes, never to single records.
 - **Run record**: a run request plus what happened to it. Called "run", never "job", except for the launcher's own job IDs: in esslivedata a job is a running streaming workflow.
 - **Run request**: everything needed to execute a workflow once.
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
@@ -607,17 +620,17 @@ Numbering follows reading order. It is provisional until the wider review and st
 
 | | Decision | Where |
 |---|---|---|
-| D1 | Every value is an output of a record; files are records too; stand-ins resolve at submission; records are never deleted; recompute is explicit | Records and references |
+| D1 | Every value is an output of a record; files are records too; stand-ins resolve at submission; records are dropped by proposal, never singly; recompute is explicit | Records and references |
 | D2 | Requests are stateless; execution may be stateful inside a session, which is a private cache | Choice 1 |
-| D3 | The data store registers disk copies only; memory caches are private; two execution shapes; retention applies to bytes | Choice 1 |
+| D3 | The data store registers disk copies only; memory caches are private; two execution shapes; three lifetimes: session, proposal, catalogue | Choice 1 |
 | D4 | Reuse across requests means a workflow boundary | Choice 1 |
 | D5 | The record store is ours, small, and implementation-agnostic; the backend is its single writer | Choice 2 |
 | D6 | One scheduling primitive: pending outputs as inputs; map and combine are optional uses of it | Choice 2 |
-| D7 | The dataset source is abstracted; not Kafka | Choice 2 |
+| D7 | The dataset source is abstracted and persists nothing; not Kafka | Choice 2 |
 | D8 | Framework-to-workflow contract: a callable from parameters to outputs; declared cheap parameters; three validation layers | Choice 3 |
 | D9 | The client interface is the API; validate is separate from submit; HTTP later; notebook first | Choice 4 |
 | D10 | Interactive plotting: views are not runs and return plain arrays; event data is never viewed; reruns live in slots | Choice 4 |
-| D11 | Only finalized data enters SciCat; publication reads a cold disk copy | Ownership, publication, and deployment |
+| D11 | Only finalized data enters SciCat; publication reads a cold disk copy; the record store is not a catalogue | Ownership, publication, and deployment |
 | D12 | Instrument plus proposal scopes everything; one backend per instrument | Ownership, publication, and deployment |
 | D13 | One type vocabulary: inputs are data-reference parameters, outputs a typed model, collections on both sides | Spec changes |
 
@@ -627,3 +640,4 @@ Reviewed before being shown to the team by independent AI reviewers from distinc
 The first pass shaped the failure-handling section, the record fields for resolved values and package versions, the serializer rule, instrument-shared artefacts, slots, and the open questions.
 The second pass removed the mechanisms that created a second copy of truth or an implicit action: a registry that tracked copies in memory, recompute triggered by reads, identical-request reuse, record deletion by reachability, memory budgets in sessions, and slots as a backend object.
 It also corrected the description of what a warm workflow reuses against the workflow source, and added the binned flag, optional map-combine, the completion marker, and intent-to-publish.
+The third pass removed what would have made the record store a second catalogue: file records created by discovery with copied metadata and stored mount paths, and records kept forever; file records are now created on reference and hold identity only, catalogue locations are asked of SciCat, and records live as long as their proposal.

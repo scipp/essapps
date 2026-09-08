@@ -55,7 +55,19 @@ Actor: user of the shared web UI.
 
 Checks: the bytes can be dropped; the record and the runs that used it remain honest about what happened; nothing else breaks.
 
-Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Retention). The origin path remains on the record forever because records are never deleted. Decide whether an origin path is sensitive enough to need redaction.
+Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The origin path remains on the record until the proposal is dropped. Decide whether an origin path is sensitive enough to need redaction.
+
+### A5. Metadata corrected after the fact
+
+Actor: instrument scientist.
+
+1. Reduces ten runs during a beamtime.
+2. A week later the sample name of one run is corrected in SciCat.
+3. Lists the runs in the web UI and expects the corrected name.
+
+Checks: the UI shows what SciCat says now; the record is unchanged; nothing in our store had to be updated.
+
+Outcome: fits. A file record holds only PID, proposal, and instrument, and the UI asks SciCat for the rest (The record store is not a catalogue, D11).
 
 ## B. Manual and interactive reduction
 
@@ -420,7 +432,7 @@ Actor: operator.
 
 Checks: retention says what is droppable and what is exempt; dropping loses bytes only, never provenance.
 
-Outcome: question. Dropping loses bytes only and records stay (Choice 1, Retention); store copies of local files and instrument-shared outputs are exempt. The policy itself, and what the operator sees, is the open question on retention.
+Outcome: question. Dropping loses bytes only and records stay (Choice 1, Lifetimes); store copies of local files and instrument-shared outputs are exempt, and a finished proposal can be dropped whole. The policy itself, and what the operator sees, is the open question on retention.
 
 ### H2. Backend upgrade with runs in flight
 
@@ -431,3 +443,15 @@ Actor: operator.
 Checks: records survive; dispatched runs are reconciled; queued ones are re-dispatched; a schema change is handled.
 
 Outcome: fits, with one silence. Restart handling covers dispatched and queued runs (Failure handling) and the store carries a schema version (D5), but the sketch does not say how a schema migration is applied. Minor.
+
+### H3. Proposal ends
+
+Actor: operator.
+
+1. A proposal's analysis window closes.
+2. Wants the instrument's store to stop carrying it, without losing what was published.
+3. A user asks a year later what parameters produced a published result.
+
+Checks: records and copies go together; nothing dangles; the published entry answers the question on its own.
+
+Outcome: fits. Records and copies are dropped by proposal after an export (Choice 1, Lifetimes); references do not cross proposals except into long-lived commissioning ones; the SciCat entry carries the provenance snapshot (D11). The window itself is the open question on retention.
