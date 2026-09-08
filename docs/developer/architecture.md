@@ -463,7 +463,7 @@ Kept together so it can be read as one piece.
 ## Execution modes mapped onto the model
 
 - **Manual**: submit one request, inspect outputs, resubmit with changed parameters.
-- **Interactive**: manual inside a session (D2), with a warm workflow (D9) driven by plot selections in a slot (D11).
+- **Interactive**: manual inside a session (D2), with a warm workflow (D9); each series of reruns, whether from a slider, a plot selection, or a growing list of runs, is a slot (D11).
   Local mode only until remote sessions exist.
 - **Batch**: template plus overrides (D7).
 - **Automatic**: trigger loop plus template (D8).
