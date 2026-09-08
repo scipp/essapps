@@ -43,6 +43,7 @@ It is plain, JSON-serializable data, even when it never leaves a process.
 
 A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, and whether the workflow object was reused from an earlier run.
 Optionally it carries a batch ID, a template version, and one link to the record it derives from, with the reason: retry, recompute, or copy.
+A failed run carries a structured failure reason, so that a user sees why without reading logs.
 Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
 The environment is recorded as an opaque name and revision, at ESS a conda environment, so that a recompute can be checked against it; the framework does no more with it than record and compare.
 A record is immutable once the run completes, except for status, and is never deleted.
@@ -65,8 +66,8 @@ Listing a folder in a local application creates one file record per file, a row 
 A raw file from the catalogue and a result from last week are therefore the same thing to a request, and a new raw file and a completed processing stage are the same kind of event to automatic reduction.
 
 **Stand-ins resolve at submission.**
-Users submit a local path, a PID, or a run number (per instrument).
-The backend turns each into a reference to a file record before persisting anything, creating the record if the PID has none yet, because provenance must not depend on a search that could give a different answer later.
+Users submit a local path, a PID, or a run number, which is unique within an instrument and proposal.
+The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a PID that one of our own records published resolves to that record's output, and any other PID to a file record, created if it has none yet.
 A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path becomes a file record with that path as its origin.
 Nothing is downloaded or copied at submission.
 
@@ -80,10 +81,12 @@ Recompute is exact only in the environment the record names, and refuses to run 
 | A run record | The record: parameters, references, versions | Recompute, explicitly | Yes |
 | A file record from SciCat | The PID; the facility mount is its location | Download again | Yes |
 | A file record from a local path | The path and checksum | Nothing to recover from, unless a store copy was made | A store copy, only by an explicit drop |
-| A published run record | The record, and now also the PID | Download rather than recompute | Yes |
+| A published run record | The PID, whose entry carries the provenance snapshot | Download rather than recompute | Yes |
 
 Two more kinds of data complete the model.
 A **template** is a stored, immutable, versioned partial run request, from a version-controlled file such as instrument defaults, or from a user saving a request.
+Saving a request makes a template with its data-reference fields blank and every other field literal; the user may blank more.
+A template moves to a new spec version by copy, and a batch rerun under the copy is a new batch whose records link to the old ones.
 A **batch** is a set of independent runs from one template with per-member overrides, tagged with a batch ID and a member key chosen by the submitter, such as the run number or the temperature, so that a batch of two thousand is listed and labelled by something meaningful.
 
 **Why this is the foundation.**
@@ -222,7 +225,7 @@ The store carries a schema version, and a stored parameter set that no longer ma
 
 **The backend is the single writer.**
 Exactly one backend process per record store, enforced by a lock that a live backend renews and a dead one loses.
-In local mode every notebook is its own backend with its own store; a second notebook that wants the same store is a client of the first.
+In local mode every notebook is its own backend with its own store, at a location the client chooses with a per-user default; a second notebook must use another location, and referencing records across notebooks waits for a local transport (open questions).
 The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes.
 The backend resolves references to locations at dispatch: a file record's reachable path is handed to the runner as is, anything else the runner fetches from the data store.
 
@@ -236,6 +239,7 @@ They are optional: a spec may instead take a collection of runs and iterate insi
 A combine's output may itself be a collection keyed by member.
 Merge strategy and memory during a merge belong to the combine workflow; real combines are not sums.
 Batch members are independent: no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.
+A batch is validated whole before any record is created, and cancelled whole by its batch ID, queued and running members alike.
 
 **The dataset source is abstracted (D7).**
 Its interface: for a proposal, yield new datasets as PID plus metadata; the backend turns each into a file record.
@@ -354,7 +358,7 @@ A view is a pure function of a reference and a view specification, served by the
 Views are not recorded and are never inputs to a run.
 When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow.
 Overlaying several runs in one plot is several views; anything beyond slicing, reduction, and downsampling, including the difference of two runs, is a workflow.
-Event data is never viewed.
+Event data is never viewed, and neither is a raw file: a quick look at a run just measured goes through a per-instrument preview spec that loads the file and produces the dense outputs a quick look needs.
 Four of six workflow families end in binned events, so the array spec marks an output as binned, a workflow that ends in events also declares the histogrammed output people look at, and the UI offers to plot only dense outputs.
 In local mode a client may also turn a reference into a scipp object directly, so plopp and the full scipp API work in a notebook.
 
@@ -362,7 +366,7 @@ In local mode a client may also turn a reference into a scipp object directly, s
 Interactive tools bind to parameters of shared vocabulary types: range, rectangle, polygon.
 Each change submits a new complete request into the plot's slot.
 A **slot** is a label on a request; runs with the same label supersede each other: a slider moving a threshold, a selection being dragged, or a list of runs to sum growing by one.
-The client interface supplies the label whenever a request reruns a warm workflow, so a notebook user gets a slot without asking for one, and comparing two variants side by side is two labels.
+The client interface supplies the label whenever a request reruns a warm workflow, so a notebook user gets a slot without asking for one; comparing two variants side by side is two labels, the second assigned when the user forks, and discarding a variant drops its label from the UI and nothing else.
 The backend offers one query, the latest submitted record with a label, and treats outputs of superseded records as the first to evict.
 Cancelling a slot's queued predecessors is one client call.
 Tools list, replay, and inspect by slot; inspection shows the latest record with its diff against the previous one, which is "one more file" for an accumulation series and "one value changed" for a slider.
@@ -386,6 +390,8 @@ Every workflow that ends in events carries a dense twin, one histogram call in t
 **Only finalized data enters SciCat (D11).**
 Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
 Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule.
+The SciCat entry carries a self-contained provenance snapshot: the raw PIDs the output derives from, the resolved parameters, the spec identity, the package versions and environment; it can be read without any service of ours, and our record is then a copy of it.
+A publication may name the PID it supersedes, which the snapshot records, since an entry in SciCat is never removed.
 It reads a disk copy: an output that exists only in a session is first written out, and a record whose workflow object was reused is first recomputed in a throwaway process, so that what enters SciCat was computed cold and the record describes it exactly.
 The backend records the intent to publish before writing to SciCat and the PID after; the output then has a second durable copy, so a miss on it becomes a download rather than a recompute.
 The dataset source recognizes a PID in either state and does not create a file record for it, and a trigger rule never fires on records made from its own template; otherwise the same data would exist twice and automatic reduction would reprocess its own output.
@@ -397,6 +403,7 @@ Run-number resolution, UI navigation, templates, and authorization by SciCat mem
 Instrument scientists and commissioning use long-lived proposals.
 Artefacts produced there and consumed by every user proposal (direct beam, beam centre, processed vanadium, masks, lookup tables) are marked instrument-shared and readable from any proposal on that instrument; without that, every external user would need membership in the commissioning proposal.
 Their disk copies are exempt from retention, because a recompute would run under a user who cannot read the commissioning inputs.
+Templates from such a proposal, the instrument defaults, are marked instrument-shared the same way.
 A deployment is one backend per instrument, with its own record store and data store; several share a host while load is low.
 With one or two users per instrument, of whom at most one works with large volumes, a single backend process serves views comfortably.
 Nothing in the model needs cross-instrument state, and a facility-wide entry point, if ever wanted, is a thin front that routes to the instrument backend.
@@ -423,6 +430,7 @@ Many-to-one is a collection-typed parameter of references, such as the runs to s
 One-to-many is a collection output, per detector bank or per angle, consumed whole or element by element.
 Many-to-many is a group whose members each reference one element of a pending output by key.
 Keys are declared on the spec where the author can, such as bank names, and free otherwise.
+Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
 No current workflow needs fan-out whose keys are known only after reading the data: Bifrost groups by rotation inside its pipeline, and imaging has no tomography grouping.
 
 **Outputs are a typed model in the same vocabulary (also D13).**
@@ -463,13 +471,14 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 - **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
   A file record's locations are paths the store did not write, on the facility mount or a user's machine, plus any copy made in the store; a store copy of a local file is kept until dropped explicitly.
-- **Record store**: create, read, update status, and two queries: records that reference output X of record Y, and the latest record with a slot label.
+- **Record store**: create, read, update status, and queries: records by proposal, time, batch ID and member key, or slot label; records that reference output X of record Y.
   Carries a schema version.
 - **Dataset source**: yields new datasets for a proposal as PID plus metadata; the backend creates one file record per PID, and none for a PID that one of our own records carries because we are publishing or have published it.
   One real implementation (SciCat) and one fake for tests.
 - **Trigger loop**: on a completed record, or a group of them, matching a rule, instantiate a template and submit.
+  Bound to one template version; moving it to a new version is a deliberate operation, and records say which version made them.
   Has its own visible status: last fire, last refusal with its structured errors.
-- **Publisher**: writes an output to SciCat together with its provenance.
+- **Publisher**: writes an output to SciCat together with its provenance snapshot.
   Idempotent: the resulting PID is recorded on the output, and publishing it again returns the PID.
 
 ## Failure handling
@@ -488,7 +497,7 @@ Kept together so it can be read as one piece.
 - **Cancel of a running request** asks the launcher to stop it; dependents are cancelled.
 - **Session loss.** A closed or crashed session drops its cache and its warm workflow.
   Runs in flight there fail; in local mode the session is the client, so there is nothing to resubmit until the user starts again.
-- **Failure surfacing** is in scope from the start: a user must see why a run failed without reading logs, and a trigger loop that is refused at submission is as visible as a run that failed.
+- **Failure surfacing** is in scope from the start: a failed record carries a structured reason, so a user sees why a run failed without reading logs, and a trigger loop that is refused at submission is as visible as a run that failed.
   Facilities that built automatic reduction report that the monitoring UI was most of the value.
 - **Slow or missing shared filesystem.** Fetching inputs has a timeout and a distinct failure status.
 - **Multi-tenancy.** The backend checks proposal access on every reference it resolves or serves, not only at submission.
@@ -539,6 +548,10 @@ Decisions the team needs to make; my recommendation in brackets.
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
 - **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest.
+- **Origin paths after a drop.** A local file's path stays on its record after its bytes are dropped, because records are never deleted.
+  [Keep it: a path is not data, and provenance needs it.]
+- **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
+  [Separate stores now; a local socket form of the HTTP transport later, which also serves the local application.]
 - **SciCat push mechanism** for new datasets, if the deployment offers one.
 
 ## Next step
