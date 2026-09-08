@@ -17,6 +17,7 @@ Key scope to deliver eventually:
 - Manual-reduction: User configures a workflow and runs it on a dataset, possibly with some interactive inspection of (intermediate) results.
 - Batch-reduction: Same as manual reduction, but applied to many datasets, many paramaters shared, but some per-dataset individualization.
 - Auto-reduction: Configre workflow auto-applied to all new datasets.
+- Chaining and combining: an output of one workflow feeds another (beam centre, processed vanadium), runs are combined (angle series, sums over runs), and auto-reduction must be able to wait for a group of runs to be complete before it fires.
 
 Key scope on another axis:
 
