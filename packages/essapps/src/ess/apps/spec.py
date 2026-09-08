@@ -19,10 +19,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, get_args, get_origin
+from types import UnionType
+from typing import Annotated, Any, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic.fields import FieldInfo
+from pydantic_core import core_schema
 
 
 class NoParams(BaseModel):
@@ -87,14 +88,36 @@ class DataRef:
         return schema
 
 
+class Materialized:
+    """
+    Validation of an in-process value: anything that is not plain data.
+
+    A data-reference field holds a :class:`Ref` in a request and the materialized
+    value, a path or a scipp object, inside the callable. This type admits the
+    second form without naming scipp, which the spec layer must not import.
+    """
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: Any, handler: Any) -> Any:
+        def check(value: Any) -> Any:
+            if isinstance(value, dict | list | str | int | float | bool | type(None)):
+                raise ValueError('expected a reference or an in-process data object')
+            return value
+
+        return core_schema.no_info_plain_validator_function(check)
+
+
 NexusFile = Annotated[Ref | Path, DataRef(kind=Kind.NEXUS)]
+"""A raw NeXus file; the callable receives a local path."""
 OpaqueFile = Annotated[Ref | Path | bytes, DataRef(kind=Kind.OPAQUE)]
 """A file the framework cannot read; a workflow returns one as bytes."""
+ArrayValue = Annotated[Ref | Materialized, DataRef(kind=Kind.ARRAY)]
+"""A scipp object of any structure; ``Array(spec)`` constrains it."""
 
 
 def Array(spec: ArraySpec | None = None) -> Any:
-    """Type of a field holding a scipp object, constrained by ``spec`` if given."""
-    return Annotated[Ref | Any, DataRef(kind=Kind.ARRAY, array=spec)]
+    """Type of a field holding a scipp object with the structure ``spec``."""
+    return Annotated[Ref | Materialized, DataRef(kind=Kind.ARRAY, array=spec)]
 
 
 class Quantity(BaseModel, frozen=True):
@@ -140,26 +163,28 @@ class WorkflowSpec(BaseModel, frozen=True):
         return SpecId(name=self.name, version=self.version)
 
 
-def data_ref(field: FieldInfo) -> DataRef | None:
-    """The :class:`DataRef` annotation of a field, if it is a data-reference field."""
-    return next((m for m in field.metadata if isinstance(m, DataRef)), None)
-
-
-def _element_type(annotation: Any) -> Any:
-    """The element type of a list or dict annotation, else None."""
+def _members(annotation: Any) -> Iterator[Any]:
+    """The annotation and, through unions, optionals, and collections, its parts."""
+    yield annotation
     origin = get_origin(annotation)
-    if origin is list:
-        return get_args(annotation)[0]
-    if origin is dict:
-        return get_args(annotation)[1]
-    return None
+    if origin is Annotated:
+        yield from _members(get_args(annotation)[0])
+    elif origin in (Union, UnionType):
+        for arg in get_args(annotation):
+            yield from _members(arg)
+    elif origin is list:
+        yield from _members(get_args(annotation)[0])
+    elif origin is dict:
+        yield from _members(get_args(annotation)[1])
 
 
-def _annotation_data_ref(annotation: Any) -> DataRef | None:
-    if get_origin(annotation) is Annotated:
-        return next(
-            (m for m in get_args(annotation)[1:] if isinstance(m, DataRef)), None
-        )
+def _data_ref(annotation: Any) -> DataRef | None:
+    """The DataRef annotation anywhere in a field's type."""
+    for member in _members(annotation):
+        if get_origin(member) is Annotated:
+            for metadata in get_args(member)[1:]:
+                if isinstance(metadata, DataRef):
+                    return metadata
     return None
 
 
@@ -167,29 +192,47 @@ def data_ref_fields(model: type[BaseModel]) -> dict[str, DataRef]:
     """
     Data-reference fields of a model by name.
 
-    A collection field whose elements are data references counts as one; every
-    element shares the annotation.
+    Optional fields and collections of references count; every element of a
+    collection shares the annotation.
     """
-    found: dict[str, DataRef] = {}
+    fields = {}
     for name, field in model.model_fields.items():
-        ref = data_ref(field)
-        if ref is None and (element := _element_type(field.annotation)) is not None:
-            ref = _annotation_data_ref(element)
+        ref = next((m for m in field.metadata if isinstance(m, DataRef)), None)
+        if ref is None:
+            ref = _data_ref(field.annotation)
         if ref is not None:
-            found[name] = ref
-    return found
+            fields[name] = ref
+    return fields
+
+
+def ref_fields(model: type[BaseModel]) -> set[str]:
+    """Fields that may hold a reference: data fields and literal-or-reference unions."""
+    return {
+        name
+        for name, field in model.model_fields.items()
+        if name in data_ref_fields(model) or Ref in _members(field.annotation)
+    }
+
+
+def as_ref(value: Any) -> Ref | None:
+    """The reference a plain value denotes, if it is one: the one place that decides."""
+    if isinstance(value, Ref):
+        return value
+    if isinstance(value, dict) and 'record' in value and set(value) <= _REF_KEYS:
+        return Ref.model_validate(value)
+    return None
+
+
+_REF_KEYS = frozenset(Ref.model_fields)
 
 
 def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Ref]]:
-    """Yield every :class:`Ref` in a plain (JSON-shaped) value, with its path."""
-    if isinstance(value, Ref):
-        yield path, value
+    """Yield every reference in a plain (JSON-shaped) value, with its path."""
+    if (ref := as_ref(value)) is not None:
+        yield path, ref
     elif isinstance(value, dict):
-        if set(value) <= {'record', 'output', 'key'} and 'record' in value:
-            yield path, Ref.model_validate(value)
-        else:
-            for k, v in value.items():
-                yield from walk_refs(v, f'{path}.{k}' if path else str(k))
+        for k, v in value.items():
+            yield from walk_refs(v, f'{path}.{k}' if path else str(k))
     elif isinstance(value, list):
         for i, v in enumerate(value):
             yield from walk_refs(v, f'{path}[{i}]')

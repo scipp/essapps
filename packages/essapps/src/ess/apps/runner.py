@@ -26,7 +26,7 @@ from pydantic import BaseModel, ValidationError
 
 from .binding import Binding, Factory, Workflow, import_object
 from .records import Failure, RunResult, Status
-from .spec import DataRef, Kind, Ref, SpecId, WorkflowSpec, data_ref_fields
+from .spec import DataRef, Kind, Ref, SpecId, WorkflowSpec, as_ref, data_ref_fields
 
 MARKER = 'done.json'
 JOB = 'job.json'
@@ -53,11 +53,13 @@ def environment_name() -> str | None:
 
 
 def _materialize(value: Any, ref: DataRef, inputs: Inputs) -> Any:
+    if (found := as_ref(value)) is not None:
+        return inputs.get(found, ref.kind)
     if isinstance(value, list):
         return [_materialize(v, ref, inputs) for v in value]
-    if isinstance(value, dict) and 'record' not in value:
+    if isinstance(value, dict):
         return {k: _materialize(v, ref, inputs) for k, v in value.items()}
-    return inputs.get(Ref.model_validate(value), ref.kind)
+    return value
 
 
 def _store_output(record_id: str, name: str, value: Any, outputs: Outputs) -> list[Ref]:

@@ -29,6 +29,7 @@ from .spec import (
     LocalOrigin,
     PidOrigin,
     Ref,
+    as_ref,
     data_ref_fields,
     walk_refs,
 )
@@ -450,8 +451,8 @@ def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
     if isinstance(value, Ref):
         value = value.model_dump()
     if isinstance(value, dict):
-        if 'record' in value and set(value) <= {'record', 'output', 'key'}:
-            return value | {'record': ids.get(value['record'], value['record'])}
+        if (ref := as_ref(value)) is not None:
+            return ref.model_dump() | {'record': ids.get(ref.record, ref.record)}
         return {k: _rewrite(v, ids) for k, v in value.items()}
     if isinstance(value, list):
         return [_rewrite(v, ids) for v in value]
@@ -461,9 +462,8 @@ def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
 def _inline(value: Any, literals: Mapping[str, Any]) -> Any:
     """Replace refs into literal outputs by the values themselves."""
     if isinstance(value, dict):
-        if 'record' in value and set(value) <= {'record', 'output', 'key'}:
-            text = str(Ref.model_validate(value))
-            return literals.get(text, value)
+        if (ref := as_ref(value)) is not None:
+            return literals.get(str(ref), value)
         return {k: _inline(v, literals) for k, v in value.items()}
     if isinstance(value, list):
         return [_inline(v, literals) for v in value]
