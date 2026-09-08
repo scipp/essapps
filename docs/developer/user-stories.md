@@ -22,7 +22,7 @@ Actor: user with a local application or notebook.
 
 Checks: listing creates nothing but records; a local file and a catalogue file are named the same way in a request; nothing is copied or downloaded before it is needed.
 
-Outcome:
+Outcome: gap. Listing, naming, and lazy copying all fit (D1). Step 3 does not: a view (D10) is defined over a declared array output, and a raw NeXus file is readable only by a workflow (D8), so the sketch does not say how a raw file is plotted before any workflow ran. Fix: state that raw files are viewable only through a workflow, and provide a per-instrument preview spec.
 
 ### A2. Run number instead of file
 
@@ -33,7 +33,7 @@ Actor: user at the instrument.
 
 Checks: the run number resolves to one catalogue dataset at submission; the record names the dataset, not the number.
 
-Outcome:
+Outcome: fits. Stand-ins resolve at submission (D1); the record names the dataset. Minor: run-number resolution is said to be per instrument in D1 and within a proposal in D12; say which disambiguates.
 
 ### A3. Work without the facility mount
 
@@ -44,7 +44,7 @@ Actor: user on a laptop away from the facility.
 
 Checks: the file is fetched once, kept as a location, and the record's identity is still the PID.
 
-Outcome:
+Outcome: fits. The fetch creates a location, the PID stays the origin (D1, D3). Retention of the fetched copy in local mode is unstated but harmless: local mode has no retention.
 
 ### A4. Mistaken copy into the shared service
 
@@ -55,7 +55,7 @@ Actor: user of the shared web UI.
 
 Checks: the bytes can be dropped; the record and the runs that used it remain honest about what happened; nothing else breaks.
 
-Outcome:
+Outcome: question. The bytes can be dropped and dependents lose recomputability (Choice 1, Retention). The origin path remains on the record forever because records are never deleted. Decide whether an origin path is sensitive enough to need redaction.
 
 ## B. Manual and interactive reduction
 
@@ -69,7 +69,7 @@ Actor: user in a notebook.
 
 Checks: which changes are cheap and who declares that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
-Outcome:
+Outcome: gap. Cheap parameters are declared on the spec (D8, D13) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
 
 ### B2. Add a run to a sum, then remove one
 
@@ -81,7 +81,7 @@ Actor: user in a notebook.
 
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
-Outcome:
+Outcome: fits. One complete request per state; the growing list is the special case the wrapper accumulates; removal resets and recomputes (Choice 1, D8).
 
 ### B3. Compare two parameter sets side by side
 
@@ -93,7 +93,7 @@ Actor: user in a notebook or the web UI.
 
 Checks: two variants can coexist without confusing the interactive series; "discard" means something concrete.
 
-Outcome:
+Outcome: gap. Two variants are two labels (D10), but the sketch does not say who assigns the second label when a user forks, and 'discard' has no meaning: records stay and eviction is automatic. Fix: forking is a client operation that assigns a new label; discard is dropping the label from the UI, nothing more.
 
 ### B4. Explore a 4D volume
 
@@ -105,7 +105,7 @@ Actor: spectroscopy user in the web UI.
 
 Checks: the frontend never receives the volume; dragging creates no records; the chosen cut becomes an input of the next workflow with exact provenance.
 
-Outcome:
+Outcome: fits in a session, where the volume lives in the process serving the views (D10). In shared mode the partial-read layout that makes this responsive is explicitly deferred.
 
 ### B5. Notebook kernel dies mid-session
 
@@ -117,7 +117,7 @@ Actor: user in a notebook.
 
 Checks: what survives, what is recomputed, and how long that takes; nothing the user did is lost except time.
 
-Outcome:
+Outcome: gap. Records survive (D5) and the warm workflow is a cache (D2), but the sketch does not say where the local record store lives, that a restarted kernel reopens it, or how the user finds their last records: the record store lists only two queries. Fix: a default per-user store location, and listing by proposal, time, batch, and slot.
 
 ## C. Chaining and stage outputs
 
@@ -130,7 +130,7 @@ Actor: user in the local or web application.
 
 Checks: the output is addressable as an input without export or import; the batch form can take it; provenance of the reduction reaches the run the beam centre came from.
 
-Outcome:
+Outcome: fits. The literal-or-reference union (D13) and references as inputs (D1) cover it; batch forms take a reference like any field.
 
 ### C2. Vanadium from the catalogue
 
@@ -140,7 +140,7 @@ Actor: user configuring single, batch, or automatic reduction.
 
 Checks: a published stage output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
-Outcome:
+Outcome: gap. A published stage output is an ordinary input (D1, D11), but the duplicate-PID check is stated only for the dataset source; a user typing our own published PID at submission may create a shallow file record instead of a reference to the run record. Fix: stand-in resolution checks PIDs against records too.
 
 ### C3. Per-bank diffraction results
 
@@ -152,7 +152,7 @@ Actor: DREAM user.
 
 Checks: one output with several members; a member is addressable as an input; the UI can show one member without loading all.
 
-Outcome:
+Outcome: gap. Collection outputs and element references are defined (D13, D1), but the sketch does not say whether one element can be stored and loaded without the rest. Fix: elements of a collection output are stored and served individually.
 
 ### C4. Reflectometry angle series
 
@@ -164,7 +164,7 @@ Actor: reflectometry user.
 
 Checks: the combine that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
-Outcome:
+Outcome: fits. This is the worked example under D6; per-angle metadata and the ORSO file are the workflow's serializer (D8).
 
 ### C5. Vanadium and sample tuned together
 
@@ -174,7 +174,7 @@ Actor: instrument scientist in a notebook.
 
 Checks: two workflows chained in memory; the vanadium output is still recorded so batch can reuse it later.
 
-Outcome:
+Outcome: fits. Two warm workflows chained in one session (Choice 1); the vanadium is a stage output with a record (D4).
 
 ## D. Batch
 
@@ -188,7 +188,7 @@ Actor: instrument scientist.
 
 Checks: picking "the run at 250 K" without knowing record IDs; one corrupt file does not affect the other 199 and its failure is visible.
 
-Outcome:
+Outcome: gap. Member keys exist (D1) and failures are isolated (D6), but nothing lets a user find a member by key: the record store has no query for it. Fix: listing and lookup by batch ID and member key.
 
 ### D2. Overnight cluster batch
 
@@ -200,7 +200,7 @@ Actor: NMX user in the web UI.
 
 Checks: results that finished while the backend was restarted are not lost; a rerun is traceable to the failed run.
 
-Outcome:
+Outcome: gap. Completion markers and reconciliation cover the restart (Failure handling), and a rerun links to the failed record (D1), but the run record has no failure-reason field although failure surfacing is in scope. Fix: add a structured failure reason to the record.
 
 ### D3. Cancel and resubmit
 
@@ -212,7 +212,7 @@ Actor: user in the web UI.
 
 Checks: cancellation reaches running and queued members; the new batch is not blocked by the old; the old records stay as history.
 
-Outcome:
+Outcome: gap. The new batch is independent and old records stay, but cancel exists per request and per slot only; batch members are independent, so nothing cancels a batch. Fix: cancel by batch ID.
 
 ### D4. Typo caught before 500 failures
 
@@ -223,7 +223,7 @@ Actor: user in the web UI.
 
 Checks: feedback arrives before the user leaves the form; no records are created for a request that cannot run.
 
-Outcome:
+Outcome: question, then fits. Validate before leaving the form is D9 verbatim. Whether a batch is validated and admitted as a whole or per member is unstated. Recommendation: every member is validated before any record is created; members are independent only at execution.
 
 ## E. Automatic reduction
 
@@ -236,7 +236,7 @@ Actor: reflectometry user during a beamtime.
 
 Checks: a rule can wait for a group; out-of-order and repeated dataset arrival do not fire it twice or early.
 
-Outcome:
+Outcome: question. The sketch names this as the open question 'Groups as the automatic-reduction unit' and recommends list-valued trigger rules; the base rule cannot express waiting for a series.
 
 ### E2. Automatic reduction goes quiet
 
@@ -247,7 +247,7 @@ Actor: instrument operator.
 
 Checks: where the operator sees that the loop is refusing to fire, and why; nothing silently continues with a superseded workflow.
 
-Outcome:
+Outcome: fits. Fail loudly on a spec mismatch (D5) and the trigger loop's visible status (Components). Visibility is pull-only, so a UI must surface it.
 
 ### E3. Reduction of our own output
 
@@ -258,7 +258,7 @@ Actor: nobody; a failure mode.
 
 Checks: the rule does not fire on the published output; the published dataset does not become a second raw-file record.
 
-Outcome:
+Outcome: fits. A rule never fires on records made from its own template, and the dataset source skips PIDs in publishing or published state (D11).
 
 ## F. Publication and provenance
 
@@ -271,7 +271,7 @@ Actor: user, then a colleague.
 
 Checks: the answer does not depend on any of our services still running; the provenance reaches raw data.
 
-Outcome:
+Outcome: gap. The publisher writes the output 'together with its provenance' but the sketch never says what that payload is, and the truth table still names our record as the truth for a published record. Fix: the SciCat entry carries a self-contained provenance snapshot (raw PIDs, resolved parameters, package versions, environment, spec identity), so no service of ours is needed to read it.
 
 ### F2. Reproduce after two upgrades
 
@@ -282,7 +282,7 @@ Actor: user.
 
 Checks: the user learns that the exact result is not reproducible in the current environment before anything runs; a recompute in the current environment is a new, honestly labelled record.
 
-Outcome:
+Outcome: fits. A published output is downloaded, not recomputed (D1); a forced recompute in another environment is refused unless overridden and yields a new linked record.
 
 ### F3. Publish what was tuned interactively
 
@@ -293,7 +293,7 @@ Actor: user in a notebook.
 
 Checks: what enters SciCat was computed in a way the record reproduces; a development binding of the workflow is refused or flagged.
 
-Outcome:
+Outcome: fits. A reused workflow object is recomputed cold before publication, and an in-process binding is refused unless overridden (D11).
 
 ## G. Roles and deployment
 
@@ -307,7 +307,7 @@ Actor: instrument scientist, then external users.
 
 Checks: artefacts from a long-lived proposal are readable across proposals on the instrument; everything else is scoped; the artefacts do not expire under the users' feet.
 
-Outcome:
+Outcome: gap. Instrument-shared artefacts cover vanadium and beam centre (D12) but templates are said to operate within a proposal, so an instrument default template made under commissioning is not shared by any rule. Fix: templates can be instrument-shared like artefacts.
 
 ### G2. Developer iterates on a workflow
 
@@ -319,7 +319,7 @@ Actor: workflow developer.
 
 Checks: a workflow can be bound without an installed package; such records are marked; they cannot masquerade as the installed spec.
 
-Outcome:
+Outcome: fits. In-process binding, the binding recorded on the record, and the no-shadowing rule (D8).
 
 ### G3. Local application, remote compute
 
@@ -330,7 +330,7 @@ Actor: user with a desktop application.
 
 Checks: a session can live in the user's process with the backend elsewhere; the stage output crosses once; views never leave the laptop.
 
-Outcome:
+Outcome: deferred by design. The sketch names this topology and lists client-hosted sessions under deferred and the remote-sessions open question; nothing in the model forecloses it.
 
 ### G4. Two notebooks on one machine
 
@@ -341,4 +341,4 @@ Actor: user with two notebooks open.
 
 Checks: what the second notebook is, a second backend or a client of the first; whether records made in one are visible in the other.
 
-Outcome:
+Outcome: question. D5 says the second notebook is a client of the first, but local mode has no transport and HTTP is deferred, so the mechanism is unstated. Decide: per-notebook stores by default and cross-notebook references deferred, or a local transport now.
