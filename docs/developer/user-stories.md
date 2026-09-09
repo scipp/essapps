@@ -273,16 +273,16 @@ Outcome: fits. Records are immutable and name their spec version; a template mov
 
 ## E. Automatic reduction
 
-### E1. Series completes, reduction fires
+### E1. Series grows, reduction follows
 
 Actor: reflectometry user during a beamtime.
 
-1. An angle series of four runs plus a reference is measured; the last run arrives last.
-2. Automatic reduction waits for the series, reduces it, and the curves appear in the web UI within minutes of the last run.
+1. An angle series is measured one run at a time, plus a reference; nobody can say in advance how many angles there will be.
+2. After each run the stitched curve in the web UI grows by one angle, within minutes of the run.
 
-Checks: a rule can wait for a group; out-of-order and repeated dataset arrival do not fire it twice or early.
+Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combine; the UI shows one curve per sample, not one per arrival.
 
-Outcome: question. The sketch names this as the open question 'Groups as the automatic-reduction unit' and recommends list-valued trigger rules; the base rule cannot express waiting for a series.
+Outcome: question, with a recommendation. The open question 'Groups as the automatic-reduction unit' recommends not waiting: submit the member and a fresh combine over the members so far, successive combines in one slot. Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
 
 ### E2. Automatic reduction goes quiet
 
