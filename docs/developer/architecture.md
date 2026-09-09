@@ -7,6 +7,7 @@ A walking skeleton of it exists under `packages/essapps`; see "Next step".
 Technology choices at the end are proposals.
 A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
 Two review notes read this document against the delivery order: [staging.md](staging.md), on what each phase needs, and [stateless.md](stateless.md), on what a design without sessions would remove and cost.
+A third, [snakemake.md](snakemake.md), reads it against Snakemake's history: what that tool got right, what it learned the hard way, and what was taken from it here.
 
 ## How to read this
 
@@ -42,7 +43,7 @@ It is independent of how the workflow is implemented or where it runs, and is de
 A request is complete: sufficient to reproduce the outputs from scratch.
 It is plain, JSON-serializable data, even when it never leaves a process.
 
-A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, and whether the workflow object was reused from an earlier run.
+A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the workflow object was reused from an earlier run, and where the runner's console output is kept.
 Optionally it carries a batch ID, a template version, and one link to the record it derives from, with the reason: retry, recompute, or copy.
 A failed run carries a structured failure reason, so that a user sees why without reading logs.
 Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
@@ -247,6 +248,8 @@ A combine's output may itself be a collection keyed by member.
 Merge strategy and memory during a merge belong to the combine workflow; real combines are not sums.
 Batch members are independent: no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.
 A batch is validated whole before any record is created, and cancelled whole by its batch ID, queued and running members alike.
+Rerunning a batch's failures is a client operation: the client lists the batch's records and resubmits the members that have no completed one.
+The backend never skips a request because an equal one completed earlier; a run that silently did not happen is a decision the user cannot see, and [snakemake.md](snakemake.md) records what that cost elsewhere.
 
 **The dataset source is abstracted (D7).**
 Its interface: for a proposal, yield new datasets as PID plus the metadata a trigger rule can match on.
@@ -309,6 +312,7 @@ A rerun sets the changed parameters and recomputes only what lies downstream of 
 The spec therefore declares which parameters are cheap to change, and the wrapper caches the nodes just upstream of them; that declaration is also what lets a UI offer a slider rather than a run button.
 `ess.reduce.streaming.StreamProcessor` is the special case for a list-valued parameter that only grows, such as runs to sum: its accumulators are fed the new elements, and any other change, including removing an element, resets it.
 The framework provides a test helper that drives a callable through a sequence of parameter sets warm and cold and asserts equal outputs; that is the one check on the wrapper's reuse rules, and every workflow with a warm form runs it.
+A second helper recomputes a completed record and compares the outputs, so that a workflow package can keep records from production as regression tests.
 
 **Validation** has three layers.
 Shape: JSON Schema, in the backend, always.
@@ -446,6 +450,7 @@ Many-to-many is a group whose members each reference one element of a pending ou
 Keys are declared on the spec where the author can, such as bank names, and free otherwise.
 Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
 No current workflow needs fan-out whose keys are known only after reading the data: Bifrost groups by rotation inside its pipeline, and imaging has no tomography grouping.
+If one arises, it is a trigger rule on the completed producer, one template instantiation per key, and not a scheduler feature; Snakemake put it in the scheduler, as checkpoints, and it became the most confusing part of the tool.
 
 **Outputs are a typed model in the same vocabulary (also D13).**
 A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form.
@@ -474,6 +479,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 - **Client interface**: the backend's Python interface, including validate and views.
   This *is* the API.
 - **Launcher**: pluggable: session, subprocess, cluster.
+  Its interface and the data store's are the two seams where implementations are swapped; both are kept narrow and stable from the first implementation, because retrofitting an interface under existing implementations cost Snakemake a major version.
   Two execution shapes; placement is relative to the session holding a run's inputs, and a group runs in one shape.
   Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
 - **Runner**: materializes inputs, validates parameters with the real parameter class, calls the workflow, stores outputs, writes a completion marker to the disk tier, reports to the backend.
@@ -485,13 +491,13 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 - **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
   A catalogue file's location comes from SciCat at dispatch and a local file's is its path; a store copy of a local file is kept until dropped explicitly or with its proposal.
-- **Record store**: create, read, update status, and queries: records by proposal, time, batch ID and member key, or slot label; records that reference output X of record Y.
+- **Record store**: create, read, update status, and queries: records by proposal, time, batch ID and member key, or slot label; records that reference output X of record Y; records whose resolved request equals a given one.
   Carries a schema version; drops a proposal's records together, never one.
 - **Dataset source**: yields new datasets for a proposal as PID plus matchable metadata to the trigger loop, and persists nothing; a dataset becomes a file record when a request references it.
   One real implementation (SciCat) and one fake for tests.
 - **Trigger loop**: on a new dataset or a completed record, or a group of either, matching a rule, instantiate a template and submit; never on a dataset whose SciCat entry carries our snapshot.
   Bound to one template version; moving it to a new version is a deliberate operation, and records say which version made them.
-  Has its own visible status: last fire, last refusal with its structured errors.
+  Has its own visible status: last fire, last refusal with its structured errors, and for any dataset of the proposal the reason it fired or did not.
 - **Publisher**: writes an output to SciCat together with its provenance snapshot.
   Idempotent: the resulting PID is recorded on the output, and publishing it again returns the PID.
 
@@ -502,6 +508,7 @@ Kept together so it can be read as one piece.
 - **Status state machine.** submitted, waiting (pending inputs), dispatched (launcher job ID recorded), running, completed, failed, cancelled.
   Retry is a new record pointing at the old one, never a status reset.
 - **Completion does not depend on the backend being up.** A throwaway runner writes a completion marker with its outputs to the disk tier before exit; the report through the backend's API is the fast path.
+  The marker is written after every output is flushed, and it is the only signal reconciliation trusts: the presence of an output file proves nothing, because a file written by a cluster job becomes visible on other hosts after a delay.
   On restart the backend reconciles dispatched runs against the launcher and the markers, so "finished while the backend was down" is completed, not failed.
 - **Runner liveness.** A throwaway runner sends periodic signals; the backend marks a silent run failed after a timeout unless a completion marker exists, and rejects a report that arrives after that.
   This is the lesson of esslivedata's stuck "active" jobs (scipp/esslivedata#823) and of ADR 0008: observe, do not trust acknowledgements.
@@ -511,6 +518,9 @@ Kept together so it can be read as one piece.
 - **Cancel of a running request** asks the launcher to stop it; dependents are cancelled.
 - **Session loss.** A closed or crashed session drops its cache and its warm workflow.
   Runs in flight there fail; in local mode the session is the client, so there is nothing to resubmit until the user starts again.
+- **Logs outlive outputs.** A throwaway runner's stdout and stderr are captured to the data store and the record says where; a session run logs to its client's process.
+  The structured failure reason covers the failures that were foreseen, and the log is for the ones that were not, such as a process killed for memory.
+  Logs are small and kept as long as the record, outside the retention policy for outputs.
 - **Failure surfacing** is in scope from the start: a failed record carries a structured reason, so a user sees why a run failed without reading logs, and a trigger loop that is refused at submission is as visible as a run that failed.
   Facilities that built automatic reduction report that the monitoring UI was most of the value.
 - **Slow or missing shared filesystem.** Fetching inputs has a timeout and a distinct failure status.
@@ -533,6 +543,7 @@ Remote sessions, on the backend host or in a client process on the user's machin
 Upload of records from a private local record store to a shared backend.
 Provisional outputs of a running run, for progress display during chunk-wise processing.
 A versioned collection record, appended to by the client and referenced by version, if lists of runs to accumulate grow well beyond a few thousand entries and resending them whole becomes a cost.
+Resource hints on the spec for the cluster launcher, such as memory as a function of input size and of the attempt number, which a retry record knows from its link to the record it retries.
 
 ## Technology proposals
 
@@ -562,6 +573,7 @@ Decisions the team needs to make; my recommendation in brackets.
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
 - **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest, and the analysis window after which a proposal's records are dropped.
+  [Let the spec mark an output as intermediate, meaning cheap to recompute from its inputs, and let the policy read that flag before the run kind; authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show they get it right.]
 - **Origin paths after a drop.** A local file's path stays on its record after its bytes are dropped, until the proposal is dropped.
   [Keep it: a path is not data, and provenance needs it.]
 - **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
@@ -643,3 +655,4 @@ The first pass shaped the failure-handling section, the record fields for resolv
 The second pass removed the mechanisms that created a second copy of truth or an implicit action: a registry that tracked copies in memory, recompute triggered by reads, identical-request reuse, record deletion by reachability, memory budgets in sessions, and slots as a backend object.
 It also corrected the description of what a warm workflow reuses against the workflow source, and added the binned flag, optional map-combine, the completion marker, and intent-to-publish.
 The third pass removed what would have made the record store a second catalogue: file records created by discovery with copied metadata and stored mount paths, and records kept forever; file records are now created on reference and hold identity only, catalogue locations are asked of SciCat, and records live as long as their proposal.
+A fourth pass read the sketch against Snakemake's history, in [snakemake.md](snakemake.md); it added the runner's log to the record, completion by marker alone, batch rerun as a client operation with a request-equality query, data-dependent fan-out as a trigger rule, the record-replay test helper, the deferred resource hints, and a recommendation on the retention question.
