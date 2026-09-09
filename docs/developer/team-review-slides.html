@@ -1,0 +1,1047 @@
+<!-- Slide deck for the team review of the architecture sketch. Wording follows architecture.md, staging.md, and stateless.md. Publish via the Artifact tool; keys: arrows/space advance, N toggles speaker notes. -->
+<title>essapps Team Review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F4F6F8; --surface: #FFFFFF; --surface-2: #EDF0F4;
+    --ink: #1B2430; --muted: #5B6775; --line: #D3DAE3; --line-strong: #9AA6B4;
+    --accent: #245069; --accent-tint: #E1EBF1;
+    --mem: #B8651A; --mem-tint: #FBEEDF;
+    --disk: #2F6B9A; --disk-tint: #E3EEF7;
+    --warn: #8A3B2E; --code-bg: #EEF1F5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161C; --surface: #1A2029; --surface-2: #222A35;
+      --ink: #E6EAF0; --muted: #9AA5B3; --line: #2D3642; --line-strong: #4B5767;
+      --accent: #8FC1E8; --accent-tint: #1E3442;
+      --mem: #E39B54; --mem-tint: #3A2A1B;
+      --disk: #6FA7D6; --disk-tint: #1C2E40;
+      --warn: #E08A78; --code-bg: #222A35;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161C; --surface: #1A2029; --surface-2: #222A35;
+    --ink: #E6EAF0; --muted: #9AA5B3; --line: #2D3642; --line-strong: #4B5767;
+    --accent: #8FC1E8; --accent-tint: #1E3442;
+    --mem: #E39B54; --mem-tint: #3A2A1B;
+    --disk: #6FA7D6; --disk-tint: #1C2E40;
+    --warn: #E08A78; --code-bg: #222A35;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-snap-type: y proximity; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 19px; line-height: 1.45;
+  }
+  a { color: var(--accent); }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+
+  .slide {
+    min-height: 100vh; scroll-snap-align: start;
+    display: grid; grid-template-rows: auto 1fr auto; gap: 20px;
+    max-width: 1280px; margin: 0 auto; padding: 40px 64px 36px;
+    border-bottom: 1px solid var(--line);
+  }
+  .slide > header { display: grid; gap: 6px; }
+  .eyebrow {
+    font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+    display: flex; justify-content: space-between; gap: 16px;
+  }
+  h1, h2 {
+    font-family: "IBM Plex Serif", Georgia, "Times New Roman", serif; font-weight: 500;
+    margin: 0; text-wrap: balance; line-height: 1.2;
+  }
+  h1 { font-size: 56px; }
+  h2 { font-size: 38px; }
+  .lede { font-size: 22px; color: var(--muted); max-width: 40em; margin: 8px 0 0; }
+  .body { display: grid; align-content: center; gap: 22px; min-width: 0; }
+  .take {
+    font-family: "IBM Plex Serif", Georgia, serif; font-size: 21px; line-height: 1.4;
+    border-top: 2px solid var(--accent); padding-top: 12px; max-width: 52em;
+  }
+  .take b { font-weight: 500; color: var(--accent); }
+  p { margin: 0; max-width: 62em; }
+  ul { margin: 0; padding-left: 1.2em; }
+  li { margin: 0.25em 0; }
+
+  figure { margin: 0; display: grid; gap: 10px; min-width: 0; }
+  figcaption { font-size: 15px; color: var(--muted); max-width: 60em; }
+  svg.fig { max-width: 100%; height: auto; display: block; color: var(--ink); font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  .fig text { fill: currentColor; font-size: 14px; }
+  .fig .h { font-weight: 600; }
+  .fig .s { font-size: 12.5px; fill: var(--muted); }
+  .fig .m { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; }
+  .fig .a { fill: var(--accent); }
+  .fig .box { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
+  .fig .lane { fill: var(--surface-2); stroke: none; }
+  .fig .mem { fill: var(--mem-tint); stroke: var(--mem); stroke-width: 1.5; }
+  .fig .disk { fill: var(--disk-tint); stroke: var(--disk); stroke-width: 1.5; }
+  .fig .accb { fill: var(--accent-tint); stroke: var(--accent); stroke-width: 1.5; }
+  .fig .port { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+  .fig .open { stroke-dasharray: 6 4; }
+  .fig .dim { opacity: 0.55; }
+  .fig .e { fill: none; stroke: currentColor; stroke-width: 1.5; marker-end: url(#ar); }
+  .fig .e.acc { stroke: var(--accent); marker-end: url(#ar-acc); }
+  .fig .e.memc { stroke: var(--mem); marker-end: url(#ar-mem); }
+  .fig .e.diskc { stroke: var(--disk); marker-end: url(#ar-disk); }
+  .fig .e.none { marker-end: none; }
+  .fig .sep { stroke: var(--line-strong); stroke-width: 1; }
+  #ar path { fill: currentColor; }
+  #ar-acc path { fill: var(--accent); }
+  #ar-mem path { fill: var(--mem); }
+  #ar-disk path { fill: var(--disk); }
+
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+  .panel { display: grid; gap: 10px; align-content: start; }
+  .panel h3 { margin: 0; font-size: 20px; font-weight: 600; }
+  .panel p, .panel li { font-size: 17px; }
+  .card { background: var(--surface); border: 1.5px solid var(--line-strong); border-radius: 8px; padding: 16px 18px; }
+  .card.open { border-style: dashed; }
+  .card.mem { background: var(--mem-tint); border-color: var(--mem); }
+  .chip {
+    display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 16px; line-height: 1.3;
+    border: 1.5px solid var(--line-strong); background: var(--surface);
+  }
+  .chip.open { border-style: dashed; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .legend { font-size: 15px; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; }
+  .legend span::before { content: ""; display: inline-block; width: 24px; height: 12px; margin-right: 8px; vertical-align: -1px; border: 1.5px solid var(--line-strong); border-radius: 3px; background: var(--surface); }
+  .legend .open::before { border-style: dashed; }
+  .legend .mem::before { background: var(--mem-tint); border-color: var(--mem); }
+  .keys { font-size: 15px; color: var(--muted); display: flex; gap: 24px; flex-wrap: wrap; }
+  .keys .dot { margin-right: 6px; }
+  .legend .disk::before { background: var(--disk-tint); border-color: var(--disk); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 17px; }
+  th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  td.c, th.c { text-align: center; }
+  .dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--accent); vertical-align: -2px; }
+  .dot.on { background: var(--accent); }
+  .dot.opt { border-style: dashed; }
+  .dot.no { border-color: var(--line); }
+
+  pre.spec {
+    margin: 0; background: var(--code-bg); border-radius: 8px; padding: 14px 16px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14.5px; line-height: 1.5;
+    overflow-x: auto; white-space: pre;
+  }
+  pre.spec .add { color: var(--accent); font-weight: 500; }
+  pre.spec .del { color: var(--warn); text-decoration: line-through; }
+  pre.spec .cm { color: var(--muted); }
+
+  ol.steps { margin: 0; padding-left: 1.4em; }
+  ol.steps li { margin: 0.35em 0; }
+  .qa { display: grid; grid-template-columns: 1fr auto; gap: 6px 28px; font-size: 17px; align-items: baseline; }
+  .qa .rec { color: var(--accent); font-family: "IBM Plex Serif", serif; }
+  .qa .q { font-weight: 500; }
+  .qa .why { grid-column: 1 / -1; color: var(--muted); font-size: 15px; margin-top: -4px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+
+  .dense .panel p { font-size: 15.5px; }
+  .dense table { font-size: 15.5px; }
+  .dense th, .dense td { padding: 5px 10px; }
+  .dense .body { gap: 14px; }
+  .notes { display: none; background: var(--surface-2); border-left: 3px solid var(--mem); padding: 10px 14px; font-size: 15px; color: var(--muted); max-width: 62em; }
+  .notes::before { content: "Speaker notes"; display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+  body.notes-on .notes { display: block; }
+
+  #bar { position: fixed; left: 0; bottom: 0; height: 3px; width: 0; background: var(--accent); z-index: 5; transition: width 0.2s; }
+  #hud { position: fixed; right: 14px; bottom: 10px; font-size: 12px; color: var(--muted); font-family: "IBM Plex Mono", monospace; z-index: 5; }
+  .title-slide { grid-template-rows: 1fr auto auto; }
+  .title-slide .body { align-content: end; }
+  .hint { font-size: 14px; color: var(--muted); }
+  .hint kbd { font-family: "IBM Plex Mono", monospace; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+
+  @media (max-width: 900px) {
+    .slide { padding: 28px 22px; min-height: auto; }
+    h1 { font-size: 38px; } h2 { font-size: 28px; }
+    .grid2, .grid3, .grid4 { grid-template-columns: 1fr; }
+    body { font-size: 17px; }
+  }
+  @media (prefers-reduced-motion: reduce) { #bar { transition: none; } }
+  @media print { .slide { min-height: auto; page-break-after: always; } #bar, #hud { display: none; } }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ar-disk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+<div id="bar"></div>
+<div id="hud"></div>
+
+<!-- ===================== 1 TITLE ===================== -->
+<section class="slide title-slide" id="s1">
+  <div class="body">
+    <div class="eyebrow"><span>Team review · September 2026</span></div>
+    <h1>Reduction applications for ESS</h1>
+    <p class="lede">What we have to build, what we propose to build it on, and what is still open.</p>
+  </div>
+  <figure>
+    <svg class="fig" viewBox="0 0 1100 110" role="img" aria-label="Raw data from SciCat flows through a workflow to a result that is published back to SciCat.">
+      <rect class="lane" x="0" y="20" width="180" height="70" rx="6"/><text x="90" y="60" text-anchor="middle" class="h">SciCat</text>
+      <path class="e" d="M180,55 L300,55"/><text x="240" y="45" text-anchor="middle" class="s">raw dataset</text>
+      <rect class="box" x="300" y="30" width="150" height="50" rx="8"/><text x="375" y="60" text-anchor="middle">workflow</text>
+      <path class="e" d="M450,55 L570,55"/><text x="510" y="45" text-anchor="middle" class="s">result</text>
+      <rect class="box" x="570" y="30" width="150" height="50" rx="8"/><text x="645" y="60" text-anchor="middle">next workflow</text>
+      <path class="e" d="M720,55 L920,55"/><text x="820" y="45" text-anchor="middle" class="s">publish, with provenance</text>
+      <rect class="lane" x="920" y="20" width="180" height="70" rx="6"/><text x="1010" y="60" text-anchor="middle" class="h">SciCat</text>
+    </svg>
+  </figure>
+  <p class="hint"><kbd>→</kbd> or <kbd>space</kbd> next slide · <kbd>←</kbd> previous · <kbd>N</kbd> speaker notes · scrolling works too</p>
+</section>
+
+<!-- ===================== 2 AGENDA ===================== -->
+<section class="slide" id="s2">
+  <header><div class="eyebrow"><span>Agenda</span></div><h2>Three parts</h2></header>
+  <div class="body grid3">
+    <div class="panel card">
+      <h3>1 · What is required</h3>
+      <p>Where we stand, what users need, the delivery order, and what is certain versus still open.</p>
+      <p class="hint">Goal: the same picture in every head before we argue about mechanisms.</p>
+    </div>
+    <div class="panel card">
+      <h3>2 · The proposal</h3>
+      <p>One modelling idea, the moving parts, the contract with workflow code, where state lives, and how failures are handled.</p>
+      <p class="hint">Goal: enough to disagree with a choice, not only with its consequences.</p>
+    </div>
+    <div class="panel card open">
+      <h3>3 · What we build first</h3>
+      <p>Which parts phase one needs, the one open question, decisions we need from you, and what already exists.</p>
+      <p class="hint">Goal: leave with decisions.</p>
+    </div>
+  </div>
+  <aside class="notes">Part 1 is deliberately slow. Part 2 is the architecture sketch condensed; the reading edition has the full argument and the rejected alternatives. Part 3 is where the discussion should happen.</aside>
+</section>
+
+<!-- ===================== 3 TODAY ===================== -->
+<section class="slide" id="s3">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>Today: workflow libraries, a live-data GUI, and nothing in between</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 300" role="img" aria-label="Three columns: the ess monorepo with libraries and notebooks, esslivedata for streaming during a measurement, and a dashed empty column for reduction after the measurement, which is this project.">
+        <rect class="box" x="20" y="30" width="330" height="240" rx="10"/>
+        <text x="185" y="65" text-anchor="middle" class="h">scipp/ess</text>
+        <text x="185" y="88" text-anchor="middle" class="s">workflow libraries, sciline pipelines</text>
+        <rect class="box" x="60" y="115" width="250" height="34" rx="6"/><text x="185" y="137" text-anchor="middle">ess.sans · ess.powder · ess.reflectometry …</text>
+        <rect class="box" x="60" y="160" width="250" height="34" rx="6"/><text x="185" y="182" text-anchor="middle">a notebook per technique</text>
+        <text x="185" y="230" text-anchor="middle" class="s">Runs when a person runs it.</text>
+        <text x="185" y="250" text-anchor="middle" class="s">Remembers nothing.</text>
+
+        <rect class="box" x="385" y="30" width="330" height="240" rx="10"/>
+        <text x="550" y="65" text-anchor="middle" class="h">scipp/esslivedata</text>
+        <text x="550" y="88" text-anchor="middle" class="s">during the measurement</text>
+        <rect class="box" x="425" y="115" width="250" height="34" rx="6"/><text x="550" y="137" text-anchor="middle">Kafka streams → reduction jobs</text>
+        <rect class="box" x="425" y="160" width="250" height="34" rx="6"/><text x="550" y="182" text-anchor="middle">Panel / HoloViews dashboard</text>
+        <text x="550" y="230" text-anchor="middle" class="s">Stateful jobs; results are transient.</text>
+        <text x="550" y="250" text-anchor="middle" class="s">Taught us a lot.</text>
+
+        <rect class="box open" x="750" y="30" width="330" height="240" rx="10"/>
+        <text x="915" y="65" text-anchor="middle" class="h a">this project</text>
+        <text x="915" y="88" text-anchor="middle" class="s">after the measurement</text>
+        <text x="915" y="128" text-anchor="middle">reduce files for users,</text>
+        <text x="915" y="152" text-anchor="middle">in bulk, and unattended,</text>
+        <text x="915" y="176" text-anchor="middle">and remember what was done.</text>
+        <text x="915" y="230" text-anchor="middle" class="s">Uses the libraries on the left.</text>
+        <text x="915" y="250" text-anchor="middle" class="s">Does not replace the middle.</text>
+      </svg>
+    </figure>
+  </div>
+  <p class="take">The gap is not workflow code. It is everything around a workflow: <b>starting it, remembering it, feeding one into the next, and showing what happened.</b></p>
+  <aside class="notes">The libraries are good and stay where they are. Live data is a different problem (streams) and stays separate. Everything in this deck is about the dashed box.</aside>
+</section>
+
+<!-- ===================== 4 FOUR NEEDS ===================== -->
+<section class="slide" id="s4">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>Four things users need to do</h2></header>
+  <div class="body grid4">
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Manual: a file goes through a workflow to a result, with a loop back labelled adjust and rerun.">
+        <rect class="box" x="4" y="70" width="72" height="44" rx="6"/><text x="40" y="96" text-anchor="middle" class="m">run 1234</text>
+        <path class="e" d="M76,92 L100,92"/>
+        <rect class="box" x="100" y="64" width="84" height="56" rx="8"/><text x="142" y="97" text-anchor="middle">workflow</text>
+        <path class="e" d="M184,92 L212,92"/>
+        <rect class="box" x="212" y="70" width="44" height="44" rx="6"/><text x="234" y="96" text-anchor="middle" class="m">I(Q)</text>
+        <path class="e acc" d="M234,68 C234,22 150,22 144,60"/>
+        <text x="190" y="30" text-anchor="middle" class="s">look, adjust, rerun</text>
+      </svg>
+      <h3>Manual</h3>
+      <p>Pick data, set parameters, run, look at the result, adjust, run again.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Batch: one template fans out to three runs with per-dataset differences.">
+        <rect class="box" x="8" y="66" width="70" height="44" rx="6"/><text x="43" y="92" text-anchor="middle">template</text>
+        <path class="e" d="M78,88 L118,36"/><path class="e" d="M78,88 L118,88"/><path class="e" d="M78,88 L118,140"/>
+        <rect class="box" x="118" y="18" width="72" height="34" rx="6"/><text x="154" y="40" text-anchor="middle" class="m">run 1201</text>
+        <rect class="box" x="118" y="71" width="72" height="34" rx="6"/><text x="154" y="93" text-anchor="middle" class="m">run 1202</text>
+        <rect class="box" x="118" y="123" width="72" height="34" rx="6"/><text x="154" y="145" text-anchor="middle" class="m">run 1203</text>
+        <text x="228" y="40" text-anchor="middle" class="s">10 K</text><text x="228" y="93" text-anchor="middle" class="s">20 K</text><text x="228" y="145" text-anchor="middle" class="s">30 K</text>
+      </svg>
+      <h3>Batch</h3>
+      <p>The same parameters over many datasets, with a few differences per dataset. Watch, cancel, rerun the failures.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Automatic: a new dataset arrives, a rule fires, a run happens, the result is published.">
+        <rect class="box open" x="4" y="66" width="58" height="44" rx="6"/><text x="33" y="86" text-anchor="middle" class="s">new</text><text x="33" y="102" text-anchor="middle" class="s">dataset</text>
+        <path class="e" d="M62,88 L82,88"/>
+        <rect class="accb" x="82" y="60" width="78" height="56" rx="8"/><text x="121" y="84" text-anchor="middle">rule +</text><text x="121" y="102" text-anchor="middle">template</text>
+        <path class="e" d="M160,88 L178,88"/>
+        <rect class="box" x="178" y="70" width="40" height="36" rx="6"/><text x="198" y="93" text-anchor="middle">run</text>
+        <path class="e" d="M218,88 L232,88"/>
+        <rect class="lane" x="232" y="66" width="24" height="44" rx="4"/>
+        <text x="130" y="30" text-anchor="middle" class="s">nobody present</text>
+        <text x="256" y="135" text-anchor="end" class="s">SciCat</text>
+      </svg>
+      <h3>Automatic</h3>
+      <p>Every new dataset is reduced without anyone present, and the result lands in the catalogue.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Chain and combine: run A feeds run B, and four runs feed one combine step.">
+        <rect class="box" x="8" y="14" width="84" height="34" rx="6"/><text x="50" y="36" text-anchor="middle">vanadium</text>
+        <path class="e acc" d="M92,31 L150,31"/>
+        <rect class="box" x="150" y="14" width="100" height="34" rx="6"/><text x="200" y="36" text-anchor="middle">sample</text>
+        <text x="117" y="62" text-anchor="middle" class="s a">output feeds input</text>
+        <rect class="box" x="8" y="110" width="30" height="34" rx="5"/><rect class="box" x="44" y="110" width="30" height="34" rx="5"/><rect class="box" x="80" y="110" width="30" height="34" rx="5"/><rect class="box open" x="116" y="110" width="30" height="34" rx="5"/>
+        <text x="23" y="132" text-anchor="middle" class="m">θ₁</text><text x="59" y="132" text-anchor="middle" class="m">θ₂</text><text x="95" y="132" text-anchor="middle" class="m">θ₃</text><text x="131" y="132" text-anchor="middle" class="m">θ₄</text>
+        <path class="e acc" d="M146,127 L176,127"/>
+        <rect class="box" x="176" y="108" width="76" height="38" rx="6"/><text x="214" y="132" text-anchor="middle">combine</text>
+        <text x="80" y="98" text-anchor="middle" class="s">wait for the whole series</text>
+      </svg>
+      <h3>Chain and combine</h3>
+      <p>A beam centre or processed vanadium feeds the next workflow. Angle runs are combined. Automatic reduction waits for a whole series.</p>
+    </div>
+  </div>
+  <p class="take">Every one of these is <b>the same workflow code</b> started differently, fed differently, and remembered differently.</p>
+  <aside class="notes">These four come straight from scoping.md. The fourth was added after the user stories showed how common it is: reflectometry is nothing but angle series, diffraction always has a vanadium stage.</aside>
+</section>
+
+<!-- ===================== 5 CROSS-CUTTING ===================== -->
+<section class="slide" id="s5">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>Two requirements cut across all four</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 280" role="img" aria-label="SciCat on the left exchanges datasets and results with the framework in the middle; the same request can execute on a laptop, the backend host, or a cluster on the right.">
+        <rect class="lane" x="20" y="60" width="200" height="160" rx="8"/>
+        <text x="120" y="130" text-anchor="middle" class="h">SciCat</text>
+        <text x="120" y="152" text-anchor="middle" class="s">the data catalogue</text>
+        <path class="e" d="M220,100 L400,100"/><text x="310" y="90" text-anchor="middle" class="s">raw datasets, run numbers</text>
+        <path class="e" d="M400,180 L220,180"/><text x="310" y="204" text-anchor="middle" class="s">finished results, with provenance</text>
+
+        <rect class="accb" x="400" y="60" width="260" height="160" rx="10"/>
+        <text x="530" y="130" text-anchor="middle" class="h">reduction framework</text>
+        <text x="530" y="152" text-anchor="middle" class="s">requests in, records out</text>
+
+        <path class="e" d="M660,140 L840,60"/><path class="e" d="M660,140 L840,140"/><path class="e open" d="M660,140 L840,220"/>
+        <text x="740" y="120" text-anchor="middle" class="s">the same request</text>
+        <rect class="box" x="840" y="36" width="230" height="48" rx="8"/><text x="955" y="65" text-anchor="middle">a laptop or a notebook</text>
+        <rect class="box" x="840" y="116" width="230" height="48" rx="8"/><text x="955" y="145" text-anchor="middle">the backend host</text>
+        <rect class="box open" x="840" y="196" width="230" height="48" rx="8"/><text x="955" y="225" text-anchor="middle">a cluster or the cloud</text>
+      </svg>
+      <figcaption>Dashed means: wanted, but not a decision yet.</figcaption>
+    </figure>
+  </div>
+  <p class="take"><b>Smooth SciCat in and out</b>, and <b>compute wherever it fits</b>, without the request knowing the difference.</p>
+</section>
+
+<!-- ===================== 6 PHASES ===================== -->
+<section class="slide" id="s6">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>The delivery order the team has in mind</h2></header>
+  <div class="body grid3">
+    <div class="panel card">
+      <div class="eyebrow"><span>Phase 1</span><span>shared service, unattended</span></div>
+      <h3>Automatic reduction</h3>
+      <p>A rule fires on new datasets, a saved configuration is applied, the run executes, the result is published, and a web page shows what fired and what failed.</p>
+      <p><b>Done when</b> one instrument's beamtime is reduced end to end against the real SciCat, and an operator sees a failure without reading logs.</p>
+    </div>
+    <div class="panel card">
+      <div class="eyebrow"><span>Phase 2</span><span>shared service, a person at a form</span></div>
+      <h3>Batch reduction</h3>
+      <p>Fill in a form once, apply it to many datasets, watch progress, cancel, rerun failures, save the form for next time.</p>
+      <p><b>Done when</b> a two-hundred-member batch can be submitted, monitored, cancelled, and partly rerun from a web page, and its members found by a meaningful key.</p>
+    </div>
+    <div class="panel card open">
+      <div class="eyebrow"><span>Phase 3</span><span>scope least known</span></div>
+      <h3>Per-technique applications</h3>
+      <p>Interactive reduction with sub-second feedback, plot selections that become parameters, exploration of large volumes, whatever each technique turns out to need.</p>
+      <p><b>Done when</b> we know what each technique needs. We do not yet.</p>
+    </div>
+  </div>
+  <p class="take">Phases 1 and 2 need <b>no state between runs</b>. Phase 3 is the first place where something must stay in memory between two runs.</p>
+  <aside class="notes">This order is from staging.md. Note the reversal: the sketch was written interactive-first because that is where the risk was; delivery is unattended-first because that is where the value is.</aside>
+</section>
+
+<!-- ===================== 7 CERTAIN / UNCERTAIN ===================== -->
+<section class="slide" id="s7">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>What is certain, and what is not</h2></header>
+  <div class="body grid2">
+    <div class="panel">
+      <h3>We build this regardless of any choice below</h3>
+      <div class="chips">
+        <span class="chip">runs made from a saved configuration, nobody present</span>
+        <span class="chip">every result traceable to raw files, parameters, and software versions</span>
+        <span class="chip">results published to SciCat carrying that trace</span>
+        <span class="chip">batches with per-dataset differences: watch, cancel, rerun</span>
+        <span class="chip">failures visible without reading logs</span>
+        <span class="chip">one workflow spec vocabulary (scipp/ess#690)</span>
+        <span class="chip">an output of one workflow usable as input of the next</span>
+        <span class="chip">Python throughout; web UI built with AI assistance</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Decisions still ahead</h3>
+      <div class="chips">
+        <span class="chip open">how sub-second interactive feedback is achieved</span>
+        <span class="chip open">the web UI framework</span>
+        <span class="chip open">when compute moves to the cluster, and whether that needs a message broker</span>
+        <span class="chip open">how long results are kept</span>
+        <span class="chip open">whether SciCat pushes new datasets or we poll</span>
+        <span class="chip open">where a user's interactive process lives in shared use</span>
+        <span class="chip open">Tiled or our own storage layer for large outputs</span>
+      </div>
+    </div>
+  </div>
+  <div class="legend"><span>solid: build regardless</span><span class="open">dashed: still to decide</span><span>This encoding holds for the rest of the deck.</span></div>
+  <aside class="notes">The right column is the honest part. The proposal is designed so that none of the left column depends on any answer on the right.</aside>
+</section>
+
+<!-- ===================== 8 LESSONS ===================== -->
+<section class="slide" id="s8">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>What esslivedata already taught us</h2></header>
+  <div class="body grid2">
+    <div class="card panel">
+      <h3>Identities that vanish with a process</h3>
+      <p>Jobs were addressed by an identity that died with the worker. Everything else had to compensate. <span class="mono">#1042, ADR 0008</span></p>
+      <p><b>So:</b> nothing may depend on a process identity.</p>
+    </div>
+    <div class="card panel">
+      <h3>Commands over Kafka</h3>
+      <p>Reliable delivery was a long struggle. The conclusion: a request row in a database is the durable desired state that was missing. <span class="mono">#856</span></p>
+      <p><b>So:</b> a request is a row before anything runs.</p>
+    </div>
+    <div class="card panel">
+      <h3>The UI reaching into internals</h3>
+      <p>Fastest way to start, and the source of the cross-session races. <span class="mono">#1046, #1098, ADR 0007</span></p>
+      <p><b>So:</b> one API, and the UI only ever uses it.</p>
+    </div>
+    <div class="card panel">
+      <h3>Jobs stuck as "active"</h3>
+      <p>Acknowledgements were trusted; processes disappeared without one. <span class="mono">#823</span></p>
+      <p><b>So:</b> observe liveness, never trust an acknowledgement.</p>
+    </div>
+  </div>
+  <p class="take">Four choices in the proposal are <b>these four lessons written down</b>.</p>
+</section>
+
+<!-- ===================== 9 ONE IDEA ===================== -->
+<section class="slide" id="s9">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y"</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Three cards in a row: a file record F, a completed run record Y whose sample parameter references F's file output, and a new request Z whose beam-centre parameter references Y's beam-centre output.">
+        <!-- file record F -->
+        <rect class="box" x="30" y="110" width="220" height="120" rx="10"/>
+        <text x="46" y="136" class="h">file record F</text>
+        <text x="46" y="158" class="s">spec: file · no workflow</text>
+        <text x="46" y="180" class="m">PID 20.500.12269/…</text>
+        <text x="46" y="200" class="s">a raw SciCat dataset</text>
+        <rect class="port" x="215" y="126" width="70" height="26" rx="13"/><text x="250" y="143" text-anchor="middle" class="m">file</text>
+
+        <!-- run record Y -->
+        <rect class="box" x="360" y="40" width="360" height="250" rx="10"/>
+        <text x="376" y="66" class="h">run record Y</text>
+        <text x="376" y="88" class="s">spec: sans_reduction 3.1 · LoKI · proposal 2026-0412</text>
+        <line class="sep" x1="376" y1="100" x2="704" y2="100"/>
+        <text x="376" y="122" class="s">request</text>
+        <text x="376" y="144" class="m a">sample = output file of record F</text>
+        <text x="376" y="166" class="m">threshold = 0.5 counts</text>
+        <line class="sep" x1="376" y1="182" x2="704" y2="182"/>
+        <text x="376" y="204" class="s">what happened</text>
+        <text x="376" y="226" class="m">status = completed</text>
+        <text x="376" y="248" class="m">versions, environment, resolved values</text>
+        <text x="376" y="270" class="m">outputs ▸</text>
+        <rect class="port" x="675" y="200" width="90" height="26" rx="13"/><text x="720" y="217" text-anchor="middle" class="m">I(Q)</text>
+        <rect class="port" x="675" y="240" width="90" height="26" rx="13"/><text x="720" y="257" text-anchor="middle" class="m">beam_centre</text>
+        <!-- reference Y -> F -->
+        <path class="e acc" d="M360,140 L290,140"/>
+
+        <!-- request Z -->
+        <rect class="box" x="830" y="150" width="250" height="140" rx="10"/>
+        <text x="846" y="176" class="h">request Z</text>
+        <text x="846" y="198" class="s">spec: sans_reduction 3.1</text>
+        <text x="846" y="222" class="m">sample = output file of G</text>
+        <text x="846" y="244" class="m a">beam_centre = output</text>
+        <text x="846" y="262" class="m a">  beam_centre of record Y</text>
+        <path class="e acc" d="M830,253 L770,253"/>
+        <text x="800" y="282" text-anchor="middle" class="s a">reference</text>
+        <text x="955" y="112" text-anchor="middle" class="s">a reference names data;</text>
+        <text x="955" y="130" text-anchor="middle" class="s">it never contains a path</text>
+      </svg>
+      <figcaption>A raw file from the catalogue is a record too: one built-in spec, no workflow, one output. So every input, whether a raw file or last week's result, is named the same way.</figcaption>
+    </figure>
+  </div>
+  <p class="take">One way to name data serves <b>inputs, plots, publication, and provenance</b>. There is no "which run produced this" query, because the name already says it.</p>
+  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way?</aside>
+</section>
+
+<!-- ===================== 10 RECORD ANATOMY ===================== -->
+<section class="slide" id="s10">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>A record is the request plus what happened to it</h2></header>
+  <div class="body grid2">
+    <div class="card panel">
+      <div class="eyebrow"><span>The request</span><span>complete, plain JSON</span></div>
+      <ul>
+        <li>which spec, name and version</li>
+        <li>every parameter: literals, and references to outputs of other records</li>
+        <li>instrument, proposal, who submitted</li>
+      </ul>
+      <p class="hint">Sufficient to reproduce the outputs from scratch. Never a path, never a memory address, never a process.</p>
+    </div>
+    <div class="card panel">
+      <div class="eyebrow"><span>What happened</span><span>filled in by the run</span></div>
+      <ul>
+        <li>status, timestamps, a structured failure reason</li>
+        <li>outputs: small values inline, large ones in the data store</li>
+        <li>resolved parameter values, defaults included</li>
+        <li>package versions and the conda environment</li>
+        <li>how the spec was bound to code, and whether a warm workflow was reused</li>
+        <li>one link to the record it derives from: retry, recompute, or copy</li>
+      </ul>
+    </div>
+  </div>
+  <p class="take">Immutable once complete. <b>Never deleted one at a time</b>: a proposal's records are dropped together, after an export. A missing copy of an output is reported, never silently recomputed.</p>
+  <aside class="notes">Resolved values and versions are what make "recompute from the record" true. Without them a changed default silently changes what a record means. Records are cheap: a row per run.</aside>
+</section>
+
+<!-- ===================== 11 PROVENANCE ===================== -->
+<section class="slide" id="s11">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Provenance is following the arrows</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two SciCat datasets become file records; a vanadium processing record consumes one; a sample reduction record consumes the other plus the processed vanadium; its output is published as a SciCat entry with a provenance snapshot.">
+        <rect class="lane" x="0" y="10" width="230" height="300" rx="8"/><text x="115" y="36" text-anchor="middle" class="h">SciCat</text>
+        <rect class="lane" x="900" y="10" width="200" height="300" rx="8"/><text x="1000" y="36" text-anchor="middle" class="h">SciCat</text>
+        <text x="565" y="36" text-anchor="middle" class="h">our records</text>
+
+        <rect class="box" x="30" y="70" width="170" height="50" rx="8"/><text x="115" y="91" text-anchor="middle">vanadium run 1180</text><text x="115" y="109" text-anchor="middle" class="m">PID …/a1</text>
+        <rect class="box" x="30" y="200" width="170" height="50" rx="8"/><text x="115" y="221" text-anchor="middle">sample run 1234</text><text x="115" y="239" text-anchor="middle" class="m">PID …/b7</text>
+
+        <path class="e" d="M200,95 L280,95"/><path class="e" d="M200,225 L280,225"/>
+        <text x="240" y="150" text-anchor="middle" class="s">resolved at</text><text x="240" y="166" text-anchor="middle" class="s">submission</text>
+        <rect class="box" x="280" y="70" width="140" height="50" rx="8"/><text x="350" y="91" text-anchor="middle">file record</text><text x="350" y="109" text-anchor="middle" class="m">PID …/a1</text>
+        <rect class="box" x="280" y="200" width="140" height="50" rx="8"/><text x="350" y="221" text-anchor="middle">file record</text><text x="350" y="239" text-anchor="middle" class="m">PID …/b7</text>
+
+        <path class="e acc" d="M420,95 L490,95"/>
+        <rect class="box" x="490" y="60" width="180" height="70" rx="8"/><text x="580" y="86" text-anchor="middle">vanadium processing</text><text x="580" y="106" text-anchor="middle" class="s">run record</text>
+        <rect class="port" x="630" y="112" width="110" height="24" rx="12"/><text x="685" y="128" text-anchor="middle" class="m">processed_v</text>
+
+        <path class="e acc" d="M740,124 L790,124 L790,160"/>
+        <path class="e acc" d="M420,225 L720,225"/>
+        <rect class="box" x="720" y="160" width="160" height="110" rx="8"/><text x="800" y="186" text-anchor="middle">sample reduction</text><text x="800" y="206" text-anchor="middle" class="s">run record</text>
+        <text x="800" y="228" text-anchor="middle" class="m">threshold = 0.5</text>
+        <rect class="port" x="830" y="246" width="60" height="24" rx="12"/><text x="860" y="262" text-anchor="middle" class="m">I(Q)</text>
+
+        <path class="e" d="M890,258 L930,258"/>
+        <rect class="box" x="930" y="190" width="150" height="100" rx="8"/><text x="1005" y="216" text-anchor="middle">derived dataset</text><text x="1005" y="238" text-anchor="middle" class="s">+ provenance snapshot:</text><text x="1005" y="256" text-anchor="middle" class="s">raw PIDs, parameters,</text><text x="1005" y="274" text-anchor="middle" class="s">versions, spec</text>
+        <text x="1005" y="178" text-anchor="middle" class="s">publish ▸</text>
+      </svg>
+      <figcaption>Each arrow into a record is a reference stored in that record. Walk them backwards from any result and you reach raw datasets, parameters, and software versions.</figcaption>
+    </figure>
+  </div>
+  <p class="take">The published entry carries a <b>self-contained snapshot</b>, readable in six months without any service of ours running.</p>
+</section>
+
+<!-- ===================== 12 FOUR NEEDS IN THE MODEL ===================== -->
+<section class="slide" id="s12">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The four needs, in this model</h2></header>
+  <div class="body grid4">
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Manual: request one becomes record one; a rerun is request two, a new record linked back to record one.">
+        <rect class="box" x="20" y="30" width="100" height="40" rx="6"/><text x="70" y="55" text-anchor="middle">record 1</text>
+        <rect class="box" x="20" y="100" width="100" height="40" rx="6"/><text x="70" y="125" text-anchor="middle">record 2</text>
+        <path class="e" d="M70,100 L70,74"/><text x="140" y="90" class="s">derives from 1</text>
+        <text x="140" y="108" class="s">(retry)</text>
+        <text x="140" y="55" class="s">one request</text>
+      </svg>
+      <h3>Manual</h3>
+      <p>One request per run. A rerun with a changed value is a new record, linked to the old one.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Batch: a template plus overrides becomes records tagged with a batch id and a member key.">
+        <rect class="box" x="8" y="66" width="70" height="44" rx="6"/><text x="43" y="92" text-anchor="middle">template</text>
+        <path class="e" d="M78,88 L118,36"/><path class="e" d="M78,88 L118,88"/><path class="e" d="M78,88 L118,140"/>
+        <rect class="box" x="118" y="18" width="130" height="34" rx="6"/><text x="183" y="40" text-anchor="middle" class="m">batch 7 · T=10K</text>
+        <rect class="box" x="118" y="71" width="130" height="34" rx="6"/><text x="183" y="93" text-anchor="middle" class="m">batch 7 · T=20K</text>
+        <rect class="box" x="118" y="123" width="130" height="34" rx="6"/><text x="183" y="145" text-anchor="middle" class="m">batch 7 · T=30K</text>
+      </svg>
+      <h3>Batch</h3>
+      <p>A template plus per-member overrides. Each record carries the batch ID and a key the submitter chose, so two thousand members are listed by something meaningful.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Automatic: the dataset source yields new datasets or completed records; a rule matches and instantiates a template; never on our own output.">
+        <rect class="box open" x="6" y="26" width="90" height="40" rx="6"/><text x="51" y="45" text-anchor="middle" class="s">new dataset</text><text x="51" y="60" text-anchor="middle" class="s">from SciCat</text>
+        <rect class="box" x="6" y="110" width="90" height="40" rx="6"/><text x="51" y="129" text-anchor="middle" class="s">a record</text><text x="51" y="144" text-anchor="middle" class="s">completed</text>
+        <path class="e" d="M96,46 L130,82"/><path class="e" d="M96,130 L130,96"/>
+        <rect class="accb" x="130" y="64" width="64" height="50" rx="8"/><text x="162" y="86" text-anchor="middle">rule</text><text x="162" y="104" text-anchor="middle" class="s">matches?</text>
+        <path class="e" d="M194,89 L214,89"/>
+        <rect class="box" x="214" y="70" width="42" height="38" rx="6"/><text x="235" y="94" text-anchor="middle" class="s">submit</text>
+      </svg>
+      <h3>Automatic</h3>
+      <p>A loop: on a new dataset or a completed record that matches a rule, fill a template and submit. Never fires on its own output.</p>
+    </div>
+    <div class="panel">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Chain: requests A and B submitted as a group; B references an output of A that does not exist yet; the backend holds B until A completes.">
+        <rect class="lane" x="6" y="14" width="248" height="120" rx="8"/><text x="18" y="34" class="s">one group, submitted together</text>
+        <rect class="box" x="20" y="50" width="90" height="40" rx="6"/><text x="65" y="75" text-anchor="middle">A</text>
+        <rect class="box" x="150" y="50" width="90" height="40" rx="6"/><text x="195" y="75" text-anchor="middle">B</text>
+        <path class="e acc open" d="M150,70 L112,70"/>
+        <text x="130" y="112" text-anchor="middle" class="s a">B names an output of A</text>
+        <text x="130" y="126" text-anchor="middle" class="s a">before it exists</text>
+        <text x="130" y="156" text-anchor="middle" class="s">held until A completes; A fails → B fails</text>
+      </svg>
+      <h3>Chain and combine</h3>
+      <p>A reference may name a pending output. That is the only scheduling primitive: map and combine are one use of it.</p>
+    </div>
+  </div>
+  <p class="take">Four modes, <b>one kind of request and one kind of record</b>. The scheduler has one kind of dependency.</p>
+</section>
+
+<!-- ===================== 13 COMPONENTS ===================== -->
+<section class="slide" id="s13">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The moving parts</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1120 470" role="img" aria-label="Clients reach the backend only through the client interface. The backend writes records, dispatches through a launcher to a runner, which calls workflow code and stores outputs in the data store. The trigger loop consumes datasets from SciCat; the publisher writes results back to SciCat.">
+        <!-- clients -->
+        <rect class="box" x="30" y="30" width="140" height="46" rx="8"/><text x="100" y="58" text-anchor="middle">notebook</text>
+        <rect class="box" x="190" y="30" width="140" height="46" rx="8"/><text x="260" y="58" text-anchor="middle">web page</text>
+        <rect class="box" x="350" y="30" width="150" height="46" rx="8"/><text x="425" y="58" text-anchor="middle">trigger loop</text>
+        <path class="e" d="M100,76 L100,120"/><path class="e" d="M260,76 L260,120"/><path class="e" d="M425,76 L425,120"/>
+        <!-- interface -->
+        <rect class="accb" x="30" y="120" width="470" height="44" rx="8"/><text x="265" y="147" text-anchor="middle" class="h">client interface · validate, submit, query, view</text>
+        <text x="520" y="147" class="s">the API. HTTP later, same interface</text>
+        <path class="e" d="M265,164 L265,200"/>
+        <!-- backend -->
+        <rect class="box" x="30" y="200" width="470" height="96" rx="10"/>
+        <text x="46" y="226" class="h">backend</text>
+        <text x="46" y="250" class="s">validate in three layers · resolve run numbers and PIDs to references</text>
+        <text x="46" y="270" class="s">write the record · hold on pending inputs · dispatch · reconcile after restart</text>
+        <path class="e" d="M140,296 L140,340"/><text x="150" y="325" class="s">single writer</text>
+        <path class="e" d="M400,296 L400,340"/>
+        <rect class="disk" x="30" y="340" width="230" height="60" rx="8"/><text x="145" y="365" text-anchor="middle" class="h">record store</text><text x="145" y="385" text-anchor="middle" class="s">SQLite; Postgres if ever needed</text>
+        <rect class="box" x="290" y="340" width="230" height="60" rx="8"/><text x="405" y="365" text-anchor="middle" class="h">launcher</text><text x="405" y="385" text-anchor="middle" class="s">subprocess · cluster · session</text>
+        <!-- runner -->
+        <path class="e" d="M520,370 L600,370 L600,296"/><text x="612" y="335" class="s">starts</text>
+        <rect class="box" x="560" y="200" width="220" height="96" rx="10"/>
+        <text x="576" y="226" class="h">runner</text>
+        <text x="576" y="248" class="s">materialize inputs</text>
+        <text x="576" y="266" class="s">call the workflow</text>
+        <text x="576" y="284" class="s">store outputs · write marker</text>
+        <path class="e" d="M560,220 L500,220"/><text x="530" y="208" text-anchor="middle" class="s">reports</text>
+        <path class="e" d="M700,296 L700,340"/>
+        <rect class="box" x="580" y="340" width="180" height="60" rx="8"/><text x="670" y="365" text-anchor="middle" class="h">workflow code</text><text x="670" y="385" text-anchor="middle" class="s">one callable, via entry point</text>
+        <!-- data store -->
+        <path class="e" d="M780,248 L850,248"/><text x="815" y="238" text-anchor="middle" class="s">reads</text>
+        <path class="e" d="M850,268 L780,268"/><text x="815" y="284" text-anchor="middle" class="s">writes</text>
+        <rect class="disk" x="850" y="200" width="240" height="96" rx="10"/>
+        <text x="866" y="226" class="h">data store</text>
+        <text x="866" y="250" class="s">registry of disk copies + disk tier</text>
+        <text x="866" y="270" class="s">large outputs, by record + output</text>
+        <!-- scicat, dataset source, publisher -->
+        <rect class="lane" x="850" y="30" width="240" height="60" rx="8"/><text x="970" y="66" text-anchor="middle" class="h">SciCat</text>
+        <rect class="box" x="580" y="30" width="220" height="46" rx="8"/><text x="690" y="58" text-anchor="middle">dataset source</text>
+        <path class="e" d="M850,60 L800,60"/><text x="826" y="48" text-anchor="middle" class="s">new</text>
+        <path class="e" d="M580,53 L500,53"/>
+        <rect class="box" x="850" y="120" width="240" height="46" rx="8"/><text x="970" y="148" text-anchor="middle">publisher · output + snapshot</text>
+        <path class="e" d="M970,120 L970,90"/>
+        <path class="e" d="M970,166 L970,200"/>
+        <text x="985" y="188" class="s">reads a disk copy</text>
+        <text x="30" y="440" class="s">Runner and workflow code never touch the record store; no database credentials on compute nodes.</text>
+        <text x="30" y="460" class="s">One backend per instrument. Several share a host while load is low.</text>
+      </svg>
+    </figure>
+  </div>
+  <p class="take">Everything the backend knows is in the records, so <b>a restart loses nothing</b>, and any client reaches it only through one interface.</p>
+  <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit.</aside>
+</section>
+
+<!-- ===================== 14 CONTRACT ===================== -->
+<section class="slide" id="s14">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The contract with workflow code: one callable</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 300" role="img" aria-label="A spec declares parameters and outputs. The runner materializes each input by kind, calls the workflow callable once, validates the outputs, and stores them.">
+        <rect class="box" x="20" y="30" width="300" height="240" rx="10"/>
+        <text x="36" y="56" class="h">spec · sans_reduction 3.1</text>
+        <text x="36" y="84" class="s">parameters</text>
+        <text x="36" y="106" class="m">sample: data ref, raw NeXus</text>
+        <text x="36" y="126" class="m">vanadium: data ref, scipp array</text>
+        <text x="36" y="146" class="m">threshold: float [counts]</text>
+        <text x="36" y="166" class="m">q_bins: edges   ⟵ cheap</text>
+        <text x="36" y="196" class="s">outputs</text>
+        <text x="36" y="218" class="m">iofq: scipp array, 1D</text>
+        <text x="36" y="238" class="m">beam_centre: vector [m]</text>
+        <text x="36" y="258" class="s">the framework never imports sciline</text>
+
+        <path class="e" d="M320,100 L420,100"/><text x="370" y="91" text-anchor="middle" class="s">path</text>
+        <path class="e" d="M320,135 L420,135"/><text x="370" y="126" text-anchor="middle" class="s">scipp object</text>
+        <path class="e" d="M320,170 L420,170"/><text x="370" y="161" text-anchor="middle" class="s">value</text>
+
+        <rect class="box" x="420" y="60" width="330" height="170" rx="10"/>
+        <text x="436" y="86" class="h">runner</text>
+        <rect class="accb" x="440" y="105" width="290" height="50" rx="8"/><text x="585" y="136" text-anchor="middle" class="m">outputs = workflow(params)</text>
+        <text x="436" y="185" class="s">validate params with the real pydantic class</text>
+        <text x="436" y="205" class="s">validate outputs against the output model</text>
+        <text x="585" y="255" text-anchor="middle" class="s">in a session: the callable is kept between calls</text>
+
+        <path class="e" d="M750,120 L850,120"/><text x="800" y="110" text-anchor="middle" class="s">large</text>
+        <path class="e" d="M750,170 L850,170"/><text x="800" y="192" text-anchor="middle" class="s">small</text>
+        <rect class="disk" x="850" y="95" width="230" height="50" rx="8"/><text x="965" y="125" text-anchor="middle">data store · scipp HDF5</text>
+        <rect class="disk" x="850" y="150" width="230" height="50" rx="8"/><text x="965" y="180" text-anchor="middle">inline in the record</text>
+      </svg>
+      <figcaption>Raw NeXus and opaque files arrive as a local path; scipp arrays arrive as scipp objects, from memory when the process has a copy, from HDF5 otherwise. The callable never writes files. Other output formats, such as ORSO or CIF, come with their own serializer.</figcaption>
+    </figure>
+  </div>
+  <p class="take">The same callable in every mode. The only difference between runners is <b>whether the callable is kept</b>.</p>
+  <aside class="notes">Rejected: a file-based contract, which forces every chain through disk; and a framework that knows sciline and caches intermediates itself, which is not affordable with event data. Arrays as objects is what keeps the phase 3 options open in every model.</aside>
+</section>
+
+<!-- ===================== 15 SPEC CHANGES ===================== -->
+<section class="slide" id="s15">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What the workflow spec needs beyond scipp/ess#690</h2></header>
+  <div class="body grid2">
+    <div class="panel">
+      <h3>As proposed in the PR</h3>
+<pre class="spec">spec sans_reduction 3.1
+  <span class="del">inputs:</span>
+  <span class="del">  sample: file</span>
+  parameters:
+    threshold: float [counts]
+    q_bins: edges
+  outputs:
+    iofq: ArraySpec(dims=[Q])
+    beam_centre: <span class="del">?  # untyped</span></pre>
+      <p class="hint">Non-array outputs have no type, so a beam centre cannot be checked against the parameter it feeds.</p>
+    </div>
+    <div class="panel">
+      <h3>Proposed</h3>
+<pre class="spec">spec sans_reduction 3.1
+  parameters:
+    <span class="add">sample: DataRef(kind=raw NeXus)</span>
+    <span class="add">vanadium: DataRef(ArraySpec(...))</span>
+    <span class="add">runs_to_sum: list[DataRef]</span>   <span class="cm"># collection</span>
+    threshold: float [counts]
+    q_bins: edges                <span class="add">cheap=True</span>
+  outputs:                       <span class="cm"># typed model</span>
+    iofq: ArraySpec(dims=[Q], <span class="add">binned=False</span>)
+    <span class="add">beam_centre: Vector [m]</span>
+    <span class="add">per_bank: dict[str, ArraySpec]</span>
+  <span class="add">code_revision: optional</span></pre>
+    </div>
+  </div>
+  <div class="chips">
+    <span class="chip">inputs are parameters of data-reference type</span>
+    <span class="chip">outputs are a typed model in the same vocabulary</span>
+    <span class="chip">collections on both sides; a reference may name one element</span>
+    <span class="chip">binned flag: event outputs are never plotted, a dense twin is</span>
+    <span class="chip open">cheap parameters: what a slider may move (phase 3)</span>
+  </div>
+  <p class="take">Chaining becomes <b>a type check between two fields</b> of one vocabulary. Storage placement stops being a spec concept.</p>
+  <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
+</section>
+
+<!-- ===================== 16 WHERE STATE LIVES ===================== -->
+<section class="slide" id="s16">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Where state lives: records never, disk always, memory only in a session</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Left: a throwaway process reads inputs from disk, runs once, writes outputs and a completion marker, and exits. Right, dashed: a session process keeps the warm workflow and a private cache in memory, reruns in memory, and writes out only on demand.">
+        <text x="270" y="30" text-anchor="middle" class="h">Throwaway process</text>
+        <text x="270" y="50" text-anchor="middle" class="s">every run in shared mode · phases 1 and 2</text>
+        <rect class="box" x="120" y="70" width="300" height="130" rx="10"/>
+        <text x="270" y="100" text-anchor="middle">start · import · run once · exit</text>
+        <text x="270" y="124" text-anchor="middle" class="s">subprocess now, cluster job later</text>
+        <text x="270" y="150" text-anchor="middle" class="s">holds nothing after it ends</text>
+        <path class="e diskc" d="M180,250 L180,200"/><text x="120" y="232" class="s">read inputs</text>
+        <path class="e diskc" d="M360,200 L360,250"/><text x="372" y="232" class="s">write outputs + marker</text>
+        <rect class="disk" x="60" y="250" width="420" height="60" rx="8"/><text x="270" y="286" text-anchor="middle" class="h">disk tier · registered copies</text>
+
+        <rect class="box open dim" x="560" y="10" width="520" height="320" rx="12"/>
+        <text x="820" y="36" text-anchor="middle" class="h">Session</text>
+        <text x="820" y="56" text-anchor="middle" class="s">phase 3 · one of three candidate models</text>
+        <rect class="mem" x="670" y="76" width="300" height="124" rx="10"/>
+        <text x="820" y="104" text-anchor="middle">process belonging to one client</text>
+        <text x="820" y="128" text-anchor="middle" class="s">warm workflow + private cache of outputs</text>
+        <text x="820" y="152" text-anchor="middle" class="s">a rerun recomputes only what changed</text>
+        <path class="e memc" d="M970,92 C1030,80 1030,140 972,128"/><text x="1025" y="152" text-anchor="middle" class="s">rerun in memory</text>
+        <path class="e diskc open" d="M820,200 L820,250"/><text x="832" y="232" class="s">write out on demand only</text>
+        <rect class="disk" x="610" y="250" width="420" height="60" rx="8"/><text x="820" y="286" text-anchor="middle" class="h">disk tier · registered copies</text>
+      </svg>
+      <figcaption>The registry knows disk copies only. A memory cache is invisible to every other process, so there is no cache-coherence protocol to build. Losing a session costs time, never data: everything in it can be recomputed from records.</figcaption>
+    </figure>
+  </div>
+  <p class="take"><b>Requests are stateless everywhere.</b> Execution may be stateful in a session, and a session's identity never appears in a record.</p>
+  <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound, seconds per rerun), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
+</section>
+
+<!-- ===================== 17 NOT A CATALOGUE ===================== -->
+<section class="slide" id="s17">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Our store is not a second catalogue</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 300" role="img" aria-label="SciCat on the left answers what was measured and finalized. Our record store on the right answers what was computed. Two crossings: resolving a stand-in into a reference, and publishing an output with its snapshot.">
+        <rect class="lane" x="20" y="30" width="440" height="240" rx="10"/>
+        <text x="240" y="62" text-anchor="middle" class="h">SciCat</text>
+        <text x="240" y="86" text-anchor="middle" class="s">what was measured · what was finalized</text>
+        <text x="40" y="126" class="s">▸ dataset metadata, sample names, run lists</text>
+        <text x="40" y="150" class="s">▸ where the bytes are, today (archive moves them)</text>
+        <text x="40" y="174" class="s">▸ who may read a proposal</text>
+        <text x="40" y="198" class="s">▸ published results, each with its snapshot</text>
+        <text x="40" y="240" class="s">entries are never removed through the regular API</text>
+
+        <rect class="box" x="640" y="30" width="440" height="240" rx="10"/>
+        <text x="860" y="62" text-anchor="middle" class="h">our record store</text>
+        <text x="860" y="86" text-anchor="middle" class="s">what was computed</text>
+        <text x="660" y="126" class="s">▸ run records: request + what happened</text>
+        <text x="660" y="150" class="s">▸ file records: PID, proposal, instrument. Nothing else.</text>
+        <text x="660" y="174" class="s">▸ created on first reference, never by discovery</text>
+        <text x="660" y="198" class="s">▸ live as long as the proposal plus an analysis window</text>
+        <text x="660" y="240" class="s">a UI wanting a sample name asks SciCat</text>
+
+        <path class="e acc" d="M460,120 L640,120"/><text x="550" y="108" text-anchor="middle" class="s">resolve: run number or PID → reference</text>
+        <path class="e acc" d="M640,200 L460,200"/><text x="550" y="224" text-anchor="middle" class="s">publish: output + provenance snapshot</text>
+        <text x="550" y="160" text-anchor="middle" class="s">the only two moments SciCat is needed</text>
+      </svg>
+    </figure>
+  </div>
+  <p class="take">Only finalized data enters SciCat. Once a reference exists, <b>work continues when the catalogue is slow</b>.</p>
+  <aside class="notes">Third review pass removed what would have made the store a replica: file records created by discovery with copied metadata and stored mount paths. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
+</section>
+
+<!-- ===================== 18 FAILURES ===================== -->
+<section class="slide" id="s18">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Failures are the product</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 250" role="img" aria-label="Status state machine: submitted, waiting, dispatched, running, then completed, failed, or cancelled. A retry is a new record pointing at the old one.">
+        <rect class="box" x="20" y="20" width="140" height="44" rx="22"/><text x="90" y="47" text-anchor="middle">submitted</text>
+        <path class="e" d="M160,42 L220,42"/>
+        <rect class="box" x="220" y="20" width="140" height="44" rx="22"/><text x="290" y="47" text-anchor="middle">waiting</text>
+        <text x="290" y="86" text-anchor="middle" class="s">pending inputs</text>
+        <path class="e" d="M360,42 L420,42"/>
+        <rect class="box" x="420" y="20" width="140" height="44" rx="22"/><text x="490" y="47" text-anchor="middle">dispatched</text>
+        <text x="490" y="86" text-anchor="middle" class="s">launcher job ID</text>
+        <path class="e" d="M560,42 L620,42"/>
+        <rect class="box" x="620" y="20" width="140" height="44" rx="22"/><text x="690" y="47" text-anchor="middle">running</text>
+        <text x="690" y="86" text-anchor="middle" class="s">liveness signals</text>
+        <path class="e" d="M760,42 L860,42"/>
+        <rect class="accb" x="860" y="20" width="140" height="44" rx="22"/><text x="930" y="47" text-anchor="middle">completed</text>
+        <path class="e" d="M760,52 L860,122"/>
+        <rect class="box" x="860" y="100" width="140" height="44" rx="22"/><text x="930" y="127" text-anchor="middle">failed</text>
+        <text x="930" y="164" text-anchor="middle" class="s">with a structured reason</text>
+        <path class="e" d="M290,64 L290,202 L860,202"/>
+        <rect class="box" x="860" y="180" width="140" height="44" rx="22"/><text x="930" y="207" text-anchor="middle">cancelled</text>
+        <text x="575" y="192" text-anchor="middle" class="s">cancel, from waiting, dispatched, or running; dependents are cancelled too</text>
+        <text x="930" y="244" text-anchor="middle" class="s">also by batch and by group</text>
+      </svg>
+    </figure>
+    <div class="grid4">
+      <div class="panel"><h3>Completion marker</h3><p>A runner writes its outputs and a marker to disk before exit. Finished while the backend was down is completed, not failed.</p></div>
+      <div class="panel"><h3>Liveness</h3><p>A silent runner is failed after a timeout unless a marker exists. A report that arrives after that is rejected.</p></div>
+      <div class="panel"><h3>Reconciliation</h3><p>On restart the backend re-dispatches queued runs and checks running ones against the launcher and the markers.</p></div>
+      <div class="panel"><h3>Retry is a new record</h3><p>Never a status reset. The trigger loop's refusals are as visible as a run's failure.</p></div>
+    </div>
+  </div>
+  <p class="take">Facilities that built automatic reduction report that <b>the monitoring UI was most of the value</b>. Phase 1 is unattended, so this is in from day one.</p>
+</section>
+
+<!-- ===================== 19 PHASE MATRIX ===================== -->
+<section class="slide" id="s19">
+  <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What each phase needs from the proposal</h2></header>
+  <div class="body">
+    <table>
+      <thead><tr><th>Part</th><th class="c">Phase 1 · automatic</th><th class="c">Phase 2 · batch</th><th class="c">Phase 3 · apps</th></tr></thead>
+      <tbody>
+        <tr><td>Records, references, file records by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Own record store, single writer; client interface with validate</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Subprocess launcher, cold runner, disk tier with registry</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Templates from version-controlled files; trigger loop; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>All of failure handling; a status page with plots of whole outputs</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Groups with pending outputs (chains via trigger events suffice at first)</td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Batch with member keys; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>HTTP transport, when the first client lives outside the backend process; cluster launcher</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Sessions, warm workflows, cheap parameters, private caches, slots, local file records</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
+      </tbody>
+    </table>
+    <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>
+  </div>
+  <p class="take">Phase 1 is the proposal with <b>one execution shape and no interactive concepts</b>. Roughly a seventh of the skeleton's code and a fifth of the text belong to phase 3 alone.</p>
+  <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, group rules for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
+</section>
+
+<!-- ===================== 20 PHASE 3 MODELS ===================== -->
+<section class="slide dense" id="s20">
+  <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Phase 3 is the real open question: where does interactive state live?</h2></header>
+  <div class="body">
+    <div class="grid3">
+      <div class="panel">
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Session model: a framework-owned session holds the warm workflow; every slider move is a record in a slot.">
+          <rect class="box open" x="10" y="10" width="300" height="130" rx="8"/><text x="22" y="30" class="s">framework</text>
+          <rect class="mem" x="30" y="45" width="150" height="70" rx="8"/><text x="105" y="74" text-anchor="middle">session</text><text x="105" y="94" text-anchor="middle" class="s">warm workflow</text>
+          <rect class="box" x="205" y="45" width="90" height="70" rx="8"/><text x="250" y="74" text-anchor="middle">records</text><text x="250" y="94" text-anchor="middle" class="s">one per move</text>
+          <path class="e" d="M180,80 L205,80"/>
+        </svg>
+        <h3>Session model <span class="hint">(the sketch)</span></h3>
+        <p>The framework owns the process. Each change is a complete record, hidden behind a slot label. Shared use needs remote sessions the framework launches, times out, and caps.</p>
+      </div>
+      <div class="panel">
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Checkpoint model: the application holds the warm workflow privately; only kept results are submitted as cold runs.">
+          <rect class="box open" x="170" y="10" width="140" height="130" rx="8"/><text x="182" y="30" class="s">framework</text>
+          <rect class="mem" x="10" y="45" width="140" height="70" rx="8"/><text x="80" y="74" text-anchor="middle">application</text><text x="80" y="94" text-anchor="middle" class="s">warm workflow</text>
+          <rect class="box" x="200" y="45" width="90" height="70" rx="8"/><text x="245" y="74" text-anchor="middle">records</text><text x="245" y="94" text-anchor="middle" class="s">cold runs</text>
+          <path class="e" d="M150,80 L200,80"/><text x="175" y="100" text-anchor="middle" class="s">keep</text>
+        </svg>
+        <h3>Checkpoint model</h3>
+        <p>The application reruns in its own memory, as a notebook does. When the user keeps a result, the full parameter set is submitted and runs cold. The framework never sees a session.</p>
+      </div>
+      <div class="panel">
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Stateless with splits: every change is a fresh run of the cheap stage over a stored intermediate on disk.">
+          <rect class="box" x="10" y="45" width="100" height="70" rx="8"/><text x="60" y="74" text-anchor="middle">expensive</text><text x="60" y="94" text-anchor="middle" class="s">stage, once</text>
+          <path class="e diskc" d="M110,80 L150,80"/>
+          <rect class="disk" x="150" y="55" width="50" height="50" rx="6"/><text x="175" y="85" text-anchor="middle" class="s">disk</text>
+          <path class="e diskc" d="M200,80 L230,80"/>
+          <rect class="box" x="230" y="45" width="80" height="70" rx="8"/><text x="270" y="74" text-anchor="middle">cheap</text><text x="270" y="94" text-anchor="middle" class="s">per change</text>
+        </svg>
+        <h3>Stateless with splits</h3>
+        <p>No new concept. Every change is a fresh process running the cheap stage over a stored intermediate. Seconds, not sub-second.</p>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th></th><th>Session</th><th>Checkpoint</th><th>Stateless with splits</th></tr></thead>
+      <tbody>
+        <tr><td>Feedback on a cheap parameter</td><td>sub-second</td><td>sub-second</td><td>seconds</td></tr>
+        <tr><td>Records while exploring</td><td>one per change, hidden by slots</td><td>none</td><td>one per change</td></tr>
+        <tr><td>New framework concepts</td><td>session, warm workflow, slots, private caches, two shapes</td><td>none; the warm wrapper becomes a library</td><td>none</td></tr>
+        <tr><td>Interactive use in the shared web UI</td><td>remote sessions owned by the framework</td><td>a hosted process per user, owned by infrastructure</td><td>works, slowly</td></tr>
+        <tr><td>Burden on workflow authors</td><td>declare cheap parameters correctly</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="take">All three keep <b>the same records, spec, and API</b>. Decide when phase 3 is designed, with measurements from the spike; the checkpoint model is the default to beat.</p>
+  <aside class="notes">Two stories the sketch was built around, tuning a SANS reduction in a notebook and tuning vanadium and sample together, fail the timing check under stateless-with-splits. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process.</aside>
+</section>
+
+<!-- ===================== 21 DECISIONS ===================== -->
+<section class="slide" id="s21">
+  <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Decisions we need from this review</h2></header>
+  <div class="body">
+    <div class="qa">
+      <span class="q">Does "output X of record Y" cover every piece of data your technique needs to name?</span><span class="rec">The foundation; everything else assumes yes</span>
+      <span class="why">Including: per-bank outputs, angle series, masks as data, lookup tables, a stored vanadium that is only valid for compatible binning.</span>
+      <span class="q">Build phases 1 and 2 on the stateless core only, and park sessions?</span><span class="rec">Recommend yes</span>
+      <span class="why">Changes nothing in what those phases build; removes a fifth of the text from what reviewers must hold in mind.</span>
+      <span class="q">Groups as the automatic-reduction unit?</span><span class="rec">Rules match groups; inputs are list-valued</span>
+      <span class="why">A reflectivity curve needs four angle runs plus a reference, and the last one arrives last. A phase 1 question.</span>
+      <span class="q">Spec changes to scipp/ess#690: typed outputs, data-reference parameters, collections, binned flag?</span><span class="rec">Recommend yes, while the PR is open</span>
+      <span class="why">Cheap parameters and code revision are one optional field each.</span>
+      <span class="q">Accept uploads of local files in the shared service?</span><span class="rec">Recommend no</span>
+      <span class="why">Refusing removes checksums-on-read, a per-proposal quota, a retention exemption, and a redaction question from phases 1 and 2.</span>
+      <span class="q">Template sharing between the two stages of a split workflow?</span><span class="rec">Copy, no inheritance</span>
+      <span class="why">Facilities that tried inheritance moved to version-controlled read-only templates with per-dataset substitution.</span>
+      <span class="q">Tiled as the disk tier and HTTP data transport?</span><span class="rec">Try as a second implementation after the spike</span>
+      <span class="why">Catalog, remote slicing, access policy, Python client. No scipp semantics: units, masks, bin edges would be a convention we own.</span>
+      <span class="q">Retention: how long each kind of output is kept, and the analysis window after a proposal?</span><span class="rec">Needs facility input</span>
+      <span class="why">Disk fills during a phase 2 batch; phase 1 needs at least a quota alarm.</span>
+    </div>
+  </div>
+  <p class="take">Decision numbers D1 to D13 in the document <b>freeze after this review</b>. Point at them.</p>
+</section>
+
+<!-- ===================== 22 WHAT EXISTS ===================== -->
+<section class="slide" id="s22">
+  <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What exists, and the next five steps</h2></header>
+  <div class="body grid2">
+    <div class="panel">
+      <h3>Exists today</h3>
+      <ul>
+        <li><b>The architecture sketch</b>, with rejected alternatives per choice, a glossary, and a decision index. A reading edition with diagrams is published.</li>
+        <li><b>38 user stories</b> run against the sketch: getting data in, interactive, chaining, batch, automatic, publication, roles, operations. Every gap found was closed or became an open question.</li>
+        <li><b>Two review notes</b>: what each phase needs, and what all-in stateless would remove and cost.</li>
+        <li><b>A walking skeleton</b>, <code>ess.apps</code>, local mode: spec vocabulary, records, SQLite store, data store, both execution shapes, group submit with pending outputs, warm sciline wrapper with a warm-equals-cold test helper, templates, batch, trigger loop, publication, fakes. 64 tests.</li>
+        <li class="hint">Not in it: real SciCat, HTTP, a UI, a cluster launcher, Tiled, a real instrument workflow.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Next, in order</h3>
+      <ol class="steps">
+        <li>Make the throwaway launcher the default; keep the session launcher as an experiment outside the phase 1 and 2 tests.</li>
+        <li>Build the real dataset source and publisher against SciCat behind the existing fakes.</li>
+        <li>Extend the trigger loop to completed-record events and group rules.</li>
+        <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
+        <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
+      </ol>
+      <p class="hint">A spike on the throwaway feedback loop, with and without a warm process pool, so the phase 3 decision rests on numbers.</p>
+    </div>
+  </div>
+  <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
+</section>
+
+<!-- ===================== 23 DISCUSS ===================== -->
+<section class="slide" id="s23">
+  <header><div class="eyebrow"><span>Discussion</span></div><h2>Three questions to leave with</h2></header>
+  <div class="body grid3">
+    <div class="card panel"><h3>Does the record model hold for your technique?</h3><p>Name the piece of data it cannot describe.</p></div>
+    <div class="card panel"><h3>Is the phase order right, and what else should be parked?</h3><p>Anything in phase 1 that you would move out, or in.</p></div>
+    <div class="card panel open"><h3>Which phase 3 model would you bet on today?</h3><p>Session, checkpoint, or stateless with splits. And what would change your mind.</p></div>
+  </div>
+  <p class="take">Reading edition, sketch, user stories, and the two review notes are in <code>docs/developer</code> on the <code>architecture-sketch</code> branch.</p>
+</section>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var bar = document.getElementById('bar');
+  var hud = document.getElementById('hud');
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function current() {
+    var y = window.scrollY + window.innerHeight / 2;
+    for (var i = slides.length - 1; i >= 0; i--) { if (slides[i].offsetTop <= y) return i; }
+    return 0;
+  }
+  function go(i) {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    slides[i].scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+    history.replaceState(null, '', '#' + (i + 1));
+  }
+  function update() {
+    var i = current();
+    bar.style.width = ((i + 1) / slides.length * 100) + '%';
+    hud.textContent = (i + 1) + ' / ' + slides.length;
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') { e.preventDefault(); go(current() + 1); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); go(current() - 1); }
+    else if (k === 'Home') { e.preventDefault(); go(0); }
+    else if (k === 'End') { e.preventDefault(); go(slides.length - 1); }
+    else if (k === 'n' || k === 'N') { document.body.classList.toggle('notes-on'); }
+  });
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  var m = /^#(\d+)$/.exec(location.hash);
+  if (m) { setTimeout(function () { go(parseInt(m[1], 10) - 1); }, 50); }
+  update();
+})();
+</script>
