@@ -32,6 +32,7 @@ The recording stayed and users came to rely on it; the FAQ now explains that a r
 Two lessons.
 The record must carry resolved parameters, code identity, and environment; the sketch does this, and Snakemake's users eventually agreed it was necessary.
 And the framework must never decide on its own that a stored result is stale or, its mirror, that a request need not run; the sketch's explicit recompute and the rule that the backend never skips an equal request are the same stance.
+A request-equality query on the record store was added for client-side rerun and later dropped, because batch rerun lists by batch ID and member key and nothing else used it.
 A third, smaller lesson: hashing code was too fine a grain, because cosmetic edits changed the hash.
 The sketch's optional code revision, at the grain of a package version or a commit, is the right grain.
 
@@ -44,7 +45,7 @@ Snakemake deletes a rule's outputs when the rule fails, so that a half-written f
 The `log:` directive exists for the one file that must survive that deletion.
 The sketch had a structured failure reason and nothing else.
 A structured reason covers the failures that were foreseen; a segfault in a C extension or a process killed for memory only shows up in stdout and stderr.
-The record now says where the runner's console output is kept.
+The runner's console output is now kept beside the record.
 
 **Data-dependent fan-out in the scheduler.**
 Checkpoints, added in 5.4, let the graph depend on a rule's output: an input function calls `checkpoints.name.get()`, which raises an exception if the checkpoint has not run, and the scheduler catches it and re-evaluates the graph later.
@@ -130,14 +131,14 @@ So its lessons bear on shared mode, batch, and failure handling, and not on choi
 
 | Lesson | Change to the sketch | Where |
 |---|---|---|
-| Logs survive when outputs do not | Record says where the runner's console output is kept; logs kept as long as the record | Records and references; Failure handling |
+| Logs survive when outputs do not | The runner's console output is kept beside the record, as long as the record | Records and references; Failure handling |
 | Shared filesystems show files late | Marker written after outputs are flushed; the only signal reconciliation trusts | Failure handling |
-| Skipping done work is a user decision | Batch rerun of failures is a client operation; backend never skips an equal request; record store answers "records whose resolved request equals this one" | Choice 2; Components |
-| Checkpoints | Fan-out with keys known only from data is a trigger rule, not a scheduler feature | Spec changes |
+| Skipping done work is a user decision | Batch rerun of failures is a client operation; backend never skips an equal request | Rules |
+| Checkpoints | Fan-out with keys known only from data is a rule on the completed producer, not a scheduler feature | Spec changes |
 | Dry run with reasons | Trigger loop explains why it fired or did not on any dataset | Components |
 | Plugin retrofit cost a major version | Launcher and data store interfaces narrow and stable from the first implementation | Components |
 | Resources with attempt | Resource hints on the spec, deferred with the cluster launcher | Explicitly deferred |
-| temp and protected | Recommendation on the retention question: an intermediate flag on outputs | Open questions |
+| temp and protected | Recommendation on the retention question: an intermediate flag on outputs, read after the superseded rule | Open questions |
 | Tests from real runs | Helper that recomputes a record and compares outputs | Choice 3 |
 
 Not folded in, and why:

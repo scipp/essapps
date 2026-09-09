@@ -77,7 +77,7 @@ The sketch keeps the lookup versioned and the record's resolved values immutable
 
 **Retry without a reason or a limit.**
 Under autoprocessing every resume makes failed rows eligible again, so a run that fails for a lasting reason is retried at every poll.
-The sketch's retry rule keys on a declared failure reason and carries a limit.
+The sketch's rule has a retry policy that keys on a declared failure reason and carries a limit.
 
 **A catalogue that lags the file.**
 The interface recommends the journal over ICat because the catalogue search "is less reliable"; FIA polls a last-run file and reads journal XML, and never touches ICAT.
@@ -100,7 +100,7 @@ Parameters selected by what the data is, an angle within a tolerance, a title pa
 Five interfaces at one facility converged on the same shape: an ordered list of match criteria on dataset metadata, each supplying defaults, with one fallback, edited by the instrument scientist, saved with the batch, and applied to typed rows and automatically added rows alike.
 The sketch had a template, one partial request, and a rule, a Python callable in the trigger loop, and nothing for manual batch beyond overrides the submitter writes by hand.
 That put the per-angle table in code, invisible to the web UI and unversioned.
-The lookup is now data in the sketch.
+The lookup is now data in the sketch, under D14.
 Two details from Mantid carry over: a match on more than one entry is an error found at validation, and the row shows which entry applied.
 
 **Precedence in one order.**
@@ -111,7 +111,7 @@ One wart to avoid: Mantid's stitch reads only the wildcard entry for its paramet
 **Exclusions with a reason, beside the data.**
 A user can exclude a run from autoprocessing with a reason, or comment on it, in the search results; the annotations survive re-searches and save with the batch, and a run deleted from the table without an exclusion comes back on the next poll.
 The sketch had annotations on records only, so there was nowhere to say "not this run" before the run was ever referenced.
-It now allows an annotation on a dataset's file record, and the trigger loop reports the exclusion as the reason it did not fire.
+The rule now carries exclusions with a reason, and the trigger loop reports an exclusion as the reason it did not fire.
 
 **Preview into the template.**
 The preview tab runs the real reduction under interactively drawn regions and writes the regions into the lookup entry for that angle, so the next batch and the next automatic run use them.
@@ -149,12 +149,12 @@ FIA's Kubernetes job per run with a pinned image is a launcher, and a good data 
 
 | Lesson | Change to the sketch | Where |
 |---|---|---|
-| Five lookup tables | A lookup is stored, versioned data: ordered entries matching dataset metadata and supplying fills, one wildcard, ambiguity a validation error; used by batch and by the trigger loop; the record says which entry applied | Records and references; Components; Glossary |
-| Nobody waits for a series | Recommendation on the groups question: key datasets into a group by metadata, submit the member and a fresh combine over the members so far, successive combines in one slot | Open questions; D10 |
-| Staleness by reset | Moving a loop to a new template or lookup version offers, as a second deliberate operation, a previewed batch over the datasets the old version reduced; nothing reruns on its own | Components |
-| Exclusions with a reason | An annotation may be attached to a dataset's file record, created for that purpose; the trigger loop honours an exclusion and reports it | Records and references; Components |
+| Five lookup tables | A lookup is stored, versioned data: ordered entries matching dataset metadata and supplying fills, one wildcard, ambiguity a validation error; used by batch and by rules; the record says which entry applied | Rules (D14); Glossary |
+| Nobody waits for a series | A rule keys datasets into a series by metadata, submits the member and a fresh combine over the series so far, and successive combines supersede under the series key; the open question closed | Rules (D14) |
+| Staleness by reset | Moving a rule to a new template or lookup version offers, as a second deliberate operation, a previewed batch over the datasets the old version reduced; nothing reruns on its own | Rules (D14) |
+| Exclusions with a reason | Exclusions are mutable state on the rule, each with a reason; the trigger loop honours them and reports them. They were first an annotation on the file record, moved in the seventh pass so that annotations stay notes nothing reads | Rules (D14); Components |
 | The catalogue lagged the file | SciCat ingestion lag as an operational question for phase 1, with a filesystem source as the fallback that still waits for the PID | Open questions |
-| The batch file is what users keep | A stored batch definition, template, lookup, members, exclusions, versioned by copy, as an open question for phase 2 | Open questions |
+| The batch file is what users keep | Not a stored unit: the batch table is a query, the latest record per dataset for a template version, plus the rule's exclusions; a stored batch definition was proposed and rejected in the seventh pass because the members would copy the records | Rules (D14) |
 
 Not folded in, and why:
 

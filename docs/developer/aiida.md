@@ -56,16 +56,16 @@ AiiDA orchestrates external codes on remote machines: it writes input files, sub
 | Lesson | Change to the sketch | Where |
 |---|---|---|
 | Integer keys do not survive a move | Run IDs are UUIDs | Records and references |
-| Extras beside immutable attributes | Annotations on a record: mutable, outside provenance, never read by a run | Records and references; Glossary |
-| Call links, logical provenance | A group ID on records submitted together | Records and references; Glossary |
+| Extras beside immutable attributes | Annotations on a record: mutable, outside provenance, read by nothing in the framework | Records and references; Glossary |
 | Exit codes and three terminal states | A failed record says whether the workflow reported a declared reason, the workflow code raised, or the framework could not run it; a spec may declare failure reasons | Failure handling; Spec changes |
-| BaseRestartWorkChain | A trigger rule may resubmit a failed record by declared reason, up to a limit | Components |
-| Transport failures pause, then play | A paused status: retries at increasing intervals, then paused with the cause, resumed by an operator or when the location is reachable again | Failure handling |
+| BaseRestartWorkChain | A rule's retry policy resubmits a failed record by declared reason, up to a limit | Rules; Components |
+| Transport failures pause, then play | A paused status: the runner retries at increasing intervals, then reports paused with the cause and exits; the backend dispatches the same record again when an operator asks or a probe finds the location back | Failure handling |
 | Restart the daemon after a code change | A code change takes effect in a new session, never a running one | Choice 3 |
 | Archive traversal rules | The deferred upload carries everything upstream of a chosen record and nothing downstream | Explicitly deferred |
 
 Not folded in, and why:
 
+- **Call links as a group ID.** Added, then removed in the seventh pass: references already connect a group's members, and the batch ID names the larger unit, so the ID answered nothing.
 - **A message broker.** The sketch has none in local mode and revisits the question with the cluster launcher; AiiDA's history is a second reason to be slow about it.
 - **A checkpointed workflow program.** D2 says the process is a cache; nothing that survives a restart is a serialised object.
 - **A caching layer.** Removed in the second review pass; if wanted, the derivation reason "copy" on a new record is where a cache hit would go, which is also how AiiDA records one.

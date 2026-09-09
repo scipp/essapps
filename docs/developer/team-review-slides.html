@@ -467,10 +467,10 @@
     <div class="card panel">
       <h3>What the scheduler should not do</h3>
       <p>Data-dependent fan-out went into the scheduler as checkpoints and became the most confusing feature. An optimising scheduler hung until a greedy fallback was added. Outputs are deleted on failure; a <span class="mono">log:</span> directive had to be invented so something survives.</p>
-      <p><b>So:</b> one primitive. Fan-out with unknown keys is a trigger rule. The runner's log stays with the record.</p>
+      <p><b>So:</b> one primitive. Fan-out with unknown keys is a rule on the completed producer. The runner's log stays with the record.</p>
     </div>
   </div>
-  <p class="take">Four small additions to the proposal came from this: <b>the log on the record, completion by marker alone, batch rerun as a client operation, fan-out as a trigger rule</b>. The full reading is in snakemake.md.</p>
+  <p class="take">Four small additions to the proposal came from this: <b>the log on the record, completion by marker alone, batch rerun as a client operation, fan-out as a rule on the producer</b>. The full reading is in snakemake.md.</p>
   <aside class="notes">Snakemake is the engine we are closest to in spirit and rejected in choice 2, so it is worth saying what we take from it anyway. The first card is the big one: most of the sketch's simplicity is that a reference has no path and no timestamp. The second card is the argument for explicit recompute. The third is D9. The fourth is why the scheduler stays at one primitive.</aside>
 </section>
 
@@ -510,26 +510,26 @@
     <div class="card panel">
       <h3>Five lookup tables, one shape</h3>
       <p>Reflectometry's lookup table, per angle within a tolerance; SANS's per-row user file; Powder's cycle mapping by run-number range; FIA's rule spec per instrument; autoreduce's variables per run range. Each: ordered match criteria on dataset metadata, defaults per match, one fallback, edited by the instrument scientist, saved with the batch.</p>
-      <p><b>So:</b> the <b>lookup</b>, versioned data beside a template that both batch and the trigger loop read, defined in part 2. Not a Python callable.</p>
+      <p><b>So:</b> the <b>lookup</b>, versioned data beside a template, and the <b>rule</b> that names which template and lookup fill a request. Both are data under D14, shown in part 2. Not a Python callable.</p>
     </div>
     <div class="card panel">
       <h3>Nobody waits for a series</h3>
       <p>FIA sums a series again on every arrival; SANS pairs a scatter with its transmission whichever comes last; reflectometry resets the group and stitches again. None waits, because nobody at the instrument can say when the series is complete: the user decides to measure one more angle.</p>
-      <p><b>So:</b> the recommendation on groups. Key a dataset into a group by metadata, refire the combine over the members so far, successive combines of one group in one slot.</p>
+      <p><b>So:</b> a rule with a series key (D14). Key a dataset into a series by metadata, refire the combine over the members so far; successive combines of one series supersede each other under the series key.</p>
     </div>
     <div class="card panel">
       <h3>Staleness by reset, exclusions beside the data</h3>
       <p>Any settings change resets every row, so one edited lookup entry reprocesses a beamtime without saying which rows it touched. A run excluded from autoprocessing carries a reason and survives re-searches; one merely deleted comes back on the next poll.</p>
-      <p><b>So:</b> moving a loop to a new template or lookup version offers a previewed reprocess batch as a second deliberate operation; nothing reruns on its own. An exclusion is an annotation on the file record, and the loop reports it.</p>
+      <p><b>So:</b> moving a loop to a new template or lookup version offers a previewed reprocess batch as a second deliberate operation; nothing reruns on its own. An exclusion, with its reason, lives on the rule, and the loop reports it.</p>
     </div>
     <div class="card panel">
       <h3>The catalogue lagged the file; the batch file is what users keep</h3>
       <p>Both interfaces read the ISIS journal because the catalogue was "less reliable"; FIA polls a last-run file, and its outputs are unknown to the catalogue. The 4.1 rewrite dropped the script generator as unused; users kept the batch JSON and edited it over a beamtime.</p>
-      <p><b>So:</b> SciCat's ingestion lag is a phase 1 question; a filesystem source can only get ahead of the catalogue and wait for the PID. A stored batch definition is a phase 2 open question.</p>
+      <p><b>So:</b> SciCat's ingestion lag is a phase 1 question; a filesystem source can only get ahead of the catalogue and wait for the PID. The batch table is a query over the records plus the rule's exclusions, not a stored unit.</p>
     </div>
   </div>
   <p class="take">Mantid is the nearest thing to what we build: batch and automatic reduction used daily at a neutron facility. Not taken: <b>state reset on a settings change, a free-form options column, script text as the record</b>. The reading is in mantid.md.</p>
-  <aside class="notes">Same shape as the two before. The lookup is the one change to the model on Mantid's evidence: it was a callable in the trigger loop, invisible to the web UI and unversioned. The second card is the answer to the groups question on the decisions slide. The options column is rejected because forms are generated from the spec, so every parameter is already reachable and an untyped escape hatch would bypass validation.</aside>
+  <aside class="notes">Same shape as the two before. The lookup and the rule are the change to the model on Mantid's evidence: the lookup was a callable in the trigger loop, invisible to the web UI and unversioned, and the rule was the loop's configuration. Both are data now, D14, on the slide after the four needs. The second card is why a rule never waits for a series. The fourth card is why there is no stored batch definition: it would copy the records, and the members table is a query. The options column is rejected because forms are generated from the spec, so every parameter is already reachable and an untyped escape hatch would bypass validation.</aside>
 </section>
 
 <!-- ===================== 12 ONE IDEA ===================== -->
@@ -605,8 +605,8 @@
         <li>package versions and the conda environment</li>
         <li>how the spec was bound to code, and whether a warm workflow was reused</li>
         <li>one link to the record it derives from: retry, recompute, or copy</li>
-        <li>for a batch or a trigger-loop run, the template version and the lookup entry that filled it</li>
-        <li>beside it, annotations a user adds after inspection: mutable, outside provenance</li>
+        <li>a submission, how the request was made: a batch member with batch ID, member key, and the rule version and lookup entry that filled it; a slot with its label; or a template with its version. Explanation, not provenance</li>
+        <li>beside it, annotations a user adds after inspection: mutable, outside provenance, read by nothing in the framework</li>
       </ul>
     </div>
   </div>
@@ -676,7 +676,7 @@
         <rect class="box" x="118" y="123" width="130" height="34" rx="6"/><text x="183" y="145" text-anchor="middle" class="m">batch 7 · T=30K</text>
       </svg>
       <h3>Batch</h3>
-      <p>A template, a lookup that defaults each member from its metadata, and per-member overrides (next slide). Each record carries the batch ID and a key the submitter chose, so two thousand members are listed by something meaningful.</p>
+      <p>A template, a lookup that defaults each member from its metadata, and per-member overrides (next slide). The batch is a tag, not a stored unit: each record carries the batch ID and a key the submitter chose, and the table of what was reduced is a query, the latest record per dataset for a template version.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Automatic: the dataset source yields new datasets or completed records; a rule matches and instantiates a template; never on our own output.">
@@ -688,7 +688,7 @@
         <rect class="box" x="214" y="70" width="42" height="38" rx="6"/><text x="235" y="94" text-anchor="middle" class="s">submit</text>
       </svg>
       <h3>Automatic</h3>
-      <p>A loop: on a new dataset or a completed record that matches a rule, fill a template through the lookup and submit. The rule is data. Never fires on its own output.</p>
+      <p>A rule: selector, template and lookup, optional series key and combine, retry policy, exclusions. The trigger loop runs rules. Never fires on its own output. Never waits for a series.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Chain: requests A and B submitted as a group; B references an output of A that does not exist yet; the backend holds B until A completes.">
@@ -709,10 +709,10 @@
 
 <!-- ===================== 16 LOOKUP ===================== -->
 <section class="slide" id="s16">
-  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What fills a request: template, lookup, override</h2></header>
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What fills a request: template, lookup, rule</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 330" role="img" aria-label="A dataset's metadata, angle 0.7 and sample name, selects one entry of a lookup. The template fills the request first, the matching lookup entry fills what is still blank, and the member's override overwrites last. The record stores the resolved values and names the template version and the lookup entry.">
+      <svg class="fig" viewBox="0 0 1100 330" role="img" aria-label="A dataset's metadata, angle 0.7 and sample name, selects one entry of a lookup. The template fills the request first, the matching lookup entry fills what is still blank, and the member's override overwrites last. The record stores the resolved values, and its submission names the rule version and the lookup entry.">
         <!-- dataset -->
         <rect class="box open" x="20" y="112" width="220" height="120" rx="8"/>
         <text x="130" y="140" text-anchor="middle" class="h">dataset, or batch member</text>
@@ -748,8 +748,8 @@
         <text x="756" y="156" class="m">wavelength = 2–16 Å</text><text x="1064" y="156" text-anchor="end" class="s">template</text>
         <text x="756" y="178" class="m">trans = 13463</text><text x="1064" y="178" text-anchor="end" class="s">lookup entry 1</text>
         <text x="756" y="200" class="m">q_max = 0.25</text><text x="1064" y="200" text-anchor="end" class="s">override</text>
-        <text x="756" y="230" class="s">names template v3 and lookup v2, entry 1</text>
-        <text x="756" y="250" class="s">the lookup is versioned; the record never changes</text>
+        <text x="756" y="230" class="s">submission: rule v1, lookup entry 1</text>
+        <text x="756" y="250" class="s">rule v1 = template v3 + lookup v2; all versioned</text>
 
         <!-- ladder arrows -->
         <path class="e" d="M660,56 L740,118"/><text x="700" y="72" text-anchor="middle" class="s">1 · fills</text>
@@ -757,11 +757,11 @@
         <path class="e" d="M660,280 L740,232"/><text x="700" y="272" text-anchor="middle" class="s">3 · overwrites</text>
         <text x="900" y="300" text-anchor="middle" class="s">later rungs overwrite earlier ones; a blank at any rung falls through to the next</text>
       </svg>
-      <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. The same object serves both.</figcaption>
+      <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. The same object serves both. A rule names the template and lookup version, and adds a selector for the datasets it applies to, a retry policy, exclusions with reasons, and optionally a series key and a combine; the trigger loop runs rules and nothing else. A batch is a tag on the records, not a stored unit (D14).</figcaption>
     </figure>
   </div>
-  <p class="take">The lookup is <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle. It is data, so the web UI shows it, a batch file carries it, and a record names the version and entry that filled it.</p>
-  <aside class="notes">This is the one concept added on Mantid's evidence, so give it a minute. Every ISIS interface has this table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The skeleton does not have this yet.</aside>
+  <p class="take">The lookup and the rule are <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle, and which datasets to reduce. Both are data, so the web UI shows them, a batch file carries them, and a record's submission names the rule version and entry that filled it. A rule with a series key combines the series again whenever a run joins it, and never waits (D14).</p>
+  <aside class="notes">The lookup and the rule are one section of the document, D14, so give this slide a minute. Every ISIS interface has the lookup table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The rule is what the trigger loop runs; its exclusions are the only mutable state on it. The batch is not a stored unit: the members table is a query over the records, and the ISIS batch file is a rendering of it plus the rule's exclusions. Successive combines of a series supersede each other under the series key, the same superseding a slot label has, so the loop needs no slot. The skeleton does not have this yet.</aside>
 </section>
 
 <!-- ===================== 17 COMPONENTS ===================== -->
@@ -1009,9 +1009,9 @@
     </figure>
     <div class="grid4">
       <div class="panel"><h3>Completion marker</h3><p>A runner writes its outputs, then a marker, to disk before exit. The marker alone is trusted: a file a cluster job wrote appears on other hosts late. Finished while the backend was down is completed, not failed.</p></div>
-      <div class="panel"><h3>Liveness</h3><p>A silent runner is failed after a timeout unless a marker exists. A run that cannot reach its inputs pauses and resumes; it is not failed.</p></div>
+      <div class="panel"><h3>Liveness</h3><p>A silent runner is failed after a timeout unless a marker exists. A run that cannot reach its inputs pauses, and the backend dispatches the same record again when the location is back or an operator asks; not a retry, and not failed.</p></div>
       <div class="panel"><h3>Reconciliation</h3><p>On restart the backend re-dispatches queued runs and checks running ones against the launcher and the markers.</p></div>
-      <div class="panel"><h3>Retry is a new record</h3><p>Never a status reset. The runner's log stays with the record, for the failures nobody foresaw. The trigger loop's refusals are as visible as a run's failure.</p></div>
+      <div class="panel"><h3>Retry is a new record</h3><p>Never a status reset. The runner's log is kept in the record store beside the record, for the failures nobody foresaw. The trigger loop's refusals are as visible as a run's failure.</p></div>
     </div>
   </div>
   <p class="take">Facilities that built automatic reduction report that <b>the monitoring UI was most of the value</b>. Phase 1 is unattended, so this is in from day one.</p>
@@ -1038,7 +1038,7 @@
     <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>
   </div>
   <p class="take">Phase 1 is the proposal with <b>one execution shape and no interactive concepts</b>. Roughly a seventh of the skeleton's code and a fifth of the text belong to phase 3 alone.</p>
-  <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, group rules for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
+  <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, rules with series keys for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
 </section>
 
 <!-- ===================== 24 PHASE 3 MODELS ===================== -->
@@ -1102,12 +1102,8 @@
       <span class="why">Including: per-bank outputs, angle series, masks as data, lookup tables, a stored vanadium that is only valid for compatible binning.</span>
       <span class="q">Build phases 1 and 2 on the stateless core only, and park sessions?</span><span class="rec">Recommend yes</span>
       <span class="why">Changes nothing in what those phases build; removes a fifth of the text from what reviewers must hold in mind.</span>
-      <span class="q">Groups as the automatic-reduction unit?</span><span class="rec">Do not wait; refire the combine, successive combines in one slot</span>
-      <span class="why">A reflectivity curve needs four angle runs plus a reference, and nobody can say when the last one has arrived. The rule keys datasets into a group by metadata and submits a fresh combine over the members so far. A phase 1 question.</span>
       <span class="q">How far does SciCat ingestion lag the file?</span><span class="rec">Measure before phase 1</span>
       <span class="why">ISIS's interfaces discover runs from the archive because the catalogue lagged; a filesystem source can only get ahead of SciCat and wait for the PID, never replace it.</span>
-      <span class="q">A stored batch definition: template, lookup, members, exclusions?</span><span class="rec">Phase 2; versioned by copy like a template</span>
-      <span class="why">ISIS users keep the batch table as a file and edit it over a beamtime. Rerun-what-changed is a diff between two versions of it and the latest record per member key.</span>
       <span class="q">Spec changes to scipp/ess#690: typed outputs, data-reference parameters, collections, binned flag?</span><span class="rec">Recommend yes, while the PR is open</span>
       <span class="why">Cheap parameters and code revision are one optional field each.</span>
       <span class="q">Accept uploads of local files in the shared service?</span><span class="rec">Recommend no</span>
@@ -1116,11 +1112,11 @@
       <span class="why">Facilities that tried inheritance moved to version-controlled read-only templates with per-dataset substitution.</span>
       <span class="q">Tiled as the disk tier and HTTP data transport?</span><span class="rec">Try as a second implementation after the spike</span>
       <span class="why">Catalog, remote slicing, access policy, Python client. No scipp semantics: units, masks, bin edges would be a convention we own.</span>
-      <span class="q">Retention: how long each kind of output is kept, and the analysis window after a proposal?</span><span class="rec">Needs facility input; let the spec flag intermediate outputs</span>
+      <span class="q">Retention: how long each kind of output is kept, and the analysis window after a proposal?</span><span class="rec">Needs facility input; superseded records first, then the spec's intermediate flag, then the kind of run</span>
       <span class="why">Disk fills during a phase 2 batch; phase 1 needs at least a quota alarm. Authors know which outputs are throwaway; Snakemake's temp flag shows they get it right.</span>
     </div>
   </div>
-  <p class="take">Decision numbers D1 to D13 in the document <b>freeze after this review</b>. Point at them.</p>
+  <p class="take">Decision numbers D1 to D14 in the document <b>freeze after this review</b>. Point at them.</p>
 </section>
 
 <!-- ===================== 26 WHAT EXISTS ===================== -->
@@ -1142,7 +1138,7 @@
       <ol class="steps">
         <li>Make the throwaway launcher the default; keep the session launcher as an experiment outside the phase 1 and 2 tests.</li>
         <li>Build the real dataset source and publisher against SciCat behind the existing fakes.</li>
-        <li>Extend the trigger loop to completed-record events, group rules, and lookups.</li>
+        <li>Extend the trigger loop to completed-record events, rules as data with series keys, and lookups.</li>
         <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
         <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
       </ol>

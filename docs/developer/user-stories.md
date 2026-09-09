@@ -282,7 +282,7 @@ Actor: reflectometry user during a beamtime.
 
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combine; the UI shows one curve per sample, not one per arrival.
 
-Outcome: question, with a recommendation. The open question 'Groups as the automatic-reduction unit' recommends not waiting: submit the member and a fresh combine over the members so far, successive combines in one slot. Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
+Outcome: fits. A rule keys runs into a series by metadata and on each arrival submits the member and a fresh combine over the series so far; successive combines supersede under the series key (D14). Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
 
 ### E2. Automatic reduction goes quiet
 

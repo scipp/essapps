@@ -14,8 +14,8 @@ Three more, [snakemake.md](snakemake.md), [aiida.md](aiida.md), and [mantid.md](
 The design rests on one modelling idea and four choices.
 The idea comes first, under "Records and references".
 The four choices follow, each with the options that were rejected, so that the team can disagree with a choice rather than only with its consequences.
-Everything after that is consequence: the rules that fall out, the changes the workflow spec needs, the components, and how failures are handled.
-Decisions carry stable identifiers D1 to D13 so discussion can point at them; they are indexed at the end, next to the glossary.
+Everything after that is consequence: the rules that fall out, how requests are made from data, the changes the workflow spec needs, the components, and how failures are handled.
+Decisions carry stable identifiers D1 to D14 so discussion can point at them; they are indexed at the end, next to the glossary.
 Terms are introduced where they are first needed.
 Two are used before they are defined: the **vocabulary** is the set of types the workflow spec allows for parameters and outputs, and the **registry** is the part of the data store that knows which stored copies of an output exist.
 
@@ -29,7 +29,7 @@ Raw files from the catalogue and files on a user's disk are records too, so ever
 Interactive work happens in a *session*: a process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run.
 Everything the backend knows is in the records, so any result can be traced back to raw data and parameters, and any result can be recomputed if its data was thrown away.
 Batch reduction is many requests made from one *template*.
-Automatic reduction is a loop that makes requests from a template whenever new data appears.
+Automatic reduction is a *rule* that makes requests from a template whenever new data appears, and combines a series of runs again whenever a run joins it.
 Publishing a result to the data catalogue is a separate, deliberate step.
 
 ## Records and references
@@ -43,14 +43,16 @@ It is independent of how the workflow is implemented or where it runs, and is de
 A request is complete: sufficient to reproduce the outputs from scratch.
 It is plain, JSON-serializable data, even when it never leaves a process.
 
-A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the workflow object was reused from an earlier run, and where the runner's console output is kept.
-Optionally it carries a batch ID, a group ID for requests submitted together, a template version with the lookup entry that filled it, and one link to the record it derives from, with the reason: retry, recompute, or copy.
+A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the workflow object was reused from an earlier run, and the runner's console output, kept beside it.
+It also carries a **submission**, which says how the request was made: as a batch member, with the batch ID and member key and, when a rule made it, the rule version and lookup entry that filled it; into a slot, with the label; or from a template, with the template version.
+The submission is explanation, not provenance, because the resolved request alone reproduces the run.
+Optionally it carries one link to the record it derives from, with the reason: retry, recompute, or copy.
 The run ID is a UUID, so that records can move between stores without renumbering.
 A failed run carries a structured failure reason, so that a user sees why without reading logs.
 Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
 The environment is recorded as an opaque name and revision, at ESS a conda environment, so that a recompute can be checked against it; the framework does no more with it than record and compare.
 A record is immutable once the run completes, except for status, and is never deleted on its own.
-Beside it live **annotations**: labels and notes a user attaches after inspection, such as "use this vanadium" or "superseded"; they are outside provenance, may change at any time, and are never read by a run.
+Beside it live **annotations**: labels and notes a user attaches after inspection, such as "use this vanadium" or "superseded"; they are outside provenance, may change at any time, and nothing in the framework reads them.
 Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.
 Which of the two applies is decided by type and is invisible to clients.
 
@@ -65,7 +67,7 @@ The record keeps references in reference form, so **provenance**, the chain from
 A SciCat dataset or a file on a user's disk is a **file record**: a record of one built-in spec, `file`, which has no workflow and one output, the file.
 A file record has an origin, which is its identity for provenance, and one or more locations, which are where its bytes can be opened.
 The origin is a PID, or a local path with the file's checksum; a location is a path on a named filesystem, such as the facility mount or a user's machine, or a copy in the data store.
-A file record for a catalogue file is created when a request first references it or a user annotates it, never by discovery, and holds only what resolution and authorization need: the PID, its proposal and instrument; the PID is the unique key.
+A file record for a catalogue file is created when a request first references it, never by discovery, and holds only what resolution and authorization need: the PID, its proposal and instrument; the PID is the unique key.
 Where its bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable; a location the store did not write is SciCat's answer or the user's path, never a copy of the catalogue.
 Listing a folder in a local application creates one file record per file, a row each and no bytes moved; the checksum is taken the first time a runner reads the file and stored on the record then.
 A raw file from the catalogue and a result from last week are therefore the same thing to a request, and a new raw file and a completed processing stage are the same kind of event to automatic reduction.
@@ -88,16 +90,8 @@ Recompute is exact only in the environment the record names, and refuses to run 
 | A file record from a local path | The path and checksum | Nothing to recover from, unless a store copy was made | A store copy, only by an explicit drop |
 | A published run record | The PID, whose entry carries the provenance snapshot | Download rather than recompute | Yes |
 
-Two more kinds of data complete the model.
-A **template** is a stored, immutable, versioned partial run request, from a version-controlled file such as instrument defaults, or from a user saving a request.
-Saving a request makes a template with its data-reference fields blank and every other field literal; the user may blank more.
-A template moves to a new spec version by copy, and a batch rerun under the copy is a new batch whose records link to the old ones.
-A **batch** is a set of independent runs from one template with per-member overrides, tagged with a batch ID and a member key chosen by the submitter, such as the run number or the temperature, so that a batch of two thousand is listed and labelled by something meaningful.
-A **lookup** is stored, versioned data beside a template: an ordered list of entries, each matching dataset metadata by a value within a tolerance, a pattern, or a run-number range that may be open-ended, and supplying template fills, with at most one wildcard entry for what nothing else matches.
-Which fields it may match on are declared per instrument, because they are what the acquisition writes into the catalogue: an angle, a sample name, a run's role.
-Batch uses it to default a member's fills from the member's metadata before the submitter's overrides apply, and the trigger loop uses it to fill a template from a dataset; a dataset matching more than one entry is a validation error, not a choice.
-The precedence is one ladder, template, then lookup entry, then member override, and a blank at any rung falls through to the next; the record stores the resolved result and names the entry that applied.
-Every ISIS batch interface converged on this table under a different name, and [mantid.md](mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
+Three kinds of data make requests without a person filling a form, and are defined under "Rules: how requests are made from data" (D14): a **template** is a partial run request; a **batch** is many requests made from one template, tagged with a batch ID and a member key; a **rule** makes requests from datasets as they arrive.
+None of them is a copy of the records.
 
 **Why this is the foundation.**
 One addressing scheme serves inputs, views, publication, and provenance, and the scheduler has one kind of dependency.
@@ -180,7 +174,7 @@ There are two execution shapes, and a group of requests submitted together runs 
 **Lifetimes.**
 There are three, and none is set by the framework.
 Memory lives as long as a session: a process with an operating-system limit, owned by its client; its cache has no budget of its own, because the store's copy of an output and the warm workflow's intermediate are the same object and evicting one frees nothing.
-The shared service's cache has a byte budget and evicts least recently used first, with outputs superseded in a slot (choice 4) before anything else.
+The shared service's cache has a byte budget and evicts least recently used first, with outputs of superseded records (D14) before anything else.
 Records live as long as their proposal plus an analysis window set by the facility: long enough to find last week's result and to chain to yesterday's vanadium, and no longer, because what is worth keeping longer was published, and a published entry carries its own provenance (D11).
 A proposal's records and disk copies are dropped together, exported as one JSON bundle first; nothing is deleted one record at a time.
 This is safe because references never cross proposals except into instrument-shared artefacts, whose commissioning proposals are long-lived, so no reference can point into a dropped proposal.
@@ -255,19 +249,17 @@ A combine's output may itself be a collection keyed by member.
 Merge strategy and memory during a merge belong to the combine workflow; real combines are not sums.
 Batch members are independent: no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.
 A batch is validated whole before any record is created, and cancelled whole by its batch ID, queued and running members alike.
-Rerunning a batch's failures is a client operation: the client lists the batch's records and resubmits the members that have no completed one.
-The backend never skips a request because an equal one completed earlier; a run that silently did not happen is a decision the user cannot see, and [snakemake.md](snakemake.md) records what that cost elsewhere.
 
 **The dataset source is abstracted (D7).**
-Its interface: for a proposal, yield new datasets as PID plus the metadata a trigger rule can match on.
-It persists nothing: a dataset becomes a file record only when a rule fires and the submission it makes references the PID, like any other stand-in, and a rule that waits for a group keeps the datasets it has seen as its own state, rebuilt from SciCat after a restart.
+Its interface: for a proposal, yield new datasets as PID plus the metadata fields it declares for the instrument; those fields, an angle, a sample name, a run's role, are the only ones a lookup or a rule may match on, and they are declared here because the source is what knows what the acquisition writes into the catalogue.
+It persists nothing: a dataset becomes a file record only when a rule fires and the submission it makes references the PID, like any other stand-in, and the series a rule has seen is rebuilt from the source after a restart.
 A SciCat implementation, polling or push as the deployment allows, and an in-memory fake.
 Arrival may be out of order and repeated; the interface does not promise a monotonic cursor.
 
 **Why.**
 No engine gives the stateless request the whole design rests on.
 Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs (scipp/esslivedata#1285, #714, ADR 0007), and one runner gives one code path for execution.
-Pending outputs as inputs is the smallest addition that covers a vanadium stage feeding a sample reduction submitted together, temperature scans, angle series, and automatic reduction over a group of runs.
+Pending outputs as inputs is the smallest addition that covers a vanadium stage feeding a sample reduction submitted together, temperature scans, angle series, and automatic reduction over a series of runs.
 Two dataset-source implementations from day one keep tests off SciCat.
 
 **Cost.**
@@ -390,7 +382,7 @@ The client interface supplies the label whenever a request reruns a warm workflo
 The backend offers one query, the latest submitted record with a label, and treats outputs of superseded records as the first to evict.
 Cancelling a slot's queued predecessors is one client call.
 Tools list, replay, and inspect by slot; inspection shows the latest record with its diff against the previous one, which is "one more file" for an accumulation series and "one value changed" for a slider.
-A slot is only a label with a supersede rule; interactive slot runs execute in the submitter's session, which until remote sessions exist means local mode, and the trigger loop may put successive combines over a growing group in one slot in shared mode (open questions).
+A slot is only a label with a supersede rule, the same rule a batch member key carries (D14); slot runs execute in the submitter's session, which until remote sessions exist means local mode.
 
 **Why.**
 One API keeps the UI out of backend internals.
@@ -404,6 +396,58 @@ A view vocabulary in the client interface, and a chunking decision at write time
 Through the client interface a user explores declared outputs only; a notebook can compute any node of a sciline workflow.
 Interactive feedback is restricted to sessions, and initially to local mode.
 Every workflow that ends in events carries a dense twin, one histogram call in the callable.
+
+## Rules: how requests are made from data (D14)
+
+Batch and automatic reduction make requests without a person filling a form.
+Three kinds of stored data serve that, and the section ends with what is deliberately not stored.
+
+A **template** is a stored, immutable, versioned partial run request, from a version-controlled file such as instrument defaults, or from a user saving a request.
+Saving a request makes a template with its data-reference fields blank and every other field literal; the user may blank more.
+A template moves to a new spec version by copy, and a batch rerun under the copy is a new batch whose records link to the old ones.
+
+A **lookup** is stored, versioned data beside a template: an ordered list of entries, each matching dataset metadata by a value within a tolerance, a pattern, or a run-number range that may be open-ended, and supplying template fills, with at most one wildcard entry for what nothing else matches.
+It matches on the fields the dataset source declares for the instrument (D7), and a dataset matching more than one entry is a validation error, not a choice.
+Every ISIS batch interface converged on this table under a different name, and [mantid.md](mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
+
+A **rule** is stored, versioned data that makes requests from datasets.
+It holds a selector, metadata criteria that pick the datasets it applies to; the template and lookup version it fills; a retry policy, the declared failure reasons on which a failed record is resubmitted as a retry record, up to a limit; and exclusions, datasets it must not fire on, each with a reason.
+Optionally it holds a series key, a metadata field whose value keys selected datasets into a **series**, and a combine, a spec and template run over a series.
+Exclusions are mutable state on the rule, not a version, because they change over a beamtime; everything else changes by copy, and records say which version made them.
+The trigger loop runs rules, and nothing else does.
+
+**Two kinds of batching, and neither is a stored unit.**
+Batching for convenience is many independent requests from one template with per-member differences, made by a person or by a rule without a series key.
+The set of members is nothing but the records that came from that template version, so it is not stored: the table of what was reduced with which values is a query, the latest record per dataset for a template version, and the ISIS batch file is a rendering of that query plus the rule's exclusions.
+Such requests are tagged with a **batch ID** and a member key chosen by the submitter, such as the run number or the temperature, so that a batch of two thousand is listed, labelled, and cancelled by something meaningful; the batch semantics are under D6.
+Batching for merging is one request whose parameter is a collection of references, whether the workflow sums them inside or a map-combine (D6) does it; the set is on the record, so the manual case needs nothing new.
+Under a rule the set is derived: the selector and series key place each dataset in a series, and each arrival submits the member's reduction and a fresh combine over the series so far, referencing the members' outputs.
+Successive combines of one series supersede each other, the series key being their member key, so the UI shows one curve per sample that grows; a series of k runs costs k-1 combines, cheap for one-dimensional curves, and the superseded ones are the first evicted.
+The rule never waits for a series to be complete, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
+A series of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.
+The rule says whether its combine is published (D11); by default it is not.
+Series membership is not stored; a metadata correction at the instrument moves a run between series, the next combine reflects it, and earlier records are untouched because they hold resolved references.
+
+**Precedence is one ladder.**
+Template, then lookup entry, then member override, and a blank at any rung falls through to the next; the record stores the resolved result, and its submission names the entry that applied.
+
+**Superseding is one rule.**
+A batch ID with a member key and a slot label (D10) are the same kind of label: the latest record under a label supersedes the earlier ones, one query serves both, and the outputs of superseded records are the first to evict.
+The trigger loop therefore needs no slot.
+
+**Moving a rule to a new template or lookup version** is a deliberate operation, and reprocessing what the old version reduced is a second one: the client lists the datasets whose latest record came from the old version, shows through validate what would change for each, and submits a batch; the loop never reruns on its own.
+Rerunning a batch's failures has the same shape: the client lists the batch's records and resubmits the members that have no completed one.
+The backend never skips a request because an equal one completed earlier; a run that silently did not happen is a decision the user cannot see, and [snakemake.md](snakemake.md) records what that cost elsewhere.
+
+**Why.**
+The template, the lookup, and the rule are what a person edits and what a UI shows; the records are what happened.
+Keeping the two apart is the lesson of ISIS's autoreduction, where the rule and the record were one row and correcting the rule rewrote history, and of the third review pass here, which removed every second copy of the records.
+One rule shape covers both kinds of batching in their automatic form, and the only state it keeps beyond its definition is the exclusions.
+
+**Cost.**
+Reprocessing after a template change is a client operation over a query, not a stored diff.
+The acquisition must write the fields a lookup or a selector matches on into the catalogue; that is a requirement on the instrument, to be stated to the instrument teams early.
+A series a person defines by hand, "these runs, and keep combining as more arrive", has no place here; it would be a rule with typed members instead of a selector, and is left out until someone asks for it.
 
 ## Ownership, publication, and deployment
 
@@ -429,7 +473,7 @@ Run-number resolution, UI navigation, templates, and authorization by SciCat mem
 Instrument scientists and commissioning use long-lived proposals.
 Artefacts produced there and consumed by every user proposal (direct beam, beam centre, processed vanadium, masks, lookup tables) are marked instrument-shared and readable from any proposal on that instrument; without that, every external user would need membership in the commissioning proposal.
 Their disk copies are exempt from retention, because a recompute would run under a user who cannot read the commissioning inputs.
-Templates from such a proposal, the instrument defaults, are marked instrument-shared the same way.
+Templates and lookups from such a proposal, the instrument defaults, are marked instrument-shared the same way; a rule is bound to the proposal whose datasets it selects.
 A deployment is one backend per instrument, with its own record store and data store; several share a host while load is low.
 With one or two users per instrument, of whom at most one works with large volumes, a single backend process serves views comfortably.
 Nothing in the model needs cross-instrument state, and a facility-wide entry point, if ever wanted, is a thin front that routes to the instrument backend.
@@ -458,7 +502,7 @@ Many-to-many is a group whose members each reference one element of a pending ou
 Keys are declared on the spec where the author can, such as bank names, and free otherwise.
 Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
 No current workflow needs fan-out whose keys are known only after reading the data: Bifrost groups by rotation inside its pipeline, and imaging has no tomography grouping.
-If one arises, it is a trigger rule on the completed producer, one template instantiation per key, and not a scheduler feature; Snakemake put it in the scheduler, as checkpoints, and it became the most confusing part of the tool.
+If one arises, it is a rule on the completed producer, one template instantiation per key, and not a scheduler feature; Snakemake put it in the scheduler, as checkpoints, and it became the most confusing part of the tool.
 
 **Outputs are a typed model in the same vocabulary (also D13).**
 A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form.
@@ -472,7 +516,7 @@ Storage placement, inline or in the data store, stops being a spec concept.
 **Cheap parameters, an optional code revision, and declared failure reasons (also D13).**
 A spec declares which parameters are cheap to change once the workflow is warm, and may carry a code revision.
 Both are read by the framework and by UIs and mean nothing to a throwaway run.
-A spec may also declare named failure reasons, each with a message; a workflow that fails for a declared reason returns it, the record carries its name, and a UI can explain it and a trigger rule can match it.
+A spec may also declare named failure reasons, each with a message; a workflow that fails for a declared reason returns it, the record carries its name, and a UI can explain it and a rule's retry policy can match it.
 
 **One built-in spec, `file` (D1).**
 No workflow, one output of file type, and no kind, so the rule above that a file satisfies any kind is checked at materialization rather than at submission.
@@ -500,16 +544,13 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 - **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
   A catalogue file's location comes from SciCat at dispatch and a local file's is its path; a store copy of a local file is kept until dropped explicitly or with its proposal.
-- **Record store**: create, read, update status, and queries: records by proposal, time, batch ID and member key, or slot label; records that reference output X of record Y; records whose resolved request equals a given one.
+- **Record store**: create, read, update status, and queries: records by proposal, time, or template or rule version; the latest record per label, a batch ID with member key or a slot label; records that reference output X of record Y.
+  Holds the runners' logs beside the records.
   Carries a schema version; drops a proposal's records together, never one.
-- **Dataset source**: yields new datasets for a proposal as PID plus matchable metadata to the trigger loop, and persists nothing; a dataset becomes a file record when a request references it.
+- **Dataset source**: yields new datasets for a proposal as PID plus the metadata fields it declares for the instrument, and persists nothing; a dataset becomes a file record when a request references it.
   One real implementation (SciCat) and one fake for tests.
-- **Trigger loop**: on a new dataset or a completed record, or a group of either, matching a rule, instantiate a template and submit; never on a dataset whose SciCat entry carries our snapshot.
-  A rule is data: which metadata fields select a dataset and key it into a group, and which template and lookup fill the request.
-  Bound to one template and lookup version; moving it to a new version is a deliberate operation, and records say which version made them.
-  Reprocessing what the old version already reduced is a second deliberate operation: the client lists the datasets whose latest record came from the old version, shows what would change for each, and submits a batch; the loop never reruns on its own.
-  A user may exclude a dataset from a rule with a reason, as an annotation on its file record; the loop honours it and reports it.
-  A rule may also name declared failure reasons on which it resubmits a failed record as a retry record, up to a limit the rule states.
+- **Trigger loop**: runs rules (D14): on a new dataset or a completed record that a rule's selector matches, fill the rule's template through its lookup and submit, and for a rule with a series key submit a fresh combine over the series so far; never on a dataset whose SciCat entry carries our snapshot, and never on one the rule excludes.
+  Resubmits a failed record as a retry record when the rule's retry policy names its failure reason, up to the rule's limit.
   Has its own visible status: last fire, last refusal with its structured errors, and for any dataset of the proposal the reason it fired or did not, an exclusion included.
 - **Publisher**: writes an output to SciCat together with its provenance snapshot.
   Idempotent: the resulting PID is recorded on the output, and publishing it again returns the PID.
@@ -532,13 +573,14 @@ Kept together so it can be read as one piece.
 - **Cancel of a running request** asks the launcher to stop it; dependents are cancelled.
 - **Session loss.** A closed or crashed session drops its cache and its warm workflow.
   Runs in flight there fail; in local mode the session is the client, so there is nothing to resubmit until the user starts again.
-- **Logs outlive outputs.** A throwaway runner's stdout and stderr are captured to the data store and the record says where; a session run logs to its client's process.
+- **Logs outlive outputs.** A throwaway runner's stdout and stderr are kept in the record store beside the record; a session run logs to its client's process.
   The structured failure reason covers the failures that were foreseen, and the log is for the ones that were not, such as a process killed for memory.
-  Logs are small and kept as long as the record, outside the retention policy for outputs.
+  Logs are small and live as long as the record; retention applies to the data store only.
 - **Failure surfacing** is in scope from the start: a failed record carries a structured reason, so a user sees why a run failed without reading logs, and a trigger loop that is refused at submission is as visible as a run that failed.
   Facilities that built automatic reduction report that the monitoring UI was most of the value.
-- **Transient infrastructure failure pauses the run.** A runner that cannot reach an input location or the data store retries at increasing intervals; then the run becomes paused with the cause recorded, keeping its record and its dispatch, and its dependents stay waiting.
-  It resumes when an operator asks or when the backend finds the location reachable again.
+- **Transient infrastructure failure pauses the run.** A runner that cannot reach an input location or the data store retries at increasing intervals, then reports paused with the cause and exits; the backend also pauses a run at dispatch when a location it resolves is unreachable.
+  The record keeps its status and its place in the chain: dependents stay waiting, and the liveness timeout does not apply.
+  Resume is the backend dispatching the same record again, when an operator asks or when a reachability probe finds the location back; it is not a retry and makes no new record.
   A paused run is not a failed run: a shared filesystem that is slow for an hour must not cost a retry record per run.
 - **Multi-tenancy.** The backend checks proposal access on every reference it resolves or serves, not only at submission.
   Cluster jobs run under the submitting user's account.
@@ -547,8 +589,8 @@ Kept together so it can be read as one piece.
 
 - **Manual**: submit one request, inspect outputs, resubmit with changed parameters.
 - **Interactive**: manual inside a session (D2), with a warm workflow (D8); each series of reruns, whether from a slider, a plot selection, or a growing list of runs, is a slot (D10).
-- **Batch**: template plus overrides (D6).
-- **Automatic**: trigger loop plus template (D7).
+- **Batch**: template plus overrides (D6, D14).
+- **Automatic**: a rule run by the trigger loop (D7, D14).
 - **Chaining and map-combine**: pending outputs as inputs (D6).
 - **Publication**: explicit publish of an output (D11).
 
@@ -578,13 +620,6 @@ Resource hints on the spec for the cluster launcher, such as memory as a functio
 
 Decisions the team needs to make; my recommendation in brackets.
 
-- **Groups as the automatic-reduction unit.** A reflectivity curve needs four angle runs plus a reference, and the last run arrives last.
-  "On new dataset, instantiate template" cannot say "wait until the series is complete", and nobody at the instrument can say it either: the user decides to measure one more angle.
-  None of ISIS's interfaces waits; each reduces the group it has and reduces it again when a member arrives.
-  [Do not wait. The rule keys a dataset into a group by metadata, such as the sample name; on each arrival it submits the member's reduction and a fresh combine over the members so far, referencing their outputs, and successive combines of one group share a slot, so the latest supersedes and the UI shows one curve per sample that grows. A series of k runs costs k-1 combines, cheap for one-dimensional curves; the superseded ones are the first evicted. Publication stays a user's decision. A group of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.]
-- **Batch definitions.** ISIS users keep the batch table as a file and edit it over a beamtime, mixing rows the loop added and rows they typed, and reprocess what changed.
-  The sketch has the records a batch produced and the template it came from, but the members table exists only in the client call that submitted it.
-  [A stored batch definition for phase 2: template, lookup, members with their overrides, exclusions; versioned by copy like a template; records carry its ID and version, and rerun-what-changed is a diff between two versions of the definition and the latest record per member key. Not UI state: it is what the user comes back for.]
 - **Template sharing.** Both stages of a split workflow share most parameters.
   Facilities that tried template inheritance moved to version-controlled read-only templates with per-dataset substitution.
   [No inheritance. A template may be derived from another by copy, and the record keeps the origin.]
@@ -593,7 +628,7 @@ Decisions the team needs to make; my recommendation in brackets.
 - **Name of the backend component.** It clashes with esslivedata's "backend services".
   [Keep it unless the two projects are documented together.]
 - **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest, and the analysis window after which a proposal's records are dropped.
-  [Let the spec mark an output as intermediate, meaning cheap to recompute from its inputs, and let the policy read that flag before the run kind; authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show they get it right.]
+  [One order: outputs of superseded records first, then an intermediate flag the spec puts on an output, meaning cheap to recompute from its inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show they get it right.]
 - **Origin paths after a drop.** A local file's path stays on its record after its bytes are dropped, until the proposal is dropped.
   [Keep it: a path is not data, and provenance needs it.]
 - **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
@@ -609,22 +644,22 @@ Then a spike on the two decisions with the most hidden risk, D3 and D6: a data s
 Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
-The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier, a real instrument workflow, the lookup, and rules as data are not in it yet, and its trigger rule is still a callable.
+The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier, a real instrument workflow, and the lookup and rules as data (D14) are not in it yet; its trigger rule is still a callable.
 
 ## Glossary
 
 Where esslivedata uses a word differently, the clash is noted.
 
-- **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, never read by a run.
+- **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
-- **Batch**: many runs made from one template, each with small differences and a member key. In esslivedata a batch is a bundle of messages; unrelated.
+- **Batch**: many runs made from one template, each with small differences and a member key; a tag on records, not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
 - **Client interface**: the backend's Python interface, including validate and views. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset source**: where new datasets are discovered; persists nothing, a dataset becomes a file record when a request references it.
 - **File record**: a record of the built-in `file` spec, standing for one SciCat dataset or one file on a user's disk, with an origin for identity and locations where its bytes can be opened; its single output is that file.
-- **Group**: several requests submitted atomically that may reference each other's outputs before they exist; their records share a group ID.
+- **Group**: several requests submitted atomically that may reference each other's outputs before they exist.
 - **Input**: a parameter of data-reference type. In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
 - **Launcher**: decides where a run executes and starts it there.
 - **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, with at most one wildcard. What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
@@ -636,16 +671,19 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Record store**: the database of records. Records are never deleted one at a time; a proposal's records are dropped together.
 - **Reference**: a value, "output X of record Y", optionally with an element key, usable as any parameter whose type matches. The only way a request names data.
 - **Retention**: how long a disk copy is kept within its proposal's lifetime; it applies to bytes, never to single records.
+- **Rule**: stored, versioned data that makes requests from datasets: a selector, a template and lookup, a retry policy, exclusions, and optionally a series key and a combine. Run by the trigger loop.
 - **Run record**: a run request plus what happened to it. Called "run", never "job", except for the launcher's own job IDs: in esslivedata a job is a running streaming workflow.
 - **Run request**: everything needed to execute a workflow once.
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
 - **SciCat**: the facility's data catalogue. **PID**: SciCat's persistent identifier for a dataset.
+- **Series**: the datasets a rule keys together by a metadata value, combined again whenever one joins.
 - **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its runs and the workflow itself in memory. A cache over records.
-- **Slot**: a label on requests that supersede each other. The unit of interactive work, and what tools list and replay.
+- **Slot**: a label on requests that supersede each other, under the same rule as a batch member key. The unit of interactive work, and what tools list and replay.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs. Defined in scipp/ess#690.
+- **Submission**: the field on a run record that says how its request was made: as a batch member, with batch ID, member key, and the rule version and lookup entry that filled it; into a slot; or from a template. Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits; the execution shape of shared mode.
-- **Trigger loop**: watches for completed records that match a rule and submits runs automatically.
+- **Trigger loop**: runs rules: watches for new datasets and completed records that a rule selects and submits runs automatically.
 - **View**: a small piece of an output's data for display, computed by the process holding a copy. Not a run.
 - **Vocabulary**: the set of types the workflow spec allows for parameters and outputs.
 - **Warm workflow**: the workflow object kept alive in a session between runs. One per spec version.
@@ -664,13 +702,14 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D4 | Reuse across requests means a workflow boundary | Choice 1 |
 | D5 | The record store is ours, small, and implementation-agnostic; the backend is its single writer | Choice 2 |
 | D6 | One scheduling primitive: pending outputs as inputs; map and combine are optional uses of it | Choice 2 |
-| D7 | The dataset source is abstracted and persists nothing; not Kafka | Choice 2 |
+| D7 | The dataset source is abstracted, declares the matchable metadata fields, and persists nothing; not Kafka | Choice 2 |
 | D8 | Framework-to-workflow contract: a callable from parameters to outputs; declared cheap parameters; three validation layers | Choice 3 |
 | D9 | The client interface is the API; validate is separate from submit; HTTP later; notebook first | Choice 4 |
 | D10 | Interactive plotting: views are not runs and return plain arrays; event data is never viewed; reruns live in slots | Choice 4 |
 | D11 | Only finalized data enters SciCat; publication reads a cold disk copy; the record store is not a catalogue | Ownership, publication, and deployment |
 | D12 | Instrument plus proposal scopes everything; one backend per instrument | Ownership, publication, and deployment |
 | D13 | One type vocabulary: inputs are data-reference parameters, outputs a typed model, collections on both sides | Spec changes |
+| D14 | Templates, lookups, and rules are the stored data requests are made from; a batch is a tag, not a stored unit; a rule keys datasets into series and never waits; superseding is one rule for member keys and slots | Rules |
 
 ## Review log
 
@@ -682,3 +721,4 @@ The third pass removed what would have made the record store a second catalogue:
 A fourth pass read the sketch against Snakemake's history, in [snakemake.md](snakemake.md); it added the runner's log to the record, completion by marker alone, batch rerun as a client operation with a request-equality query, data-dependent fan-out as a trigger rule, the record-replay test helper, the deferred resource hints, and a recommendation on the retention question.
 A fifth pass read it against AiiDA's history, in [aiida.md](aiida.md); it added UUID run IDs, annotations beside the record, the group ID, three kinds of failure with reasons declared on the spec, the paused status for transient infrastructure failure, retry by reason in the trigger loop, the session-restart rule for code changes, and the export rule for the deferred upload.
 A sixth pass read it against Mantid's ISIS batch interfaces and FIA, in [mantid.md](mantid.md); it added the lookup as versioned data used by batch and the trigger loop, the lookup entry on the record, rules as data, exclusions as annotations on file records, the explicit reprocess operation when a loop moves to a new version, the slot as a label usable by the trigger loop, and three open-question entries: not waiting for a series, batch definitions, and catalogue lag.
+A seventh pass read the three prior-art passes together for incremental creep and consolidated what they had added: template, lookup, and rule are one section with one decision, D14; a batch is a tag rather than a stored unit, because the set of members is a query over records; the rule replaces the batch definition and holds the exclusions, so annotations are notes again; the record gets one submission field in place of a group ID, a template version, and a lookup entry; the group ID, the request-equality query, and the trigger loop's use of slots were dropped; logs moved to the record store; paused runs got a mechanism; and the open questions on waiting for a series and on batch definitions closed.
