@@ -510,7 +510,7 @@
     <div class="card panel">
       <h3>Five lookup tables, one shape</h3>
       <p>Reflectometry's lookup table, per angle within a tolerance; SANS's per-row user file; Powder's cycle mapping by run-number range; FIA's rule spec per instrument; autoreduce's variables per run range. Each: ordered match criteria on dataset metadata, defaults per match, one fallback, edited by the instrument scientist, saved with the batch.</p>
-      <p><b>So:</b> a <b>lookup</b> is versioned data beside a template, used by batch and the trigger loop; ambiguity is a validation error; the record names the entry that applied. Not a Python callable.</p>
+      <p><b>So:</b> the <b>lookup</b>, versioned data beside a template that both batch and the trigger loop read, defined in part 2. Not a Python callable.</p>
     </div>
     <div class="card panel">
       <h3>Nobody waits for a series</h3>
@@ -676,7 +676,7 @@
         <rect class="box" x="118" y="123" width="130" height="34" rx="6"/><text x="183" y="145" text-anchor="middle" class="m">batch 7 · T=30K</text>
       </svg>
       <h3>Batch</h3>
-      <p>A template plus per-member overrides. Each record carries the batch ID and a key the submitter chose, so two thousand members are listed by something meaningful.</p>
+      <p>A template, a lookup that defaults each member from its metadata, and per-member overrides (next slide). Each record carries the batch ID and a key the submitter chose, so two thousand members are listed by something meaningful.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Automatic: the dataset source yields new datasets or completed records; a rule matches and instantiates a template; never on our own output.">
@@ -688,7 +688,7 @@
         <rect class="box" x="214" y="70" width="42" height="38" rx="6"/><text x="235" y="94" text-anchor="middle" class="s">submit</text>
       </svg>
       <h3>Automatic</h3>
-      <p>A loop: on a new dataset or a completed record that matches a rule, fill a template and submit. Never fires on its own output.</p>
+      <p>A loop: on a new dataset or a completed record that matches a rule, fill a template through the lookup and submit. The rule is data. Never fires on its own output.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Chain: requests A and B submitted as a group; B references an output of A that does not exist yet; the backend holds B until A completes.">
@@ -707,8 +707,65 @@
   <p class="take">Four modes, <b>one kind of request and one kind of record</b>. The scheduler has one kind of dependency.</p>
 </section>
 
-<!-- ===================== 16 COMPONENTS ===================== -->
+<!-- ===================== 16 LOOKUP ===================== -->
 <section class="slide" id="s16">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What fills a request: template, lookup, override</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1100 330" role="img" aria-label="A dataset's metadata, angle 0.7 and sample name, selects one entry of a lookup. The template fills the request first, the matching lookup entry fills what is still blank, and the member's override overwrites last. The record stores the resolved values and names the template version and the lookup entry.">
+        <!-- dataset -->
+        <rect class="box open" x="20" y="112" width="220" height="120" rx="8"/>
+        <text x="130" y="140" text-anchor="middle" class="h">dataset, or batch member</text>
+        <text x="130" y="166" text-anchor="middle" class="m">run 1234</text>
+        <text x="130" y="188" text-anchor="middle" class="m">θ = 0.7°</text>
+        <text x="130" y="210" text-anchor="middle" class="m">sample = "Si wafer"</text>
+        <path class="e" d="M240,172 L300,172"/><text x="270" y="160" text-anchor="middle" class="s">metadata</text>
+
+        <!-- template -->
+        <rect class="box" x="300" y="16" width="360" height="80" rx="8"/>
+        <text x="316" y="40" class="h">template · v3</text>
+        <text x="316" y="62" class="m">q_step = 0.02 · wavelength = 2–16 Å</text>
+        <text x="316" y="82" class="m">trans = blank · q_max = blank</text>
+
+        <!-- lookup -->
+        <rect class="box" x="300" y="112" width="360" height="120" rx="8"/>
+        <text x="316" y="136" class="h">lookup · v2</text>
+        <rect class="accb" x="310" y="146" width="340" height="22" rx="4"/>
+        <text x="316" y="161" class="m">θ 0.7 ± 0.01 → trans 13463, q_max 0.30</text>
+        <text x="316" y="185" class="m">θ 2.3 ± 0.01, title /Si/ → trans 13464</text>
+        <text x="316" y="207" class="m">wildcard → trans 13460</text>
+        <text x="316" y="226" class="s">two entries match → validation error, not a choice</text>
+
+        <!-- override -->
+        <rect class="box" x="300" y="248" width="360" height="64" rx="8"/>
+        <text x="316" y="272" class="h">member override · typed by the submitter</text>
+        <text x="316" y="296" class="m">q_max = 0.25</text>
+
+        <!-- record -->
+        <rect class="box" x="740" y="84" width="340" height="180" rx="10"/>
+        <text x="756" y="108" class="h">record · resolved values</text>
+        <text x="756" y="134" class="m">q_step = 0.02</text><text x="1064" y="134" text-anchor="end" class="s">template</text>
+        <text x="756" y="156" class="m">wavelength = 2–16 Å</text><text x="1064" y="156" text-anchor="end" class="s">template</text>
+        <text x="756" y="178" class="m">trans = 13463</text><text x="1064" y="178" text-anchor="end" class="s">lookup entry 1</text>
+        <text x="756" y="200" class="m">q_max = 0.25</text><text x="1064" y="200" text-anchor="end" class="s">override</text>
+        <text x="756" y="230" class="s">names template v3 and lookup v2, entry 1</text>
+        <text x="756" y="250" class="s">the lookup is versioned; the record never changes</text>
+
+        <!-- ladder arrows -->
+        <path class="e" d="M660,56 L740,118"/><text x="700" y="72" text-anchor="middle" class="s">1 · fills</text>
+        <path class="e acc" d="M660,172 L740,174"/><text x="700" y="164" text-anchor="middle" class="s a">2 · fills what is blank</text>
+        <path class="e" d="M660,280 L740,232"/><text x="700" y="272" text-anchor="middle" class="s">3 · overwrites</text>
+        <text x="900" y="300" text-anchor="middle" class="s">later rungs overwrite earlier ones; a blank at any rung falls through to the next</text>
+      </svg>
+      <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. The same object serves both.</figcaption>
+    </figure>
+  </div>
+  <p class="take">The lookup is <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle. It is data, so the web UI shows it, a batch file carries it, and a record names the version and entry that filled it.</p>
+  <aside class="notes">This is the one concept added on Mantid's evidence, so give it a minute. Every ISIS interface has this table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The skeleton does not have this yet.</aside>
+</section>
+
+<!-- ===================== 17 COMPONENTS ===================== -->
+<section class="slide" id="s17">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The moving parts</h2></header>
   <div class="body">
     <figure>
@@ -766,8 +823,8 @@
   <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit.</aside>
 </section>
 
-<!-- ===================== 17 CONTRACT ===================== -->
-<section class="slide" id="s17">
+<!-- ===================== 18 CONTRACT ===================== -->
+<section class="slide" id="s18">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The contract with workflow code: one callable</h2></header>
   <div class="body">
     <figure>
@@ -807,8 +864,8 @@
   <aside class="notes">Rejected: a file-based contract, which forces every chain through disk; and a framework that knows sciline and caches intermediates itself, which is not affordable with event data. Arrays as objects is what keeps the phase 3 options open in every model.</aside>
 </section>
 
-<!-- ===================== 18 SPEC CHANGES ===================== -->
-<section class="slide" id="s18">
+<!-- ===================== 19 SPEC CHANGES ===================== -->
+<section class="slide" id="s19">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What the workflow spec needs beyond scipp/ess#690</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -851,8 +908,8 @@
   <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
 </section>
 
-<!-- ===================== 19 WHERE STATE LIVES ===================== -->
-<section class="slide" id="s19">
+<!-- ===================== 20 WHERE STATE LIVES ===================== -->
+<section class="slide" id="s20">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Where state lives: records never, disk always, memory only in a session</h2></header>
   <div class="body">
     <figure>
@@ -885,8 +942,8 @@
   <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound, seconds per rerun), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
 </section>
 
-<!-- ===================== 20 NOT A CATALOGUE ===================== -->
-<section class="slide" id="s20">
+<!-- ===================== 21 NOT A CATALOGUE ===================== -->
+<section class="slide" id="s21">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Our store is not a second catalogue</h2></header>
   <div class="body">
     <figure>
@@ -919,8 +976,8 @@
   <aside class="notes">Third review pass removed what would have made the store a replica: file records created by discovery with copied metadata and stored mount paths. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
 </section>
 
-<!-- ===================== 21 FAILURES ===================== -->
-<section class="slide" id="s21">
+<!-- ===================== 22 FAILURES ===================== -->
+<section class="slide" id="s22">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Failures are the product</h2></header>
   <div class="body">
     <figure>
@@ -960,8 +1017,8 @@
   <p class="take">Facilities that built automatic reduction report that <b>the monitoring UI was most of the value</b>. Phase 1 is unattended, so this is in from day one.</p>
 </section>
 
-<!-- ===================== 22 PHASE MATRIX ===================== -->
-<section class="slide" id="s22">
+<!-- ===================== 23 PHASE MATRIX ===================== -->
+<section class="slide" id="s23">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What each phase needs from the proposal</h2></header>
   <div class="body">
     <table>
@@ -984,8 +1041,8 @@
   <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, group rules for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
 </section>
 
-<!-- ===================== 23 PHASE 3 MODELS ===================== -->
-<section class="slide dense" id="s23">
+<!-- ===================== 24 PHASE 3 MODELS ===================== -->
+<section class="slide dense" id="s24">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Phase 3 is the real open question: where does interactive state live?</h2></header>
   <div class="body">
     <div class="grid3">
@@ -1036,8 +1093,8 @@
   <aside class="notes">Two stories the sketch was built around, tuning a SANS reduction in a notebook and tuning vanadium and sample together, fail the timing check under stateless-with-splits. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process.</aside>
 </section>
 
-<!-- ===================== 24 DECISIONS ===================== -->
-<section class="slide" id="s24">
+<!-- ===================== 25 DECISIONS ===================== -->
+<section class="slide" id="s25">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Decisions we need from this review</h2></header>
   <div class="body">
     <div class="qa">
@@ -1066,8 +1123,8 @@
   <p class="take">Decision numbers D1 to D13 in the document <b>freeze after this review</b>. Point at them.</p>
 </section>
 
-<!-- ===================== 25 WHAT EXISTS ===================== -->
-<section class="slide" id="s25">
+<!-- ===================== 26 WHAT EXISTS ===================== -->
+<section class="slide" id="s26">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What exists, and the next five steps</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -1095,8 +1152,8 @@
   <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
 </section>
 
-<!-- ===================== 26 DISCUSS ===================== -->
-<section class="slide" id="s26">
+<!-- ===================== 27 DISCUSS ===================== -->
+<section class="slide" id="s27">
   <header><div class="eyebrow"><span>Discussion</span></div><h2>Three questions to leave with</h2></header>
   <div class="body grid3">
     <div class="card panel"><h3>Does the record model hold for your technique?</h3><p>Name the piece of data it cannot describe.</p></div>
