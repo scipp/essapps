@@ -34,6 +34,11 @@ A job stores the reduction script text it executed, fetched from the head of a g
 A rerun is the user editing the script text and picking an image.
 Outputs go to a directory per proposal and are not registered in the catalogue.
 
+**ISIS autoreduction**, FIA's predecessor from 2015 to 2022, ran a `reduce.py` per instrument whose variables came from a `reduce_vars.py` beside it.
+A scientist set variable values "from run N onward" or for one experiment in the web UI; a new run took the experiment's values if any, else the latest set whose start run was not above it, else the script's defaults.
+A rerun was a new version of the same run number, with edited values and a chosen Mantid version, which selected a container image.
+Its 2021 redesign flattened the per-variable tables into one JSON row per value set, and that row served as both the rule and the record: a run pointed at the row that filled it, and editing the rule in the web form rewrote the row in place.
+
 ## What it learned the hard way
 
 **Identity by name in a process.**
@@ -65,6 +70,11 @@ Its own guide said reflectometry was "the only used case at the moment"; nobody 
 Batch UIs differ per technique more than a column mapping can express.
 The sketch's D9 says the same: the workflow contract and the view interface are the two contracts that must not foreclose UI options, and everything else in a UI is replaceable.
 
+**The rule and the record in one row.**
+In ISIS autoreduction after 2021, the value set that fills new runs from run N onward and the value set a processed run records are the same database row, so a scientist correcting the rule for future runs silently changes what old runs say they used; the form also drops any variable no longer in `reduce_vars.py` without saying so.
+Earlier, a `tracks_script` flag let a value set follow edits to the script's defaults, with the same effect on history.
+The sketch keeps the lookup versioned and the record's resolved values immutable, and refuses a stored parameter set that no longer matches its spec instead of dropping fields; this is the strongest reason the lookup must be versioned data rather than an editable table.
+
 **Retry without a reason or a limit.**
 Under autoprocessing every resume makes failed rows eligible again, so a run that fails for a lasting reason is retried at every poll.
 The sketch's retry rule keys on a declared failure reason and carries a limit.
@@ -72,6 +82,8 @@ The sketch's retry rule keys on a declared failure reason and carries a limit.
 **A catalogue that lags the file.**
 The interface recommends the journal over ICat because the catalogue search "is less reliable"; FIA polls a last-run file and reads journal XML, and never touches ICAT.
 Both discover runs from the archive, not the catalogue, and FIA's outputs are consequently unknown to the catalogue.
+The older system's end-of-run monitor "stops working after a certain amount of time", and the proposed fix was a health check that diffs the catalogue against the database and resubmits what was missed; its successor is a cron job diffing a last-run file against a local record of what was seen.
+The sketch's trigger status, the reason a dataset did or did not fire, is that health check as a query, and the dataset source's tolerance of repeated and out-of-order arrival is what the old system lacked: a repeated message there created a new run version silently.
 The sketch's dataset source is abstracted (D7), but a file record's identity is the SciCat PID, so a filesystem-watching source cannot replace the catalogue, only get ahead of it and wait for the PID.
 Whether SciCat ingestion lags the file by more than a beamtime can bear is an operational question to settle before phase 1; it is now on the open questions.
 
@@ -118,6 +130,10 @@ D6 verbatim.
 The SANS interface builds one serialisable state per row, validates it whole, and can show it in a diagnostic tab; a row with its own user file ignores the GUI.
 The sketch's request is that object; the validate operation separate from submit (D9) is the diagnostic tab.
 
+**A version history per run.**
+ISIS autoreduction numbered reruns of one run number as versions of it, and the run page showed the version history with who started each, why, and with which values and Mantid version.
+That is the record browser's view of one dataset: the records that reference its file record, in order, each linked to the one it derives from.
+
 **What FIA records.**
 Executed script text with its commit, injected values, a container image with a pinned Mantid version, output names, a stack trace, an owner that is a proposal or a user; a watcher that declares a job stalled after thirty minutes without output.
 Environment, code revision, logs, proposal scope, and liveness are all on the sketch's record already.
@@ -156,4 +172,5 @@ Not folded in, and why:
 - Release notes `docs/source/release/v3.7.1`, `v3.11.0`, `v3.13.0`, `v4.1.0`, `v4.2.0`, `v5.1.0`, `v6.4.0`, `v6.8.0`, `v6.10.0`, `v6.15.0`, `v6.16.0`, `reflectometry.rst`; the DataProcessorWidget removal in mantid PR 34599
 - ISIS SANS: `scripts/SANS/sans/state/AllStates.py`, `sans/command_interface/batch_csv_parser.py`, `sans/sans_batch.py`, `qt/python/mantidqtinterfaces/mantidqtinterfaces/sans_isis/gui_logic/models/gui_state_director.py`; `docs/source/interfaces/isis_sans/`
 - ISIS Powder: `scripts/Diffraction/isis_powder/routines/instrument_settings.py`, `run_details.py`, `yaml_parser.py`; [ISIS Powder tutorials](https://docs.mantidproject.org/nightly/techniques/ISISPowder-Tutorials.html)
+- ISIS autoreduction (archived 2022): `autoreduce_qp/model/database/records.py`, `queue_processor/handle_message.py`, `db/autoreduce_db/reduction_viewer/models.py` and migrations 0005, 0010, 0011; frontend `views/common.py`, `views/configure_new_runs.py`, `templates/help.html`; `documents/old/documentation-from-main-repo/Technical Documentation.md`; `documents/old/design/EORM/health-check-for-EoRM.md`; `documents/design/roadmap/autoreduction_roadmap.md`
 - FIA: [file-watcher](https://github.com/fiaisis/file-watcher), [run-detection](https://github.com/fiaisis/run-detection) (`rundetection/rules/common_rules.py`, `mari_rules.py`, `sans_rules.py`, `inter_rules.py`, `specifications.py`), [FIA-API](https://github.com/fiaisis/FIA-API) (`fia_api/core/models.py`, `scripts/acquisition.py`, `scripts/transforms/`), [jobcontroller](https://github.com/fiaisis/jobcontroller) (`job_creator.py`, `job_watcher.py`), [db](https://github.com/fiaisis/db)
