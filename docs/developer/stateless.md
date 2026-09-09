@@ -76,8 +76,30 @@ With eager splitting, so that the expensive stage is its own record and the chea
 Without splitting it costs all of them.
 Either way it is "change and press run", not a slider.
 
+The seconds come from the first two rows, and each has a mitigation that leaves the record layer untouched.
+
 A pool of warm *processes*, idle runners with imports done and no workflow state, removes the first row and keeps every stateless property, because state still crosses only through disk.
 It is a launcher implementation detail, not a design change, and it is the cheapest mitigation available.
+
+Letting those runners keep their outputs, and routing a request to the runner that already holds its input, removes the second row too, leaving the cheap stage itself.
+This is the session model with the addressing rule changed: a warm process is keyed by the reference it holds and the code version it runs, rather than owned by one client.
+D2's invariant survives untouched, because the key is derived from the request and no identity of the process enters a record.
+It is additive on the stateless core, because a request that reaches a runner without the input in memory falls back to reading disk or recomputing the stage, which is the stateless path unchanged.
+That fallback is what makes it safe, and it exists only because records are complete: a memory copy is a cache, never the only copy of a fact.
+It is also the one option that improves on the session model where the session model is weakest, because two people tuning off the same intermediate share one warm copy and no per-user process has to be launched, timed out, or capped.
+
+What it costs is not the transfer but the placement.
+
+- The rule "nothing in the core may need a request to reach a particular process" weakens to "nothing may *require* it", and the distinction holds only as long as the fallback is real.
+- Something must know which runner holds which output.
+  D3 refuses exactly this, but its argument is about caches in processes the backend does not own; over a backend-owned pool the index is soft state that a restart discards.
+- The placement that maximises reuse is the placement that destroys fan-out: five hundred batch runs referencing one processed vanadium either queue on the single warm runner or each recompute it.
+  Deciding when to replicate a small hot artefact and when to pin a large one is a scheduler feature, and it is where the real weight of this option sits.
+- Eviction becomes cross-client, so the pool needs a byte budget, and every eviction makes a routing prediction wrong.
+  Sub-second becomes the typical case rather than a guarantee.
+- The key must include the code version, so an upgrade fragments the pool.
+
+None of this is needed for phases 1 and 2, and none of it changes a record, a spec, or the client interface.
 
 **The disk.**
 Every stage output that a user wants to iterate on is written, and for event data those are the large ones.
@@ -89,11 +111,34 @@ Splitting becomes mandatory wherever a user will iterate, and the cut must be at
 The sketch already notes that the cut is not always clean, with processed vanadium in diffraction as the example.
 Every technique's notebook today has such a cut, the point after loading and coordinate conversion where the parameters people move come in, so the authors know where it is; the cost is that the cut becomes a spec boundary and its output a stored, typed, retained artefact rather than a variable.
 
-**Accumulation.**
-Adding one run to a sum of fifty need not recompute fifty loads.
-With per-run stage outputs on disk the sum reads fifty-one small intermediates, and a sum can also be expressed as a chain, a new request that references the previous sum's output and the new run.
-That is stateless accumulation with exact provenance and no accumulator.
-It stops working only when the accumulated quantity is too large to store, which is the case the in-process `StreamProcessor` exists for.
+**Accumulation** is not a cost of this variant; it has its own section below, because it is a requirement of phase 2 rather than a property of phase 3.
+
+## Accumulation belongs to phase 2, not to phase 3
+
+The documents use one word for two mechanisms, an in-memory accumulator (D8) and a combine over stored outputs (D14), and then file the second under the first.
+[staging.md](staging.md) puts "accumulation" in phase 3 beside the warm workflow, which reads as though incremental combination were an interactive convenience.
+The scope says the opposite: automatic reduction "reduces a group of runs again whenever a run is added to it, because nobody at the instrument can say when a series is complete".
+That case runs unattended, in shared mode, with no user and no session to hold an accumulator, and it is phase 2.
+Filing accumulation under the session model turns it into an argument for sessions when the case with the strongest claim on it is the one case that has no session.
+
+The sketch does answer it, in D14 rather than D8: a rule submits "a fresh combine over the series so far, referencing the members' outputs".
+So there are three rungs, and the framework currently stands on the first.
+
+1. **Recombine the members.** Each arrival reruns the combine over all k stored member outputs. No state, exact provenance, and the sketch's own qualifier is the limit: "cheap for one-dimensional curves". Nobody has said what happens when it is not.
+2. **Chain to the previous combine.** The new request references the previous combine's output and the new member, so an arrival costs one small read and one load rather than k. Still stateless, still one record per state, and it needs the combine to be associative, which the sketch already makes the author's problem for anything depending on the whole list, such as normalisation by summed monitor counts.
+3. **Fold into a live accumulator.** A process holds the partial result and folds new members into it. This needs a warm process addressed by what it holds, which is the keyed runner from the feedback-loop section: the two problems have the same third rung and would be solved by the same mechanism.
+
+The invariant that keeps all three interchangeable is worth stating in the core, because it costs nothing now and is what makes rungs 2 and 3 additive later:
+
+> Every value the system accumulates is recomputable from records, because every input to it is a dataset or an output that has one.
+> An accumulator is therefore always an optimisation with a recompute fallback, never the only copy of a fact.
+
+Two cases inside the current scope test it, and both are worth a number from the spike rather than a design now: a series whose members are not one-dimensional curves, where rung 1 stops being cheap, and an accumulated quantity too large to store, where rung 2 writes exactly what splitting was meant to avoid.
+
+One case outside the scope would remove the invariant rather than stress it: reduction of a live stream, where the inputs are pulses with no records and nothing can be recomputed.
+That is esslivedata's domain, and it is the reason `ess.reduce.streaming.StreamProcessor` exists.
+If it enters this project's scope the question stops being where a cache may live and becomes where authoritative state may live, which is a different design and would be a reason to revisit choice 1 rather than an extension of it.
+Making that boundary explicit is the point of writing the invariant down.
 
 ## The user stories under the variant
 
@@ -101,12 +146,12 @@ Only the stories that the session touched change outcome.
 
 | Story | Under the sketch | All-in stateless |
 |---|---|---|
-| B1 tune a SANS reduction, feedback within a second or two | Fits in a session | Fails the timing check; a handful of seconds per change with splitting, more without |
-| B2 add a run to a sum, then remove one | Accumulator in the warm workflow | Fits, by chaining or by reading stored per-run outputs |
+| B1 tune a SANS reduction, feedback within a second or two | Fits in a session | A handful of seconds per change with splitting, more without; fits again once the rerun is routed to a warm runner holding the intermediate |
+| B2 add a run to a sum, then remove one | Accumulator in the warm workflow | Fits, by recombining or chaining; removal is a fresh combine either way, where the accumulator has to reset |
 | B3 compare two variants | Two slot labels | Fits, two records, the UI keeps two IDs |
 | B4 explore a 4D volume | Served from session memory | Needs the deferred chunked on-disk layout, or the application loads the volume itself |
 | B5 kernel dies mid-session | Records survive, warm state is recomputed | Fits better: there was no state to lose |
-| C5 vanadium and sample tuned together | Two warm workflows chained in memory | Correct but slow: each vanadium change reruns both stages cold |
+| C5 vanadium and sample tuned together | Two warm workflows chained in memory | Correct but slow: each vanadium change reruns both stages cold, and a warm runner helps only the second |
 | F3 publish what was tuned | Recompute cold first | Fits trivially; the rule is gone |
 | G2 developer iterates on a workflow | In-process binding | Editable install plus a throwaway run; a slower loop |
 | G3 local application, remote compute | Session on the laptop | The stage output crosses once; the cheap stage reruns in local throwaway processes |
@@ -134,26 +179,33 @@ The application may compare the cold output with what was on screen and warn if 
 Templates are saved from checkpoints; publication reads checkpoints; chains are checkpointed as a group.
 Shared interactive use is then a hosting question, a process per user as JupyterHub or a per-user web server already provides, and the framework never sees a session.
 
-**The stateless model with eager splits.**
-Every change is a fresh run of the cheap stage over a stored intermediate.
-No new concept at all, one code path, and a feedback loop of seconds rather than sub-second.
+**The stateless model with eager splits**, which has two rungs.
+On the first, every change is a fresh run of the cheap stage over a stored intermediate: no new concept at all, one code path, and a feedback loop of seconds.
+On the second, a pool of warm runners keyed by the reference they hold serves the rerun from memory, and the loop is sub-second.
+The second rung is additive on the first, because a routing miss is the first rung, so this is a starting point rather than a ceiling.
+Where the first rung's cost is disk and the workflow authors, the second's is a placement policy and a memory index over a pool the backend owns.
 
 | | Session model | Checkpoint model | Stateless with splits |
 |---|---|---|---|
-| Feedback on a cheap parameter | Sub-second | Sub-second | Seconds |
+| Feedback on a cheap parameter | Sub-second | Sub-second | Seconds; sub-second on the second rung |
 | Records created while exploring | One per change, hidden by slots | None | One per change |
 | Provenance of a kept result | Complete | Complete | Complete |
 | What the user saw equals the record | By the wrapper's rules plus a test helper | Checked once at checkpoint, cold | By construction |
-| New framework concepts | Session, warm workflow, cheap parameters, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None |
-| Interactive use in the shared web UI | Remote sessions owned by the framework | A hosted process per user, owned by infrastructure | Works, slowly |
-| Disk volume | Low | Low | High |
+| New framework concepts | Session, warm workflow, cheap parameters, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None on the first rung; a placement policy and a memory index on the second |
+| Interactive use in the shared web UI | Remote sessions owned by the framework | A hosted process per user, owned by infrastructure | Works, slowly; on the second rung with no per-user process at all |
+| Disk volume | Low | Low | High; lower on the second rung |
 | Burden on workflow authors | Declare cheap parameters and cache nodes correctly | None beyond the callable | Split at every tunable boundary |
 | Losing the process | Lose time; every step was recorded | Lose the exploration since the last checkpoint | Lose nothing |
 | Exploring a large volume in the browser | Views from session memory | Views from the application's memory, or a hosted process | Chunked layout on disk |
+| Accumulation for an unattended growing series | No session exists to hold the accumulator; the rule recombines | The application is not running; the rule recombines | The rule recombines, and chaining is the same code path |
 
 The checkpoint model keeps what the session model was for, sub-second reruns and chained tuning, and drops what it cost, because the framework's only promise about interactive work becomes "a record is a cold run", which the core already promises.
 Its weak point is the same as the session model's: shared interactive use needs a process per user somewhere, and it answers that with infrastructure rather than with framework code.
 Its other cost is that a checkpoint takes as long as a cold run, once per kept result.
+
+The last row is the one that should be argued about, because it is not a phase 3 row.
+Two of the three models answer unattended accumulation by not being involved, which is correct and is what the sketch already does; it means the model chosen for interactive work does not decide how a growing series is combined, and that neither of the first two columns can be justified by accumulation.
+The reverse also holds: if a series that is not a one-dimensional curve forces a live accumulator into phase 2, the mechanism it needs is the third model's second rung, and phase 3 then has a keyed warm pool it did not have to pay for.
 
 ## Should phases 1 and 2 be split from phase 3
 
@@ -174,8 +226,9 @@ Two things the core must keep so that phase 3 stays open in every model:
 - Any client may turn a reference into an object in its own process.
   The sketch grants this to local mode; the core should grant it to any client that can reach the disk tier, which is what lets an application hold its own state without the framework knowing.
 
-And one thing it must not do: nothing in the core may need a request to reach a particular process.
+And one thing it must not do: nothing in the core may *require* a request to reach a particular process.
 That is already true, and it is what makes the HTTP transport, load balancing, and a restart trivial.
+The word is "require", not "prefer": a launcher that accepts a placement hint and a scheduler free to ignore it keep the property, and are what the keyed warm pool would later need.
 
 ## Recommendation
 
@@ -183,5 +236,10 @@ As a judgment.
 
 - Adopt the all-in stateless variant as the design of phases 1 and 2, which changes nothing in what those phases would have built and removes about a fifth of the architecture text from what their reviewers must hold in mind.
 - Decide the phase 3 model when phase 3 is designed, with the checkpoint model as the default to beat, because it meets B1 and C5 without adding a concept to the framework.
-- Measure the throwaway feedback loop in the spike, with and without a warm process pool, so that the phase 3 decision rests on numbers; if the cheap-stage rerun is under a few seconds for the techniques that matter, the third model is enough for some of them.
+  Do not dismiss the third model on its feedback number: seconds is the first rung, not the model.
+- Measure the throwaway feedback loop in the spike, in three configurations: cold, with a warm process pool, and with a runner that already holds the intermediate in memory.
+  The three numbers separate the cost of process start, of the disk read, and of the computation, and the phase 3 decision needs all three; if the cheap-stage rerun is under a few seconds for the techniques that matter, the third model's first rung is enough for some of them.
+- Write the recomputability invariant into the core now, and say in the same place that live-stream reduction is outside the scope it holds for.
+  It costs nothing today and is what keeps both the keyed warm pool and a live accumulator additive rather than a redesign.
+- Measure the combine over a series whose members are not one-dimensional curves, since that is where the sketch's unattended accumulation stops being cheap, and it is phase 2 rather than phase 3.
 - Keep `warm.py` and the session launcher as an experiment, outside the core's tests and documents, so that nothing is lost if the session model wins.

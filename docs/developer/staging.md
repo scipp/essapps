@@ -55,7 +55,8 @@ A number means the phase where the part is first needed.
 | D7 | Real SciCat dataset source | Core | The sketch defers real SciCat; phase 1 cannot. |
 | D8 | One callable, entry points, materialization by kind | Core | |
 | D8 | Three validation layers | Core | The trigger loop's refusals need structured errors from day one. |
-| D8 | Warm reuse, cheap parameters, warm-equals-cold helper, accumulation | 3 only | |
+| D8 | Warm reuse, cheap parameters, warm-equals-cold helper, in-memory accumulator | 3 only | |
+| D14 | Combining a growing series | 2 | Unattended, with no session to hold an accumulator: the rule recombines the members, or chains to the previous combine. Not the same thing as D8's accumulator. |
 | D8 | In-process binding, no-shadowing rule | 3 only | Phases 1 and 2 bind through installed packages; developers install editable. |
 | D9 | The client interface is the API; validate separate from submit | Core | |
 | D9 | Notebook as the first client | Reordered | The first clients are the trigger loop and a web page in the backend process. |
@@ -158,7 +159,7 @@ A "manual" reduction from the web page in phase 2 is a batch of one; a rerun wit
 The direct answer to "is there anything phases 1 and 2 would not require but phase 3 would":
 
 - Sessions, and the two invariants that keep them safe: no session identity in a record, and everything in a session recomputable from records.
-- The warm workflow, the sciline wrapper with its frontier computation, the declaration of cheap parameters, the warm-equals-cold test helper, and the accumulation special case for growing lists.
+- The warm workflow, the sciline wrapper with its frontier computation, the declaration of cheap parameters, the warm-equals-cold test helper, and the in-memory accumulator for growing lists; combining a growing series without one is phase 2 (D14).
 - The `reused` flag on the record, and the rule that a reused result is recomputed cold before publication.
 - Private memory caches, the rule that the registry knows disk copies only, the memory lifetime, and the cache-coherence argument for keeping caches private.
 - Two execution shapes, placement as a launcher decision, `needs_disk_inputs`, write-out on demand, and the rule that a group runs in one shape.

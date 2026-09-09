@@ -137,6 +137,9 @@ Where does that state live, and what does a record know about it?
 The last option, with two invariants that keep it safe (D2).
 Session identity never appears in a record.
 Everything a session holds can be recomputed from records, so a session is a cache, and losing one costs only time.
+The invariant is not about sessions: every value this system holds in memory, including a partial sum over a growing series, is recomputable from records, because every input to it is a dataset or an output that has one.
+Held state is therefore always an optimisation with a recompute fallback, never the only copy of a fact.
+It holds because reduction here consumes datasets; it would not hold for reduction of a live stream, where the inputs are pulses with no records, which is why that is esslivedata's problem and not in this project's scope.
 This is esslivedata's lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so nothing depends on this one.
 
 A session is defined by its owner, not by where it runs.
@@ -199,6 +202,7 @@ An output that another spec takes as input is called a stage output in this docu
 Batch, automatic reduction, and provenance are properties of the record, not of the process that executes it, so pinning "stateless" at the record level costs them nothing.
 A stage output can be huge, and writing one to disk is wasted work when its only consumer is in the same process; recompute is often cheaper than storage.
 Keeping memory caches private is what keeps the design free of a cache-coherence protocol: a registry that tracked copies in processes it does not own would need every eviction, close, and crash reported, and would block backend requests on user processes that may be busy or gone.
+The argument is about processes the backend does not own, and does not rule out an index over a pool of warm runners the backend does own, addressed by the reference they hold; that stays open as an additive option, and is discussed in [stateless.md](stateless.md).
 
 **Cost.**
 Two lifetimes for the workflow object in the runner: once per run, or once per session.
@@ -423,6 +427,7 @@ Such requests are tagged with a **batch ID** and a member key chosen by the subm
 Batching for merging is one request whose parameter is a collection of references, whether the workflow sums them inside or a map-combine (D6) does it; the set is on the record, so the manual case needs nothing new.
 Under a rule the set is derived: the selector and series key place each dataset in a series, and each arrival submits the member's reduction and a fresh combine over the series so far, referencing the members' outputs.
 Successive combines of one series supersede each other, the series key being their member key, so the UI shows one curve per sample that grows; a series of k runs costs k-1 combines, cheap for one-dimensional curves, and the superseded ones are the first evicted.
+Where the members are not cheap to recombine, the combine may instead reference the previous combine's output and the new member, which is the same request shape and costs one read per arrival rather than k, and is exact whenever the combine is associative.
 The rule never waits for a series to be complete, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
 A series of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.
 The rule says whether its combine is published (D11); by default it is not.

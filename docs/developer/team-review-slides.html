@@ -939,7 +939,7 @@
     </figure>
   </div>
   <p class="take"><b>Requests are stateless everywhere.</b> Execution may be stateful in a session, and a session's identity never appears in a record.</p>
-  <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound, seconds per rerun), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
+  <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound at seconds per rerun, unless warm runners are keyed by the reference they hold; see the three-models slide), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
 </section>
 
 <!-- ===================== 21 NOT A CATALOGUE ===================== -->
@@ -1067,30 +1067,35 @@
         <p>The application reruns in its own memory, as a notebook does. When the user keeps a result, the full parameter set is submitted and runs cold. The framework never sees a session.</p>
       </div>
       <div class="panel">
-        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Stateless with splits: every change is a fresh run of the cheap stage over a stored intermediate on disk.">
-          <rect class="box" x="10" y="45" width="100" height="70" rx="8"/><text x="60" y="74" text-anchor="middle">expensive</text><text x="60" y="94" text-anchor="middle" class="s">stage, once</text>
-          <path class="e diskc" d="M110,80 L150,80"/>
-          <rect class="disk" x="150" y="55" width="50" height="50" rx="6"/><text x="175" y="85" text-anchor="middle" class="s">disk</text>
-          <path class="e diskc" d="M200,80 L230,80"/>
-          <rect class="box" x="230" y="45" width="80" height="70" rx="8"/><text x="270" y="74" text-anchor="middle">cheap</text><text x="270" y="94" text-anchor="middle" class="s">per change</text>
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Stateless with splits: the cheap stage reads the stored intermediate from disk on rung 1, or from a warm runner keyed by that reference on rung 2.">
+          <rect class="mem" x="62" y="6" width="196" height="30" rx="8"/><text x="160" y="26" text-anchor="middle" class="s">warm runner, keyed by the reference</text>
+          <path class="e memc" d="M55,62 L55,21 L62,21"/>
+          <path class="e memc" d="M258,21 L272,21 L272,62"/>
+          <rect class="box" x="10" y="62" width="90" height="60" rx="8"/><text x="55" y="86" text-anchor="middle">expensive</text><text x="55" y="104" text-anchor="middle" class="s">stage, once</text>
+          <path class="e diskc" d="M100,92 L136,92"/>
+          <rect class="disk" x="136" y="69" width="46" height="46" rx="6"/><text x="159" y="96" text-anchor="middle" class="s">disk</text>
+          <path class="e diskc" d="M182,92 L218,92"/>
+          <rect class="box" x="218" y="62" width="92" height="60" rx="8"/><text x="264" y="86" text-anchor="middle">cheap</text><text x="264" y="104" text-anchor="middle" class="s">per change</text>
+          <text x="160" y="144" text-anchor="middle" class="s">rung 1 through disk · rung 2 through memory</text>
         </svg>
-        <h3>Stateless with splits</h3>
-        <p>No new concept. Every change is a fresh process running the cheap stage over a stored intermediate. Seconds, not sub-second.</p>
+        <h3>Stateless with splits <span class="hint">(two rungs)</span></h3>
+        <p><b>Rung 1:</b> every change is a fresh process over a stored intermediate. Seconds. <b>Rung 2:</b> warm runners keyed by the reference they hold serve the rerun from memory. Sub-second, additive, and a routing miss is rung 1.</p>
       </div>
     </div>
     <table>
       <thead><tr><th></th><th>Session</th><th>Checkpoint</th><th>Stateless with splits</th></tr></thead>
       <tbody>
-        <tr><td>Feedback on a cheap parameter</td><td>sub-second</td><td>sub-second</td><td>seconds</td></tr>
+        <tr><td>Feedback on a cheap parameter</td><td>sub-second</td><td>sub-second</td><td>seconds; sub-second on rung 2</td></tr>
         <tr><td>Records while exploring</td><td>one per change, hidden by slots</td><td>none</td><td>one per change</td></tr>
-        <tr><td>New framework concepts</td><td>session, warm workflow, slots, private caches, two shapes</td><td>none; the warm wrapper becomes a library</td><td>none</td></tr>
-        <tr><td>Interactive use in the shared web UI</td><td>remote sessions owned by the framework</td><td>a hosted process per user, owned by infrastructure</td><td>works, slowly</td></tr>
+        <tr><td>New framework concepts</td><td>session, warm workflow, slots, private caches, two shapes</td><td>none; the warm wrapper becomes a library</td><td>none on rung 1; a placement policy and a memory index on rung 2</td></tr>
+        <tr><td>Interactive use in the shared web UI</td><td>remote sessions owned by the framework</td><td>a hosted process per user, owned by infrastructure</td><td>works, slowly; on rung 2 with no per-user process at all</td></tr>
         <tr><td>Burden on workflow authors</td><td>declare cheap parameters correctly</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
+        <tr><td>Accumulation for an unattended growing series</td><td>no session exists to hold it</td><td>the application is not running</td><td>the rule recombines or chains; same code path</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="take">All three keep <b>the same records, spec, and API</b>. Decide when phase 3 is designed, with measurements from the spike; the checkpoint model is the default to beat.</p>
-  <aside class="notes">Two stories the sketch was built around, tuning a SANS reduction in a notebook and tuning vanadium and sample together, fail the timing check under stateless-with-splits. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process.</aside>
+  <p class="take">All three keep <b>the same records, spec, and API</b>. Decide when phase 3 is designed, with measurements from the spike; the checkpoint model is the default to beat, and the third is not to be dismissed on its feedback number, because seconds is rung 1 rather than the model.</p>
+  <aside class="notes">Rung 2 is the session model with the addressing rule changed: keyed by the reference held, not owned by a client. D2's invariant survives, the fallback on a miss is the ordinary stateless path, and the cost is a placement policy, because the placement that maximises reuse is the one that destroys fan-out. The last row is not a phase 3 row: unattended accumulation is phase 2, and two of the three models answer it by not being involved, so no column can be justified by accumulation. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process. And one word to keep: nothing may <em>require</em> a request to reach a particular process, which still allows a placement hint.</aside>
 </section>
 
 <!-- ===================== 25 DECISIONS ===================== -->
@@ -1142,7 +1147,7 @@
         <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
         <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
       </ol>
-      <p class="hint">A spike on the throwaway feedback loop, with and without a warm process pool, so the phase 3 decision rests on numbers.</p>
+      <p class="hint">A spike on the throwaway feedback loop in three configurations, cold, a warm process pool, and a runner already holding the intermediate, so the phase 3 decision rests on numbers.</p>
     </div>
   </div>
   <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
