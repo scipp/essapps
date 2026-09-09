@@ -209,7 +209,7 @@
   <div class="body grid3">
     <div class="panel card">
       <h3>1 · What is required</h3>
-      <p>Where we stand, what users need, the delivery order, what is certain versus still open, and what esslivedata, Snakemake, and AiiDA taught.</p>
+      <p>Where we stand, what users need, the delivery order, what is certain versus still open, and what esslivedata, Snakemake, AiiDA, and Mantid taught.</p>
       <p class="hint">Goal: the same picture in every head before we argue about mechanisms.</p>
     </div>
     <div class="panel card">
@@ -502,8 +502,37 @@
   <aside class="notes">Same shape as the Snakemake slide. The broker story is the second data point after esslivedata's Kafka experience. The checkpoint story is the strongest external argument for D2. The paused state is the one mechanism added on AiiDA's evidence alone.</aside>
 </section>
 
-<!-- ===================== 11 ONE IDEA ===================== -->
+<!-- ===================== 11 MANTID ===================== -->
 <section class="slide" id="s11">
+  <header><div class="eyebrow"><span>Part 1 · What is required</span></div><h2>What Mantid's ISIS interfaces taught us</h2></header>
+  <div class="body grid2">
+    <div class="card panel">
+      <h3>Five lookup tables, one shape</h3>
+      <p>Reflectometry's lookup table, per angle within a tolerance; SANS's per-row user file; Powder's cycle mapping by run-number range; FIA's rule spec per instrument; autoreduce's variables per run range. Each: ordered match criteria on dataset metadata, defaults per match, one fallback, edited by the instrument scientist, saved with the batch.</p>
+      <p><b>So:</b> a <b>lookup</b> is versioned data beside a template, used by batch and the trigger loop; ambiguity is a validation error; the record names the entry that applied. Not a Python callable.</p>
+    </div>
+    <div class="card panel">
+      <h3>Nobody waits for a series</h3>
+      <p>FIA sums a series again on every arrival; SANS pairs a scatter with its transmission whichever comes last; reflectometry resets the group and stitches again. None waits, because nobody at the instrument can say when the series is complete: the user decides to measure one more angle.</p>
+      <p><b>So:</b> the recommendation on groups. Key a dataset into a group by metadata, refire the combine over the members so far, successive combines of one group in one slot.</p>
+    </div>
+    <div class="card panel">
+      <h3>Staleness by reset, exclusions beside the data</h3>
+      <p>Any settings change resets every row, so one edited lookup entry reprocesses a beamtime without saying which rows it touched. A run excluded from autoprocessing carries a reason and survives re-searches; one merely deleted comes back on the next poll.</p>
+      <p><b>So:</b> moving a loop to a new template or lookup version offers a previewed reprocess batch as a second deliberate operation; nothing reruns on its own. An exclusion is an annotation on the file record, and the loop reports it.</p>
+    </div>
+    <div class="card panel">
+      <h3>The catalogue lagged the file; the batch file is what users keep</h3>
+      <p>Both interfaces read the ISIS journal because the catalogue was "less reliable"; FIA polls a last-run file, and its outputs are unknown to the catalogue. The 4.1 rewrite dropped the script generator as unused; users kept the batch JSON and edited it over a beamtime.</p>
+      <p><b>So:</b> SciCat's ingestion lag is a phase 1 question; a filesystem source can only get ahead of the catalogue and wait for the PID. A stored batch definition is a phase 2 open question.</p>
+    </div>
+  </div>
+  <p class="take">Mantid is the nearest thing to what we build: batch and automatic reduction used daily at a neutron facility. Not taken: <b>state reset on a settings change, a free-form options column, script text as the record</b>. The reading is in mantid.md.</p>
+  <aside class="notes">Same shape as the two before. The lookup is the one change to the model on Mantid's evidence: it was a callable in the trigger loop, invisible to the web UI and unversioned. The second card is the answer to the groups question on the decisions slide. The options column is rejected because forms are generated from the spec, so every parameter is already reachable and an untyped escape hatch would bypass validation.</aside>
+</section>
+
+<!-- ===================== 12 ONE IDEA ===================== -->
+<section class="slide" id="s12">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y"</h2></header>
   <div class="body">
     <figure>
@@ -553,8 +582,8 @@
   <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way?</aside>
 </section>
 
-<!-- ===================== 12 RECORD ANATOMY ===================== -->
-<section class="slide" id="s12">
+<!-- ===================== 13 RECORD ANATOMY ===================== -->
+<section class="slide" id="s13">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>A record is the request plus what happened to it</h2></header>
   <div class="body grid2">
     <div class="card panel">
@@ -575,6 +604,7 @@
         <li>package versions and the conda environment</li>
         <li>how the spec was bound to code, and whether a warm workflow was reused</li>
         <li>one link to the record it derives from: retry, recompute, or copy</li>
+        <li>for a batch or a trigger-loop run, the template version and the lookup entry that filled it</li>
         <li>beside it, annotations a user adds after inspection: mutable, outside provenance</li>
       </ul>
     </div>
@@ -583,8 +613,8 @@
   <aside class="notes">Resolved values and versions are what make "recompute from the record" true. Without them a changed default silently changes what a record means. Records are cheap: a row per run.</aside>
 </section>
 
-<!-- ===================== 13 PROVENANCE ===================== -->
-<section class="slide" id="s13">
+<!-- ===================== 14 PROVENANCE ===================== -->
+<section class="slide" id="s14">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Provenance is following the arrows</h2></header>
   <div class="body">
     <figure>
@@ -621,8 +651,8 @@
   <p class="take">The published entry carries a <b>self-contained snapshot</b>, readable in six months without any service of ours running.</p>
 </section>
 
-<!-- ===================== 14 FOUR NEEDS IN THE MODEL ===================== -->
-<section class="slide" id="s14">
+<!-- ===================== 15 FOUR NEEDS IN THE MODEL ===================== -->
+<section class="slide" id="s15">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The four needs, in this model</h2></header>
   <div class="body grid4">
     <div class="panel">
@@ -676,8 +706,8 @@
   <p class="take">Four modes, <b>one kind of request and one kind of record</b>. The scheduler has one kind of dependency.</p>
 </section>
 
-<!-- ===================== 15 COMPONENTS ===================== -->
-<section class="slide" id="s15">
+<!-- ===================== 16 COMPONENTS ===================== -->
+<section class="slide" id="s16">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The moving parts</h2></header>
   <div class="body">
     <figure>
@@ -735,8 +765,8 @@
   <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit.</aside>
 </section>
 
-<!-- ===================== 16 CONTRACT ===================== -->
-<section class="slide" id="s16">
+<!-- ===================== 17 CONTRACT ===================== -->
+<section class="slide" id="s17">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The contract with workflow code: one callable</h2></header>
   <div class="body">
     <figure>
@@ -776,8 +806,8 @@
   <aside class="notes">Rejected: a file-based contract, which forces every chain through disk; and a framework that knows sciline and caches intermediates itself, which is not affordable with event data. Arrays as objects is what keeps the phase 3 options open in every model.</aside>
 </section>
 
-<!-- ===================== 17 SPEC CHANGES ===================== -->
-<section class="slide" id="s17">
+<!-- ===================== 18 SPEC CHANGES ===================== -->
+<section class="slide" id="s18">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What the workflow spec needs beyond scipp/ess#690</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -820,8 +850,8 @@
   <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
 </section>
 
-<!-- ===================== 18 WHERE STATE LIVES ===================== -->
-<section class="slide" id="s18">
+<!-- ===================== 19 WHERE STATE LIVES ===================== -->
+<section class="slide" id="s19">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Where state lives: records never, disk always, memory only in a session</h2></header>
   <div class="body">
     <figure>
@@ -854,8 +884,8 @@
   <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound, seconds per rerun), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
 </section>
 
-<!-- ===================== 19 NOT A CATALOGUE ===================== -->
-<section class="slide" id="s19">
+<!-- ===================== 20 NOT A CATALOGUE ===================== -->
+<section class="slide" id="s20">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Our store is not a second catalogue</h2></header>
   <div class="body">
     <figure>
@@ -888,8 +918,8 @@
   <aside class="notes">Third review pass removed what would have made the store a replica: file records created by discovery with copied metadata and stored mount paths. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
 </section>
 
-<!-- ===================== 20 FAILURES ===================== -->
-<section class="slide" id="s20">
+<!-- ===================== 21 FAILURES ===================== -->
+<section class="slide" id="s21">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Failures are the product</h2></header>
   <div class="body">
     <figure>
@@ -929,8 +959,8 @@
   <p class="take">Facilities that built automatic reduction report that <b>the monitoring UI was most of the value</b>. Phase 1 is unattended, so this is in from day one.</p>
 </section>
 
-<!-- ===================== 21 PHASE MATRIX ===================== -->
-<section class="slide" id="s21">
+<!-- ===================== 22 PHASE MATRIX ===================== -->
+<section class="slide" id="s22">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What each phase needs from the proposal</h2></header>
   <div class="body">
     <table>
@@ -939,7 +969,7 @@
         <tr><td>Records, references, file records by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Own record store, single writer; client interface with validate</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Subprocess launcher, cold runner, disk tier with registry</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Templates from version-controlled files; trigger loop; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Templates and lookups from version-controlled files; trigger loop with rules as data; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>All of failure handling; a status page with plots of whole outputs</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Groups with pending outputs (chains via trigger events suffice at first)</td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Batch with member keys; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
@@ -953,8 +983,8 @@
   <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, group rules for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
 </section>
 
-<!-- ===================== 22 PHASE 3 MODELS ===================== -->
-<section class="slide dense" id="s22">
+<!-- ===================== 23 PHASE 3 MODELS ===================== -->
+<section class="slide dense" id="s23">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Phase 3 is the real open question: where does interactive state live?</h2></header>
   <div class="body">
     <div class="grid3">
@@ -1005,8 +1035,8 @@
   <aside class="notes">Two stories the sketch was built around, tuning a SANS reduction in a notebook and tuning vanadium and sample together, fail the timing check under stateless-with-splits. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process.</aside>
 </section>
 
-<!-- ===================== 23 DECISIONS ===================== -->
-<section class="slide" id="s23">
+<!-- ===================== 24 DECISIONS ===================== -->
+<section class="slide" id="s24">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Decisions we need from this review</h2></header>
   <div class="body">
     <div class="qa">
@@ -1014,8 +1044,12 @@
       <span class="why">Including: per-bank outputs, angle series, masks as data, lookup tables, a stored vanadium that is only valid for compatible binning.</span>
       <span class="q">Build phases 1 and 2 on the stateless core only, and park sessions?</span><span class="rec">Recommend yes</span>
       <span class="why">Changes nothing in what those phases build; removes a fifth of the text from what reviewers must hold in mind.</span>
-      <span class="q">Groups as the automatic-reduction unit?</span><span class="rec">Rules match groups; inputs are list-valued</span>
-      <span class="why">A reflectivity curve needs four angle runs plus a reference, and the last one arrives last. A phase 1 question.</span>
+      <span class="q">Groups as the automatic-reduction unit?</span><span class="rec">Do not wait; refire the combine, successive combines in one slot</span>
+      <span class="why">A reflectivity curve needs four angle runs plus a reference, and nobody can say when the last one has arrived. The rule keys datasets into a group by metadata and submits a fresh combine over the members so far. A phase 1 question.</span>
+      <span class="q">How far does SciCat ingestion lag the file?</span><span class="rec">Measure before phase 1</span>
+      <span class="why">ISIS's interfaces discover runs from the archive because the catalogue lagged; a filesystem source can only get ahead of SciCat and wait for the PID, never replace it.</span>
+      <span class="q">A stored batch definition: template, lookup, members, exclusions?</span><span class="rec">Phase 2; versioned by copy like a template</span>
+      <span class="why">ISIS users keep the batch table as a file and edit it over a beamtime. Rerun-what-changed is a diff between two versions of it and the latest record per member key.</span>
       <span class="q">Spec changes to scipp/ess#690: typed outputs, data-reference parameters, collections, binned flag?</span><span class="rec">Recommend yes, while the PR is open</span>
       <span class="why">Cheap parameters and code revision are one optional field each.</span>
       <span class="q">Accept uploads of local files in the shared service?</span><span class="rec">Recommend no</span>
@@ -1031,8 +1065,8 @@
   <p class="take">Decision numbers D1 to D13 in the document <b>freeze after this review</b>. Point at them.</p>
 </section>
 
-<!-- ===================== 24 WHAT EXISTS ===================== -->
-<section class="slide" id="s24">
+<!-- ===================== 25 WHAT EXISTS ===================== -->
+<section class="slide" id="s25">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What exists, and the next five steps</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -1040,7 +1074,7 @@
       <ul>
         <li><b>The architecture sketch</b>, with rejected alternatives per choice, a glossary, and a decision index. A reading edition with diagrams is published.</li>
         <li><b>38 user stories</b> run against the sketch: getting data in, interactive, chaining, batch, automatic, publication, roles, operations. Every gap found was closed or became an open question.</li>
-        <li><b>Four review notes</b>: what each phase needs, what all-in stateless would remove and cost, and what the histories of Snakemake and AiiDA say about the sketch.</li>
+        <li><b>Five review notes</b>: what each phase needs, what all-in stateless would remove and cost, and what the histories of Snakemake, AiiDA, and Mantid's ISIS interfaces say about the sketch.</li>
         <li><b>A walking skeleton</b>, <code>ess.apps</code>, local mode: spec vocabulary, records, SQLite store, data store, both execution shapes, group submit with pending outputs, warm sciline wrapper with a warm-equals-cold test helper, templates, batch, trigger loop, publication, fakes. 64 tests.</li>
         <li class="hint">Not in it: real SciCat, HTTP, a UI, a cluster launcher, Tiled, a real instrument workflow.</li>
       </ul>
@@ -1050,7 +1084,7 @@
       <ol class="steps">
         <li>Make the throwaway launcher the default; keep the session launcher as an experiment outside the phase 1 and 2 tests.</li>
         <li>Build the real dataset source and publisher against SciCat behind the existing fakes.</li>
-        <li>Extend the trigger loop to completed-record events and group rules.</li>
+        <li>Extend the trigger loop to completed-record events, group rules, and lookups.</li>
         <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
         <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
       </ol>
@@ -1060,15 +1094,15 @@
   <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
 </section>
 
-<!-- ===================== 25 DISCUSS ===================== -->
-<section class="slide" id="s25">
+<!-- ===================== 26 DISCUSS ===================== -->
+<section class="slide" id="s26">
   <header><div class="eyebrow"><span>Discussion</span></div><h2>Three questions to leave with</h2></header>
   <div class="body grid3">
     <div class="card panel"><h3>Does the record model hold for your technique?</h3><p>Name the piece of data it cannot describe.</p></div>
     <div class="card panel"><h3>Is the phase order right, and what else should be parked?</h3><p>Anything in phase 1 that you would move out, or in.</p></div>
     <div class="card panel open"><h3>Which phase 3 model would you bet on today?</h3><p>Session, checkpoint, or stateless with splits. And what would change your mind.</p></div>
   </div>
-  <p class="take">Reading edition, sketch, user stories, and the four review notes are in <code>docs/developer</code> on the <code>architecture-sketch</code> branch.</p>
+  <p class="take">Reading edition, sketch, user stories, and the five review notes are in <code>docs/developer</code> on the <code>architecture-sketch</code> branch.</p>
 </section>
 
 <script>
