@@ -93,7 +93,7 @@ Actor: user in a notebook.
 
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
-Outcome: fits. One complete request per state; the growing list is the special case the wrapper accumulates; removal resets and recomputes (Choice 1, D8).
+Outcome: fits. Adding a run is a combine request over the session's previous combine and the new run's contribution, which the session holds in memory as it holds any output; removing one is a fresh combine over the remaining contributions; each state is a record (D15).
 
 ### B3. Compare two parameter sets side by side
 
@@ -187,7 +187,7 @@ Actor: reflectometry user.
 
 Checks: the combine that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
-Outcome: fits. This is the worked example under D6; per-angle metadata and the ORSO file are the workflow's serializer (D8).
+Outcome: fits. This is the worked example under D6; the stitch is not additive, so it is an opaque combine over the per-angle outputs, recomputed on every arrival (D15); per-angle metadata and the ORSO file are the workflow's serializer (D8).
 
 ### C5. Vanadium and sample tuned together
 
@@ -282,7 +282,7 @@ Actor: reflectometry user during a beamtime.
 
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combine; the UI shows one curve per sample, not one per arrival.
 
-Outcome: fits. A rule keys runs into a series by metadata and on each arrival submits the member and a fresh combine over the series so far; successive combines supersede under the series key (D14). Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
+Outcome: fits. A rule keys runs into a series by metadata and on each arrival submits the member and a combine request, over all per-angle outputs because the stitch is not additive (D15); successive combines supersede under the series key (D14). Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
 
 ### E2. Automatic reduction goes quiet
 

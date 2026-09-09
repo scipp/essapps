@@ -2,7 +2,7 @@
 
 Companion to [architecture.md](architecture.md) and [staging.md](staging.md).
 The sketch keeps state between runs in one place, the session, so that interactive work can rerun a warm workflow in memory.
-This note asks what the design looks like if it never does that: no caching, no reuse, no accumulation, and a changed parameter means a fresh process.
+This note asks what the design looks like if it never does that: no caching, no reuse, and a changed parameter means a fresh process.
 It then asks whether that makes phases 1 and 2 a separate, simpler system from phase 3, and what the three ways of doing phase 3 look like.
 
 ## The variant
@@ -29,7 +29,7 @@ The list is long because the session touches many sections, not because any one 
   What remains is a disk tier with a registry, a read cache in the view server if measurements ask for one, and retention.
 - D4 loses its second reason and the remark that it disappears inside a session.
   The rule becomes: split a workflow wherever a stage should be reusable or tunable on its own, always.
-- D8 loses the warm workflow, the sciline wrapper and its frontier, the declaration of cheap parameters as a framework concept, the accumulation special case, the warm-equals-cold helper, and the `reused` flag.
+- D8 loses the warm workflow, the sciline wrapper and its frontier, the declaration of cheap parameters as a framework concept, the warm-equals-cold helper, and the `reused` flag.
   In-process binding goes with it, because a throwaway process imports code by name.
 - D10 loses slots and everything on them.
   Views stay, served by the service from disk copies, with one routing rule instead of three.
@@ -111,34 +111,22 @@ Splitting becomes mandatory wherever a user will iterate, and the cut must be at
 The sketch already notes that the cut is not always clean, with processed vanadium in diffraction as the example.
 Every technique's notebook today has such a cut, the point after loading and coordinate conversion where the parameters people move come in, so the authors know where it is; the cost is that the cut becomes a spec boundary and its output a stored, typed, retained artefact rather than a variable.
 
-**Accumulation** is not a cost of this variant; it has its own section below, because it is a requirement of phase 2 rather than a property of phase 3.
+**Accumulation** is not a cost of this variant; D15 makes a series a chain of combine requests through disk, which is the variant's own shape, and the section below says what that leaves open.
 
-## Accumulation belongs to phase 2, not to phase 3
+## Accumulation is a declared combine, not a session feature
 
-The documents use one word for two mechanisms, an in-memory accumulator (D8) and a combine over stored outputs (D14), and then file the second under the first.
-[staging.md](staging.md) puts "accumulation" in phase 3 beside the warm workflow, which reads as though incremental combination were an interactive convenience.
-The scope says the opposite: automatic reduction "reduces a group of runs again whenever a run is added to it, because nobody at the instrument can say when a series is complete".
-That case runs unattended, in shared mode, with no user and no session to hold an accumulator, and it is phase 2.
-Filing accumulation under the session model turns it into an argument for sessions when the case with the strongest claim on it is the one case that has no session.
+An earlier version of this note filed accumulation under the session model, which made it an argument for sessions when the case with the strongest claim on it, a series nobody declares complete, runs unattended with no session at all.
+D15 now answers it in the core: a workflow declares its accumulation points, and a series is a chain of combine requests, each referencing the previous combine's contribution and the new member's.
+That is the variant's own shape, a throwaway process reading and writing through disk, so the variant loses nothing here and phases 1 and 2 need nothing beyond it.
 
-The sketch does answer it, in D14 rather than D8: a rule submits "a fresh combine over the series so far, referencing the members' outputs".
-So there are three rungs, and the framework currently stands on the first.
-
-1. **Recombine the members.** Each arrival reruns the combine over all k stored member outputs. No state, exact provenance, and the sketch's own qualifier is the limit: "cheap for one-dimensional curves". Nobody has said what happens when it is not.
-2. **Chain to the previous combine.** The new request references the previous combine's output and the new member, so an arrival costs one small read and one load rather than k. Still stateless, still one record per state, and it needs the combine to be associative, which the sketch already makes the author's problem for anything depending on the whole list, such as normalisation by summed monitor counts.
-3. **Fold into a live accumulator.** A process holds the partial result and folds new members into it. This needs a warm process addressed by what it holds, which is the keyed runner from the feedback-loop section: the two problems have the same third rung and would be solved by the same mechanism.
-
-The invariant that keeps all three interchangeable is worth stating in the core, because it costs nothing now and is what makes rungs 2 and 3 additive later:
-
-> Every value the system accumulates is recomputable from records, because every input to it is a dataset or an output that has one.
-> An accumulator is therefore always an optimisation with a recompute fallback, never the only copy of a fact.
-
-Two cases inside the current scope test it, and both are worth a number from the spike rather than a design now: a series whose members are not one-dimensional curves, where rung 1 stops being cheap, and an accumulated quantity too large to store, where rung 2 writes exactly what splitting was meant to avoid.
+What the variant leaves open is only how often the running contribution is written.
+Writing it on every arrival is the chain; holding it in a process and writing every n arrivals is the fold, and the fold needs a warm process addressed by the series it holds, which is the keyed runner from the feedback-loop section.
+The two problems have the same second rung and would be solved by the same mechanism.
+The invariant that makes the fold additive rather than a redesign is in the core (D2, D15): every value the system holds in memory is recomputable from records, because every input to it is a dataset or an output that has one.
 
 One case outside the scope would remove the invariant rather than stress it: reduction of a live stream, where the inputs are pulses with no records and nothing can be recomputed.
 That is esslivedata's domain, and it is the reason `ess.reduce.streaming.StreamProcessor` exists.
 If it enters this project's scope the question stops being where a cache may live and becomes where authoritative state may live, which is a different design and would be a reason to revisit choice 1 rather than an extension of it.
-Making that boundary explicit is the point of writing the invariant down.
 
 ## The user stories under the variant
 
@@ -147,7 +135,7 @@ Only the stories that the session touched change outcome.
 | Story | Under the sketch | All-in stateless |
 |---|---|---|
 | B1 tune a SANS reduction, feedback within a second or two | Fits in a session | A handful of seconds per change with splitting, more without; fits again once the rerun is routed to a warm runner holding the intermediate |
-| B2 add a run to a sum, then remove one | Accumulator in the warm workflow | Fits, by recombining or chaining; removal is a fresh combine either way, where the accumulator has to reset |
+| B2 add a run to a sum, then remove one | A chained combine whose partial the session holds (D15) | Fits, the same chain through disk; removal is a fresh combine either way |
 | B3 compare two variants | Two slot labels | Fits, two records, the UI keeps two IDs |
 | B4 explore a 4D volume | Served from session memory | Needs the deferred chunked on-disk layout, or the application loads the volume itself |
 | B5 kernel dies mid-session | Records survive, warm state is recomputed | Fits better: there was no state to lose |
@@ -197,15 +185,14 @@ Where the first rung's cost is disk and the workflow authors, the second's is a 
 | Burden on workflow authors | Declare cheap parameters and cache nodes correctly | None beyond the callable | Split at every tunable boundary |
 | Losing the process | Lose time; every step was recorded | Lose the exploration since the last checkpoint | Lose nothing |
 | Exploring a large volume in the browser | Views from session memory | Views from the application's memory, or a hosted process | Chunked layout on disk |
-| Accumulation for an unattended growing series | No session exists to hold the accumulator; the rule recombines | The application is not running; the rule recombines | The rule recombines, and chaining is the same code path |
+| Combining an unattended growing series | A chained combine (D15); no session is involved | A chained combine; the application is not running | A chained combine, this model's own shape; the fold is its second rung |
 
 The checkpoint model keeps what the session model was for, sub-second reruns and chained tuning, and drops what it cost, because the framework's only promise about interactive work becomes "a record is a cold run", which the core already promises.
 Its weak point is the same as the session model's: shared interactive use needs a process per user somewhere, and it answers that with infrastructure rather than with framework code.
 Its other cost is that a checkpoint takes as long as a cold run, once per kept result.
 
-The last row is the one that should be argued about, because it is not a phase 3 row.
-Two of the three models answer unattended accumulation by not being involved, which is correct and is what the sketch already does; it means the model chosen for interactive work does not decide how a growing series is combined, and that neither of the first two columns can be justified by accumulation.
-The reverse also holds: if a series that is not a one-dimensional curve forces a live accumulator into phase 2, the mechanism it needs is the third model's second rung, and phase 3 then has a keyed warm pool it did not have to pay for.
+The last row is not a phase 3 row: D15 answers it the same way in every column, so the model chosen for interactive work does not decide how a growing series is combined, and no column can be justified by accumulation.
+The reverse also holds: if a series arrives faster than its partial can be read and written, the fold D15 allows is the third model's second rung, and phase 3 then has a keyed warm pool it did not have to pay for.
 
 ## Should phases 1 and 2 be split from phase 3
 
@@ -239,7 +226,6 @@ As a judgment.
   Do not dismiss the third model on its feedback number: seconds is the first rung, not the model.
 - Measure the throwaway feedback loop in the spike, in three configurations: cold, with a warm process pool, and with a runner that already holds the intermediate in memory.
   The three numbers separate the cost of process start, of the disk read, and of the computation, and the phase 3 decision needs all three; if the cheap-stage rerun is under a few seconds for the techniques that matter, the third model's first rung is enough for some of them.
-- Write the recomputability invariant into the core now, and say in the same place that live-stream reduction is outside the scope it holds for.
-  It costs nothing today and is what keeps both the keyed warm pool and a live accumulator additive rather than a redesign.
-- Measure the combine over a series whose members are not one-dimensional curves, since that is where the sketch's unattended accumulation stops being cheap, and it is phase 2 rather than phase 3.
+- Keep the recomputability invariant where it now is, in the core (D2, D15), with live-stream reduction outside the scope it holds for; it is what keeps both the keyed warm pool and the fold additive rather than a redesign.
+- Measure the chained combine (D15) on a four-dimensional partial, one read and one write of a multi-gigabyte contribution per arrival, since that number decides when a series needs the fold.
 - Keep `warm.py` and the session launcher as an experiment, outside the core's tests and documents, so that nothing is lost if the session model wins.

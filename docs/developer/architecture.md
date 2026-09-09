@@ -138,7 +138,7 @@ The last option, with two invariants that keep it safe (D2).
 Session identity never appears in a record.
 Everything a session holds can be recomputed from records, so a session is a cache, and losing one costs only time.
 The invariant is not about sessions: every value this system holds in memory, including a partial sum over a growing series, is recomputable from records, because every input to it is a dataset or an output that has one.
-Held state is therefore always an optimisation with a recompute fallback, never the only copy of a fact.
+Held state is therefore always an optimisation with a recompute fallback, never the only copy of a fact, which is what lets a growing series be combined on disk or in memory interchangeably (D15).
 It holds because reduction here consumes datasets; it would not hold for reduction of a live stream, where the inputs are pulses with no records, which is why that is esslivedata's problem and not in this project's scope.
 This is esslivedata's lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so nothing depends on this one.
 
@@ -152,7 +152,7 @@ A session holds one **warm workflow** per spec version: the workflow object kept
 Tuning a stage and its consumer together, such as vanadium processing and a sample reduction, uses two, chained through the session's memory.
 From the framework's side there is one kind of rerun: a new, complete request.
 Changing a threshold and adding one more run to a list of runs to sum look the same, a full parameter set that differs from the previous one in one field, and the record of each rerun stands on its own.
-Whether the workflow reuses unchanged intermediates or folds a new list element into an accumulator is a difference the workflow discovers by comparing the two parameter sets (choice 3), not a kind of request.
+A changed threshold reruns the warm workflow (choice 3); one more run is a combine request over the session's previous combine (D15); neither is a kind of request the framework distinguishes.
 The list is resent whole on every rerun; it holds references, not data, so at the few thousand entries expected it stays under a megabyte.
 
 **The data store follows from the choice (D3).**
@@ -250,7 +250,7 @@ Groups must be acyclic; a waiting request has no timeout, because every record i
 Map and combine are one use of this: a batch of members plus one request whose inputs reference their outputs.
 They are optional: a spec may instead take a collection of runs and iterate inside, as reflectometry does when it scales overlapping angle curves against each other and writes the scaled curves back per angle.
 A combine's output may itself be a collection keyed by member.
-Merge strategy and memory during a merge belong to the combine workflow; real combines are not sums.
+An additive combine is declared as such and chained (D15); any other merge strategy belongs to the combine workflow.
 Batch members are independent: no ordering between them, and rerunning a member is a new record with the same batch ID; anything else is chaining.
 A batch is validated whole before any record is created, and cancelled whole by its batch ID, queued and running members alike.
 
@@ -314,7 +314,7 @@ Chunk-wise processing of one large file, as the NMX workflow does, happens insid
 A sciline workflow meets the contract through a thin wrapper that keeps the pipeline and caches the values of the nodes the spec declares expensive.
 A rerun sets the changed parameters and recomputes only what lies downstream of them, which is how every notebook already works: the parameters people move interactively, Q bins, d-spacing bins, cut axes, a beam centre, enter after the expensive load and coordinate conversion.
 The spec therefore declares which parameters are cheap to change, and the wrapper caches the nodes just upstream of them; that declaration is also what lets a UI offer a slider rather than a run button.
-`ess.reduce.streaming.StreamProcessor` is the special case for a list-valued parameter that only grows, such as runs to sum: its accumulators are fed the new elements, and any other change, including removing an element, resets it.
+A list of runs that only grows is not a case for the warm workflow but a combine (D15); the wrapper caches nodes and never accumulates.
 The framework provides a test helper that drives a callable through a sequence of parameter sets warm and cold and asserts equal outputs; that is the one check on the wrapper's reuse rules, and every workflow with a warm form runs it.
 A second helper recomputes a completed record and compares the outputs, so that a workflow package can keep records from production as regression tests.
 
@@ -328,7 +328,7 @@ The runner remains authoritative for parameters (ADR 0001 in scipp/ess#690); a d
 
 **Why.**
 Arrays arriving as objects is what lets a chain in a session stay in memory while workflow code looks the same in every mode.
-One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept.
+One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept, and a combine request (D15) calls two stages of the same binding rather than a second protocol.
 Reuse inside the wrapper is correct by construction from the sciline graph, given the declared cheap parameters; the declaration cannot be avoided, because caching every intermediate is not affordable and the graph does not know compute cost.
 Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.
 
@@ -336,7 +336,7 @@ Serialization of outputs must be pluggable because the outputs that get publishe
 Two validation points, with the runner's being the authoritative one.
 The runner loads scipp arrays whole.
 Reuse is exact only if the wrapper's rules are right; the test helper is the check, and the record's "workflow object reused" flag is what lets publication insist on a cold result (D11).
-Accumulation over a growing list is exact only for quantities that combine element by element; anything that depends on the whole list, such as normalisation by summed monitor counts, must be an accumulator on the right node, which is the workflow author's job.
+Accumulation over a growing list is D15's problem, where normalisation sits after the accumulation point.
 DREAM and imaging masks are Python callables today; each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 
 ### Choice 4: How clients reach the system (D9, D10)
@@ -381,11 +381,11 @@ In local mode a client may also turn a reference into a scipp object directly, s
 **Interactive reruns live in slots (also D10).**
 Interactive tools bind to parameters of shared vocabulary types: range, rectangle, polygon.
 Each change submits a new complete request into the plot's slot.
-A **slot** is a label on a request; runs with the same label supersede each other: a slider moving a threshold, a selection being dragged, or a list of runs to sum growing by one.
+A **slot** is a label on a request; runs with the same label supersede each other: a slider moving a threshold, a selection being dragged, or a series of runs growing by one.
 The client interface supplies the label whenever a request reruns a warm workflow, so a notebook user gets a slot without asking for one; comparing two variants side by side is two labels, the second assigned when the user forks, and discarding a variant drops its label from the UI and nothing else.
 The backend offers one query, the latest submitted record with a label, and treats outputs of superseded records as the first to evict.
 Cancelling a slot's queued predecessors is one client call.
-Tools list, replay, and inspect by slot; inspection shows the latest record with its diff against the previous one, which is "one more file" for an accumulation series and "one value changed" for a slider.
+Tools list, replay, and inspect by slot; inspection shows the latest record with its diff against the previous one, which is "one more contribution" for a series (D15) and "one value changed" for a slider.
 A slot is only a label with a supersede rule, the same rule a batch member key carries (D14); slot runs execute in the submitter's session, which until remote sessions exist means local mode.
 
 **Why.**
@@ -400,6 +400,93 @@ A view vocabulary in the client interface, and a chunking decision at write time
 Through the client interface a user explores declared outputs only; a notebook can compute any node of a sciline workflow.
 Interactive feedback is restricted to sessions, and initially to local mode.
 Every workflow that ends in events carries a dense twin, one histogram call in the callable.
+
+## Combining: how contributions become a result (D15)
+
+**The question.**
+Reduction is combination: counts from many pulses, angles, banks, and runs are added up into a curve or a volume, and that sum is then normalised, stitched, or fitted.
+Techniques differ in what is added, a one-dimensional curve for SANS and diffraction or a four-dimensional volume for spectroscopy; in how it is added, dense histograms by summation and binned events by concatenation; in what is added over, runs in a series, angle groups inside one run, or chunks of one file; and in when the non-additive step comes.
+Earlier versions of this document answered this in three places that did not meet: D6 made every combine an opaque workflow, D8 made a growing list of runs a special case of the warm workflow, and D14 had a rule recombine the members' outputs.
+The last is wrong for the first technique it would meet: a SANS member's displayed output is I(Q), and I(Q) curves do not add.
+What the workflows do, read from the source:
+
+- ess.sans merges runs at two nodes, the numerator and the denominator of I(Q), events by concatenation and the dense denominator by summation, and normalises once after the merge.
+  One function dispatches on the value: concatenate if binned, sum if dense.
+  The one-dimensional and two-dimensional outputs share the path.
+- ess.reflectometry concatenates events for runs at the same angle, which is additive, and combines angles by a global fit of scale factors over all curves, written back per angle and followed by a variance-weighted mean.
+  That is not additive; it needs the whole set, and it is affordable because the curves are one-dimensional.
+- ess.powder has no multi-run sum yet, and normalises by proton charge and by vanadium per run, upstream of where a sum would go.
+- ess.bifrost combines angles inside one run: events are grouped by rotation and concatenated into the volume.
+  A series across runs is unwritten.
+- `ess.reduce.streaming.StreamProcessor` is the additive structure made explicit: a graph up to declared accumulation keys is run per chunk, values are added at those keys, and the graph from those keys to the targets is run once at the end.
+  Its accumulators histogram events before adding, so it covers histogram mode only.
+
+Every additive case has one shape: a per-member stage produces an intermediate at one or more **accumulation points**, the intermediates are added, and a final stage turns the sum into the outputs.
+Normalisation sits in the final stage, which is why the intermediate usually has two parts, a numerator and a denominator, as LoKI's does in esslivedata.
+Dimensionality and event mode do not change the shape: a four-dimensional volume adds like a curve, and concatenation is addition for binned data.
+They change the size of the intermediate and the operation, and the framework needs to know neither.
+
+**Options.**
+
+- *Opaque.*
+  Every combine is a workflow; the framework knows nothing beyond map-combine (D6).
+  Exact for reflectometry, wrong or silently expensive for every additive case, because the framework cannot chain, fold, or parallelise what it cannot see.
+- *Framework-owned.*
+  The framework sums scipp arrays itself.
+  It then imports scipp semantics it has otherwise avoided, decides between summation and concatenation, and still cannot place normalisation.
+- *Declared structure.*
+  The workflow declares its accumulation points and supplies the three stages; the framework knows the algebra, that the middle stage is associative and commutative, and nothing about the values.
+
+**Choice.**
+Declared structure.
+A workflow may declare a **contribution**: an output at its accumulation points, opaque to the framework, and typically a data group holding a numerator, a denominator, and whatever else must be summed, such as monitor spectra or proton charge.
+A workflow with a contribution exposes three entry points instead of one: **contribute**, from parameters to a contribution; **combine**, from two contributions to one, associative and commutative; and **finalize**, from a contribution and the parameters to the outputs.
+The single callable of D8 is the composition contribute, then finalize, and is what a run without a series executes.
+A sciline workflow gets the three from the wrapper given the accumulation keys, which is the declaration `StreamProcessor` already takes: the graph up to the keys is contribute, the graph from the keys to the targets is finalize, and combine is the addition ess.reduce already dispatches on the value.
+Whether the intermediate is events or a histogram is the author's choice at the accumulation point: events keep rebinning a cheap parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
+The framework does not see the difference.
+
+A spec that declares a contribution also declares which of its parameters finalize reads; the rest, every data reference among them, are contribute's.
+The two sets usually coincide with the expensive and cheap parameters of D8, since the parameters people move interactively are the ones that enter after the sum, but they are separate declarations because they answer different questions.
+A member run of a declared series executes contribute only, and its other output fields are absent, which D13 allows.
+A **combine request** names the spec, carries the finalize parameters, and references contributions: the contribution outputs of member records, and usually the contribution output of the previous combine record.
+It produces the combined contribution, a stage output kept for the next combine, and the finalized outputs.
+It is complete in D1's sense because its references resolve to records that name the files; a recompute of a chained combine walks the chain back to the members.
+It is one use of pending outputs as inputs (D6) and needs no scheduling of its own; the runner calls combine over the references and finalize on the result, from the same binding that supplied contribute.
+The backend's runnability check requires every referenced contribution to come from the same spec name and version; anything finer, such as histogram bins that do not match, is combine failing fast.
+Combine may modify its first argument in place, since D2 makes the partial recomputable.
+
+Which contributions a combine references is the submitter's choice, and it decides the cost.
+A rule chains: each arrival is a combine record referencing the previous combine's contribution and the new member's, one read and one write of the partial per arrival, in a throwaway process, exact because combine is associative.
+That is what a series costs in shared mode, and it is enough for phases 1 and 2: even a four-dimensional partial of a few gigabytes is read and written once per arrival, and arrivals are minutes apart.
+Removing a member is a combine referencing the remaining contributions, never a subtraction; if their disk copies were evicted, contribute runs again from the raw files.
+A superseded combine's partial is needed only by the combine that superseded it, which has already run, so evicting it first (D10) costs nothing until a recompute walks the chain.
+In a session the same request shape serves the growing list of B2: the session holds the previous combine's contribution in memory as it holds any output, and each addition is a combine record in the slot.
+The warm workflow (D8) has no accumulation special case.
+
+The **fold** is an addition to chaining for a series that arrives faster than its partial can be read and written: a process holds the running contribution in memory and writes a combine record every n arrivals or when the series goes quiet.
+Between records the memory copy is a cache, recomputable from the last record and the members since, so D2's invariant holds; this is the warm runner keyed by what it holds, discussed in [stateless.md](stateless.md).
+A fold's records carry the reused flag, so publication recomputes them cold along the chain (D11); a rule that publishes its combine therefore chains.
+
+The unit that is combined is whatever the workflow maps over.
+Across records it is the framework's map-combine: one contribute per member, one combine.
+Inside one record, angle groups in a Bifrost run or chunks of an NMX file, the callable applies the same three stages itself, in parallel if it likes, and the framework never sees it; that the structure serves both is what makes declaring it worth the author's while.
+
+A combine that is not additive, reflectometry's stitching or a tomographic reconstruction, stays an ordinary workflow taking a collection of member outputs (D6), executed by recomputing on every arrival.
+The rule (D14) says which of the two it runs; the trigger loop submits contribute for the new member and a combine request, chained for a declared combine and over all members for an opaque one.
+
+**Why.**
+One structure serves adding a run in a notebook, a rule's growing series, a batch summed as one request, a parallel reduction of five hundred runs, the esslivedata accumulator, and whatever phase 3 holds in memory; they differ in where the contributions come from and how often the partial is written as a record.
+The author declares what every additive workflow already contains, and what `StreamProcessor` already asks for.
+The framework stays ignorant of scipp: it never sums, never chooses between summation and concatenation, and never places normalisation.
+Held state stays a cache: the invariant of D2, that every value in memory is recomputable from records, is what lets the fold be an addition rather than a design.
+
+**Cost.**
+Authors must place normalisation after the accumulation point; ess.sans does, ess.powder does not yet.
+Contributions are stage outputs on disk in shared mode, often large, and a chained series keeps k partials until the superseded ones are evicted, the first to go under D10's rule.
+The framework cannot check associativity; a test helper runs contribute, combine, and finalize over a list of members in two groupings and compares with the one-shot callable, and every workflow that declares a contribution runs it.
+The fold needs a long-lived process addressed by its series, which phases 1 and 2 do not have, and for event-mode contributions an accumulator that concatenates, which `ess.reduce.streaming` does not have.
+Neither is needed before a series arrives faster than a partial can be read and written.
 
 ## Rules: how requests are made from data (D14)
 
@@ -416,7 +503,7 @@ Every ISIS batch interface converged on this table under a different name, and [
 
 A **rule** is stored, versioned data that makes requests from datasets.
 It holds a selector, metadata criteria that pick the datasets it applies to; the template and lookup version it fills; a retry policy, the declared failure reasons on which a failed record is resubmitted as a retry record, up to a limit; and exclusions, datasets it must not fire on, each with a reason.
-Optionally it holds a series key, a metadata field whose value keys selected datasets into a **series**, and a combine, a spec and template run over a series.
+Optionally it holds a series key, a metadata field whose value keys selected datasets into a **series**, and a combine: for a workflow with a contribution its own combine stage with the finalize parameters, otherwise the spec and template of a combine workflow (D15).
 Exclusions are mutable state on the rule, not a version, because they change over a beamtime; everything else changes by copy, and records say which version made them.
 The trigger loop runs rules, and nothing else does.
 
@@ -425,9 +512,8 @@ Batching for convenience is many independent requests from one template with per
 The set of members is nothing but the records that came from that template version, so it is not stored: the table of what was reduced with which values is a query, the latest record per dataset for a template version, and the ISIS batch file is a rendering of that query plus the rule's exclusions.
 Such requests are tagged with a **batch ID** and a member key chosen by the submitter, such as the run number or the temperature, so that a batch of two thousand is listed, labelled, and cancelled by something meaningful; the batch semantics are under D6.
 Batching for merging is one request whose parameter is a collection of references, whether the workflow sums them inside or a map-combine (D6) does it; the set is on the record, so the manual case needs nothing new.
-Under a rule the set is derived: the selector and series key place each dataset in a series, and each arrival submits the member's reduction and a fresh combine over the series so far, referencing the members' outputs.
-Successive combines of one series supersede each other, the series key being their member key, so the UI shows one curve per sample that grows; a series of k runs costs k-1 combines, cheap for one-dimensional curves, and the superseded ones are the first evicted.
-Where the members are not cheap to recombine, the combine may instead reference the previous combine's output and the new member, which is the same request shape and costs one read per arrival rather than k, and is exact whenever the combine is associative.
+Under a rule the set is derived: the selector and series key place each dataset in a series, and each arrival submits the member's run and a combine request (D15), chained to the previous combine when the workflow declares a contribution and over all members' outputs when it does not.
+Successive combines of one series supersede each other, the series key being their member key, so the UI shows one curve per sample that grows; a series of k runs costs k-1 combines, and the superseded ones are the first evicted.
 The rule never waits for a series to be complete, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
 A series of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.
 The rule says whether its combine is published (D11); by default it is not.
@@ -523,6 +609,10 @@ A spec declares which parameters are cheap to change once the workflow is warm, 
 Both are read by the framework and by UIs and mean nothing to a throwaway run.
 A spec may also declare named failure reasons, each with a message; a workflow that fails for a declared reason returns it, the record carries its name, and a UI can explain it and a rule's retry policy can match it.
 
+**A contribution output (also D13, D15).**
+A spec may mark one output as its contribution and declare which parameters finalize reads, at which point the binding must supply contribute, combine, and finalize, and a combine request over that spec is valid.
+The contribution is typed like any output, so a combine's reference to one is the same type check as chaining; what it holds, a numerator and a denominator or more, is the author's.
+
 **One built-in spec, `file` (D1).**
 No workflow, one output of file type, and no kind, so the rule above that a file satisfies any kind is checked at materialization rather than at submission.
 
@@ -540,7 +630,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
   Its interface and the data store's are the two seams where implementations are swapped; both are kept narrow and stable from the first implementation, because retrofitting an interface under existing implementations cost Snakemake a major version.
   Two execution shapes; placement is relative to the session holding a run's inputs, and a group runs in one shape.
   Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
-- **Runner**: materializes inputs, validates parameters with the real parameter class, calls the workflow, stores outputs, writes a completion marker to the disk tier, reports to the backend.
+- **Runner**: materializes inputs, validates parameters with the real parameter class, calls the workflow, or for a combine request its combine and finalize stages (D15), stores outputs, writes a completion marker to the disk tier, reports to the backend.
   In a session it keeps the workflow callable between runs.
   Never touches the record store.
 - **Session**: a runner plus a private memory cache, belonging to one client.
@@ -554,7 +644,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
   Carries a schema version; drops a proposal's records together, never one.
 - **Dataset source**: yields new datasets for a proposal as PID plus the metadata fields it declares for the instrument, and persists nothing; a dataset becomes a file record when a request references it.
   One real implementation (SciCat) and one fake for tests.
-- **Trigger loop**: runs rules (D14): on a new dataset or a completed record that a rule's selector matches, fill the rule's template through its lookup and submit, and for a rule with a series key submit a fresh combine over the series so far; never on a dataset whose SciCat entry carries our snapshot, and never on one the rule excludes.
+- **Trigger loop**: runs rules (D14): on a new dataset or a completed record that a rule's selector matches, fill the rule's template through its lookup and submit, and for a rule with a series key submit a combine request over the series (D15); never on a dataset whose SciCat entry carries our snapshot, and never on one the rule excludes.
   Resubmits a failed record as a retry record when the rule's retry policy names its failure reason, up to the rule's limit.
   Has its own visible status: last fire, last refusal with its structured errors, and for any dataset of the proposal the reason it fired or did not, an exclusion included.
 - **Publisher**: writes an output to SciCat together with its provenance snapshot.
@@ -597,6 +687,7 @@ Kept together so it can be read as one piece.
 - **Batch**: template plus overrides (D6, D14).
 - **Automatic**: a rule run by the trigger loop (D7, D14).
 - **Chaining and map-combine**: pending outputs as inputs (D6).
+- **Combining a series**: contribute, combine, finalize (D15); chained through disk in shared mode, through memory in a session.
 - **Publication**: explicit publish of an output (D11).
 
 ## Explicitly deferred
@@ -645,21 +736,24 @@ Decisions the team needs to make; my recommendation in brackets.
 ## Next step
 
 Review this document with the team before implementing.
-Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake map-combine pair.
+Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake workflow with two accumulation points (D15), run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.
 Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
-The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier, a real instrument workflow, and the lookup and rules as data (D14) are not in it yet; its trigger rule is still a callable.
+The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier, a real instrument workflow, the lookup and rules as data (D14), and the contribute, combine, and finalize stages with combine requests (D15) are not in it yet; its trigger rule is still a callable.
 
 ## Glossary
 
 Where esslivedata uses a word differently, the clash is noted.
 
+- **Accumulation point**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum.
 - **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Batch**: many runs made from one template, each with small differences and a member key; a tag on records, not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
 - **Client interface**: the backend's Python interface, including validate and views. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
+- **Combine request**: a request that references contributions, from member records and optionally a previous combine, and produces the combined contribution and the finalized outputs. Chained when each references the previous.
+- **Contribution**: a workflow's output at its accumulation points; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset source**: where new datasets are discovered; persists nothing, a dataset becomes a file record when a request references it.
@@ -715,6 +809,7 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D12 | Instrument plus proposal scopes everything; one backend per instrument | Ownership, publication, and deployment |
 | D13 | One type vocabulary: inputs are data-reference parameters, outputs a typed model, collections on both sides | Spec changes |
 | D14 | Templates, lookups, and rules are the stored data requests are made from; a batch is a tag, not a stored unit; a rule keys datasets into series and never waits; superseding is one rule for member keys and slots | Rules |
+| D15 | An additive combine is declared: a contribution output at the workflow's accumulation points, with contribute, combine, and finalize; a combine request chains through disk, a session, or a warm runner, and the partial is always recomputable | Combining |
 
 ## Review log
 
@@ -727,3 +822,4 @@ A fourth pass read the sketch against Snakemake's history, in [snakemake.md](sna
 A fifth pass read it against AiiDA's history, in [aiida.md](aiida.md); it added UUID run IDs, annotations beside the record, the group ID, three kinds of failure with reasons declared on the spec, the paused status for transient infrastructure failure, retry by reason in the trigger loop, the session-restart rule for code changes, and the export rule for the deferred upload.
 A sixth pass read it against Mantid's ISIS batch interfaces and FIA, in [mantid.md](mantid.md); it added the lookup as versioned data used by batch and the trigger loop, the lookup entry on the record, rules as data, exclusions as annotations on file records, the explicit reprocess operation when a loop moves to a new version, the slot as a label usable by the trigger loop, and three open-question entries: not waiting for a series, batch definitions, and catalogue lag.
 A seventh pass read the three prior-art passes together for incremental creep and consolidated what they had added: template, lookup, and rule are one section with one decision, D14; a batch is a tag rather than a stored unit, because the set of members is a query over records; the rule replaces the batch definition and holds the exclusions, so annotations are notes again; the record gets one submission field in place of a group ID, a template version, and a lookup entry; the group ID, the request-equality query, and the trigger loop's use of slots were dropped; logs moved to the record store; paused runs got a mechanism; and the open questions on waiting for a series and on batch definitions closed.
+An eighth pass asked whether accumulation could be deferred at all, read how ess.sans, ess.reflectometry, ess.powder, ess.bifrost, and the streaming module combine runs, and found the sketch had three answers that did not meet; it added D15, the declared additive combine with its three stages, removed the accumulation special case from the warm workflow, and made a series combine a chained request rather than a recombination of member outputs.

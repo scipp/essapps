@@ -55,8 +55,10 @@ A number means the phase where the part is first needed.
 | D7 | Real SciCat dataset source | Core | The sketch defers real SciCat; phase 1 cannot. |
 | D8 | One callable, entry points, materialization by kind | Core | |
 | D8 | Three validation layers | Core | The trigger loop's refusals need structured errors from day one. |
-| D8 | Warm reuse, cheap parameters, warm-equals-cold helper, in-memory accumulator | 3 only | |
-| D14 | Combining a growing series | 2 | Unattended, with no session to hold an accumulator: the rule recombines the members, or chains to the previous combine. Not the same thing as D8's accumulator. |
+| D8 | Warm reuse, cheap parameters, warm-equals-cold helper | 3 only | |
+| D15 | Combine requests over member outputs | Core | Phase 1's angle series is an opaque combine, recomputed on each arrival. |
+| D15 | Contribution output, contribute, combine, and finalize, chained combines, grouping helper | 2 | The first declared contribution is a SANS or powder sum over runs. |
+| D15 | The fold: a process holding the running contribution | 3 only | Only when a series arrives faster than its partial can be read and written. |
 | D8 | In-process binding, no-shadowing rule | 3 only | Phases 1 and 2 bind through installed packages; developers install editable. |
 | D9 | The client interface is the API; validate separate from submit | Core | |
 | D9 | Notebook as the first client | Reordered | The first clients are the trigger loop and a web page in the backend process. |
@@ -110,7 +112,7 @@ This list matters more than the previous one, because it is the critical path.
   With both, a chain such as vanadium then sample is two rules and needs no pending outputs.
 - Group rules.
   The open question "groups as the automatic-reduction unit" is a phase 1 question, because a reflectometry beamtime reduced automatically is nothing but angle series.
-  A rule that waits for a series and submits one request with a list-valued parameter needs no scheduler support beyond what a single request has.
+  A rule that submits a combine request when a member completes (D14, D15) needs no scheduler support beyond what a single request has; pending outputs are needed only if member and combine are submitted together.
 - A deployment: the backend as a long-running service on one host per instrument, with the lock, restart reconciliation, logs, and something that pages an operator.
 - Authentication for the web page, mapping a login to SciCat proposal membership, unless the phase 1 page is restricted to instrument staff.
 - A web UI framework choice.
@@ -159,7 +161,7 @@ A "manual" reduction from the web page in phase 2 is a batch of one; a rerun wit
 The direct answer to "is there anything phases 1 and 2 would not require but phase 3 would":
 
 - Sessions, and the two invariants that keep them safe: no session identity in a record, and everything in a session recomputable from records.
-- The warm workflow, the sciline wrapper with its frontier computation, the declaration of cheap parameters, the warm-equals-cold test helper, and the in-memory accumulator for growing lists; combining a growing series without one is phase 2 (D14).
+- The warm workflow, the sciline wrapper with its frontier computation, the declaration of cheap parameters, the warm-equals-cold test helper, and nothing for growing lists: a series is a chained combine (D15) in every phase, and only the fold that holds the partial in memory is phase 3.
 - The `reused` flag on the record, and the rule that a reused result is recomputed cold before publication.
 - Private memory caches, the rule that the registry knows disk copies only, the memory lifetime, and the cache-coherence argument for keeping caches private.
 - Two execution shapes, placement as a launcher decision, `needs_disk_inputs`, write-out on demand, and the rule that a group runs in one shape.
@@ -241,7 +243,7 @@ Recommended reordering of the next steps, as a judgment:
 
 The document would be easier to review against the phases if it were two layers rather than one.
 
-- A **core** that is complete in itself: D1, D5, D6 marked optional, D7, D8 without its warm half, D9, D10 without slots, D11 without the cold-recompute rule, D12, D13 without cheap parameters, and failure handling without session loss.
+- A **core** that is complete in itself: D1, D5, D6 marked optional, D7, D8 without its warm half, D9, D10 without slots, D11 without the cold-recompute rule, D12, D13 without cheap parameters, D15 without the fold, and failure handling without session loss.
   This is the design of phases 1 and 2, and a reader can check that it closes with no forward reference to a session.
 - An **interactive extension** that adds sessions, warm workflows, cheap parameters, slots, private caches, the second execution shape, and local file records, each stated as an addition to a named part of the core.
   It should open with the decision that [stateless.md](stateless.md) puts on the table, because the extension is one of three ways to do phase 3 and not obviously the right one.
