@@ -546,6 +546,25 @@ Series membership is not stored: the members are the records under the rule's la
 Template, then lookup entry, then the values the submitter typed, and a blank at any rung falls through to the next.
 The record stores the resolved result, and its submission names the entry that applied and the typed values, kept apart, so that a reprocess under a new template or lookup version carries what was typed and recomputes what was filled.
 
+**In pandas terms.**
+The batch table is a frame, and the pieces above are how it is built:
+
+| Here | In pandas terms |
+|---|---|
+| Batch table | A frame: one row per member, the member key as index, parameters as columns |
+| Template | Column defaults, one row broadcast over the frame |
+| Lookup | An as-of or interval join with tolerance against the dataset metadata, the wildcard as fallback; two matches are an error, not the nearest |
+| Precedence ladder | `typed.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
+| Typed values beside resolved values | Keeping the source frames next to the result frame, instead of writing the result back into the cells |
+| Selector | A boolean mask over the dataset metadata frame |
+| Series key | `groupby(series_key)` |
+| Chained combine | A cumulative reduction within the group; the superseded partials are its intermediate values |
+| Latest per label and member key | `groupby(member_key).last()` over the records |
+
+The picture is exact for the view and wrong for the store: a frame is a stored, mutable table, and Mantid's runs table was one, which is where staleness by reset and the write-back into cells came from; here the records are the append-only log and the frame is a query over them.
+In a notebook the client interface speaks the picture anyway: the batch table comes back as a DataFrame, and apply accepts one, member key as index and typed values as columns; the ISIS batch CSV is that frame on disk.
+Two words clash and should be read with care: a series here is a groupby group, not a pandas Series, and apply here is a merge and fill, not `DataFrame.apply`.
+
 **Why.**
 The template, the lookup, and the rule are what a person edits and what a UI shows; the records are what happened.
 Keeping the two apart is the lesson of ISIS's autoreduction, where the rule and the record were one row and correcting the rule rewrote history, and of the third review pass here, which removed every second copy of the records.
@@ -769,7 +788,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Accumulation point**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum.
 - **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
-- **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations.
+- **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations. In a notebook it accepts a DataFrame, member key as index and typed values as columns.
 - **Batch**: the records under one label, made by a person from a template or by a rule; not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
 - **Client interface**: the backend's Python interface, including validate, apply, and views. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
