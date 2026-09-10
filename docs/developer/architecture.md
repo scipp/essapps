@@ -67,15 +67,15 @@ The record keeps references in reference form, so **provenance**, the chain from
 A **dataset** is data the framework did not compute: a SciCat dataset, or a file on a user's disk.
 A reference names it by its **dataset identity**: the PID for a catalogue dataset; for a local file, the instrument and run number it carries in its name or header, which is what a PID is minted from, or its path when it carries neither, the one case where a path is an identity.
 Identity is not location: where the bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable, or is the user's path for a local file, or a copy in the data store.
-The record store keeps one **dataset entry** per referenced dataset, holding what resolution and authorization need, the identity, its proposal and instrument, and the locations the store itself wrote; it is created when a request first references the dataset, never by discovery, and is dropped with its proposal.
-Listing a folder in a local application creates one entry per file, a row each and no bytes moved; the checksum is recorded the first time a runner reads the file, so that a recompute can tell whether it read the same bytes.
+Nothing is stored per dataset: its proposal is checked against the request's at submission, when the PID's SciCat entry is read anyway, and the data store registers a copy of its bytes only when it makes one.
+In the local application a folder is a dataset source (D7), read when asked; the checksum of a local file is recorded on the record of the run that read it, so that a recompute can tell whether it read the same bytes, and the path the submitter typed stays on the submission.
 A dataset is not a record: it has no request, no status, and nothing to recompute.
 A parameter of data-reference kind accepts either form, a dataset reference is never pending, and the trigger loop's two kinds of candidate are a new dataset and a completed record (D14).
 Making every dataset a record of a built-in `file` spec, so that a reference has one form, was the sketch's first answer and was dropped in the tenth pass: it bought a UUID over an identity SciCat already keeps, a spec with no workflow, and a rule to stop the store from becoming a catalogue, and gave nothing the two forms do not, since "which records used this dataset" is the same index over references either way, and a raw file is not viewable in either, a quick look being a preview run (D10).
 
 **Stand-ins resolve at submission.**
 Users submit a local path, a PID, or a run number, which is unique within an instrument and proposal.
-The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a run number is looked up in SciCat; a PID whose entry carries our provenance snapshot resolves to the run record named there while the store still has it, and any other PID to a dataset reference, with an entry created if it has none yet.
+The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a run number is looked up in SciCat; a PID whose entry carries our provenance snapshot resolves to the run record named there while the store still has it, and any other PID to a dataset reference, once its proposal is checked against the request's.
 A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path becomes a local dataset, identified as above.
 Nothing is downloaded or copied at submission, and SciCat is not needed again once a reference exists.
 
@@ -159,7 +159,7 @@ The list is resent whole on every rerun; it holds references, not data, so at th
 **The data store follows from the choice (D3).**
 It is one component owned by the backend: a registry and a disk tier.
 Every process that holds data, a session or the shared service, also keeps a private in-memory cache of outputs.
-The registry knows disk copies only.
+The registry knows disk copies only, keyed by reference in either form: outputs written to the disk tier, and copies of datasets the store made, a catalogue file downloaded or a local file uploaded.
 A memory cache is invisible to every other process, is never registered, and nothing is ever pulled out of a session by anyone but the session's own client.
 A runner asks the store for an input and hands it an output; the store serves from the cache of that process when it can and otherwise reads or writes disk.
 The runner never knows about caches, and the launcher decides only where a run executes.
@@ -184,7 +184,7 @@ A proposal's records and disk copies are dropped together, exported as one JSON 
 This is safe because references never cross proposals except into instrument-shared artefacts, whose commissioning proposals are long-lived, so no reference can point into a dropped proposal.
 Within a proposal, disk copies have a retention policy per kind of run, an open question; when it expires the bytes are dropped and the record stays.
 A dropped copy is a missing copy, under the rule in "Records and references".
-Store copies of local files are exempt from that policy: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the dataset entry or with its proposal, after which every record that reaches it through references is no longer recomputable.
+Store copies of local files are exempt from that policy: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the copy or with its proposal, after which every record that reaches it through references is no longer recomputable.
 They count against a per-proposal quota.
 A login, a batch, or an application start is not a lifetime: what a user comes back for outlives all three, and automatic reduction has none of them.
 
@@ -257,8 +257,8 @@ A group is validated whole before any record is created, and a batch is cancelle
 
 **The dataset source is abstracted (D7).**
 Its interface: for a proposal, yield new datasets as PID plus the metadata fields it declares for the instrument; those fields, an angle, a sample name, a run's role, are the only ones a lookup or a rule may match on, and they are declared here because the source is what knows what the acquisition writes into the catalogue.
-It persists nothing: a dataset gets an entry in the store only when a rule fires and the submission it makes references the PID, like any other stand-in; which datasets a rule has already decided on is a query over the records, not memory in the source or the loop, and which series a member belongs to is asked of the source when a combine is submitted.
-A SciCat implementation, polling or push as the deployment allows, and an in-memory fake.
+It persists nothing: a dataset enters the store only as a reference in the requests a rule submits, like any other stand-in; which datasets a rule has already decided on is a query over the records, not memory in the source or the loop, and which series a member belongs to is asked of the source when a combine is submitted.
+A SciCat implementation, polling or push as the deployment allows, a folder for the local application, and an in-memory fake.
 Arrival may be out of order and repeated; the interface does not promise a monotonic cursor.
 
 **Why.**
@@ -584,7 +584,7 @@ A series a person defines by hand, "these runs, and keep combining as more arriv
 Our store answers what was computed; SciCat answers what was measured and what was finalized.
 A record holds nothing from SciCat that it did not need to make a decision, so a UI that wants a sample name or the list of a proposal's runs asks SciCat, and a batch member key such as a temperature is supplied by the submitter, not looked up.
 SciCat is needed at two moments, resolving a stand-in and publishing; a resolved reference never needs it again, so work on data already referenced continues when the catalogue is slow.
-Local mode is the one place where our store is the only catalogue, and there it is a row per file in a folder.
+Local mode has no catalogue: a folder is its dataset source, read when asked, and the store holds nothing about the files in it.
 
 **Only finalized data enters SciCat (D11).**
 Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
@@ -617,6 +617,8 @@ The spec has one parameter model and no separate input section.
 The parameter vocabulary gains a **data reference** type: a field holding a reference to a file or array output, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same `ArraySpec` that outputs declare.
 A parameter of this type is what we call an **input**.
 A dataset reference satisfies any kind: the consumer's kind decides how it is materialized, and loading a file as a scipp array fails if it is not scipp HDF5.
+A UI choosing a value for such a field asks the **picker**, a client query that returns candidates of matching kind as rows of one shape, a reference, its kind, and display fields: outputs from the record store, and datasets from every dataset source the client has, SciCat for a proposal or a folder in the local application.
+Nothing is stored to make that list, and a further place to pick from is another dataset-source implementation, not a change to the picker.
 A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run.
 Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, materialization to a file, provenance edges, validation timing, and which widget a UI shows.
 esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.
@@ -662,7 +664,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 
 - **Backend**: validates a request in three layers, finds the references by walking the request's values, checks each against the type of the output it names, resolves stand-ins to references, creates the record, and hands the request to a launcher.
   Single writer to the record store; exactly one backend process per record store.
-- **Client interface**: the backend's Python interface, including validate, apply, and views.
+- **Client interface**: the backend's Python interface, including validate, apply, views, and the picker (D13).
   This *is* the API.
 - **Launcher**: pluggable: session, subprocess, cluster.
   Its interface and the data store's are the two seams where implementations are swapped; both are kept narrow and stable from the first implementation, because retrofitting an interface under existing implementations cost Snakemake a major version.
@@ -674,14 +676,14 @@ Structural validation of an array output against its `ArraySpec` happens in the 
 - **Session**: a runner plus a private memory cache, belonging to one client.
   Created and closed by the client; closing drops its cache.
   In local mode it is the client's own process.
-- **Data store**: a registry of disk copies and a disk tier, addressed as record plus output name plus optional key.
+- **Data store**: a registry of disk copies and a disk tier, addressed by reference: record plus output name plus optional key, or a dataset identity for a copy of a dataset.
   Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
   A catalogue file's location comes from SciCat at dispatch and a local file's is its path; a store copy of a local file is kept until dropped explicitly or with its proposal.
 - **Record store**: create, read, update status, and queries: records by proposal, time, template version, or rule version; the records under a label and the latest per label and member key; records that reference output X of record Y, or dataset D.
   Holds the runners' logs beside the records.
   Carries a schema version; drops a proposal's records together, never one.
-- **Dataset source**: yields new datasets for a proposal as PID plus the metadata fields it declares for the instrument, and persists nothing; a dataset gets an entry when a request references it.
-  One real implementation (SciCat) and one fake for tests.
+- **Dataset source**: yields new datasets for a proposal as PID plus the metadata fields it declares for the instrument, and persists nothing.
+  SciCat, a folder for the local application, and a fake for tests; the picker lists from every source the client has.
 - **Trigger loop**: runs the active rules (D14): applies a rule to each candidate, a new dataset or a completed record, that its selector matches after its bound and that has no record under its label; apply fills the template through the lookup and submits, and for a rule with a series key also submits a combine request over the series (D15); never on a candidate the rule excludes or whose SciCat entry carries our snapshot.
   Resubmits a failed record as a retry record when the rule's retry policy names its failure reason, up to the rule's limit.
   Keeps no state: every decision is a query over the records, so a restart changes nothing.
@@ -764,7 +766,7 @@ Decisions the team needs to make; my recommendation in brackets.
   [Keep it unless the two projects are documented together.]
 - **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest, and the analysis window after which a proposal's records are dropped.
   [One order: outputs of superseded records first, then an intermediate flag the spec puts on an output, meaning cheap to recompute from its inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show they get it right.]
-- **Local paths after a drop.** A local file's path stays on its dataset entry after its bytes are dropped, until the proposal is dropped.
+- **Local paths after a drop.** A local file's path stays on the submission after its bytes are dropped, until the proposal is dropped.
   [Keep it: a path is not data, and provenance needs it.]
 - **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
   [Separate stores now; a local socket form of the HTTP transport later, which also serves the local application.]
@@ -790,21 +792,21 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations. In a notebook it accepts a DataFrame, member key as index and typed values as columns.
 - **Batch**: the records under one label, made by a person from a template or by a rule; not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
-- **Client interface**: the backend's Python interface, including validate, apply, and views. The API.
+- **Client interface**: the backend's Python interface, including validate, apply, views, and the picker. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
 - **Combine request**: a request that references contributions, from member records and optionally a previous combine, and produces the combined contribution and the finalized outputs. Chained when each references the previous.
 - **Contribution**: a workflow's output at its accumulation points; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path. The second form of reference. Not a record: no request, no status.
-- **Dataset entry**: the record store's row per referenced dataset: identity, proposal, instrument, and the locations the store wrote. Created on first reference, never by discovery.
-- **Dataset source**: where new datasets are discovered; persists nothing, a dataset gets an entry when a request references it.
+- **Dataset source**: where datasets are discovered and listed; persists nothing. SciCat for a proposal, a folder in the local application.
 - **Group**: several requests submitted atomically that may reference each other's outputs before they exist.
 - **Input**: a parameter of data-reference type. In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
 - **Label**: a field on a request, with an optional member key; the latest record per label and member key supersedes the earlier ones. A rule's name for the records it makes, a name the submitter picks for a batch, a slot for an interactive tool.
 - **Launcher**: decides where a run executes and starts it there.
 - **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, with at most one wildcard. What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
 - **Local mode**: client, backend, launcher, session, and data store in one Python process. **Shared mode**: the backend as a service used by many people; the **shared service** is that backend's process, which also holds a memory cache.
+- **Picker**: the client query behind an input field: candidates of matching kind from the record store and from every dataset source, as rows of one shape.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
 - **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
@@ -866,4 +868,4 @@ A sixth pass read it against Mantid's ISIS batch interfaces and FIA, in [mantid.
 A seventh pass read the three prior-art passes together for incremental creep and consolidated what they had added: template, lookup, and rule are one section with one decision, D14; a batch is a tag rather than a stored unit, because the set of members is a query over records; the rule replaces the batch definition and holds the exclusions, so annotations are notes again; the record gets one submission field in place of a group ID, a template version, and a lookup entry; the group ID, the request-equality query, and the trigger loop's use of slots were dropped; logs moved to the record store; paused runs got a mechanism; and the open questions on waiting for a series and on batch definitions closed.
 An eighth pass asked whether accumulation could be deferred at all, read how ess.sans, ess.reflectometry, ess.powder, ess.bifrost, and the streaming module combine runs, and found the sketch had three answers that did not meet; it added D15, the declared additive combine with its three stages, removed the accumulation special case from the warm workflow, and made a series combine a chained request rather than a recombination of member outputs.
 A ninth pass asked whether batch and automatic reduction were more unified than the sketch had set out to make them, and found that a rule is to a batch what a template is to a request, which is what Mantid's reflectometry batch tab already is; it merged the slot and the batch ID into one label with an optional member key, made a rule's records a batch under the rule's name, named the one apply operation behind the form, the trigger loop, and the backlog, reprocess, and rerun operations, made the trigger loop stateless by putting a lower bound on the rule's selector, gave the rule an active state, put the typed values on the submission so that a reprocess carries them, and moved labels and apply from phase 2 into phase 1.
-A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, kept the store's entry per referenced dataset for authorization and copies, and took a local file's identity from the run identity it carries rather than a hash at submission.
+A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, stores nothing per dataset, since the proposal check happens at submission and the data store registers only the copies it makes, keyed by reference in either form, took a local file's identity from the run identity it carries rather than a hash at submission, made a folder a dataset source for the local application, and named the picker, the query behind an input field, so that listing what can be picked is a query over the record store and the dataset sources rather than a table of ours.

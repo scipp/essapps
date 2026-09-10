@@ -537,15 +537,16 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y" or a dataset</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two cards: a completed run record Y whose sample parameter holds a SciCat PID inline, and a new request Z whose beam-centre parameter references Y's beam-centre output. A side note says the record store keeps an entry per referenced PID.">
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two cards: a completed run record Y whose sample parameter holds a SciCat PID inline, and a new request Z whose beam-centre parameter references Y's beam-centre output. A side note says nothing is stored per dataset and the data store registers only the copies it makes.">
         <!-- side note: what a PID in a request implies -->
         <text x="46" y="128" class="s">a dataset is named by its PID,</text>
         <text x="46" y="146" class="s">inline in the request</text>
-        <text x="46" y="180" class="s">the record store keeps one entry</text>
-        <text x="46" y="198" class="s">per referenced PID: proposal,</text>
-        <text x="46" y="216" class="s">instrument, our copies</text>
-        <text x="46" y="250" class="s">the bytes are where SciCat says,</text>
-        <text x="46" y="268" class="s">or a copy in the data store</text>
+        <text x="46" y="178" class="s">nothing is stored per dataset;</text>
+        <text x="46" y="196" class="s">its proposal is checked at submission</text>
+        <text x="46" y="228" class="s">the data store registers a copy</text>
+        <text x="46" y="246" class="s">only when it makes one</text>
+        <text x="46" y="278" class="s">the bytes are where SciCat says,</text>
+        <text x="46" y="296" class="s">or a copy in the data store</text>
 
         <!-- run record Y -->
         <rect class="box" x="360" y="40" width="360" height="250" rx="10"/>
@@ -579,7 +580,7 @@
     </figure>
   </div>
   <p class="take">Two forms of name serve <b>inputs, plots, publication, and provenance</b>. There is no "which run produced this" query, because the name already says it.</p>
-  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way? Address the confusion from the first review head on: "no filenames" never meant nobody types one; it means the stored request holds an identity, so a moved or re-archived file cannot make a record stale. Earlier drafts wrapped every file in a "file record" of a built-in spec so that a reference had one form; the tenth pass dropped that. It was a UUID over an identity SciCat already keeps, and nothing it gave, the "which runs used this dataset" query, plotting, the trigger loop, is anything a PID in the request does not give. The side note is the whole remainder: an entry per referenced PID in the record store, for authorization and for the copies the store made; the bytes live in the data store or wherever SciCat says.</aside>
+  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way? Address the confusion from the first review head on: "no filenames" never meant nobody types one; it means the stored request holds an identity, so a moved or re-archived file cannot make a record stale. Earlier drafts wrapped every file in a "file record" of a built-in spec so that a reference had one form; the tenth pass dropped that. It was a UUID over an identity SciCat already keeps, and nothing it gave, the "which runs used this dataset" query, plotting, the trigger loop, is anything a PID in the request does not give. Nothing is stored per dataset: the proposal check happens at submission, when the PID's SciCat entry is read anyway, and the data store registers a copy only when it makes one, keyed by the same reference. Listing what can be picked is a query over the record store and the dataset sources, SciCat or a folder, not a table of ours.</aside>
 </section>
 
 <!-- ===================== 13 RECORD ANATOMY ===================== -->
@@ -865,7 +866,7 @@
         <rect class="box" x="350" y="30" width="150" height="46" rx="8"/><text x="425" y="58" text-anchor="middle">trigger loop</text>
         <path class="e" d="M100,76 L100,120"/><path class="e" d="M260,76 L260,120"/><path class="e" d="M425,76 L425,120"/>
         <!-- interface -->
-        <rect class="accb" x="30" y="120" width="470" height="44" rx="8"/><text x="265" y="147" text-anchor="middle" class="h">client interface · validate, submit, query, view</text>
+        <rect class="accb" x="30" y="120" width="470" height="44" rx="8"/><text x="265" y="147" text-anchor="middle" class="h">client interface · validate, submit, query, view, pick</text>
         <text x="520" y="147" class="s">the API. HTTP later, same interface</text>
         <path class="e" d="M265,164 L265,200"/>
         <!-- backend -->
@@ -893,10 +894,10 @@
         <rect class="disk" x="850" y="200" width="240" height="96" rx="10"/>
         <text x="866" y="226" class="h">data store</text>
         <text x="866" y="250" class="s">registry of disk copies + disk tier</text>
-        <text x="866" y="270" class="s">large outputs, by record + output</text>
+        <text x="866" y="270" class="s">copies keyed by reference, either form</text>
         <!-- scicat, dataset source, publisher -->
         <rect class="lane" x="850" y="30" width="240" height="60" rx="8"/><text x="970" y="66" text-anchor="middle" class="h">SciCat</text>
-        <rect class="box" x="580" y="30" width="220" height="46" rx="8"/><text x="690" y="58" text-anchor="middle">dataset source</text>
+        <rect class="box" x="580" y="30" width="220" height="46" rx="8"/><text x="690" y="50" text-anchor="middle">dataset source</text><text x="690" y="68" text-anchor="middle" class="s">SciCat · folder</text>
         <path class="e" d="M850,60 L800,60"/><text x="826" y="48" text-anchor="middle" class="s">new</text>
         <path class="e" d="M580,53 L500,53"/>
         <rect class="box" x="850" y="120" width="240" height="46" rx="8"/><text x="970" y="148" text-anchor="middle">publisher · output + snapshot</text>
@@ -909,7 +910,7 @@
     </figure>
   </div>
   <p class="take">Everything the backend knows is in the records, so <b>a restart loses nothing</b>, and any client reaches it only through one interface.</p>
-  <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit.</aside>
+  <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit. The dataset source has two real implementations, SciCat and a folder for the local application. The picker behind an input field lists candidates from the record store and from every dataset source the client has, and stores nothing to do it; a further place to pick from is one more dataset source.</aside>
 </section>
 
 <!-- ===================== 19 CONTRACT ===================== -->
@@ -1121,8 +1122,8 @@
         <text x="860" y="62" text-anchor="middle" class="h">our record store</text>
         <text x="860" y="86" text-anchor="middle" class="s">what was computed</text>
         <text x="660" y="126" class="s">▸ run records: request + what happened</text>
-        <text x="660" y="150" class="s">▸ dataset entries: PID, proposal, instrument, our copies. Nothing else.</text>
-        <text x="660" y="174" class="s">▸ created on first reference, never by discovery</text>
+        <text x="660" y="150" class="s">▸ nothing per dataset: its proposal is checked at submission</text>
+        <text x="660" y="174" class="s">▸ copies of datasets live in the data store, only when made</text>
         <text x="660" y="198" class="s">▸ live as long as the proposal plus an analysis window</text>
         <text x="660" y="240" class="s">a UI wanting a sample name asks SciCat</text>
 
@@ -1133,7 +1134,7 @@
     </figure>
   </div>
   <p class="take">Only finalized data enters SciCat. Once a reference exists, <b>work continues when the catalogue is slow</b>.</p>
-  <aside class="notes">Third review pass removed what would have made the store a replica: entries created by discovery with copied metadata and stored mount paths. The entry per referenced dataset is what authorization and the store's own copies need, and it is not a record. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
+  <aside class="notes">Third review pass removed what would have made the store a replica: entries created by discovery with copied metadata and stored mount paths. Nothing is stored per dataset now; the data store registers a copy only when it makes one. In the local application a folder is the dataset source, read when asked. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
 </section>
 
 <!-- ===================== 24 FAILURES ===================== -->
@@ -1184,7 +1185,7 @@
     <table>
       <thead><tr><th>Part</th><th class="c">Phase 1 · automatic</th><th class="c">Phase 2 · batch</th><th class="c">Phase 3 · apps</th></tr></thead>
       <tbody>
-        <tr><td>Records, references in both forms, dataset entries by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Records, references in both forms, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Own record store, single writer; client interface with validate</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Subprocess launcher, cold runner, disk tier with registry</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Templates and lookups from version-controlled files; rules as data, labels with member keys, apply as a previewed group, cancel by label; a stateless trigger loop; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>

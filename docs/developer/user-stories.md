@@ -55,7 +55,7 @@ Actor: user of the shared web UI.
 
 Checks: the bytes can be dropped; the record and the runs that used it remain honest about what happened; nothing else breaks.
 
-Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The local path remains on the dataset entry until the proposal is dropped. Decide whether a local path is sensitive enough to need redaction.
+Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The local path remains on the submission until the proposal is dropped. Decide whether a local path is sensitive enough to need redaction.
 
 ### A5. Metadata corrected after the fact
 
@@ -67,7 +67,7 @@ Actor: instrument scientist.
 
 Checks: the UI shows what SciCat says now; the record is unchanged; nothing in our store had to be updated.
 
-Outcome: fits. A dataset entry holds only PID, proposal, and instrument, and the UI asks SciCat for the rest (The record store is not a catalogue, D11).
+Outcome: fits. Nothing is stored per dataset, and the UI asks SciCat (The record store is not a catalogue, D11).
 
 ## B. Manual and interactive reduction
 
@@ -302,7 +302,7 @@ Actor: nobody; a failure mode.
 1. An automatic-reduction result is published to SciCat.
 2. The dataset source sees the new dataset.
 
-Checks: the rule does not fire on the published output; the published dataset does not get a dataset entry of its own.
+Checks: the rule does not fire on the published output; the published dataset is not listed as a raw dataset.
 
 Outcome: fits. A rule never fires on records made from its own template, and the dataset source skips PIDs in publishing or published state (D11).
 

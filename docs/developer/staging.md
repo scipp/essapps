@@ -35,7 +35,7 @@ A number means the phase where the part is first needed.
 | Decision | Part | First needed | Note |
 |---|---|---|---|
 | D1 | Requests, records, references to completed records | Core | The foundation; every phase stands on it. |
-| D1 | Dataset references and entries for catalogue datasets by PID | Core | The trigger loop creates the entries. |
+| D1 | Dataset references for catalogue datasets by PID | Core | The trigger loop submits them. |
 | D1 | Local files as datasets, identified by run identity or path, checksum on first read | 3 only | Or phase 2 if the web page accepts uploads; see "Candidates for removal". |
 | D1 | Run-number resolution | 2 | A form field; the trigger loop already has the PID. |
 | D1 | Recompute of a dropped copy | 2 | Nothing is dropped in phase 1 unless a quota is hit. |
@@ -100,7 +100,7 @@ The same by component.
 ## Phase 1 in detail
 
 **What it needs from the sketch.**
-Records, references, dataset entries by PID, templates from files, the record store, the backend without groups, the subprocess launcher, the cold runner, the disk tier with its registry, the dataset source, the trigger loop, the publisher, trivial views, and all of failure handling.
+Records, references in both forms, templates from files, the record store, the backend without groups, the subprocess launcher, the cold runner, the disk tier with its registry, the dataset source, the trigger loop, the publisher, trivial views, and all of failure handling.
 That is the sketch with Choice 1 reduced to its first sentence, Choice 3 without its warm half, and Choice 4 without slots.
 
 **What it needs that the sketch defers or underweights.**
