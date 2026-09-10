@@ -41,7 +41,7 @@ A number means the phase where the part is first needed.
 | D1 | Recompute of a dropped copy | 2 | Nothing is dropped in phase 1 unless a quota is hit. |
 | D1 | Records dropped by proposal, export bundle | 2 | An operations task; phase 1 keeps everything. |
 | D1 | Templates | Core | Phase 1 needs version-controlled files only; saving a request as a template is phase 2. |
-| D1 | Batch, member keys | 2 | The whole of phase 2. |
+| D1 | Labels and member keys, apply as a previewed group, cancel by label | Core | A rule's records are a batch under its name; the backlog, reprocess, and rerun operations are apply over a query. The form that types members by hand is phase 2. |
 | D2 | Requests are stateless | Core | |
 | D2 | Sessions, session invariants | 3 only | |
 | D3 | Registry of disk copies, disk tier | Core | The data store in phases 1 and 2 is exactly this. |
@@ -65,7 +65,8 @@ A number means the phase where the part is first needed.
 | D9 | HTTP transport | 2, as a decision | Needed as soon as a client lives outside the backend process: a JavaScript frontend or a notebook submitting batches. |
 | D10 | Views as plain arrays over dense outputs | Core, trivially | Phase 1 views are whole small outputs; slicing and overlays come with phase 2 plots. |
 | D10 | Event data never viewed, dense twin outputs | Core | A rule on workflow authors, free for the framework. |
-| D10 | Slots, latest-by-label, evict-superseded-first, fork, cancel predecessors, diff | 3 only | |
+| D10 | Latest per label and member key, evict-superseded-first | Core | One query serves a rule's table in phase 1 and slots in phase 3. |
+| D10 | Slots, fork, cancel predecessors, diff | 3 only | |
 | D11 | Publication with a provenance snapshot, real SciCat publisher | Core | Automatic reduction that publishes nothing is invisible. |
 | D11 | Cold recompute before publishing a reused result; refusal of in-process bindings | 3 only | Every run in phases 1 and 2 is cold. |
 | D12 | Instrument plus proposal on every record; one backend per instrument | Core | |
@@ -74,7 +75,7 @@ A number means the phase where the part is first needed.
 | D13 | Cheap parameters on the spec | 3 only | |
 | D13 | Code revision on the spec | Core | One optional field; keeps development records honest. |
 | Failure | State machine, completion marker, reconciliation on restart, liveness, structured failure reason, trigger status | Core | Unattended operation is what phase 1 is. |
-| Failure | Cancel by batch | 2 | |
+| Failure | Cancel by label | Core | Stopping what a rule started. |
 | Failure | Session loss | 3 only | |
 | Failure | Access checked on every reference | Core if external users see phase 1; else 2 | |
 
@@ -82,18 +83,18 @@ The same by component.
 
 | Component | Phase 1 | Phase 2 | Phase 3 |
 |---|---|---|---|
-| Backend | Validate, submit one, dispatch, poll, retry | Plus group submit if adopted, cancel by batch, recompute | Unchanged |
+| Backend | Validate, apply as a previewed group, dispatch, poll, retry, cancel by label | Plus recompute | Unchanged |
 | Client interface | In-process, used by the trigger loop and the web page | Plus HTTP transport if the UI or notebooks leave the process | Plus slots, direct scipp access in notebooks |
 | Launcher | Subprocess on the backend host | Plus cluster when volume demands | Plus session, and later remote session |
 | Runner | Cold: construct, call once, marker | Unchanged | Plus keep the callable |
 | Data store | Disk tier plus registry | Plus retention and drop | Plus private caches, write-out on demand |
-| Record store | Records, references, list by proposal and time | Plus list by batch and member key | Plus slot column and latest-by-label |
+| Record store | Records, references, list by proposal and time, records under a label and latest per label and member key | Unchanged | Unchanged |
 | Dataset source | Real SciCat plus fake | Unchanged | Unchanged |
-| Trigger loop | On datasets and on completed records; group rules | Unchanged | Unchanged |
+| Trigger loop | On datasets and on completed records; rules with a bound and an active state; no state of its own | Unchanged | Unchanged |
 | Publisher | Real SciCat plus fake | Unchanged | Plus cold recompute rule |
-| Templates | Version-controlled files, one version bound per loop | Plus saved from a request, derived by copy | Unchanged |
+| Templates | Version-controlled files, one version bound per rule | Plus saved from a request, derived by copy | Unchanged |
 | Views | Whole small outputs | Slicing, reduction, overlays, a read cache in the service | Volumes, served from session memory |
-| Web UI | Status page, record list, plot | Forms with live validation, batch monitor, template editor | Per-technique applications |
+| Web UI | The rule's table, which is the batch table, record list, plot | Forms with live validation, hand-typed members and overrides, template editor | Per-technique applications |
 | Sessions, warm workflows, slots | Absent | Absent | The whole of the addition |
 
 ## Phase 1 in detail
@@ -121,7 +122,7 @@ This list matters more than the previous one, because it is the critical path.
 - A quota alarm, because retention is not designed yet and a beamtime of automatic reduction fills disks.
 
 **What phase 1 can do without and should not build.**
-Sessions, warm workflows, cheap parameters, the private cache, the second execution shape, slots, local file records, in-process binding, batch, user-saved templates, run-number resolution, recompute, groups, the HTTP transport.
+Sessions, warm workflows, cheap parameters, the private cache, the second execution shape, slots, local file records, in-process binding, the batch form, user-saved templates, run-number resolution, recompute, the HTTP transport.
 
 **Two simplifications available in phase 1 that the sketch does not mention.**
 
@@ -133,7 +134,7 @@ Sessions, warm workflows, cheap parameters, the private cache, the second execut
 ## Phase 2 in detail
 
 **Additions.**
-Batch with member keys, validated whole and cancelled whole; templates saved from requests and derived by copy; run-number resolution; a record browser by proposal, time, batch, and member key; recompute; retention and drop; cluster launcher when one host is not enough; the view vocabulary for slicing and overlays; live validation in forms.
+The batch form: members and per-member values typed by hand, over the same apply, labels, and table phase 1 built for rules; templates saved from requests and derived by copy; run-number resolution; recompute; retention and drop; cluster launcher when one host is not enough; the view vocabulary for slicing and overlays; live validation in forms.
 
 **Decisions that fall due.**
 
@@ -165,7 +166,7 @@ The direct answer to "is there anything phases 1 and 2 would not require but pha
 - The `reused` flag on the record, and the rule that a reused result is recomputed cold before publication.
 - Private memory caches, the rule that the registry knows disk copies only, the memory lifetime, and the cache-coherence argument for keeping caches private.
 - Two execution shapes, placement as a launcher decision, `needs_disk_inputs`, write-out on demand, and the rule that a group runs in one shape.
-- Slots: the label, latest-by-label, evict superseded first, cancel a slot's predecessors, forking into a second label, and the inspection tooling that shows the diff between successive records.
+- Slots: cancel a slot's predecessors, forking into a second label, and the inspection tooling that shows the diff between successive records; the label itself and latest-per-label are in the core, because a rule's records use them.
 - In-process binding, the no-shadowing rule, and the refusal to publish an in-process record.
 - Local file records with checksum on first read, store copies of local files exempt from retention, and the per-proposal quota, unless phase 2 accepts uploads.
 - Per-notebook record stores, the two-notebooks question, and upload of a private record store to the shared backend.

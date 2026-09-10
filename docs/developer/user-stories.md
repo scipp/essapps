@@ -211,7 +211,7 @@ Actor: instrument scientist.
 
 Checks: picking "the run at 250 K" without knowing record IDs; one corrupt file does not affect the other 199 and its failure is visible.
 
-Outcome: gap, closed in the sketch. Member keys exist (D1) and failures are isolated (D6), but nothing lets a user find a member by key: the record store has no query for it. Fix: listing and lookup by batch ID and member key.
+Outcome: gap, closed in the sketch. Member keys exist (D1) and failures are isolated (D6), but nothing lets a user find a member by key: the record store has no query for it. Fix: listing and lookup by label and member key.
 
 ### D2. Overnight cluster batch
 
@@ -235,7 +235,7 @@ Actor: user in the web UI.
 
 Checks: cancellation reaches running and queued members; the new batch is not blocked by the old; the old records stay as history.
 
-Outcome: gap, closed in the sketch. The new batch is independent and old records stay, but cancel exists per request and per slot only; batch members are independent, so nothing cancels a batch. Fix: cancel by batch ID.
+Outcome: gap, closed in the sketch. The new batch is independent and old records stay, but cancel exists per request and per slot only; batch members are independent, so nothing cancels a batch. Fix: cancel by label, which a slot and a batch share.
 
 ### D4. Typo caught before 500 failures
 
@@ -313,9 +313,9 @@ Actor: instrument scientist.
 1. Improves the instrument defaults template mid-beamtime.
 2. New runs should use the new version; results already made stay as they are.
 
-Checks: the loop moves to the new version deliberately; every record names the template version that made it.
+Checks: the rule moves to the new version deliberately; every record names the template version that made it.
 
-Outcome: fits. Templates are immutable and versioned (D1); the trigger loop is bound to one version and moved deliberately (Components); records carry the template version.
+Outcome: fits. Templates are immutable and versioned (D1); a rule names one template version and is moved by copy, and reprocessing what the old version made is the reprocess operation, offered and previewed, never automatic (D14); records carry the template version.
 
 ## F. Publication and provenance
 

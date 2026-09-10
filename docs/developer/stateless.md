@@ -40,7 +40,7 @@ The session.
 The launcher has one shape and no `needs_disk_inputs`.
 The runner has no keep flag.
 The data store has no cache, no `write_out`, no `evict`.
-The record store has no slot column and no latest-by-label query.
+The record store keeps the label and the latest-per-label query, because a rule's records are a batch under its name; only the slot use of a label goes.
 
 **Rules and open questions.**
 Session loss as a failure event, and the sentence that session runs have no liveness timeout.

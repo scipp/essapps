@@ -150,17 +150,18 @@ FIA's Kubernetes job per run with a pinned image is a launcher, and a good data 
 | Lesson | Change to the sketch | Where |
 |---|---|---|
 | Five lookup tables | A lookup is stored, versioned data: ordered entries matching dataset metadata and supplying fills, one wildcard, ambiguity a validation error; used by batch and by rules; the record says which entry applied | Rules (D14); Glossary |
-| Nobody waits for a series | A rule keys datasets into a series by metadata, submits the member and a fresh combine over the series so far, and successive combines supersede under the series key; the open question closed | Rules (D14) |
-| Staleness by reset | Moving a rule to a new template or lookup version offers, as a second deliberate operation, a previewed batch over the datasets the old version reduced; nothing reruns on its own | Rules (D14) |
+| Nobody waits for a series | A rule keys datasets into a series by metadata, submits the member and a fresh combine over the series so far, and successive combines supersede under the rule's label with the series value as member key; the open question closed | Rules (D14) |
+| Staleness by reset | Moving a rule to a new template or lookup version offers, as a second deliberate operation, the reprocess: apply over the datasets the old version reduced, previewed; nothing reruns on its own | Rules (D14) |
 | Exclusions with a reason | Exclusions are mutable state on the rule, each with a reason; the trigger loop honours them and reports them. They were first an annotation on the file record, moved in the seventh pass so that annotations stay notes nothing reads | Rules (D14); Components |
 | The catalogue lagged the file | SciCat ingestion lag as an operational question for phase 1, with a filesystem source as the fallback that still waits for the PID | Open questions |
-| The batch file is what users keep | Not a stored unit: the batch table is a query, the latest record per dataset for a template version, plus the rule's exclusions; a stored batch definition was proposed and rejected in the seventh pass because the members would copy the records | Rules (D14) |
+| The batch file is what users keep | Not a stored unit: the batch table is a query, the latest record per member key under the rule's label, plus the rule's exclusions; a stored batch definition was proposed and rejected in the seventh pass because the members would copy the records | Rules (D14) |
+| Autoprocessing is a mode of the batch tab | Batch and automatic reduction are one mechanism: a rule is to a batch what a template is to a request, a rule's records are a batch under its name, the slot and the batch ID are one label, and one apply operation serves the form, the trigger loop, and the backlog, reprocess, and rerun operations; the ninth pass | Rules (D14) |
 
 Not folded in, and why:
 
 - **Resetting state on a settings change.** The Snakemake 7.8 story; the sketch keeps reruns explicit and now names the operation.
 - **A free-form options column.** Both ISIS interfaces let a row override any algorithm property by name; the sketch's forms are generated from the spec, so every parameter is already reachable, and an untyped escape hatch would bypass validation.
-- **Pause and resume of a batch.** Mantid's pause exists so users can edit the shared model; the sketch's requests are immutable, so editing is submitting, and cancel by batch covers the rest.
+- **Pause and resume of a batch.** Mantid's pause exists so users can edit the shared model; the sketch's requests are immutable, so editing is submitting. A rule can be paused, but that stops it firing and nothing else.
 - **A cached vanadium keyed by its inputs.** Powder's implicit cache in the calibration folder; identical-request reuse was removed in the second review pass, and the opt-in shape in snakemake.md stands.
 - **Run titles as the metadata channel.** Every ISIS match reads `th=` or `_TRANS` out of a title typed at the instrument. The sketch matches on SciCat metadata; that the acquisition writes the angle, sample, and role into it is a requirement on the instrument, not on this framework, and is worth stating to the instrument teams early.
 - **Script text as the record.** FIA's choice; the sketch's request is structured and a script is a rendering of it.

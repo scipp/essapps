@@ -3,10 +3,17 @@
 """
 Templates and the trigger loop: batch and automatic reduction over records.
 
-A template is an immutable, versioned partial request. Batch is many requests
-from one template with per-member overrides. Automatic reduction is a loop that
-instantiates a template whenever a new dataset or a completed record matches a
-rule; it is bound to one template version and has a visible status.
+A template is an immutable, versioned partial request. A batch is the records
+made from one template under one label, keyed per member. Automatic reduction
+is the trigger loop instantiating a template for each new dataset a rule
+matches; its records are a batch labelled by the template it is bound to.
+
+The architecture (D14) goes further than this module: one label field in place
+of ``slot`` and ``batch``, rules as stored data with a lower bound and an
+active state, one ``apply`` operation behind the batch form and the loop, and
+a loop that asks the record store which datasets still need firing on instead
+of remembering them. This module keeps the callable rule and the seen-set until
+that lands.
 """
 
 from __future__ import annotations

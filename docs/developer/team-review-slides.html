@@ -509,8 +509,8 @@
   <div class="body grid2">
     <div class="card panel">
       <h3>Five lookup tables, one shape</h3>
-      <p>Reflectometry's lookup table, per angle within a tolerance; SANS's per-row user file; Powder's cycle mapping by run-number range; FIA's rule spec per instrument; autoreduce's variables per run range. Each: ordered match criteria on dataset metadata, defaults per match, one fallback, edited by the instrument scientist, saved with the batch.</p>
-      <p><b>So:</b> the <b>lookup</b>, versioned data beside a template, and the <b>rule</b> that names which template and lookup fill a request. Both are data under D14, shown in part 2. Not a Python callable.</p>
+      <p>Reflectometry's lookup table, per angle within a tolerance; SANS's per-row user file; Powder's cycle mapping by run-number range; FIA's per-instrument specification, which it calls rules; autoreduce's variables per run range. Each: ordered match criteria on dataset metadata, defaults per match, one fallback, edited by the instrument scientist, saved with the batch.</p>
+      <p><b>So:</b> the <b>lookup</b>, versioned data beside a template, and our <b>rule</b>, a template with its lookup and a selector for the datasets it applies to. Both are data under D14, shown in part 2. Not a Python callable.</p>
     </div>
     <div class="card panel">
       <h3>Nobody waits for a series</h3>
@@ -520,16 +520,16 @@
     <div class="card panel">
       <h3>Staleness by reset, exclusions beside the data</h3>
       <p>Any settings change resets every row, so one edited lookup entry reprocesses a beamtime without saying which rows it touched. A run excluded from autoprocessing carries a reason and survives re-searches; one merely deleted comes back on the next poll.</p>
-      <p><b>So:</b> moving a loop to a new template or lookup version offers a previewed reprocess batch as a second deliberate operation; nothing reruns on its own. An exclusion, with its reason, lives on the rule, and the loop reports it.</p>
+      <p><b>So:</b> moving a rule to a new template or lookup version offers the reprocess, a previewed batch over what the old version made, as a second deliberate operation; nothing reruns on its own. An exclusion, with its reason, lives on the rule, and the trigger loop reports it.</p>
     </div>
     <div class="card panel">
       <h3>The catalogue lagged the file; the batch file is what users keep</h3>
       <p>Both interfaces read the ISIS journal because the catalogue was "less reliable"; FIA polls a last-run file, and its outputs are unknown to the catalogue. The 4.1 rewrite dropped the script generator as unused; users kept the batch JSON and edited it over a beamtime.</p>
-      <p><b>So:</b> SciCat's ingestion lag is a phase 1 question; a filesystem source can only get ahead of the catalogue and wait for the PID. The batch table is a query over the records plus the rule's exclusions, not a stored unit.</p>
+      <p><b>So:</b> SciCat's ingestion lag is a phase 1 question; a filesystem source can only get ahead of the catalogue and wait for the PID. The batch table is a query, the latest record per member under the rule's label, plus the rule's exclusions; not a stored unit.</p>
     </div>
   </div>
-  <p class="take">Mantid is the nearest thing to what we build: batch and automatic reduction used daily at a neutron facility. Not taken: <b>state reset on a settings change, a free-form options column, script text as the record</b>. The reading is in mantid.md.</p>
-  <aside class="notes">Same shape as the two before. The lookup and the rule are the change to the model on Mantid's evidence: the lookup was a callable in the trigger loop, invisible to the web UI and unversioned, and the rule was the loop's configuration. Both are data now, D14, on the slide after the four needs. The second card is why a rule never waits for a series. The fourth card is why there is no stored batch definition: it would copy the records, and the members table is a query. The options column is rejected because forms are generated from the spec, so every parameter is already reachable and an untyped escape hatch would bypass validation.</aside>
+  <p class="take">Mantid is the nearest thing to what we build: batch and automatic reduction used daily at a neutron facility, and in its reflectometry interface they are <b>one thing</b>: a batch tab whose autoprocessing appends rows, which is our rule. Not taken: <b>state reset on a settings change, a free-form options column, script text as the record</b>. The reading is in mantid.md.</p>
+  <aside class="notes">Same shape as the two before. The lookup and the rule are the change to the model on Mantid's evidence: the lookup was a callable in the trigger loop, invisible to the web UI and unversioned, and the rule was the loop's configuration. Both are data now, D14, on the slide after the four needs. The second card is why a rule never waits for a series. The fourth card is why there is no stored batch definition: it would copy the records, and the members table is a query. The options column is rejected because forms are generated from the spec, so every parameter is already reachable and an untyped escape hatch would bypass validation. The take line is the ninth pass: the batch tab maps onto the rule one to one, settings to template, lookup table to lookup, autoprocessing search to selector, runs table to the rule's table, so a rule is to a batch what a template is to a request.</aside>
 </section>
 
 <!-- ===================== 12 ONE IDEA ===================== -->
@@ -605,7 +605,7 @@
         <li>package versions and the conda environment</li>
         <li>how the spec was bound to code, and whether a warm workflow was reused</li>
         <li>one link to the record it derives from: retry, recompute, or copy</li>
-        <li>a submission, how the request was made: a batch member with batch ID, member key, and the rule version and lookup entry that filled it; a slot with its label; or a template with its version. Explanation, not provenance</li>
+        <li>a label and member key, under which records supersede: a batch name, a rule's name, or a slot; and a submission, how the request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed. Explanation, not provenance</li>
         <li>beside it, annotations a user adds after inspection: mutable, outside provenance, read by nothing in the framework</li>
       </ul>
     </div>
@@ -668,7 +668,7 @@
       <p>One request per run. A rerun with a changed value is a new record, linked to the old one.</p>
     </div>
     <div class="panel">
-      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Batch: a template plus overrides becomes records tagged with a batch id and a member key.">
+      <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Batch: a template plus typed values becomes records under a label with a member key.">
         <rect class="box" x="8" y="66" width="70" height="44" rx="6"/><text x="43" y="92" text-anchor="middle">template</text>
         <path class="e" d="M78,88 L118,36"/><path class="e" d="M78,88 L118,88"/><path class="e" d="M78,88 L118,140"/>
         <rect class="box" x="118" y="18" width="130" height="34" rx="6"/><text x="183" y="40" text-anchor="middle" class="m">batch 7 · T=10K</text>
@@ -676,7 +676,7 @@
         <rect class="box" x="118" y="123" width="130" height="34" rx="6"/><text x="183" y="145" text-anchor="middle" class="m">batch 7 · T=30K</text>
       </svg>
       <h3>Batch</h3>
-      <p>A template, a lookup that defaults each member from its metadata, and per-member overrides (next slide). The batch is a tag, not a stored unit: each record carries the batch ID and a key the submitter chose, and the table of what was reduced is a query, the latest record per dataset for a template version.</p>
+      <p>A template, a lookup that defaults each member from its metadata, and per-member values typed by hand (next slide), applied to a set of datasets at once. The batch is the records under one label, not a stored unit: each record carries the label and a member key, and the table of what was reduced is a query, the latest record per member key under the label.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Automatic: the dataset source yields new datasets or completed records; a rule matches and instantiates a template; never on our own output.">
@@ -688,7 +688,7 @@
         <rect class="box" x="214" y="70" width="42" height="38" rx="6"/><text x="235" y="94" text-anchor="middle" class="s">submit</text>
       </svg>
       <h3>Automatic</h3>
-      <p>A rule: selector, template and lookup, optional series key and combine, retry policy, exclusions. The trigger loop runs rules. Never fires on its own output. Never waits for a series.</p>
+      <p>A rule: selector with a lower bound, template and lookup, optional series key and combine, retry policy, exclusions, active or paused. The trigger loop applies it to each arrival, and its records are a batch under its name: a rule is to a batch what a template is to a request. Never fires on its own output. Never waits for a series.</p>
     </div>
     <div class="panel">
       <svg class="fig" viewBox="0 0 260 170" role="img" aria-label="Chain: requests A and B submitted as a group; B references an output of A that does not exist yet; the backend holds B until A completes.">
@@ -748,7 +748,7 @@
         <text x="756" y="156" class="m">wavelength = 2–16 Å</text><text x="1064" y="156" text-anchor="end" class="s">template</text>
         <text x="756" y="178" class="m">trans = 13463</text><text x="1064" y="178" text-anchor="end" class="s">lookup entry 1</text>
         <text x="756" y="200" class="m">q_max = 0.25</text><text x="1064" y="200" text-anchor="end" class="s">override</text>
-        <text x="756" y="230" class="s">submission: rule v1, lookup entry 1</text>
+        <text x="756" y="230" class="s">submission: rule v1, entry 1, typed q_max</text>
         <text x="756" y="250" class="s">rule v1 = template v3 + lookup v2; all versioned</text>
 
         <!-- ladder arrows -->
@@ -757,11 +757,11 @@
         <path class="e" d="M660,280 L740,232"/><text x="700" y="272" text-anchor="middle" class="s">3 · overwrites</text>
         <text x="900" y="300" text-anchor="middle" class="s">later rungs overwrite earlier ones; a blank at any rung falls through to the next</text>
       </svg>
-      <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. The same object serves both. A rule names the template and lookup version, and adds a selector for the datasets it applies to, a retry policy, exclusions with reasons, and optionally a series key and a combine (the workflow's own combine stage for a declared contribution, a combine workflow otherwise); the trigger loop runs rules and nothing else. A batch is a tag on the records, not a stored unit (D14).</figcaption>
+      <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. One operation, apply, does both: fill the template through the lookup for a set of datasets and return a group to preview. A rule names the template and lookup version, and adds a selector with a lower bound, a retry policy, exclusions with reasons, an active state, and optionally a series key and a combine (the workflow's own combine stage for a declared contribution, a combine workflow otherwise); the trigger loop applies rules and nothing else, and keeps no memory: whether a dataset still needs firing on is a query over the records. A batch is the records under one label, not a stored unit; a rule's records carry its name (D14).</figcaption>
     </figure>
   </div>
-  <p class="take">The lookup and the rule are <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle, and which datasets to reduce. Both are data, so the web UI shows them, a batch file carries them, and a record's submission names the rule version and entry that filled it. A rule with a series key combines the series again whenever a run joins it, chained when the workflow declares a contribution, and never waits (D14, D15).</p>
-  <aside class="notes">The lookup and the rule are one section of the document, D14, so give this slide a minute. Every ISIS interface has the lookup table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The rule is what the trigger loop runs; its exclusions are the only mutable state on it. The batch is not a stored unit: the members table is a query over the records, and the ISIS batch file is a rendering of it plus the rule's exclusions. Successive combines of a series supersede each other under the series key, the same superseding a slot label has, so the loop needs no slot. The skeleton does not have this yet.</aside>
+  <p class="take">The lookup and the rule are <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle, and which datasets to reduce. Both are data, so the web UI shows them, a batch file carries them, and a record's submission names the rule version, the entry, and the typed values that filled it. <b>A rule is to a batch what a template is to a request</b>: the batch form and the trigger loop call one apply, and a rule's records are a batch under its name. A rule with a series key combines the series again whenever a run joins it, chained when the workflow declares a contribution, and never waits (D14, D15).</p>
+  <aside class="notes">The lookup and the rule are one section of the document, D14, so give this slide a minute. Every ISIS interface has the lookup table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The rule is what the trigger loop applies; its exclusions and its active state are the only mutable state on it. The batch is not a stored unit: the members table is the latest record per member key under the rule's label, and the ISIS batch file is a rendering of it plus the rule's exclusions. The slot and the batch ID are one label field now, so one query supersedes, cancels, and evicts for a slot, a batch, and a rule; a series' combines supersede under the rule's label with the series value as member key. The loop keeps no memory: it fires on a dataset after the rule's bound that has no record under the rule's label, so restart reconciliation falls out. Creating a rule offers the backlog as a previewed batch; moving it offers the reprocess. Phase 1 therefore already has labels, apply, and the batch table; phase 2 adds the form. The skeleton does not have this yet.</aside>
 </section>
 
 <!-- ===================== 17 COMPONENTS ===================== -->
@@ -1075,7 +1075,7 @@
         <path class="e" d="M290,64 L290,202 L860,202"/>
         <rect class="box" x="860" y="180" width="140" height="44" rx="22"/><text x="930" y="207" text-anchor="middle">cancelled</text>
         <text x="575" y="192" text-anchor="middle" class="s">cancel, from waiting, dispatched, or running; dependents are cancelled too</text>
-        <text x="930" y="244" text-anchor="middle" class="s">also by batch and by group</text>
+        <text x="930" y="244" text-anchor="middle" class="s">also by label and by group</text>
       </svg>
     </figure>
     <div class="grid4">
@@ -1098,11 +1098,11 @@
         <tr><td>Records, references, file records by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Own record store, single writer; client interface with validate</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Subprocess launcher, cold runner, disk tier with registry</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Templates and lookups from version-controlled files; trigger loop with rules as data; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Templates and lookups from version-controlled files; rules as data, labels with member keys, apply as a previewed group, cancel by label; a stateless trigger loop; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>All of failure handling; a status page with plots of whole outputs</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Groups with pending outputs (chains via trigger events suffice at first)</td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Combine requests over member outputs; an opaque combine per arrival serves phase 1's angle series</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Batch with member keys; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>The batch form: members and values typed by hand over the same apply and table; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Contribution output with contribute, combine, and finalize; chained combines; grouping helper</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>HTTP transport, when the first client lives outside the backend process; cluster launcher</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Sessions, warm workflows, cheap parameters, private caches, slots, local file records; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
@@ -1111,7 +1111,7 @@
     <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>
   </div>
   <p class="take">Phase 1 is the proposal with <b>one execution shape and no interactive concepts</b>. Roughly a seventh of the skeleton's code and a fifth of the text belong to phase 3 alone.</p>
-  <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, rules with series keys for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm.</aside>
+  <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, rules with series keys for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm. Labels, apply, and cancel by label moved into phase 1 in the ninth pass: a rule's records are a batch, and the status page is the rule's table, which is also phase 2's batch table, so it is built once.</aside>
 </section>
 
 <!-- ===================== 25 PHASE 3 MODELS ===================== -->
@@ -1218,7 +1218,7 @@
       <ol class="steps">
         <li>Make the throwaway launcher the default; keep the session launcher as an experiment outside the phase 1 and 2 tests.</li>
         <li>Build the real dataset source and publisher against SciCat behind the existing fakes.</li>
-        <li>Extend the trigger loop to completed-record events, rules as data with series keys, and lookups.</li>
+        <li>Extend the trigger loop to completed-record events, rules as data with series keys and a bound, lookups, one label field in place of slot and batch ID, apply, and a loop that asks the records instead of remembering.</li>
         <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
         <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
       </ol>
