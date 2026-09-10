@@ -84,7 +84,7 @@ The interface recommends the journal over ICat because the catalogue search "is 
 Both discover runs from the archive, not the catalogue, and FIA's outputs are consequently unknown to the catalogue.
 The older system's end-of-run monitor "stops working after a certain amount of time", and the proposed fix was a health check that diffs the catalogue against the database and resubmits what was missed; its successor is a cron job diffing a last-run file against a local record of what was seen.
 The sketch's trigger status, the reason a dataset did or did not fire, is that health check as a query, and the dataset source's tolerance of repeated and out-of-order arrival is what the old system lacked: a repeated message there created a new run version silently.
-The sketch's dataset source is abstracted (D7), but a file record's identity is the SciCat PID, so a filesystem-watching source cannot replace the catalogue, only get ahead of it and wait for the PID.
+The sketch's dataset source is abstracted (D7), but a catalogue dataset's identity is its SciCat PID, so a filesystem-watching source cannot replace the catalogue, only get ahead of it and wait for the PID.
 Whether SciCat ingestion lags the file by more than a beamtime can bear is an operational question to settle before phase 1; it is now on the open questions.
 
 **Retrospective group reduction.**
@@ -132,7 +132,7 @@ The sketch's request is that object; the validate operation separate from submit
 
 **A version history per run.**
 ISIS autoreduction numbered reruns of one run number as versions of it, and the run page showed the version history with who started each, why, and with which values and Mantid version.
-That is the record browser's view of one dataset: the records that reference its file record, in order, each linked to the one it derives from.
+That is the record browser's view of one dataset: the records that reference the dataset, in order, each linked to the one it derives from.
 
 **What FIA records.**
 Executed script text with its commit, injected values, a container image with a pinned Mantid version, output names, a stack trace, an owner that is a proposal or a user; a watcher that declares a job stalled after thirty minutes without output.
@@ -152,7 +152,7 @@ FIA's Kubernetes job per run with a pinned image is a launcher, and a good data 
 | Five lookup tables | A lookup is stored, versioned data: ordered entries matching dataset metadata and supplying fills, one wildcard, ambiguity a validation error; used by batch and by rules; the record says which entry applied | Rules (D14); Glossary |
 | Nobody waits for a series | A rule keys datasets into a series by metadata, submits the member and a fresh combine over the series so far, and successive combines supersede under the rule's label with the series value as member key; the open question closed | Rules (D14) |
 | Staleness by reset | Moving a rule to a new template or lookup version offers, as a second deliberate operation, the reprocess: apply over the datasets the old version reduced, previewed; nothing reruns on its own | Rules (D14) |
-| Exclusions with a reason | Exclusions are mutable state on the rule, each with a reason; the trigger loop honours them and reports them. They were first an annotation on the file record, moved in the seventh pass so that annotations stay notes nothing reads | Rules (D14); Components |
+| Exclusions with a reason | Exclusions are mutable state on the rule, each with a reason; the trigger loop honours them and reports them. They were first an annotation on the dataset, moved in the seventh pass so that annotations stay notes nothing reads | Rules (D14); Components |
 | The catalogue lagged the file | SciCat ingestion lag as an operational question for phase 1, with a filesystem source as the fallback that still waits for the PID | Open questions |
 | The batch file is what users keep | Not a stored unit: the batch table is a query, the latest record per member key under the rule's label, plus the rule's exclusions; a stored batch definition was proposed and rejected in the seventh pass because the members would copy the records | Rules (D14) |
 | Autoprocessing is a mode of the batch tab | Batch and automatic reduction are one mechanism: a rule is to a batch what a template is to a request, a rule's records are a batch under its name, the slot and the batch ID are one label, and one apply operation serves the form, the trigger loop, and the backlog, reprocess, and rerun operations; the ninth pass | Rules (D14) |

@@ -35,8 +35,8 @@ A number means the phase where the part is first needed.
 | Decision | Part | First needed | Note |
 |---|---|---|---|
 | D1 | Requests, records, references to completed records | Core | The foundation; every phase stands on it. |
-| D1 | File records for catalogue datasets by PID | Core | The trigger loop creates them. |
-| D1 | File records for local paths, checksum on first read | 3 only | Or phase 2 if the web page accepts uploads; see "Candidates for removal". |
+| D1 | Dataset references and entries for catalogue datasets by PID | Core | The trigger loop creates the entries. |
+| D1 | Local files as datasets, identified by run identity or path, checksum on first read | 3 only | Or phase 2 if the web page accepts uploads; see "Candidates for removal". |
 | D1 | Run-number resolution | 2 | A form field; the trigger loop already has the PID. |
 | D1 | Recompute of a dropped copy | 2 | Nothing is dropped in phase 1 unless a quota is hit. |
 | D1 | Records dropped by proposal, export bundle | 2 | An operations task; phase 1 keeps everything. |
@@ -100,7 +100,7 @@ The same by component.
 ## Phase 1 in detail
 
 **What it needs from the sketch.**
-Records, references, file records by PID, templates from files, the record store, the backend without groups, the subprocess launcher, the cold runner, the disk tier with its registry, the dataset source, the trigger loop, the publisher, trivial views, and all of failure handling.
+Records, references, dataset entries by PID, templates from files, the record store, the backend without groups, the subprocess launcher, the cold runner, the disk tier with its registry, the dataset source, the trigger loop, the publisher, trivial views, and all of failure handling.
 That is the sketch with Choice 1 reduced to its first sentence, Choice 3 without its warm half, and Choice 4 without slots.
 
 **What it needs that the sketch defers or underweights.**
@@ -122,7 +122,7 @@ This list matters more than the previous one, because it is the critical path.
 - A quota alarm, because retention is not designed yet and a beamtime of automatic reduction fills disks.
 
 **What phase 1 can do without and should not build.**
-Sessions, warm workflows, cheap parameters, the private cache, the second execution shape, slots, local file records, in-process binding, the batch form, user-saved templates, run-number resolution, recompute, the HTTP transport.
+Sessions, warm workflows, cheap parameters, the private cache, the second execution shape, slots, local files, in-process binding, the batch form, user-saved templates, run-number resolution, recompute, the HTTP transport.
 
 **Two simplifications available in phase 1 that the sketch does not mention.**
 
@@ -148,7 +148,7 @@ The batch form: members and per-member values typed by hand, over the same apply
   When it is adopted, the skeleton already has it.
 - *Local uploads.*
   Whether the shared web page accepts files from a user's disk.
-  Refusing them removes local file records, checksums on read, the per-proposal quota, the retention exemption, and the redaction question of story A4 from phases 1 and 2 entirely.
+  Refusing them removes local files as datasets, checksums on read, the per-proposal quota, the retention exemption, and the redaction question of story A4 from phases 1 and 2 entirely.
 - *Cluster launcher.*
   Brings heartbeats instead of process polling, jobs under the submitting user, download tokens, and the "no broker" question.
   Story D2, thirty multi-gigabyte NMX runs overnight, is the first that needs it.
@@ -168,7 +168,7 @@ The direct answer to "is there anything phases 1 and 2 would not require but pha
 - Two execution shapes, placement as a launcher decision, `needs_disk_inputs`, write-out on demand, and the rule that a group runs in one shape.
 - Slots: cancel a slot's predecessors, forking into a second label, and the inspection tooling that shows the diff between successive records; the label itself and latest-per-label are in the core, because a rule's records use them.
 - In-process binding, the no-shadowing rule, and the refusal to publish an in-process record.
-- Local file records with checksum on first read, store copies of local files exempt from retention, and the per-proposal quota, unless phase 2 accepts uploads.
+- Local files as datasets with checksum on first read, store copies of local files exempt from retention, and the per-proposal quota, unless phase 2 accepts uploads.
 - Per-notebook record stores, the two-notebooks question, and upload of a private record store to the shared backend.
 - Session loss as a failure event, and the absence of a liveness timeout for session runs.
 - Remote sessions, the session launcher, idle timeout, session cap, and the interpreter-sharing cost of a one-process application.
@@ -221,8 +221,6 @@ Nothing in phases 1 and 2 becomes harder without them, and the skeleton shows th
 
 **Considered and not recommended.**
 
-- Replacing file records with a second reference form that names a PID directly.
-  It removes the built-in `file` spec and the create-on-first-reference rule, but adds a second kind of reference to every walk, and loses the one query "which runs used this dataset" that comes free from references being records.
 - Removing the retry and recompute distinction.
   It is one enum value and the record browser will want the word.
 
@@ -246,7 +244,7 @@ The document would be easier to review against the phases if it were two layers 
 
 - A **core** that is complete in itself: D1, D5, D6 marked optional, D7, D8 without its warm half, D9, D10 without slots, D11 without the cold-recompute rule, D12, D13 without cheap parameters, D15 without the fold, and failure handling without session loss.
   This is the design of phases 1 and 2, and a reader can check that it closes with no forward reference to a session.
-- An **interactive extension** that adds sessions, warm workflows, cheap parameters, slots, private caches, the second execution shape, and local file records, each stated as an addition to a named part of the core.
+- An **interactive extension** that adds sessions, warm workflows, cheap parameters, slots, private caches, the second execution shape, and local files as datasets, each stated as an addition to a named part of the core.
   It should open with the decision that [stateless.md](stateless.md) puts on the table, because the extension is one of three ways to do phase 3 and not obviously the right one.
 
 The user stories can be tagged the same way; A1, B1 to B5, C5, F3, G2, G3, and G4 are the extension's stories, and every other story runs against the core alone.

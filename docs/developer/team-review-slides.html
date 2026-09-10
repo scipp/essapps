@@ -452,7 +452,7 @@
     <div class="card panel">
       <h3>Identity by path, staleness by timestamp</h3>
       <p>Inherited from Make. Every special case descends from it: <span class="mono">ancient(), --touch, --latency-wait, --cleanup-metadata</span>, ambiguous-rule errors, history lost on a rename.</p>
-      <p><b>So:</b> a reference names a record. No path, no timestamp, no staleness.</p>
+      <p><b>So:</b> a reference names data by identity, never by location. No timestamp, no staleness. You still type a filename; it resolves at submission.</p>
     </div>
     <div class="card panel">
       <h3>Recording provenance was right; acting on it was not</h3>
@@ -471,7 +471,7 @@
     </div>
   </div>
   <p class="take">Four small additions to the proposal came from this: <b>the log on the record, completion by marker alone, batch rerun as a client operation, fan-out as a rule on the producer</b>. The full reading is in snakemake.md.</p>
-  <aside class="notes">Snakemake is the engine we are closest to in spirit and rejected in choice 2, so it is worth saying what we take from it anyway. The first card is the big one: most of the sketch's simplicity is that a reference has no path and no timestamp. The second card is the argument for explicit recompute. The third is D9. The fourth is why the scheduler stays at one primitive.</aside>
+  <aside class="notes">Snakemake is the engine we are closest to in spirit and rejected in choice 2, so it is worth saying what we take from it anyway. The first card is the big one: most of the sketch's simplicity is that a reference names an identity, a record output or a dataset's PID, and never a path, so nothing goes stale. Say plainly that filenames are still typed: they resolve at submission, and only the identity is stored. The second card is the argument for explicit recompute. The third is D9. The fourth is why the scheduler stays at one primitive.</aside>
 </section>
 
 <!-- ===================== 10 AIIDA ===================== -->
@@ -534,17 +534,16 @@
 
 <!-- ===================== 12 ONE IDEA ===================== -->
 <section class="slide" id="s12">
-  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y"</h2></header>
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y" or a dataset</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Three cards in a row: a file record F, a completed run record Y whose sample parameter references F's file output, and a new request Z whose beam-centre parameter references Y's beam-centre output.">
-        <!-- file record F -->
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Three cards in a row: a dataset D identified by its SciCat PID, a completed run record Y whose sample parameter references D, and a new request Z whose beam-centre parameter references Y's beam-centre output.">
+        <!-- dataset D -->
         <rect class="box" x="30" y="110" width="220" height="120" rx="10"/>
-        <text x="46" y="136" class="h">file record F</text>
-        <text x="46" y="158" class="s">spec: file · no workflow</text>
+        <text x="46" y="136" class="h">dataset D</text>
+        <text x="46" y="158" class="s">not a record: no request, no status</text>
         <text x="46" y="180" class="m">PID 20.500.12269/…</text>
-        <text x="46" y="200" class="s">a raw SciCat dataset</text>
-        <rect class="port" x="215" y="126" width="70" height="26" rx="13"/><text x="250" y="143" text-anchor="middle" class="m">file</text>
+        <text x="46" y="200" class="s">a raw SciCat dataset; identity, not location</text>
 
         <!-- run record Y -->
         <rect class="box" x="360" y="40" width="360" height="250" rx="10"/>
@@ -552,7 +551,7 @@
         <text x="376" y="88" class="s">spec: sans_reduction 3.1 · LoKI · proposal 2026-0412</text>
         <line class="sep" x1="376" y1="100" x2="704" y2="100"/>
         <text x="376" y="122" class="s">request</text>
-        <text x="376" y="144" class="m a">sample = output file of record F</text>
+        <text x="376" y="144" class="m a">sample = dataset D</text>
         <text x="376" y="166" class="m">threshold = 0.5 counts</text>
         <line class="sep" x1="376" y1="182" x2="704" y2="182"/>
         <text x="376" y="204" class="s">what happened</text>
@@ -562,25 +561,25 @@
         <rect class="port" x="675" y="200" width="90" height="26" rx="13"/><text x="720" y="217" text-anchor="middle" class="m">I(Q)</text>
         <rect class="port" x="675" y="240" width="90" height="26" rx="13"/><text x="720" y="257" text-anchor="middle" class="m">beam_centre</text>
         <!-- reference Y -> F -->
-        <path class="e acc" d="M360,140 L290,140"/>
+        <path class="e acc" d="M360,140 L250,140"/>
 
         <!-- request Z -->
         <rect class="box" x="830" y="150" width="250" height="140" rx="10"/>
         <text x="846" y="176" class="h">request Z</text>
         <text x="846" y="198" class="s">spec: sans_reduction 3.1</text>
-        <text x="846" y="222" class="m">sample = output file of G</text>
+        <text x="846" y="222" class="m">sample = dataset E</text>
         <text x="846" y="244" class="m a">beam_centre = output</text>
         <text x="846" y="262" class="m a">  beam_centre of record Y</text>
         <path class="e acc" d="M830,253 L770,253"/>
         <text x="800" y="282" text-anchor="middle" class="s a">reference</text>
-        <text x="955" y="112" text-anchor="middle" class="s">a reference names data;</text>
-        <text x="955" y="130" text-anchor="middle" class="s">it never contains a path</text>
+        <text x="955" y="112" text-anchor="middle" class="s">a reference names data by identity,</text>
+        <text x="955" y="130" text-anchor="middle" class="s">never by where its bytes are</text>
       </svg>
-      <figcaption>A raw file from the catalogue is a record too: one built-in spec, no workflow, one output. So every input, whether a raw file or last week's result, is named the same way.</figcaption>
+      <figcaption>Two forms, and only these: an output of a record, or a dataset, the PID for a catalogue file and the run identity a local file carries, else its path. You still type a filename, PID, or run number; the backend resolves it at submission and stores the identity. A dataset reference is never pending, and a raw file is plotted through a preview run, not viewed directly.</figcaption>
     </figure>
   </div>
-  <p class="take">One way to name data serves <b>inputs, plots, publication, and provenance</b>. There is no "which run produced this" query, because the name already says it.</p>
-  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way?</aside>
+  <p class="take">Two forms of name serve <b>inputs, plots, publication, and provenance</b>. There is no "which run produced this" query, because the name already says it.</p>
+  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way? Address the confusion from the first review head on: "no filenames" never meant nobody types one; it means the stored request holds an identity, so a moved or re-archived file cannot make a record stale. Earlier drafts wrapped every file in a "file record" of a built-in spec so that a reference had one form; the tenth pass dropped that. It was a UUID over an identity SciCat already keeps, and nothing it gave, the "which runs used this dataset" query, plotting, the trigger loop, is anything a plain dataset reference does not give.</aside>
 </section>
 
 <!-- ===================== 13 RECORD ANATOMY ===================== -->
@@ -619,7 +618,7 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Provenance is following the arrows</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two SciCat datasets become file records; a vanadium processing record consumes one; a sample reduction record consumes the other plus the processed vanadium; its output is published as a SciCat entry with a provenance snapshot.">
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two SciCat datasets are resolved to dataset references by PID; a vanadium processing record consumes one; a sample reduction record consumes the other plus the processed vanadium; its output is published as a SciCat entry with a provenance snapshot.">
         <rect class="lane" x="0" y="10" width="230" height="300" rx="8"/><text x="115" y="36" text-anchor="middle" class="h">SciCat</text>
         <rect class="lane" x="900" y="10" width="200" height="300" rx="8"/><text x="1000" y="36" text-anchor="middle" class="h">SciCat</text>
         <text x="565" y="36" text-anchor="middle" class="h">our records</text>
@@ -629,8 +628,8 @@
 
         <path class="e" d="M200,95 L280,95"/><path class="e" d="M200,225 L280,225"/>
         <text x="240" y="150" text-anchor="middle" class="s">resolved at</text><text x="240" y="166" text-anchor="middle" class="s">submission</text>
-        <rect class="box" x="280" y="70" width="140" height="50" rx="8"/><text x="350" y="91" text-anchor="middle">file record</text><text x="350" y="109" text-anchor="middle" class="m">PID …/a1</text>
-        <rect class="box" x="280" y="200" width="140" height="50" rx="8"/><text x="350" y="221" text-anchor="middle">file record</text><text x="350" y="239" text-anchor="middle" class="m">PID …/b7</text>
+        <rect class="box" x="280" y="70" width="140" height="50" rx="8"/><text x="350" y="91" text-anchor="middle">dataset</text><text x="350" y="109" text-anchor="middle" class="m">PID …/a1</text>
+        <rect class="box" x="280" y="200" width="140" height="50" rx="8"/><text x="350" y="221" text-anchor="middle">dataset</text><text x="350" y="239" text-anchor="middle" class="m">PID …/b7</text>
 
         <path class="e acc" d="M420,95 L490,95"/>
         <rect class="box" x="490" y="60" width="180" height="70" rx="8"/><text x="580" y="86" text-anchor="middle">vanadium processing</text><text x="580" y="106" text-anchor="middle" class="s">run record</text>
@@ -646,7 +645,7 @@
         <rect class="box" x="930" y="190" width="150" height="100" rx="8"/><text x="1005" y="216" text-anchor="middle">derived dataset</text><text x="1005" y="238" text-anchor="middle" class="s">+ provenance snapshot:</text><text x="1005" y="256" text-anchor="middle" class="s">raw PIDs, parameters,</text><text x="1005" y="274" text-anchor="middle" class="s">versions, spec</text>
         <text x="1005" y="178" text-anchor="middle" class="s">publish ▸</text>
       </svg>
-      <figcaption>Each arrow into a record is a reference stored in that record. Walk them backwards from any result and you reach raw datasets, parameters, and software versions.</figcaption>
+      <figcaption>Each arrow into a record is a reference stored in that record. Walk them backwards from any result and you reach the raw datasets, the leaves, and every parameter and software version on the way.</figcaption>
     </figure>
   </div>
   <p class="take">The published entry carries a <b>self-contained snapshot</b>, readable in six months without any service of ours running.</p>
@@ -1122,7 +1121,7 @@
         <text x="860" y="62" text-anchor="middle" class="h">our record store</text>
         <text x="860" y="86" text-anchor="middle" class="s">what was computed</text>
         <text x="660" y="126" class="s">▸ run records: request + what happened</text>
-        <text x="660" y="150" class="s">▸ file records: PID, proposal, instrument. Nothing else.</text>
+        <text x="660" y="150" class="s">▸ dataset entries: PID, proposal, instrument, our copies. Nothing else.</text>
         <text x="660" y="174" class="s">▸ created on first reference, never by discovery</text>
         <text x="660" y="198" class="s">▸ live as long as the proposal plus an analysis window</text>
         <text x="660" y="240" class="s">a UI wanting a sample name asks SciCat</text>
@@ -1134,7 +1133,7 @@
     </figure>
   </div>
   <p class="take">Only finalized data enters SciCat. Once a reference exists, <b>work continues when the catalogue is slow</b>.</p>
-  <aside class="notes">Third review pass removed what would have made the store a replica: file records created by discovery with copied metadata and stored mount paths. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
+  <aside class="notes">Third review pass removed what would have made the store a replica: entries created by discovery with copied metadata and stored mount paths. The entry per referenced dataset is what authorization and the store's own copies need, and it is not a record. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
 </section>
 
 <!-- ===================== 24 FAILURES ===================== -->
@@ -1185,7 +1184,7 @@
     <table>
       <thead><tr><th>Part</th><th class="c">Phase 1 · automatic</th><th class="c">Phase 2 · batch</th><th class="c">Phase 3 · apps</th></tr></thead>
       <tbody>
-        <tr><td>Records, references, file records by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
+        <tr><td>Records, references in both forms, dataset entries by PID, one spec vocabulary</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Own record store, single writer; client interface with validate</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Subprocess launcher, cold runner, disk tier with registry</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Templates and lookups from version-controlled files; rules as data, labels with member keys, apply as a previewed group, cancel by label; a stateless trigger loop; publisher; real SciCat source</td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
@@ -1195,7 +1194,7 @@
         <tr><td>The batch form: members and values typed by hand over the same apply and table; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Contribution output with contribute, combine, and finalize; chained combines; grouping helper</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>HTTP transport, when the first client lives outside the backend process; cluster launcher</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Sessions, warm workflows, cheap parameters, private caches, slots, local file records; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
+        <tr><td>Sessions, warm workflows, cheap parameters, private caches, slots, local files as datasets; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
       </tbody>
     </table>
     <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>

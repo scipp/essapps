@@ -44,7 +44,7 @@ Actor: user on a laptop away from the facility.
 
 Checks: the file is fetched once, kept as a location, and the record's identity is still the PID.
 
-Outcome: fits. The fetch creates a location, the PID stays the origin (D1, D3). Retention of the fetched copy in local mode is unstated but harmless: local mode has no retention.
+Outcome: fits. The fetch creates a location, the PID stays the identity (D1, D3). Retention of the fetched copy in local mode is unstated but harmless: local mode has no retention.
 
 ### A4. Mistaken copy into the shared service
 
@@ -55,7 +55,7 @@ Actor: user of the shared web UI.
 
 Checks: the bytes can be dropped; the record and the runs that used it remain honest about what happened; nothing else breaks.
 
-Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The origin path remains on the record until the proposal is dropped. Decide whether an origin path is sensitive enough to need redaction.
+Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The local path remains on the dataset entry until the proposal is dropped. Decide whether a local path is sensitive enough to need redaction.
 
 ### A5. Metadata corrected after the fact
 
@@ -67,7 +67,7 @@ Actor: instrument scientist.
 
 Checks: the UI shows what SciCat says now; the record is unchanged; nothing in our store had to be updated.
 
-Outcome: fits. A file record holds only PID, proposal, and instrument, and the UI asks SciCat for the rest (The record store is not a catalogue, D11).
+Outcome: fits. A dataset entry holds only PID, proposal, and instrument, and the UI asks SciCat for the rest (The record store is not a catalogue, D11).
 
 ## B. Manual and interactive reduction
 
@@ -163,7 +163,7 @@ Actor: user configuring single, batch, or automatic reduction.
 
 Checks: a published stage output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
-Outcome: gap, closed in the sketch. A published stage output is an ordinary input (D1, D11), but the duplicate-PID check is stated only for the dataset source; a user typing our own published PID at submission may create a shallow file record instead of a reference to the run record. Fix: stand-in resolution checks PIDs against records too.
+Outcome: gap, closed in the sketch. A published stage output is an ordinary input (D1, D11), but the duplicate-PID check is stated only for the dataset source; a user typing our own published PID at submission may create a dataset reference instead of a reference to the run record. Fix: stand-in resolution checks PIDs against records too.
 
 ### C3. Per-bank diffraction results
 
@@ -302,7 +302,7 @@ Actor: nobody; a failure mode.
 1. An automatic-reduction result is published to SciCat.
 2. The dataset source sees the new dataset.
 
-Checks: the rule does not fire on the published output; the published dataset does not become a second raw-file record.
+Checks: the rule does not fire on the published output; the published dataset does not get a dataset entry of its own.
 
 Outcome: fits. A rule never fires on records made from its own template, and the dataset source skips PIDs in publishing or published state (D11).
 
