@@ -764,8 +764,98 @@
   <aside class="notes">The lookup and the rule are one section of the document, D14, so give this slide a minute. Every ISIS interface has the lookup table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The rule is what the trigger loop applies; its exclusions and its active state are the only mutable state on it. The batch is not a stored unit: the members table is the latest record per member key under the rule's label, and the ISIS batch file is a rendering of it plus the rule's exclusions. The slot and the batch ID are one label field now, so one query supersedes, cancels, and evicts for a slot, a batch, and a rule; a series' combines supersede under the rule's label with the series value as member key. The loop keeps no memory: it fires on a dataset after the rule's bound that has no record under the rule's label, so restart reconciliation falls out. Creating a rule offers the backlog as a previewed batch; moving it offers the reprocess. Phase 1 therefore already has labels, apply, and the batch table; phase 2 adds the form. If someone thinks in pandas: the batch table is a frame indexed by member key, the template is column defaults, the lookup is an as-of join with tolerance, the ladder is combine_first, the series key is a groupby, and latest-per-member is groupby-last; exact for the view, wrong for the store, because the frame is a query over immutable records, not a mutable table. The document has the full mapping under D14. The skeleton does not have this yet.</aside>
 </section>
 
-<!-- ===================== 17 COMPONENTS ===================== -->
+<!-- ===================== 17 WHAT LIVES WHERE ===================== -->
 <section class="slide" id="s17">
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What lives where: stored data, one apply, records</h2></header>
+  <div class="body">
+    <figure>
+      <svg class="fig" viewBox="0 0 1120 500" role="img" aria-label="Three rows. Top: stored data edited by people and versioned by copy: template, lookup, rule, each with who edits it and when. Middle: apply, called by the trigger loop on its own for each arrival after the rule's bound, and by a person, previewed, for the form, the backlog, the reprocess, and the rerun; a dataset axis shows the bound splitting backlog from arrivals. Bottom: the records, immutable, under the rule's name as label, and the batch table as a query over them.">
+        <!-- row 1: stored data -->
+        <rect class="lane" x="20" y="14" width="1080" height="126" rx="10"/>
+        <text x="32" y="34" class="s">STORED DATA · edited by people · versioned by copy · what a UI shows and a batch file carries</text>
+        <rect class="box" x="32" y="46" width="340" height="84" rx="8"/>
+        <text x="46" y="68" class="h">template · v3</text>
+        <text x="46" y="88" class="s">a partial request: defaults, blanks to fill</text>
+        <text x="46" y="106" class="s">developer at deploy · user saving a form</text>
+        <text x="46" y="122" class="s">changes by copy → v4</text>
+        <rect class="box" x="392" y="46" width="340" height="84" rx="8"/>
+        <text x="406" y="68" class="h">lookup · v2</text>
+        <text x="406" y="88" class="s">entries: metadata match → fills; a wildcard</text>
+        <text x="406" y="106" class="s">instrument scientist, during the beamtime</text>
+        <text x="406" y="122" class="s">changes by copy → v3</text>
+        <rect class="box" x="752" y="46" width="336" height="84" rx="8"/>
+        <text x="766" y="68" class="h">rule "refl-series" · v2</text>
+        <text x="766" y="86" class="s">selector + bound · template v3 · lookup v2</text>
+        <text x="766" y="104" class="s">series key · retry · exclusions · active</text>
+        <text x="766" y="122" class="s">instrument scientist; two fields mutable</text>
+
+        <!-- rule names template and lookup -->
+        <path class="e" d="M760,130 L700,196"/>
+        <text x="775" y="172" class="s">names template v3 + lookup v2</text>
+
+        <!-- row 2: callers and apply -->
+        <rect class="port" x="20" y="168" width="330" height="62" rx="8"/>
+        <text x="34" y="190" class="h a">the trigger loop, on its own</text>
+        <text x="34" y="209" class="s">each candidate after the rule's bound</text>
+        <text x="34" y="224" class="s">that has no record under the rule's label</text>
+        <rect class="box" x="20" y="244" width="330" height="104" rx="8"/>
+        <text x="34" y="266" class="h">a person, previewed first</text>
+        <text x="34" y="285" class="s">form · datasets and values typed by hand</text>
+        <text x="34" y="302" class="s">backlog · before the bound, at rule creation</text>
+        <text x="34" y="319" class="s">reprocess · made by an older rule version</text>
+        <text x="34" y="336" class="s">rerun · members without a completed record</text>
+
+        <rect class="accb" x="430" y="196" width="280" height="116" rx="10"/>
+        <text x="570" y="222" text-anchor="middle" class="h">apply</text>
+        <text x="570" y="244" text-anchor="middle" class="s">a rule, or a template with its lookup</text>
+        <text x="570" y="262" text-anchor="middle" class="s">× datasets × typed values per member</text>
+        <text x="570" y="280" text-anchor="middle" class="s">fills the ladder: template, entry, typed</text>
+        <text x="570" y="298" text-anchor="middle" class="s">→ one group, validated whole, submitted</text>
+        <path class="e acc" d="M350,199 L430,230"/>
+        <path class="e" d="M350,296 L430,280"/>
+
+        <!-- dataset axis: bound -->
+        <text x="770" y="214" class="h">the bound splits the dataset axis</text>
+        <path class="e" d="M770,262 L1090,262"/>
+        <text x="1092" y="252" class="s" text-anchor="end">arriving</text>
+        <line class="sep" x1="800" y1="256" x2="800" y2="268"/><line class="sep" x1="835" y1="256" x2="835" y2="268"/><line class="sep" x1="870" y1="256" x2="870" y2="268"/>
+        <line x1="905" y1="238" x2="905" y2="286" stroke="var(--accent)" stroke-width="2"/>
+        <text x="905" y="300" text-anchor="middle" class="s a">bound: newest dataset when the rule was made</text>
+        <line class="sep" x1="945" y1="256" x2="945" y2="268"/><line class="sep" x1="985" y1="256" x2="985" y2="268"/><line class="sep" x1="1025" y1="256" x2="1025" y2="268"/>
+        <text x="830" y="238" text-anchor="middle" class="s">backlog · offered once</text>
+        <text x="1000" y="238" text-anchor="middle" class="s a">the loop fires on its own</text>
+        <text x="930" y="326" text-anchor="middle" class="s">reprocess and rerun revisit either side, previewed</text>
+
+        <!-- apply -> records -->
+        <path class="e" d="M570,312 L570,366"/>
+        <text x="582" y="344" class="s">submit</text>
+        <!-- records -> person -->
+        <path class="e" d="M185,366 L185,348"/>
+        <text x="197" y="362" class="s">queries over the records</text>
+
+        <!-- row 3: records -->
+        <rect class="lane" x="20" y="366" width="1080" height="122" rx="10"/>
+        <text x="32" y="386" class="s">RECORDS · immutable, append-only · what happened · under label "refl-series", member key = run</text>
+        <text x="32" y="408" class="m">run</text><text x="92" y="408" class="m">rule</text><text x="138" y="408" class="m">entry</text><text x="196" y="408" class="m">typed</text><text x="262" y="408" class="m">status</text>
+        <text x="32" y="426" class="m">1234</text><text x="92" y="426" class="m">v1</text><text x="138" y="426" class="m">e1</text><text x="196" y="426" class="m">–</text><text x="262" y="426" class="m">completed</text>
+        <text x="32" y="444" class="m">1234</text><text x="92" y="444" class="m">v2</text><text x="138" y="444" class="m">e1</text><text x="196" y="444" class="m">–</text><text x="262" y="444" class="m">completed · the reprocess; latest wins</text>
+        <text x="32" y="462" class="m">1235</text><text x="92" y="462" class="m">v2</text><text x="138" y="462" class="m">e2</text><text x="196" y="462" class="m">q_max</text><text x="262" y="462" class="m">completed · typed by hand, supersedes the loop's</text>
+        <text x="32" y="480" class="m">1236</text><text x="92" y="480" class="m">–</text><text x="138" y="480" class="m">–</text><text x="196" y="480" class="m">–</text><text x="262" y="480" class="m">excluded: beam dump</text>
+        <text x="700" y="408" class="h">the batch table is a query</text>
+        <text x="700" y="428" class="s">latest per member key under the label, plus exclusions</text>
+        <text x="700" y="446" class="s">one table for a rule and a form batch: the status page</text>
+        <text x="700" y="464" class="s">superseded records evict first; combines share the label</text>
+        <text x="700" y="482" class="s">submission explains; resolved values are provenance</text>
+      </svg>
+      <figcaption>Three kinds of stored data, one operation, and one kind of record. The trigger loop is one caller of apply and the only one that acts on its own; every operation over existing datasets is a person asking, shown the result of validate first. Nothing in the bottom row is ever edited (D14).</figcaption>
+    </figure>
+  </div>
+  <p class="take"><b>Who defines what, when</b>: developers write template files at deploy; the instrument scientist edits the lookup and the rule during the beamtime; a user saves a form as a template. Everything is versioned by copy except a rule's exclusions and active state. <b>Live versus existing</b>: the bound decides. After it the loop acts on its own; before it, and for anything already reduced, a person asks and previews.</p>
+  <aside class="notes">This slide answers three questions the lookup slide leaves open. Where things live: the top row is stored data, the bottom row is records, and the tables people see are queries over the bottom row; nothing is stored twice. Who defines what, when: the top row's small print. The rule is the one thing with mutable state, and only two fields of it, because exclusions and pausing change over a beamtime while everything else changes by copy so that records can name the version that made them. Live versus existing: the dataset axis on the right. The loop's rule is one clause: a candidate after the bound with no record under the label. It has no memory, so a restart, a pause, and a resume all resolve to the same query, and the trigger status is that query for one dataset. The backlog is offered once when the rule is created, the reprocess when the rule moves to a new version, the rerun whenever failures exist; all three are apply over a query result, previewed through validate, and none happens on its own. A hand-submitted member under the rule's label lands in the same table and supersedes the loop's record for that member, which is how a scientist corrects one run without touching the rule. The skeleton has apply only as the batch function and the loop still keeps a seen-set.</aside>
+</section>
+
+<!-- ===================== 18 COMPONENTS ===================== -->
+<section class="slide" id="s18">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The moving parts</h2></header>
   <div class="body">
     <figure>
@@ -823,8 +913,8 @@
   <aside class="notes">Session as a launcher option is the phase 3 part; in phases 1 and 2 the launcher starts a subprocess. Own record store and small scheduler rather than a workflow engine: none of AiiDA, Snakemake, Prefect gives a stateless request a notebook, a trigger loop, and a batch form can all emit.</aside>
 </section>
 
-<!-- ===================== 18 CONTRACT ===================== -->
-<section class="slide" id="s18">
+<!-- ===================== 19 CONTRACT ===================== -->
+<section class="slide" id="s19">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The contract with workflow code: one callable</h2></header>
   <div class="body">
     <figure>
@@ -864,8 +954,8 @@
   <aside class="notes">Rejected: a file-based contract, which forces every chain through disk; and a framework that knows sciline and caches intermediates itself, which is not affordable with event data. Arrays as objects is what keeps the phase 3 options open in every model.</aside>
 </section>
 
-<!-- ===================== 19 COMBINING ===================== -->
-<section class="slide dense" id="s19">
+<!-- ===================== 20 COMBINING ===================== -->
+<section class="slide dense" id="s20">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Reduction is combination: declare the accumulation points</h2></header>
   <div class="body">
     <figure>
@@ -932,8 +1022,8 @@
   <aside class="notes">D14 used to say the rule recombines the members' outputs. That is wrong for the first technique it meets: a SANS member's output is I(Q), and I(Q) curves do not add; what adds is the numerator and the denominator before normalisation. The notebook, the rule, and the fold differ only in how often the partial is written as a record: every addition, every arrival, every n arrivals. The fold's records carry the reused flag, so publication recomputes them cold along the chain, and a rule that publishes its combine therefore chains. A combine that is not additive, reflectometry's stitch or a tomographic reconstruction, stays an opaque workflow over the member outputs, recomputed on every arrival; the rule says which of the two it runs.</aside>
 </section>
 
-<!-- ===================== 20 SPEC CHANGES ===================== -->
-<section class="slide" id="s20">
+<!-- ===================== 21 SPEC CHANGES ===================== -->
+<section class="slide" id="s21">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>What the workflow spec needs beyond scipp/ess#690</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -979,8 +1069,8 @@
   <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
 </section>
 
-<!-- ===================== 21 WHERE STATE LIVES ===================== -->
-<section class="slide" id="s21">
+<!-- ===================== 22 WHERE STATE LIVES ===================== -->
+<section class="slide" id="s22">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Where state lives: records never, disk always, memory only in a session</h2></header>
   <div class="body">
     <figure>
@@ -1013,8 +1103,8 @@
   <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound at seconds per rerun, unless warm runners are keyed by the reference they hold; see the three-models slide), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
 </section>
 
-<!-- ===================== 22 NOT A CATALOGUE ===================== -->
-<section class="slide" id="s22">
+<!-- ===================== 23 NOT A CATALOGUE ===================== -->
+<section class="slide" id="s23">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Our store is not a second catalogue</h2></header>
   <div class="body">
     <figure>
@@ -1047,8 +1137,8 @@
   <aside class="notes">Third review pass removed what would have made the store a replica: file records created by discovery with copied metadata and stored mount paths. Publication reads a cold disk copy; a result tuned in a session is recomputed cold first.</aside>
 </section>
 
-<!-- ===================== 23 FAILURES ===================== -->
-<section class="slide" id="s23">
+<!-- ===================== 24 FAILURES ===================== -->
+<section class="slide" id="s24">
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Failures are the product</h2></header>
   <div class="body">
     <figure>
@@ -1088,8 +1178,8 @@
   <p class="take">Facilities that built automatic reduction report that <b>the monitoring UI was most of the value</b>. Phase 1 is unattended, so this is in from day one.</p>
 </section>
 
-<!-- ===================== 24 PHASE MATRIX ===================== -->
-<section class="slide" id="s24">
+<!-- ===================== 25 PHASE MATRIX ===================== -->
+<section class="slide" id="s25">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What each phase needs from the proposal</h2></header>
   <div class="body">
     <table>
@@ -1114,8 +1204,8 @@
   <aside class="notes">Phase 1 critical path that the sketch underweights: the real SciCat source and publisher, the trigger loop firing on completed records, rules with series keys for angle series, a deployment with a lock and restart reconciliation, authentication for the page, a web framework choice, and a disk quota alarm. Labels, apply, and cancel by label moved into phase 1 in the ninth pass: a rule's records are a batch, and the status page is the rule's table, which is also phase 2's batch table, so it is built once.</aside>
 </section>
 
-<!-- ===================== 25 PHASE 3 MODELS ===================== -->
-<section class="slide dense" id="s25">
+<!-- ===================== 26 PHASE 3 MODELS ===================== -->
+<section class="slide dense" id="s26">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Phase 3 is the real open question: where does interactive state live?</h2></header>
   <div class="body">
     <div class="grid3">
@@ -1171,8 +1261,8 @@
   <aside class="notes">Rung 2 is the session model with the addressing rule changed: keyed by the reference held, not owned by a client. D2's invariant survives, the fallback on a miss is the ordinary stateless path, and the cost is a placement policy, because the placement that maximises reuse is the one that destroys fan-out. The last row is not a phase 3 row: D15 answers it the same way in every column, so the model chosen for interactive work does not decide how a growing series is combined, and no column can be justified by accumulation. If a series arrives faster than its partial can be read and written, the fold D15 allows is the third model's second rung, and phase 3 then has a keyed warm pool it did not have to pay for. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process. And one word to keep: nothing may <em>require</em> a request to reach a particular process, which still allows a placement hint.</aside>
 </section>
 
-<!-- ===================== 26 DECISIONS ===================== -->
-<section class="slide" id="s26">
+<!-- ===================== 27 DECISIONS ===================== -->
+<section class="slide" id="s27">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>Decisions we need from this review</h2></header>
   <div class="body">
     <div class="qa">
@@ -1199,8 +1289,8 @@
   <p class="take">Decision numbers D1 to D15 in the document <b>freeze after this review</b>. Point at them.</p>
 </section>
 
-<!-- ===================== 27 WHAT EXISTS ===================== -->
-<section class="slide" id="s27">
+<!-- ===================== 28 WHAT EXISTS ===================== -->
+<section class="slide" id="s28">
   <header><div class="eyebrow"><span>Part 3 · What we build first</span></div><h2>What exists, and the next five steps</h2></header>
   <div class="body grid2">
     <div class="panel">
@@ -1228,8 +1318,8 @@
   <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
 </section>
 
-<!-- ===================== 28 DISCUSS ===================== -->
-<section class="slide" id="s28">
+<!-- ===================== 29 DISCUSS ===================== -->
+<section class="slide" id="s29">
   <header><div class="eyebrow"><span>Discussion</span></div><h2>Three questions to leave with</h2></header>
   <div class="body grid3">
     <div class="card panel"><h3>Does the record model hold for your technique?</h3><p>Name the piece of data it cannot describe.</p></div>
