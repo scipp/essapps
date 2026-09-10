@@ -6,7 +6,7 @@ Companion to [scoping.md](scoping.md), which states goals and scope.
 A walking skeleton of it exists under `packages/essapps`; see "Next step".
 Technology choices at the end are proposals.
 A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
-Two review notes read this document against the delivery order: [staging.md](staging.md), on what each phase needs, and [stateless.md](stateless.md), on what a design without sessions would remove and cost.
+Three review notes read this document against the delivery order and the execution model: [staging.md](staging.md), on what each phase needs, [stateless.md](stateless.md), on what a design without sessions would remove and cost, and [stages.md](stages.md), on how the sciline proposal to replace map/reduce with stages and folds fits the execution side.
 Three more, [snakemake.md](snakemake.md), [aiida.md](aiida.md), and [mantid.md](mantid.md), read it against the histories of Snakemake, AiiDA, and Mantid's ISIS batch interfaces: what each got right, what it learned the hard way, and what was taken from it here.
 
 ## How to read this
