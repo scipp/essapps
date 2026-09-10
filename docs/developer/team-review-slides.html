@@ -537,13 +537,15 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>One idea: every piece of data is "output X of record Y" or a dataset</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Three cards in a row: a dataset D identified by its SciCat PID, a completed run record Y whose sample parameter references D, and a new request Z whose beam-centre parameter references Y's beam-centre output.">
-        <!-- dataset D -->
-        <rect class="box" x="30" y="110" width="220" height="120" rx="10"/>
-        <text x="46" y="136" class="h">dataset D</text>
-        <text x="46" y="158" class="s">not a record: no request, no status</text>
-        <text x="46" y="180" class="m">PID 20.500.12269/…</text>
-        <text x="46" y="200" class="s">a raw SciCat dataset; identity, not location</text>
+      <svg class="fig" viewBox="0 0 1100 320" role="img" aria-label="Two cards: a completed run record Y whose sample parameter holds a SciCat PID inline, and a new request Z whose beam-centre parameter references Y's beam-centre output. A side note says the record store keeps an entry per referenced PID.">
+        <!-- side note: what a PID in a request implies -->
+        <text x="46" y="128" class="s">a dataset is named by its PID,</text>
+        <text x="46" y="146" class="s">inline in the request</text>
+        <text x="46" y="180" class="s">the record store keeps one entry</text>
+        <text x="46" y="198" class="s">per referenced PID: proposal,</text>
+        <text x="46" y="216" class="s">instrument, our copies</text>
+        <text x="46" y="250" class="s">the bytes are where SciCat says,</text>
+        <text x="46" y="268" class="s">or a copy in the data store</text>
 
         <!-- run record Y -->
         <rect class="box" x="360" y="40" width="360" height="250" rx="10"/>
@@ -551,7 +553,7 @@
         <text x="376" y="88" class="s">spec: sans_reduction 3.1 · LoKI · proposal 2026-0412</text>
         <line class="sep" x1="376" y1="100" x2="704" y2="100"/>
         <text x="376" y="122" class="s">request</text>
-        <text x="376" y="144" class="m a">sample = dataset D</text>
+        <text x="376" y="144" class="m">sample = PID 20.500.12269/a1</text>
         <text x="376" y="166" class="m">threshold = 0.5 counts</text>
         <line class="sep" x1="376" y1="182" x2="704" y2="182"/>
         <text x="376" y="204" class="s">what happened</text>
@@ -560,14 +562,12 @@
         <text x="376" y="270" class="m">outputs ▸</text>
         <rect class="port" x="675" y="200" width="90" height="26" rx="13"/><text x="720" y="217" text-anchor="middle" class="m">I(Q)</text>
         <rect class="port" x="675" y="240" width="90" height="26" rx="13"/><text x="720" y="257" text-anchor="middle" class="m">beam_centre</text>
-        <!-- reference Y -> F -->
-        <path class="e acc" d="M360,140 L250,140"/>
 
         <!-- request Z -->
         <rect class="box" x="830" y="150" width="250" height="140" rx="10"/>
         <text x="846" y="176" class="h">request Z</text>
         <text x="846" y="198" class="s">spec: sans_reduction 3.1</text>
-        <text x="846" y="222" class="m">sample = dataset E</text>
+        <text x="846" y="222" class="m">sample = PID 20.500.12269/b7</text>
         <text x="846" y="244" class="m a">beam_centre = output</text>
         <text x="846" y="262" class="m a">  beam_centre of record Y</text>
         <path class="e acc" d="M830,253 L770,253"/>
@@ -575,11 +575,11 @@
         <text x="955" y="112" text-anchor="middle" class="s">a reference names data by identity,</text>
         <text x="955" y="130" text-anchor="middle" class="s">never by where its bytes are</text>
       </svg>
-      <figcaption>Two forms, and only these: an output of a record, or a dataset, the PID for a catalogue file and the run identity a local file carries, else its path. You still type a filename, PID, or run number; the backend resolves it at submission and stores the identity. A dataset reference is never pending, and a raw file is plotted through a preview run, not viewed directly.</figcaption>
+      <figcaption>Two forms, and only these: an output of a record, or a dataset, named inline by its PID, or for a local file by the run identity it carries, else its path. Nothing stands between the request and the PID. You still type a filename, PID, or run number; the backend resolves it at submission and stores the identity. A dataset reference is never pending, and a raw file is plotted through a preview run, not viewed directly.</figcaption>
     </figure>
   </div>
   <p class="take">Two forms of name serve <b>inputs, plots, publication, and provenance</b>. There is no "which run produced this" query, because the name already says it.</p>
-  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way? Address the confusion from the first review head on: "no filenames" never meant nobody types one; it means the stored request holds an identity, so a moved or re-archived file cannot make a record stale. Earlier drafts wrapped every file in a "file record" of a built-in spec so that a reference had one form; the tenth pass dropped that. It was a UUID over an identity SciCat already keeps, and nothing it gave, the "which runs used this dataset" query, plotting, the trigger loop, is anything a plain dataset reference does not give.</aside>
+  <aside class="notes">This is D1 and the thing to push on. If the team accepts this slide, most of the rest follows. Ask: is there data anyone needs that cannot be named this way? Address the confusion from the first review head on: "no filenames" never meant nobody types one; it means the stored request holds an identity, so a moved or re-archived file cannot make a record stale. Earlier drafts wrapped every file in a "file record" of a built-in spec so that a reference had one form; the tenth pass dropped that. It was a UUID over an identity SciCat already keeps, and nothing it gave, the "which runs used this dataset" query, plotting, the trigger loop, is anything a PID in the request does not give. The side note is the whole remainder: an entry per referenced PID in the record store, for authorization and for the copies the store made; the bytes live in the data store or wherever SciCat says.</aside>
 </section>
 
 <!-- ===================== 13 RECORD ANATOMY ===================== -->
