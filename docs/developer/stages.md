@@ -23,10 +23,10 @@ The skeleton's `WarmPipeline` is already the first row: its `frontier()` compute
 That is the `Stage` frontier, with the same rule and the same "extra parameters are harmless" remark.
 What the skeleton adds on top, the field-name-to-key mapping, the `reused` flag, and the rebuild when an expensive parameter changes, stays; what it does by hand, the graph walk and the cache, becomes the library's.
 
-The vocabulary lines up with one rename.
-The sketch's "stage output" is the value at a `Stage` boundary; its "accumulation point" is an accumulation key; its "contribution" is the aggregation's contribution, a mapping from accumulation keys to values; its "combine" is a push of each contribution into fresh accumulators and a read of their values; its "fold" is a process holding accumulators.
+The vocabulary lines up.
+The sketch's "stage output" is the value at a `Stage` boundary; its accumulation key is the aggregation's, the word taken from the ADR in place of the earlier "accumulation point"; its "contribution" is the aggregation's contribution, a mapping from accumulation keys to values; its "combine" is a push of each contribution into fresh accumulators and a read of their values; its "fold" is a process holding accumulators.
 Only the last has no class behind it, and none is needed: the ADR dropped `Fold` as a class name because scipp uses the word for reshaping, and the sketch's fold is a deployment shape, not an object.
-Judgment: say "accumulation key" where the sketch says "accumulation point", since the spec declares keys and one vocabulary across sciline, ess.reduce, and this framework is the ADR's stated aim; whether "fold" stays as the name of the process shape is a question for the next pass, since it appears in D15, stateless.md, staging.md, and the deck.
+Judgment: "fold" stays as the name of the process shape, since it names a deployment and not an object, and renaming it would touch D15, stateless.md, staging.md, and the deck for no gain in precision.
 
 ## What changes in the text
 
@@ -77,7 +77,7 @@ Non-member parameters are shared by construction within one request; across the 
 Judgment: since the binding knows which parameters contribute reads, the runner can require the referenced member records to agree on them before combining, which turns a silent mix into a refusal; add it to the runnability check of a combine request.
 
 **Glossary.**
-Add stage, accumulator, accumulation key, and aggregation as the mechanisms, and point the definitions of accumulation point, contribution, combine request, and stage output at them.
+Add stage, accumulator, accumulation key, and aggregation as the mechanisms, and point the definitions of accumulation key, contribution, combine request, and stage output at them.
 
 ## Phase 3
 
@@ -171,7 +171,6 @@ Read against the ADR, the design document, and the modules on the PR branch at 0
 
 Not applied; for the next pass.
 
-- Throughout: "accumulation point" becomes accumulation key; decide whether "fold" stays as the name of the process shape.
 - D8: replace "the wrapper caches the nodes just upstream of them" with a reference to the stage's frontier, note that the warm sciline wrapper is a `Stage` with the cheap parameters as inputs, and that a cheap parameter the targets do not need is refused at bind time.
 - D13, contribution output: keep "and declare which parameters finalize reads"; add that the binding derives the split from the graph, refuses a spec whose declaration disagrees with it, and refuses a combine request carrying a contribute parameter.
 - D15: name `Aggregation` as what the wrapper builds from the accumulation keys, the accumulator per key, and the member keys of the request; say the associativity helper is generic and also checks that a combined value can be pushed; say removal is a combine over the contributions the holder keeps; add the memory policy sentence; soften "an accumulator that concatenates, which `ess.reduce.streaming` does not have" to `Buffered` over the package's concatenation; add the runnability check that referenced members agree on the contribute parameters.

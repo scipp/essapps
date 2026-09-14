@@ -337,7 +337,7 @@ Serialization of outputs must be pluggable because the outputs that get publishe
 Two validation points, with the runner's being the authoritative one.
 The runner loads scipp arrays whole.
 Reuse is exact only if the wrapper's rules are right; the test helper is the check, and the record's "workflow object reused" flag is what lets publication insist on a cold result (D11).
-Accumulation over a growing list is D15's problem, where normalisation sits after the accumulation point.
+Accumulation over a growing list is D15's problem, where normalisation sits after the accumulation key.
 DREAM and imaging masks are Python callables today; each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 
 ### Choice 4: How clients reach the system (D9, D10)
@@ -423,7 +423,7 @@ What the workflows do, read from the source:
 - `ess.reduce.streaming.StreamProcessor` is the additive structure made explicit: a graph up to declared accumulation keys is run per chunk, values are added at those keys, and the graph from those keys to the targets is run once at the end.
   Its accumulators histogram events before adding, so it covers histogram mode only.
 
-Every additive case has one shape: a per-member stage produces an intermediate at one or more **accumulation points**, the intermediates are added, and a final stage turns the sum into the outputs.
+Every additive case has one shape: a per-member stage produces an intermediate at one or more **accumulation keys**, the intermediates are added, and a final stage turns the sum into the outputs.
 Normalisation sits in the final stage, which is why the intermediate usually has two parts, a numerator and a denominator, as LoKI's does in esslivedata.
 Dimensionality and event mode do not change the shape: a four-dimensional volume adds like a curve, and concatenation is addition for binned data.
 They change the size of the intermediate and the operation, and the framework needs to know neither.
@@ -437,15 +437,15 @@ They change the size of the intermediate and the operation, and the framework ne
   The framework sums scipp arrays itself.
   It then imports scipp semantics it has otherwise avoided, decides between summation and concatenation, and still cannot place normalisation.
 - *Declared structure.*
-  The workflow declares its accumulation points and supplies the three stages; the framework knows the algebra, that the middle stage is associative and commutative, and nothing about the values.
+  The workflow declares its accumulation keys and supplies the three stages; the framework knows the algebra, that the middle stage is associative and commutative, and nothing about the values.
 
 **Choice.**
 Declared structure.
-A workflow may declare a **contribution**: an output at its accumulation points, opaque to the framework, and typically a data group holding a numerator, a denominator, and whatever else must be summed, such as monitor spectra or proton charge.
+A workflow may declare a **contribution**: an output at its accumulation keys, opaque to the framework, and typically a data group holding a numerator, a denominator, and whatever else must be summed, such as monitor spectra or proton charge.
 A workflow with a contribution exposes three entry points instead of one: **contribute**, from parameters to a contribution; **combine**, from two contributions to one, associative and commutative; and **finalize**, from a contribution and the parameters to the outputs.
 The single callable of D8 is the composition contribute, then finalize, and is what a run without a series executes.
 A sciline workflow gets the three from the wrapper given the accumulation keys, which is the declaration `StreamProcessor` already takes: the graph up to the keys is contribute, the graph from the keys to the targets is finalize, and combine is the addition ess.reduce already dispatches on the value.
-Whether the intermediate is events or a histogram is the author's choice at the accumulation point: events keep rebinning a cheap parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
+Whether the intermediate is events or a histogram is the author's choice at the accumulation key: events keep rebinning a cheap parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
 The framework does not see the difference.
 
 A spec that declares a contribution also declares which of its parameters finalize reads; the rest, every data reference among them, are contribute's.
@@ -484,7 +484,7 @@ The framework stays ignorant of scipp: it never sums, never chooses between summ
 Held state stays a cache: the invariant of D2, that every value in memory is recomputable from records, is what lets the fold be an addition rather than a design.
 
 **Cost.**
-Authors must place normalisation after the accumulation point; ess.sans does, ess.powder does not yet.
+Authors must place normalisation after the accumulation key; ess.sans does, ess.powder does not yet.
 Contributions are stage outputs on disk in shared mode, often large, and a chained series keeps k partials until the superseded ones are evicted, the first to go under D10's rule.
 The framework cannot check associativity; a test helper runs contribute, combine, and finalize over a list of members in two groupings and compares with the one-shot callable, and every workflow that declares a contribution runs it.
 The fold needs a long-lived process addressed by its series, which phases 1 and 2 do not have, and for event-mode contributions an accumulator that concatenates, which `ess.reduce.streaming` does not have.
@@ -777,7 +777,7 @@ Decisions the team needs to make; my recommendation in brackets.
 ## Next step
 
 Review this document with the team before implementing.
-Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake workflow with two accumulation points (D15), run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.
+Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake workflow with two accumulation keys (D15), run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.
 Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
@@ -787,7 +787,7 @@ The skeleton exists as the package `essapps` under `packages/`, import `ess.apps
 
 Where esslivedata uses a word differently, the clash is noted.
 
-- **Accumulation point**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum.
+- **Accumulation key**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum.
 - **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations. In a notebook it accepts a DataFrame, member key as index and typed values as columns.
@@ -795,7 +795,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Client interface**: the backend's Python interface, including validate, apply, views, and the picker. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
 - **Combine request**: a request that references contributions, from member records and optionally a previous combine, and produces the combined contribution and the finalized outputs. Chained when each references the previous.
-- **Contribution**: a workflow's output at its accumulation points; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize.
+- **Contribution**: a workflow's output at its accumulation keys; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path. The second form of reference. Not a record: no request, no status.
@@ -853,7 +853,7 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D12 | Instrument plus proposal scopes everything; one backend per instrument | Ownership, publication, and deployment |
 | D13 | One type vocabulary: inputs are data-reference parameters, outputs a typed model, collections on both sides | Spec changes |
 | D14 | Templates, lookups, and rules are the stored data requests are made from; a rule is to a batch what a template is to a request; a batch is the records under one label, not a stored unit; one apply operation serves the form, the loop, and reprocessing; the loop keeps no memory; a rule keys datasets into series and never waits | Rules |
-| D15 | An additive combine is declared: a contribution output at the workflow's accumulation points, with contribute, combine, and finalize; a combine request chains through disk, a session, or a warm runner, and the partial is always recomputable | Combining |
+| D15 | An additive combine is declared: a contribution output at the workflow's accumulation keys, with contribute, combine, and finalize; a combine request chains through disk, a session, or a warm runner, and the partial is always recomputable | Combining |
 
 ## Review log
 
@@ -869,3 +869,4 @@ A seventh pass read the three prior-art passes together for incremental creep an
 An eighth pass asked whether accumulation could be deferred at all, read how ess.sans, ess.reflectometry, ess.powder, ess.bifrost, and the streaming module combine runs, and found the sketch had three answers that did not meet; it added D15, the declared additive combine with its three stages, removed the accumulation special case from the warm workflow, and made a series combine a chained request rather than a recombination of member outputs.
 A ninth pass asked whether batch and automatic reduction were more unified than the sketch had set out to make them, and found that a rule is to a batch what a template is to a request, which is what Mantid's reflectometry batch tab already is; it merged the slot and the batch ID into one label with an optional member key, made a rule's records a batch under the rule's name, named the one apply operation behind the form, the trigger loop, and the backlog, reprocess, and rerun operations, made the trigger loop stateless by putting a lower bound on the rule's selector, gave the rule an active state, put the typed values on the submission so that a reprocess carries them, and moved labels and apply from phase 2 into phase 1.
 A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, stores nothing per dataset, since the proposal check happens at submission and the data store registers only the copies it makes, keyed by reference in either form, took a local file's identity from the run identity it carries rather than a hash at submission, made a folder a dataset source for the local application, and named the picker, the query behind an input field, so that listing what can be picked is a query over the record store and the dataset sources rather than a table of ours.
+An eleventh pass read the sketch against scipp/sciline#245, the proposal to replace map/reduce with stages and aggregations composed outside the graph, in [stages.md](stages.md); it renamed accumulation point to accumulation key, sciline's word for the same thing, and lists the edits to D8, D13, D14, and D15 that follow from the proposal.

@@ -956,7 +956,7 @@
 
 <!-- ===================== 20 COMBINING ===================== -->
 <section class="slide dense" id="s20">
-  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Reduction is combination: declare the accumulation points</h2></header>
+  <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Reduction is combination: declare the accumulation keys</h2></header>
   <div class="body">
     <figure>
       <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Each member run's contribute stage writes a contribution to disk. A combine takes the previous partial and the new contribution and writes a new partial; finalize reads the last partial and its declared parameters and produces the outputs. A fold, later, holds the running contribution in memory and writes a record every n arrivals.">
@@ -1001,7 +1001,7 @@
         <text x="537" y="320" text-anchor="middle" class="s">the memory copy is a cache, recomputable from the last record and the members since</text>
         <path class="e memc open" d="M740,284 L740,244"/><text x="750" y="268" class="s">a record every n arrivals</text>
       </svg>
-      <figcaption>Every additive workflow has this shape: a per-member stage produces an intermediate at one or more accumulation points, the intermediates are added, and a final stage turns the sum into the outputs. A combine request names the spec, carries the finalize parameters, and references contributions; chained, it references the previous combine's partial and the new member's contribution. Solid is built regardless; the dashed amber fold is phase 3.</figcaption>
+      <figcaption>Every additive workflow has this shape: a per-member stage produces an intermediate at one or more accumulation keys, the intermediates are added, and a final stage turns the sum into the outputs. A combine request names the spec, carries the finalize parameters, and references contributions; chained, it references the previous combine's partial and the new member's contribution. Solid is built regardless; the dashed amber fold is phase 3.</figcaption>
     </figure>
     <div class="grid3">
       <div class="card panel">
@@ -1010,7 +1010,7 @@
       </div>
       <div class="card panel">
         <h3>The declaration</h3>
-        <p>A <b>contribution</b> output at the accumulation points, opaque to the framework. Three stages: <b>contribute</b>, parameters to a contribution; <b>combine</b>, two contributions to one, associative and commutative; <b>finalize</b>, contribution and parameters to the outputs, with the parameters finalize reads declared. The framework never sums and never sees whether it is events or a histogram.</p>
+        <p>A <b>contribution</b> output at the accumulation keys, opaque to the framework. Three stages: <b>contribute</b>, parameters to a contribution; <b>combine</b>, two contributions to one, associative and commutative; <b>finalize</b>, contribution and parameters to the outputs, with the parameters finalize reads declared. The framework never sums and never sees whether it is events or a histogram.</p>
       </div>
       <div class="card panel">
         <h3>What it buys</h3>
@@ -1018,7 +1018,7 @@
       </div>
     </div>
   </div>
-  <p class="take">Authors must put normalisation <b>after the accumulation point</b>; ess.sans does, ess.powder does not yet (D15).</p>
+  <p class="take">Authors must put normalisation <b>after the accumulation key</b>; ess.sans does, ess.powder does not yet (D15).</p>
   <aside class="notes">D14 used to say the rule recombines the members' outputs. That is wrong for the first technique it meets: a SANS member's output is I(Q), and I(Q) curves do not add; what adds is the numerator and the denominator before normalisation. The notebook, the rule, and the fold differ only in how often the partial is written as a record: every addition, every arrival, every n arrivals. The fold's records carry the reused flag, so publication recomputes them cold along the chain, and a rule that publishes its combine therefore chains. A combine that is not additive, reflectometry's stitch or a tomographic reconstruction, stays an opaque workflow over the member outputs, recomputed on every arrival; the rule says which of the two it runs.</aside>
 </section>
 
@@ -1052,7 +1052,7 @@
     iofq: ArraySpec(dims=[Q], <span class="add">binned=False</span>)
     <span class="add">beam_centre: Vector [m]</span>
     <span class="add">per_bank: dict[str, ArraySpec]</span>
-    <span class="add">contribution: DataGroup</span>   <span class="cm"># accumulation points</span>
+    <span class="add">contribution: DataGroup</span>   <span class="cm"># accumulation keys</span>
   <span class="add">finalize_reads: [q_bins]</span>
   <span class="add">code_revision: optional</span></pre>
     </div>
@@ -1274,7 +1274,7 @@
       <span class="why">ISIS's interfaces discover runs from the archive because the catalogue lagged; a filesystem source can only get ahead of SciCat and wait for the PID, never replace it.</span>
       <span class="q">Spec changes to scipp/ess#690: typed outputs, data-reference parameters, collections, binned flag?</span><span class="rec">Recommend yes, while the PR is open</span>
       <span class="why">Cheap parameters and code revision are one optional field each.</span>
-      <span class="q">Confirm D15: workflow authors declare accumulation points and place normalisation after them?</span><span class="rec">Recommend yes</span>
+      <span class="q">Confirm D15: workflow authors declare accumulation keys and place normalisation after them?</span><span class="rec">Recommend yes</span>
       <span class="why">The framework can then chain, fold, and parallelise a combine without knowing scipp. ess.sans already has the shape; ess.powder does not yet.</span>
       <span class="q">Accept uploads of local files in the shared service?</span><span class="rec">Recommend no</span>
       <span class="why">Refusing removes checksums-on-read, a per-proposal quota, a retention exemption, and a redaction question from phases 1 and 2.</span>
@@ -1312,7 +1312,7 @@
         <li>Choose the web framework for the status page; run it in the backend process against the client interface.</li>
         <li>Deploy for one instrument. Let phase 2 start from what the operators ask for.</li>
       </ol>
-      <p class="hint">A spike on the throwaway feedback loop in three configurations, cold, a warm process pool, and a runner already holding the intermediate, so the phase 3 decision rests on numbers. It uses a fake workflow with two accumulation points, run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.</p>
+      <p class="hint">A spike on the throwaway feedback loop in three configurations, cold, a warm process pool, and a runner already holding the intermediate, so the phase 3 decision rests on numbers. It uses a fake workflow with two accumulation keys, run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.</p>
     </div>
   </div>
   <p class="take">Nothing here is final. The point of the review is to <b>disagree with a choice</b>, not only with its consequences.</p>
