@@ -98,7 +98,7 @@ The note also says the fold "is the third model's second rung" and that solving 
 That is now visible in code: a keyed warm runner holds a `Stage` for a cheap-parameter loop and a set of accumulators for a series, and both are addressed by what they hold.
 
 The sciline proposal considered and deferred a generic object that holds a network of stages and accumulators and routes pushes through it.
-The candidates for it are the per-package objects, esssans's thirty lines holding a pipeline, two aggregations, a finalize stage, and contributions, and this framework's wrapper, which holds the same things for one aggregation.
+The candidates for it are the per-package objects, such as esssans's, holding a pipeline, two aggregations, a finalize stage, and contributions, and this framework's wrapper, which holds the same things for one aggregation.
 If they turn out to be the same code, or if phase 3 places accumulators on process boundaries, that object is their generalisation, and the loops written in phases 1 and 2 say what it must do.
 Judgment: phase 3 still does not need deciding now, and the reason is stronger than before.
 Whichever model is chosen, the object it runs is built and tested in phases 1 and 2, because D15's throwaway contribute and combine are the same `Aggregation` calls.
@@ -126,7 +126,7 @@ The accumulator per key is part of the declaration: `Buffered` over the package'
 - **Parallelism over members.**
   In-graph mapping ran the members of a batch in one scheduler, and the LoKI validation measures what that gave: under the dask scheduler the map/reduce reference is faster by the two sample runs it ran in threads.
   An `Aggregation` runs them as the driver says: in the framework that is the launcher, one throwaway process per member, which is the sketch's shape already; inside one process it is a thread pool over `contribute`, which the wrapper must provide for the summed-batch-in-one-request case.
-  `Stage` computes its static part on first call without a lock, so the wrapper warms before it maps over rows; otherwise two threads load the same file.
+  `Stage` computes its static part once even when called from several threads, but the wrapper should still warm all stages together before it maps over rows, so that static work the stages share is done once.
 - **Live streams.**
   `StreamProcessor` on `Stage` has members that cannot be recomputed and a context that changes without invalidating what was accumulated.
   The stateless note's boundary stands: that is where authoritative state lives in memory, it is esslivedata's, and nothing here moves it into scope.
@@ -136,12 +136,12 @@ The accumulator per key is part of the declaration: `Buffered` over the package'
 
 ## Points for the sciline proposal
 
-Read against the ADR, the design document, and the modules on the PR branch at 010ca83; all five were applied on that branch on 2026-09-14, the first two in the design document's section 6 and the `Accumulator` docstring, the fourth as a lock on the stage's held part.
+Read against the ADR, the design document, and the modules on the PR branch at 010ca83; all five were applied on that branch on 2026-09-14, the first two in the design document's sections 6.7 and 4 and the `Accumulator` docstring, the fourth as a lock on the stage's held part.
 
-- **The paragraph on this framework** in section 6 of the design document says a chained series is "an accumulator per accumulation key, from `agg.accumulators()`, into which essapps pushes each contribution as it arrives".
+- **The paragraph on this framework** in the design document (now section 6.7) said a chained series is "an accumulator per accumulation key, from `agg.accumulators()`, into which essapps pushes each contribution as it arrives".
   That describes the fold, phase 3, where a process holds accumulators.
   The chained series of phases 1 and 2 is `combine([previous, new])` in a throwaway process per arrival, holding nothing; and the wrapper holding contributions by member label is the session case, where members are removed.
-  Rollout item F points at the edit list at the end of this note, whose earlier form dropped the D13 declaration; the list now keeps it, checked against the graph.
+  The design document's migration section points at the edit list at the end of this note, whose earlier form dropped the D13 declaration; the list now keeps it, checked against the graph.
 - **Combining combined values** is used by `combine`'s docstring, the chained test, and every consumer here, but nothing states the condition on the accumulator: its `value` must be pushable and the result independent of grouping and order.
   `Buffered` has it when its function is associative; an ess.reduce accumulator has it only if `push` accepts its own `value` type, which the histogramming ones do through `maybe_hist` today and will need to keep once that moves.
   One sentence on `Accumulator` or on `combine` would say what an author who writes a running-total accumulator for an aggregation has to provide.
