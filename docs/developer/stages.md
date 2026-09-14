@@ -136,7 +136,7 @@ The accumulator per key is part of the declaration: `Buffered` over the package'
 
 ## Points for the sciline proposal
 
-Read against the ADR, the design document, and the modules on the PR branch at 010ca83.
+Read against the ADR, the design document, and the modules on the PR branch at 010ca83; all five were applied on that branch on 2026-09-14, the first two in the design document's section 6 and the `Accumulator` docstring, the fourth as a lock on the stage's held part.
 
 - **The paragraph on this framework** in section 6 of the design document says a chained series is "an accumulator per accumulation key, from `agg.accumulators()`, into which essapps pushes each contribution as it arrives".
   That describes the fold, phase 3, where a process holds accumulators.
