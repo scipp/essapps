@@ -21,9 +21,10 @@ loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
 
 # Interactive reruns of a sciline pipeline; 'bins' is declared cheap, so the
-# second run reuses the warm workflow. Both are records in the slot 'hist'.
-first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, slot='hist')
-second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, slot='hist')
+# second run reuses the warm workflow. Both carry the label 'hist', the slot the
+# plot owns, so the second supersedes the first.
+first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
+second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
 assert second.reused and client.latest('hist').id == second.id
 client.view(second.ref('histogram'))  # plain numpy arrays
 

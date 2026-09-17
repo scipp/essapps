@@ -42,12 +42,12 @@ def test_publish_is_idempotent(client: Client, run_ref: Ref) -> None:
 def test_publish_refuses_reused_and_in_process_records_by_default(
     client: Client, run_ref: Ref
 ) -> None:
-    client.run(LOAD, {'run': run_ref}, slot='s')
-    second = client.run(LOAD, {'run': run_ref, 'scale': 2.0}, slot='s')
+    client.run(LOAD, {'run': run_ref}, label='s')
+    second = client.run(LOAD, {'run': run_ref, 'scale': 2.0}, label='s')
     assert second.reused
     with pytest.raises(ValueError, match='reused'):
         client.publish(second.ref('data'), FakePublisher())
-    first = client.records(slot='s')[0]
+    first = client.records(label='s')[0]
     with pytest.raises(ValueError, match='in-process'):
         client.publish(first.ref('data'), FakePublisher())
 

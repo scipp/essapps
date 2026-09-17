@@ -42,11 +42,14 @@ class RunRequest(BaseModel, frozen=True):
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)
-    slot: str | None = Field(
-        default=None, description="Label of the series of reruns this belongs to."
+    label: str | None = Field(
+        default=None,
+        description="Records under one label supersede each other (D14, D10).",
     )
-    batch: str | None = None
-    member_key: str | None = None
+    member_key: str | None = Field(
+        default=None,
+        description="Which member of the batch under the label this is.",
+    )
 
     def refs(self) -> list[Ref]:
         return [ref for _, ref in walk_refs(self.params)]

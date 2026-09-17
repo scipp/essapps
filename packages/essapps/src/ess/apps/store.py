@@ -20,7 +20,7 @@ from typing import IO, Self
 from .records import RunRecord, Status
 from .spec import Ref, SpecId
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -31,15 +31,13 @@ CREATE TABLE IF NOT EXISTS records (
     status TEXT NOT NULL,
     proposal TEXT NOT NULL,
     instrument TEXT NOT NULL,
-    slot TEXT,
-    batch TEXT,
+    label TEXT,
     member_key TEXT,
     created TEXT NOT NULL,
     doc TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS records_proposal ON records (proposal, created);
-CREATE INDEX IF NOT EXISTS records_slot ON records (proposal, slot, created);
-CREATE INDEX IF NOT EXISTS records_batch ON records (batch, member_key);
+CREATE INDEX IF NOT EXISTS records_label ON records (proposal, label, member_key);
 CREATE TABLE IF NOT EXISTS refs (
     from_id TEXT NOT NULL,
     to_id TEXT NOT NULL,
@@ -108,7 +106,7 @@ class RecordStore:
             for record in records:
                 req = record.request
                 self._db.execute(
-                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?)',
                     (
                         record.id,
                         req.spec.name,
@@ -116,8 +114,7 @@ class RecordStore:
                         record.status.value,
                         req.proposal,
                         req.instrument,
-                        req.slot,
-                        req.batch,
+                        req.label,
                         req.member_key,
                         record.created.isoformat(),
                         record.model_dump_json(),
@@ -159,8 +156,8 @@ class RecordStore:
         proposal: str | None = None,
         spec: SpecId | None = None,
         status: Status | None = None,
-        slot: str | None = None,
-        batch: str | None = None,
+        label: str | None = None,
+        member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
     ) -> list[RunRecord]:
@@ -169,8 +166,8 @@ class RecordStore:
         for column, value in (
             ('proposal', proposal),
             ('status', status.value if status else None),
-            ('slot', slot),
-            ('batch', batch),
+            ('label', label),
+            ('member_key', member_key),
         ):
             if value is not None:
                 clauses.append(f'{column}=?')
@@ -189,14 +186,35 @@ class RecordStore:
         )
         return [RunRecord.model_validate_json(r[0]) for r in rows]
 
-    def latest(self, slot: str, proposal: str) -> RunRecord | None:
-        """The newest record with this slot label, whatever its status."""
+    def latest(
+        self, label: str, proposal: str, *, member_key: str | None = None
+    ) -> RunRecord | None:
+        """
+        The record that supersedes the others under this label, whatever its status.
+
+        With ``member_key`` it is the newest record for that member; without, the
+        newest under the label whatever its member key.
+        """
+        clause = 'AND member_key IS ?' if member_key is not None else ''
+        args = [proposal, label] + ([member_key] if member_key is not None else [])
         row = self._db.execute(
-            'SELECT doc FROM records WHERE proposal=? AND slot=? '
+            'SELECT doc FROM records '  # noqa: S608
+            f'WHERE proposal=? AND label=? {clause} '
             'ORDER BY created DESC, rowid DESC LIMIT 1',
-            (proposal, slot),
+            args,
         ).fetchone()
         return None if row is None else RunRecord.model_validate_json(row[0])
+
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+        """The records under this label: the latest per member key, by member key."""
+        rows = self._db.execute(
+            'SELECT doc FROM records AS r WHERE proposal=? AND label=? AND rowid=('
+            ' SELECT max(rowid) FROM records WHERE proposal=r.proposal'
+            ' AND label=r.label AND member_key IS r.member_key)'
+            ' ORDER BY member_key, rowid',
+            (proposal, label),
+        )
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
 
     def referencing(self, record_id: str, output: str | None = None) -> list[str]:
         """IDs of records that reference an output of ``record_id``."""

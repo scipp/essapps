@@ -40,30 +40,63 @@ def test_update_changes_status_and_missing_record_raises(store: RecordStore) -> 
         store.update(RunRecord(request=request()))
 
 
-def test_list_filters_by_proposal_spec_status_slot_and_batch(
+def test_list_filters_by_proposal_spec_status_label_and_member(
     store: RecordStore,
 ) -> None:
-    a = RunRecord(request=request(slot='tune'))
-    b = RunRecord(request=request(proposal='p2', batch='b1', member_key='300K'))
+    a = RunRecord(request=request(label='tune'))
+    b = RunRecord(request=request(proposal='p2', label='scan', member_key='300K'))
     c = RunRecord(request=request(spec=SpecId(name='other', version=2)))
     c.status = Status.COMPLETED
     for r in (a, b, c):
         store.add(r)
     assert [r.id for r in store.list(proposal='p1')] == [a.id, c.id]
-    assert [r.id for r in store.list(slot='tune')] == [a.id]
-    assert [r.id for r in store.list(batch='b1')] == [b.id]
+    assert [r.id for r in store.list(label='tune')] == [a.id]
+    assert [r.id for r in store.list(label='scan')] == [b.id]
+    assert [r.id for r in store.list(member_key='300K')] == [b.id]
     assert [r.id for r in store.list(spec=SPEC)] == [a.id, b.id]
     assert [r.id for r in store.list(status=Status.COMPLETED)] == [c.id]
     assert [r.id for r in store.list(limit=1)] == [a.id]
 
 
-def test_latest_in_slot_is_the_newest_record(store: RecordStore) -> None:
-    first = RunRecord(request=request(slot='tune'))
-    second = RunRecord(request=request(slot='tune'))
+def test_latest_under_a_label_is_the_newest_record(store: RecordStore) -> None:
+    first = RunRecord(request=request(label='tune'))
+    second = RunRecord(request=request(label='tune'))
     store.add(first)
     store.add(second)
     assert store.latest('tune', 'p1').id == second.id
     assert store.latest('tune', 'p2') is None
+
+
+def test_latest_per_member_key_supersedes_only_within_the_member(
+    store: RecordStore,
+) -> None:
+    def member(key: str) -> RunRecord:
+        return RunRecord(request=request(label='scan', member_key=key))
+
+    first, other, corrected = member('300K'), member('310K'), member('300K')
+    for r in (first, other, corrected):
+        store.add(r)
+    assert store.latest('scan', 'p1', member_key='300K').id == corrected.id
+    assert store.latest('scan', 'p1', member_key='310K').id == other.id
+    assert store.latest('scan', 'p1').id == corrected.id
+    assert store.latest('scan', 'p1', member_key='320K') is None
+
+
+def test_batch_table_is_the_latest_record_per_member_key(store: RecordStore) -> None:
+    def member(key: str | None) -> RunRecord:
+        return RunRecord(request=request(label='scan', member_key=key))
+
+    first, other, corrected = member('300K'), member('310K'), member('300K')
+    by_hand = member(None)
+    elsewhere = RunRecord(request=request(label='other', member_key='300K'))
+    for r in (first, other, corrected, by_hand, elsewhere):
+        store.add(r)
+    assert [r.id for r in store.batch('scan', 'p1')] == [
+        by_hand.id,
+        corrected.id,
+        other.id,
+    ]
+    assert store.batch('scan', 'p2') == []
 
 
 def test_referencing_finds_records_by_output_of_producer(store: RecordStore) -> None:

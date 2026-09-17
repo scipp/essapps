@@ -47,8 +47,7 @@ class Client:
         spec: WorkflowSpec | SpecId,
         params: BaseModel | Mapping[str, Any] | None = None,
         *,
-        slot: str | None = None,
-        batch: str | None = None,
+        label: str | None = None,
         member_key: str | None = None,
     ) -> RunRequest:
         spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
@@ -60,8 +59,7 @@ class Client:
             instrument=self.instrument,
             proposal=self.proposal,
             submitter=self.submitter,
-            slot=slot,
-            batch=batch,
+            label=label,
             member_key=member_key,
         )
 
@@ -115,8 +113,13 @@ class Client:
     def records(self, **filters: Any) -> list[RunRecord]:
         return self.backend.records.list(proposal=self.proposal, **filters)
 
-    def latest(self, slot: str) -> RunRecord | None:
-        return self.backend.records.latest(slot, self.proposal)
+    def latest(self, label: str, member_key: str | None = None) -> RunRecord | None:
+        """The record that supersedes the others under a label (a slot, D10)."""
+        return self.backend.records.latest(label, self.proposal, member_key=member_key)
+
+    def batch(self, label: str) -> list[RunRecord]:
+        """The batch table under a label: the latest record per member key."""
+        return self.backend.records.batch(label, self.proposal)
 
     def wait(
         self, records: Iterable[RunRecord | str], timeout: float = 60.0

@@ -100,8 +100,8 @@ def test_session_reruns_of_a_sciline_workflow_record_reuse(
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     data = loaded.ref('data')
-    first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, slot='hist')
-    second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, slot='hist')
+    first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
+    second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
     assert not first.reused
     assert second.reused
     assert client.output(second).sizes == {'x': 8}

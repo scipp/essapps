@@ -4,16 +4,16 @@
 Templates and the trigger loop: batch and automatic reduction over records.
 
 A template is an immutable, versioned partial request. A batch is the records
-made from one template under one label, keyed per member. Automatic reduction
-is the trigger loop instantiating a template for each new dataset a rule
-matches; its records are a batch labelled by the template it is bound to.
+under one label, keyed per member, whether a person or the trigger loop made
+them. Automatic reduction is the trigger loop instantiating a template for each
+new dataset a rule matches; its records carry the template's name as their
+label and the dataset's identity as their member key.
 
-The architecture (D14) goes further than this module: one label field in place
-of ``slot`` and ``batch``, rules as stored data with a lower bound and an
-active state, one ``apply`` operation behind the batch form and the loop, and
-a loop that asks the record store which datasets still need firing on instead
-of remembering them. This module keeps the callable rule and the seen-set until
-that lands.
+The architecture (D14) goes further than this module: rules as stored data with
+a lower bound and an active state, one ``apply`` operation behind the batch form
+and the loop, and a loop that asks the record store which datasets still need
+firing on instead of remembering them. This module keeps the callable rule and
+the seen-set until that lands.
 """
 
 from __future__ import annotations
@@ -76,12 +76,12 @@ def batch(
     template: Template,
     members: Mapping[str, Mapping[str, Any]],
     *,
-    batch_id: str,
+    label: str,
 ) -> dict[str, RunRecord]:
     """One request per member, keyed by a meaningful member key; validated whole."""
     group = {
         key: client.request(
-            template.spec, template.fill(**fills), batch=batch_id, member_key=key
+            template.spec, template.fill(**fills), label=label, member_key=key
         )
         for key, fills in members.items()
     }
@@ -142,7 +142,8 @@ class TriggerLoop:
             request = self.client.request(
                 self.template.spec,
                 params,
-                batch=f'{self.template.name}/v{self.template.version}',
+                label=self.template.name,
+                member_key=dataset.pid,
             )
             try:
                 fired.append(self.client.submit(request))

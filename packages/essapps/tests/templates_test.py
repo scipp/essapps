@@ -42,28 +42,49 @@ def test_batch_runs_members_by_key(
         '310K': client.file(write_run(tmp_path / 'b.h5', [3.0, 4.0])),
     }
     records = batch(
-        client, template, {k: {'run': v} for k, v in runs.items()}, batch_id='scan1'
+        client, template, {k: {'run': v} for k, v in runs.items()}, label='scan1'
     )
     assert {k: r.status for k, r in records.items()} == dict.fromkeys(
         runs, Status.COMPLETED
     )
     assert records['310K'].outputs['total']['value'] == 14.0
-    assert [r.request.member_key for r in client.records(batch='scan1')] == [
+    assert [r.request.member_key for r in client.records(label='scan1')] == [
         '300K',
         '310K',
     ]
+
+
+def test_a_corrected_member_supersedes_the_batch_record(
+    client: Client, template: Template, tmp_path: Path
+) -> None:
+    runs = {
+        '300K': client.file(write_run(tmp_path / 'a.h5', [1.0, 2.0])),
+        '310K': client.file(write_run(tmp_path / 'b.h5', [3.0, 4.0])),
+    }
+    first = batch(
+        client, template, {k: {'run': v} for k, v in runs.items()}, label='scan1'
+    )
+    corrected = client.run(
+        LOAD,
+        {'run': runs['300K'], 'scale': 4.0},
+        label='scan1',
+        member_key='300K',
+    )
+    assert [r.id for r in client.batch('scan1')] == [corrected.id, first['310K'].id]
+    assert client.latest('scan1', '300K').id == corrected.id
+    assert client.latest('scan1', '310K').id == first['310K'].id
 
 
 def test_batch_is_refused_whole(
     client: Client, template: Template, run_ref: Ref
 ) -> None:
     with pytest.raises(ValueError, match='needs'):
-        batch(client, template, {'a': {'run': run_ref}, 'b': {}}, batch_id='scan2')
-    assert client.records(batch='scan2') == []
+        batch(client, template, {'a': {'run': run_ref}, 'b': {}}, label='scan2')
+    assert client.records(label='scan2') == []
     bad = template.revise(scale='not a number')
     with pytest.raises(SubmitError):
-        batch(client, bad, {'a': {'run': run_ref}}, batch_id='scan3')
-    assert client.records(batch='scan3') == []
+        batch(client, bad, {'a': {'run': run_ref}}, label='scan3')
+    assert client.records(label='scan3') == []
 
 
 def test_trigger_loop_fires_once_per_dataset_and_reports_refusals(
@@ -83,7 +104,8 @@ def test_trigger_loop_fires_once_per_dataset_and_reports_refusals(
     source.add(Dataset('pid/2', tmp_path / 'r2.h5', {'type': 'background'}))
     (fired,) = loop.run_once()
     assert fired.status == Status.COMPLETED
-    assert fired.request.batch == 'load-defaults/v1'
+    assert fired.request.label == 'load-defaults'
+    assert fired.request.member_key == 'pid/1'
     assert loop.status.fired == 1
     assert loop.run_once() == []
     file_record = client.record(fired.request.refs()[0].record)

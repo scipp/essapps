@@ -70,12 +70,12 @@ def test_chaining_through_memory_and_literal_outputs(
 
 
 def test_warm_workflow_is_reused_within_a_session(client: Client, run_ref: Ref) -> None:
-    first = client.run(LOAD, {'run': run_ref}, slot='tune')
-    second = client.run(LOAD, {'run': run_ref, 'scale': 3.0}, slot='tune')
+    first = client.run(LOAD, {'run': run_ref}, label='tune')
+    second = client.run(LOAD, {'run': run_ref, 'scale': 3.0}, label='tune')
     assert not first.reused
     assert second.reused
     assert client.latest('tune').id == second.id
-    assert [r.id for r in client.records(slot='tune')] == [first.id, second.id]
+    assert [r.id for r in client.records(label='tune')] == [first.id, second.id]
 
 
 def test_group_with_pending_outputs_runs_in_dependency_order(

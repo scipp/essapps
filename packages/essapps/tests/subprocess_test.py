@@ -51,9 +51,9 @@ def test_run_is_dispatched_then_reconciled_from_the_marker(
 def test_map_combine_runs_through_subprocesses(client: Client, run_ref: Ref) -> None:
     group = client.submit_group(
         {
-            'a': client.request(LOAD, {'run': run_ref}, batch='b1', member_key='a'),
+            'a': client.request(LOAD, {'run': run_ref}, label='b1', member_key='a'),
             'b': client.request(
-                LOAD, {'run': run_ref, 'scale': 3.0}, batch='b1', member_key='b'
+                LOAD, {'run': run_ref, 'scale': 3.0}, label='b1', member_key='b'
             ),
             'sum': client.request(
                 SUM,
@@ -72,7 +72,7 @@ def test_map_combine_runs_through_subprocesses(client: Client, run_ref: Ref) -> 
         group, Status.COMPLETED
     )
     assert client.output(done['sum'].ref('total')).sum().value == 40.0
-    assert [r.request.member_key for r in client.records(batch='b1')] == ['a', 'b']
+    assert [r.request.member_key for r in client.records(label='b1')] == ['a', 'b']
 
 
 def test_failure_in_subprocess_carries_the_reason(client: Client) -> None:
