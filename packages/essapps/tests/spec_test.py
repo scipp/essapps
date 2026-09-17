@@ -13,6 +13,7 @@ from ess.apps.spec import (
     NexusFile,
     OutputRef,
     Quantity,
+    SerializedWorkflowSpec,
     WorkflowSpec,
     as_ref,
     data_fields,
@@ -146,3 +147,30 @@ def test_a_contribution_needs_the_other_outputs_optional() -> None:
         spec(Required, contribution='contribution')
     assert spec(Optional, contribution='contribution').contribution == 'contribution'
     assert spec(Required).contribution is None
+
+
+def test_serialized_spec_carries_the_combine_declaration() -> None:
+    class Outputs(BaseModel):
+        contribution: Array()
+        result: Array() | None = None
+
+    class Params(BaseModel):
+        run: NexusFile
+        scale: float = 1.0
+
+    spec = WorkflowSpec(
+        name='w',
+        version=1,
+        title='W',
+        description='d',
+        params=Params,
+        outputs=Outputs,
+        contribution='contribution',
+        finalize_params=frozenset({'scale'}),
+    )
+    serialized = SerializedWorkflowSpec.model_validate_json(
+        spec.serialize().model_dump_json()
+    )
+    assert serialized.contribution == 'contribution'
+    assert serialized.finalize_params == frozenset({'scale'})
+    assert 'scale' in serialized.params_schema['properties']

@@ -24,6 +24,8 @@ import sciline
 import scipp as sc
 from ess import loki, sans
 from ess.loki import data
+from ess.reduce.spec.conversions import edges_to_variable
+from ess.reduce.spec.parameters import QEdges, WavelengthEdges
 from ess.sans.types import (
     BackgroundRun,
     BackgroundSubtractedIofQ,
@@ -122,25 +124,18 @@ BEAM_CENTER = WorkflowSpec(
 
 # I(Q)
 
-QMin = NewType('QMin', float)
-QMax = NewType('QMax', float)
-QNumBins = NewType('QNumBins', int)
-WavelengthMin = NewType('WavelengthMin', float)
-WavelengthMax = NewType('WavelengthMax', float)
-WavelengthNumBins = NewType('WavelengthNumBins', int)
+QEdgesParam = NewType('QEdgesParam', QEdges)
+WavelengthEdgesParam = NewType('WavelengthEdgesParam', WavelengthEdges)
 BeamCenterQuantity = NewType('BeamCenterQuantity', Quantity)
 
 
-def q_edges(low: QMin, high: QMax, bins: QNumBins) -> QBins:
-    return QBins(sc.linspace('Q', low, high, bins + 1, unit='1/angstrom'))
+def q_edges(edges: QEdgesParam) -> QBins:
+    """Spec-vocabulary edges as the variable the workflow wants."""
+    return QBins(edges_to_variable(edges, 'Q'))
 
 
-def wavelength_edges(
-    low: WavelengthMin, high: WavelengthMax, bins: WavelengthNumBins
-) -> WavelengthBins:
-    return WavelengthBins(
-        sc.linspace('wavelength', low, high, bins + 1, unit='angstrom')
-    )
+def wavelength_edges(edges: WavelengthEdgesParam) -> WavelengthBins:
+    return WavelengthBins(edges_to_variable(edges, 'wavelength'))
 
 
 def beam_center_vector(center: BeamCenterQuantity) -> BeamCenter:
@@ -156,12 +151,8 @@ class IofQParams(BaseModel):
     empty_beam_run: NexusFile
     direct_beam: OpaqueFile
     beam_center: Quantity | OutputRef
-    wavelength_min: float = 1.0
-    wavelength_max: float = 13.0
-    wavelength_bins: int = Field(default=200, ge=1)
-    q_min: float = 0.01
-    q_max: float = 0.3
-    q_bins: int = Field(default=100, ge=1)
+    wavelength: WavelengthEdges = WavelengthEdges(start=1.0, stop=13.0, num_bins=200)
+    q: QEdges = QEdges(start=0.01, stop=0.3, num_bins=100)
 
 
 class IofQOutputs(BaseModel):
@@ -182,12 +173,8 @@ def iofq_workflow() -> WarmPipeline:
             'empty_beam_run': Filename[EmptyBeamRun],
             'direct_beam': DirectBeamFilename,
             'beam_center': BeamCenterQuantity,
-            'wavelength_min': WavelengthMin,
-            'wavelength_max': WavelengthMax,
-            'wavelength_bins': WavelengthNumBins,
-            'q_min': QMin,
-            'q_max': QMax,
-            'q_bins': QNumBins,
+            'wavelength': WavelengthEdgesParam,
+            'q': QEdgesParam,
         },
         resolve={
             'sample_run': 'path',
@@ -198,7 +185,7 @@ def iofq_workflow() -> WarmPipeline:
             'direct_beam': 'path',
         },
         targets={'iofq': BackgroundSubtractedIofQ},
-        stage_inputs=['q_min', 'q_max', 'q_bins'],
+        stage_inputs=['q'],
     )
 
 

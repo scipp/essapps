@@ -15,6 +15,8 @@ import pytest
 
 pytest.importorskip('ess.loki')
 
+from ess.reduce.spec.parameters import QEdges, WavelengthEdges
+
 from ess.apps import loki
 from ess.apps.client import Client, local
 from ess.apps.sources import FolderSource
@@ -58,10 +60,14 @@ def client(cache: Path, tmp_path: Path) -> Iterator[Client]:
     session.close()
 
 
+def q_edges(num_bins: int) -> QEdges:
+    return QEdges(start=0.01, stop=0.3, num_bins=num_bins)
+
+
 def iofq_params(
     inputs: dict[str, Any], center: Any, **overrides: Any
 ) -> dict[str, Any]:
-    return inputs | {'beam_center': center, 'q_bins': 100} | overrides
+    return inputs | {'beam_center': center, 'q': q_edges(100)} | overrides
 
 
 def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
@@ -85,7 +91,7 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
 
     # A rebinning under the same label: a new record that supersedes the first.
     second = client.run(
-        loki.IOFQ, iofq_params(refs, center.ref(), q_bins=50), label='iofq'
+        loki.IOFQ, iofq_params(refs, center.ref(), q=q_edges(50)), label='iofq'
     )
     assert second.reused
     assert client.output(second, 'iofq').sizes == {'Q': 50}
@@ -121,7 +127,7 @@ def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> No
 
     call()
     assert not workflow.reused
-    call(q_bins=50)
+    call(q=q_edges(50))
     assert workflow.reused
-    call(wavelength_bins=100)
+    call(wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100))
     assert not workflow.reused

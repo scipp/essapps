@@ -33,6 +33,7 @@ from ess.reduce.spec import (
     ref_fields,
     walk_refs,
 )
+from ess.reduce.spec import SerializedWorkflowSpec as _SerializedWorkflowSpec
 from ess.reduce.spec import WorkflowSpec as _WorkflowSpec
 from pydantic import BaseModel, Field, create_model, model_validator
 
@@ -48,6 +49,7 @@ __all__ = [
     'OutputRef',
     'Quantity',
     'Ref',
+    'SerializedWorkflowSpec',
     'SpecId',
     'WorkflowSpec',
     'as_ref',
@@ -115,6 +117,13 @@ class SpecId(BaseModel, frozen=True):
         return f'{self.name}/v{self.version}'
 
 
+class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
+    """The plain-data form of scipp/ess#690 with the D15 declaration."""
+
+    contribution: str | None = None
+    finalize_params: frozenset[str] = frozenset()
+
+
 class WorkflowSpec(_WorkflowSpec, frozen=True):
     """
     The spec of scipp/ess#690 with the declared additive combine (D15).
@@ -161,6 +170,13 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
     @property
     def id(self) -> SpecId:
         return SpecId(name=self.name, version=self.version)
+
+    def serialize(self) -> SerializedWorkflowSpec:
+        return SerializedWorkflowSpec(
+            **super().serialize().model_dump(),
+            contribution=self.contribution,
+            finalize_params=self.finalize_params,
+        )
 
     @property
     def contribute_params(self) -> frozenset[str]:
