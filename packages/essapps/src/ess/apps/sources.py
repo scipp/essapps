@@ -71,11 +71,26 @@ class FolderSource:
     is identified by those, which is what a PID is minted from; any other file is
     identified by its path. The folder is one proposal's, so ``proposal`` selects
     nothing here.
+
+    Facilities name files differently, so ``identity`` is the expression matched
+    against a file's stem: a group ``run`` gives the run number and a group
+    ``instrument`` the instrument, which ``instrument`` supplies for names that
+    do not carry one. A stem the expression does not match is identified by its
+    path.
     """
 
-    def __init__(self, path: Path | str, pattern: str = '*') -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        pattern: str = '*',
+        *,
+        identity: str | re.Pattern[str] = _RUN_IDENTITY,
+        instrument: str | None = None,
+    ) -> None:
         self.path = Path(path)
         self.pattern = pattern
+        self.identity = re.compile(identity)
+        self.instrument = instrument
 
     def new_datasets(self, proposal: str) -> list[Dataset]:
         return self._scan()
@@ -91,11 +106,13 @@ class FolderSource:
         ]
 
     def _dataset(self, path: Path) -> Dataset:
-        match = _RUN_IDENTITY.fullmatch(path.stem)
+        match = self.identity.fullmatch(path.stem)
         if match is None:
             return Dataset(path=path)
-        return Dataset(
-            path=path,
-            instrument=match['instrument'].lower(),
-            run=int(match['run']),
-        )
+        instrument = match.groupdict().get('instrument') or self.instrument
+        if instrument is None:
+            raise ValueError(
+                f'{path.name} carries a run number but no instrument; give the '
+                'source an instrument name'
+            )
+        return Dataset(path=path, instrument=instrument.lower(), run=int(match['run']))

@@ -4,6 +4,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from ess.apps.sources import Dataset, FolderSource
 from ess.apps.spec import DatasetRef
 
@@ -58,3 +60,20 @@ def test_a_file_that_moved_is_located_where_it_is_now(tmp_path: Path) -> None:
     assert FolderSource(moved).locate(DatasetRef(instrument='dream', run=4711)) == (
         moved / 'dream_4711.nxs'
     )
+
+
+def test_another_filename_shape_gives_the_run_identity(tmp_path: Path) -> None:
+    """LoKI tutorial files are ``<run>-<date>.nxs`` and carry no instrument."""
+    write(tmp_path, '60393-2022-02-28_2215.nxs')
+    source = FolderSource(
+        tmp_path, '*.nxs', identity=r'(?P<run>\d+)-.*', instrument='loki'
+    )
+    (dataset,) = source.new_datasets('p1')
+    assert dataset.ref == DatasetRef(instrument='loki', run=60393)
+
+
+def test_a_run_number_without_an_instrument_is_refused(tmp_path: Path) -> None:
+    write(tmp_path, '60393-2022-02-28_2215.nxs')
+    source = FolderSource(tmp_path, '*.nxs', identity=r'(?P<run>\d+)-.*')
+    with pytest.raises(ValueError, match='no instrument'):
+        source.new_datasets('p1')
