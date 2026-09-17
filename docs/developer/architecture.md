@@ -314,7 +314,7 @@ Chunk-wise processing of one large file, as the NMX workflow does, happens insid
 **What a warm workflow reuses.**
 A sciline workflow meets the contract through a thin wrapper that keeps the pipeline and caches the values of the nodes the spec declares expensive.
 A rerun sets the changed parameters and recomputes only what lies downstream of them, which is how every notebook already works: the parameters people move interactively, Q bins, d-spacing bins, cut axes, a beam centre, enter after the expensive load and coordinate conversion.
-The spec therefore declares which parameters are cheap to change, and the wrapper builds a **stage** from the workflow's targets and those parameters as its inputs: sciline's `Stage` (scipp/sciline#245), the part of a graph from named inputs to named outputs, which computes everything the inputs cannot affect once and holds it at its frontier.
+The spec therefore declares which parameters are cheap to change, and the wrapper builds a **stage** from the workflow's targets and those parameters as its inputs: sciline's `Stage` (scipp/sciline#245), the part of a graph from named inputs to named outputs, which computes once everything the inputs cannot affect and holds it at its frontier.
 That frontier is the cache, and a rerun is a call of the stage with the cheap parameters.
 The declaration is also what lets a UI offer a slider rather than a run button, and a stage refuses an input its outputs do not need, so a cheap parameter that never reaches the targets is a bind error rather than a dead slider.
 The wrapper imports sciline; the framework does not.
