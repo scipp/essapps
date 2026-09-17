@@ -22,7 +22,9 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     record = client.run(LOAD, {'run': run_ref})
     assert record.status == Status.COMPLETED, record.failure
     assert as_ref(record.request.params['run']) == run_ref
-    assert record.checksums['run'] == hashlib.sha256(run_file.read_bytes()).hexdigest()
+    checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
+    assert record.checksums == {str(run_ref): checksum}
+    assert record.resolved_params['run'] == {'instrument': 'dream', 'run': 1}
     assert client.provenance(record)['raw'] == [{'instrument': 'dream', 'run': 1}]
 
 

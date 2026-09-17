@@ -95,17 +95,22 @@ def test_cheap_parameter_the_targets_do_not_need_is_refused() -> None:
         )
 
 
-def test_session_reruns_of_a_sciline_workflow_record_reuse(
+def test_session_reruns_record_reuse_of_the_expensive_part_not_of_the_callable(
     client: Client, run_ref: Ref
 ) -> None:
+    """``reused`` is what D11 reads: the result came out of held state."""
     loaded = client.run(LOAD, {'run': run_ref})
     data = loaded.ref('data')
     first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
-    second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
+    cheap = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
+    expensive = client.run(
+        HISTOGRAM, {'data': data, 'bins': 8, 'threshold': 2.0}, label='hist'
+    )
     assert not first.reused
-    assert second.reused
-    assert client.output(second).sizes == {'x': 8}
-    assert client.latest('hist').id == second.id
+    assert cheap.reused
+    assert not expensive.reused
+    assert client.output(cheap).sizes == {'x': 8}
+    assert client.latest('hist').id == expensive.id
 
 
 def test_reuse_keeps_outputs_that_no_cheap_parameter_feeds() -> None:

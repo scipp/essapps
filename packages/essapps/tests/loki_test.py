@@ -79,11 +79,14 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     first = client.run(loki.IOFQ, iofq_params(refs, center.ref()), label='iofq')
     assert first.failure is None, first.failure
     assert client.output(first, 'iofq').sizes == {'Q': 100}
+    # 60392 is both the background transmission and the empty beam: one file.
+    assert len(first.checksums) == len(set(RUNS.values())) + 1
 
     # A cheap change under the same label: a new record that supersedes the first.
     second = client.run(
         loki.IOFQ, iofq_params(refs, center.ref(), q_bins=50), label='iofq'
     )
+    assert second.reused
     assert client.output(second, 'iofq').sizes == {'Q': 50}
     assert client.latest('iofq').id == second.id
     assert [r.id for r in client.records(label='iofq')] == [first.id, second.id]
@@ -98,10 +101,9 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
 
 def test_only_a_cheap_change_reuses_the_warm_stage(cache: Path) -> None:
     """
-    ``WarmPipeline.reused`` is the one signal that the expensive part was held.
-
-    A record's ``reused`` flag says only that the runner kept the callable, so it
-    is true for every run after the first whatever changed.
+    ``WarmPipeline.reused`` is the signal that the expensive part was held, and
+    it is what a record's ``reused`` flag reports: the run came out of the warm
+    stage rather than merely out of a kept callable.
     """
     paths = {name: next(cache.glob(f'{run}-*')) for name, run in RUNS.items()} | {
         'direct_beam': cache / DIRECT_BEAM

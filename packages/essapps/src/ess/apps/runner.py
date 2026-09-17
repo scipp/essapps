@@ -34,6 +34,7 @@ from pydantic import BaseModel, ValidationError
 from .binding import Binding, Factory, Workflow, combining, import_object
 from .records import Failure, RunResult, RunStage, Status
 from .spec import (
+    ArraySpec,
     DataRef,
     DatasetRef,
     Kind,
@@ -81,25 +82,76 @@ def _materialize(value: Any, ref: DataRef, inputs: Inputs) -> Any:
     return value
 
 
-def _checksums(params: dict[str, Any], inputs: Inputs) -> dict[str, str]:
-    """
-    The checksum of every local file the run reads, by parameter path.
+class OutputShapeError(Exception):
+    """An output does not have the structure its spec declares."""
 
-    A dataset is the only input whose bytes the framework did not write, so a
-    recompute can only tell whether it read the same bytes if we take these.
+
+def file_checksum(path: Path) -> str:
+    """The sha256 of a file's bytes."""
+    with path.open('rb') as file:
+        return hashlib.file_digest(file, 'sha256').hexdigest()
+
+
+def _datasets(params: dict[str, Any]) -> list[DatasetRef]:
     """
-    checksums = {}
-    for path, ref in walk_refs(params):
-        if not isinstance(ref, DatasetRef):
-            continue
-        located = inputs.get(ref, Kind.OPAQUE)
-        if isinstance(located, Path) and located.is_file():
-            digest = hashlib.sha256()
-            with located.open('rb') as file:
-                while chunk := file.read(1 << 20):
-                    digest.update(chunk)
-            checksums[path] = digest.hexdigest()
-    return checksums
+    The distinct datasets a request names.
+
+    Two parameters may name one dataset -- a run that is both the background
+    transmission and the empty beam -- and that is one file to locate and hash.
+    """
+    refs = (ref for _, ref in walk_refs(params) if isinstance(ref, DatasetRef))
+    return list(dict.fromkeys(refs))
+
+
+def _resolved(value: Any) -> Any:
+    """
+    The JSON form of the parameters, references reduced to what identifies them.
+
+    A dataset reference dumps every identity field, all but one of them empty;
+    the record shows the identity the request gave, as provenance does.
+    """
+    if isinstance(value, dict):
+        if as_ref(value) is not None:
+            return {k: v for k, v in value.items() if v is not None}
+        return {k: _resolved(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolved(v) for v in value]
+    return value
+
+
+def _elements(value: Any) -> list[Any]:
+    """What an output field holds: one value, or the elements of a collection."""
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _check_array(name: str, value: Any, spec: ArraySpec) -> None:
+    """An array output against the structure its spec declares (D13)."""
+    for element in _elements(value):
+        dims = tuple(getattr(element, 'dims', ()))
+        coords = getattr(element, 'coords', {})
+        if missing := tuple(d for d in spec.dims if d not in dims):
+            raise OutputShapeError(
+                f'output {name!r} has dims {dims}, without the declared {missing}'
+            )
+        if absent := tuple(c for c in spec.coords if c not in coords):
+            raise OutputShapeError(
+                f'output {name!r} is without the declared coords {absent}'
+            )
+
+
+def _failure(error: Exception) -> Failure:
+    """Why the run failed, under a kind a caller can branch on."""
+    if isinstance(error, ValidationError):
+        kind = 'validation'
+    elif isinstance(error, OutputShapeError):
+        kind = 'output-shape'
+    else:
+        kind = type(error).__name__
+    return Failure(kind=kind, message=str(error), traceback=traceback.format_exc())
 
 
 def _store_output(record_id: str, name: str, value: Any, outputs: Outputs) -> list[Ref]:
@@ -121,11 +173,43 @@ def _store_output(record_id: str, name: str, value: Any, outputs: Outputs) -> li
 
 
 class Runner:
-    """Executes runs; with ``keep`` the callable survives between runs."""
+    """
+    Executes runs; with ``keep`` the callable survives between runs.
+
+    Checksums survive with it: a file is hashed once per (path, size, mtime). A
+    session that reruns a workflow over the same hundreds of megabytes therefore
+    spends the sha256 once rather than on every rerun. A throwaway runner runs
+    once, so it hashes each file it reads once either way.
+    """
 
     def __init__(self, *, keep: bool) -> None:
         self._keep = keep
         self._warm: dict[SpecId, Workflow] = {}
+        self._digests: dict[tuple[Path, int, int], str] = {}
+
+    def _checksum(self, path: Path) -> str:
+        stat = path.stat()
+        key = (path, stat.st_size, stat.st_mtime_ns)
+        if key not in self._digests:
+            self._digests[key] = file_checksum(path)
+        return self._digests[key]
+
+    def _checksums(self, params: dict[str, Any], inputs: Inputs) -> dict[str, str]:
+        """
+        The checksum of every local file the run reads, by reference.
+
+        A dataset is the only input whose bytes the framework did not write, so a
+        recompute can only tell whether it read the same bytes if we take these.
+        The key is the reference rather than a parameter path, because a dataset
+        two parameters name is one file; which parameter read it is in
+        ``resolved_params``.
+        """
+        checksums = {}
+        for ref in _datasets(params):
+            located = inputs.get(ref, Kind.OPAQUE)
+            if isinstance(located, Path) and located.is_file():
+                checksums[str(ref)] = self._checksum(located)
+        return checksums
 
     def _callable(self, spec: WorkflowSpec, factory: Factory) -> tuple[Workflow, bool]:
         if spec.id in self._warm:
@@ -166,13 +250,13 @@ class Runner:
             # it is validated against a model of exactly those fields.
             params_model = finalize_model(spec) if stage == 'combine' else spec.params
             validated = params_model.model_validate(params)
-            result.resolved_params = validated.model_dump(mode='json')
-            result.checksums = _checksums(params, inputs)
+            result.resolved_params = _resolved(validated.model_dump(mode='json'))
+            result.checksums = self._checksums(params, inputs)
             materialized = validated.model_dump()
             for name, ref in data_ref_fields(params_model).items():
                 if materialized.get(name) is not None:
                     materialized[name] = _materialize(materialized[name], ref, inputs)
-            workflow, result.reused = self._callable(spec, binding.factory)
+            workflow, kept = self._callable(spec, binding.factory)
             returned = self._call(
                 spec,
                 workflow,
@@ -180,6 +264,11 @@ class Runner:
                 params_model.model_validate(materialized),
                 [inputs.get(ref, Kind.ARRAY) for ref in contributions],
             )
+            # The flag means the result came out of held state, which is what
+            # D11 reads before publishing. A callable holding a frontier knows
+            # whether it reused it; one holding nothing but itself can say only
+            # that the runner kept it.
+            result.reused = getattr(workflow, 'reused', kept)
             model = (
                 returned
                 if isinstance(returned, BaseModel)
@@ -189,13 +278,7 @@ class Runner:
             result.status = Status.COMPLETED
         except Exception as e:
             result.status = Status.FAILED
-            result.failure = Failure(
-                kind='validation'
-                if isinstance(e, ValidationError)
-                else type(e).__name__,
-                message=str(e),
-                traceback=traceback.format_exc(),
-            )
+            result.failure = _failure(e)
         result.finished = datetime.now(UTC)
         return result
 
@@ -226,12 +309,15 @@ class Runner:
         model: BaseModel,
         outputs: Outputs,
     ) -> None:
+        """Check each output against its declared structure, then store it."""
         stored = data_ref_fields(spec.outputs)
         for name in type(model).model_fields:
             value = getattr(model, name)
             if value is None:
                 continue
             if name in stored:
+                if (array := stored[name].array) is not None:
+                    _check_array(name, value, array)
                 result.stored_outputs += _store_output(record_id, name, value, outputs)
             else:
                 result.outputs[name] = model.model_dump(mode='json', include={name})[

@@ -61,7 +61,8 @@ def test_a_dataset_is_located_before_the_subprocess_starts(
     (done,) = client.wait([client.run(LOAD, {'run': run_ref})])
     assert done.status == Status.COMPLETED, done.failure
     file = datasets / 'dream_1.h5'
-    assert done.checksums == {'run': hashlib.sha256(file.read_bytes()).hexdigest()}
+    checksum = hashlib.sha256(file.read_bytes()).hexdigest()
+    assert done.checksums == {str(run_ref): checksum}
     job = json.loads((client.backend.launcher.workdir(done) / 'job.json').read_text())
     assert job['locations'] == {'dataset:dream/1': str(file)}
 
