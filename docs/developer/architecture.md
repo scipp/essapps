@@ -795,6 +795,19 @@ The two designated testing seams are the fake dataset source and the session lau
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
 The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper built on sciline's `Stage`, labels and member keys with the latest-per-label query, dataset references with a folder source and the picker, contributions with contribute, combine, and finalize over sciline's `Aggregation` and combine requests, the lookup, the rule, `apply`, and the memoryless trigger loop, publication, and a LoKI session notebook on the real esssans workflow bound in-process. Not in it: the Tiled-backed disk tier, a SciCat dataset source, the opaque-combine branch of a rule, the fold, HTTP, and a store for templates and rules.
 
+**What binding real workflows found.**
+Two workflow families are bound, LoKI SANS and Amor reflectometry, and each found something the sketch does not answer; they are listed here, by decision, until the decision is changed or the finding is dismissed.
+An opaque combine over a collection parameter gets none of the member-consistency check that D15 gives the declared combine, so a stitch over curves reduced with different detector limits passes validation; the check should be a property of a collection-valued data parameter, not of a combine request (D15).
+Collection keys are the submitter's invention: nothing ties a key to the record it came from, and a reference into a pending collection output is not checked for its key, so a transposed dictionary is accepted (D13, D8).
+Chaining compares formats only, so a declared `ArraySpec` is never read by anyone; the runner checks dims and coordinate names on an output but not units or `binned` (D13).
+A stage input is also how a session shares work across the members of a series, since the reduced reference survives a change of sample run only if the sample run is a stage input; the sketch describes stage inputs as what a slider moves and does not say the two coincide (D8).
+Every scalar parameter costs a `NewType` and a provider in the binding whose only job is to turn plain data into a scipp object; a conversion named beside the key, as the form of a data reference is, would remove them (D8).
+An output the framework cannot serialize, an ORSO file, has no place to declare its serializer, though the sketch says it must come with one (D8).
+The parameter vocabulary lacks a pixel-index range, an angle range, and a Q range, and an edges model whose range the data derives, which is what a workflow whose binning follows the geometry needs (D13).
+Pixel masks are a graph rewrite in the LoKI workflow, so they are fixed in the binding's factory and not on the record, and the request is not complete; the same rewrite, a list of filenames rebuilding the graph, is what stops the additive half of reflectometry, same-angle runs, from being bound, and D15's declared contribution is the way out for both (D8, D15).
+The beam-centre finder takes a pipeline rather than a key, so it is a plain callable and its expensive part is not shared with the reduction that consumes its result (D8).
+Fitting scale factors over all members and re-reducing each member with its factor is a cycle, members to combine to members, which three requests express but no rule can, since a rule only ever runs members then a combine (D14).
+
 ## Glossary
 
 Where esslivedata uses a word differently, the clash is noted.
