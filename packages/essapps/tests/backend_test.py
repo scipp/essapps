@@ -306,6 +306,38 @@ def test_retry_and_recompute_link_to_the_old_record(
     assert new.status == Status.COMPLETED
 
 
+def test_a_retry_and_a_correction_supersede_the_current_head(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    first = client.run(LOAD, {'run': run_ref}, label='tune')
+    assert first.supersedes is None
+    retried = client.backend.retry(first.id)
+    assert retried.supersedes == first.id
+    assert client.latest('tune').id == retried.id
+
+    corrected = client.run(LOAD, {'run': run_ref, 'scale': 2.0}, label='tune')
+    assert corrected.supersedes == retried.id
+    assert client.latest('tune').id == corrected.id
+
+
+def test_two_requests_in_one_group_chain_in_group_order(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    """Within a group, a later request supersedes the earlier one in the group,
+    not the head that was current before the group was submitted."""
+    group = client.submit_group(
+        {
+            'a': client.request(LOAD, {'run': run_ref}, label='tune', member_key='k'),
+            'b': client.request(
+                LOAD, {'run': run_ref, 'scale': 2.0}, label='tune', member_key='k'
+            ),
+        }
+    )
+    assert group['a'].supersedes is None
+    assert group['b'].supersedes == group['a'].id
+    assert client.latest('tune', 'k').id == group['b'].id
+
+
 def test_cancel_terminal_record_is_a_no_op(client: Client, run_ref: DatasetRef) -> None:
     done = client.run(LOAD, {'run': run_ref})
     client.cancel(done)

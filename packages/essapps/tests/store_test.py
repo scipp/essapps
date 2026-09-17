@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -58,13 +59,27 @@ def test_list_filters_by_proposal_spec_status_label_and_member(
     assert [r.id for r in store.list(limit=1)] == [a.id]
 
 
-def test_latest_under_a_label_is_the_newest_record(store: RecordStore) -> None:
+def test_latest_is_the_head_of_the_labels_chain(store: RecordStore) -> None:
     first = RunRecord(request=request(label='tune'))
-    second = RunRecord(request=request(label='tune'))
     store.add(first)
+    second = RunRecord(request=request(label='tune'), supersedes=first.id)
     store.add(second)
     assert store.latest('tune', 'p1').id == second.id
     assert store.latest('tune', 'p2') is None
+
+
+def test_the_head_does_not_depend_on_creation_time(store: RecordStore) -> None:
+    """Several writers may submit under one label from different hosts, so the
+    order under a label cannot depend on a clock."""
+    first = RunRecord(request=request(label='tune'))
+    store.add(first)
+    second = RunRecord(
+        request=request(label='tune'),
+        supersedes=first.id,
+        created=first.created - timedelta(hours=1),
+    )
+    store.add(second)
+    assert store.latest('tune', 'p1').id == second.id
 
 
 def test_latest_per_member_key_supersedes_only_within_the_member(
@@ -73,24 +88,31 @@ def test_latest_per_member_key_supersedes_only_within_the_member(
     def member(key: str) -> RunRecord:
         return RunRecord(request=request(label='scan', member_key=key))
 
-    first, other, corrected = member('300K'), member('310K'), member('300K')
-    for r in (first, other, corrected):
-        store.add(r)
+    first, other = member('300K'), member('310K')
+    store.add(first, other)
+    corrected = RunRecord(
+        request=request(label='scan', member_key='300K'), supersedes=first.id
+    )
+    store.add(corrected)
     assert store.latest('scan', 'p1', member_key='300K').id == corrected.id
     assert store.latest('scan', 'p1', member_key='310K').id == other.id
-    assert store.latest('scan', 'p1').id == corrected.id
     assert store.latest('scan', 'p1', member_key='320K') is None
+    # The slot form: no record under 'scan' carries a NULL member key.
+    assert store.latest('scan', 'p1') is None
 
 
-def test_batch_table_is_the_latest_record_per_member_key(store: RecordStore) -> None:
+def test_batch_table_is_the_head_per_member_key(store: RecordStore) -> None:
     def member(key: str | None) -> RunRecord:
         return RunRecord(request=request(label='scan', member_key=key))
 
-    first, other, corrected = member('300K'), member('310K'), member('300K')
+    first, other = member('300K'), member('310K')
     by_hand = member(None)
     elsewhere = RunRecord(request=request(label='other', member_key='300K'))
-    for r in (first, other, corrected, by_hand, elsewhere):
-        store.add(r)
+    store.add(first, other, by_hand, elsewhere)
+    corrected = RunRecord(
+        request=request(label='scan', member_key='300K'), supersedes=first.id
+    )
+    store.add(corrected)
     assert [r.id for r in store.batch('scan', 'p1')] == [
         by_hand.id,
         corrected.id,

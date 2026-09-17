@@ -155,6 +155,7 @@ FIA's Kubernetes job per run with a pinned image is a launcher, and a good data 
 | Exclusions with a reason | Exclusions are mutable state on the rule, each with a reason; the trigger loop honours them and reports them. They were first an annotation on the dataset, moved in the seventh pass so that annotations stay notes nothing reads | Rules (D14); Components |
 | The catalogue lagged the file | SciCat ingestion lag as an operational question for phase 1, with a filesystem source as the fallback that still waits for the PID | Open questions |
 | The batch file is what users keep | Not a stored unit: the batch table is a query, the latest record per member key under the rule's label, plus the rule's exclusions; a stored batch definition was proposed and rejected in the seventh pass because the members would copy the records | Rules (D14) |
+| FIA walks the journal for the partner run | A lookup fill may be as-of: the nearest earlier dataset matching criteria, resolved against the member when the rule is applied, for cans, dark frames, and transmission pairing; the thirteenth pass, prompted by [git.md](git.md) | Rules (D14) |
 | Autoprocessing is a mode of the batch tab | Batch and automatic reduction are one mechanism: a rule is to a batch what a template is to a request, a rule's records are a batch under its name, the slot and the batch ID are one label, and one apply operation serves the form, the trigger loop, and the backlog, reprocess, and rerun operations; the ninth pass | Rules (D14) |
 
 Not folded in, and why:

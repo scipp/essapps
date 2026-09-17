@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from fnmatch import fnmatch
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -74,7 +74,7 @@ Criteria = dict[str, Near | Like | Between]
 """Conditions by dataset field; a dataset satisfies them when it satisfies all."""
 
 
-def _matches(criteria: Criteria, dataset: Dataset) -> bool:
+def matches(criteria: Criteria, dataset: Dataset) -> bool:
     fields = dataset.fields
     return all(
         name in fields and criterion.matches(fields[name])
@@ -144,17 +144,31 @@ class Template(BaseModel, frozen=True):
         )
 
 
+class AsOf(BaseModel, frozen=True):
+    """
+    A fill resolved per member: the nearest earlier dataset matching ``match``.
+
+    Cans, dark frames, and empty-beam runs are measured repeatedly during an
+    experiment; the right one for a member is the one nearest before it, not
+    the one latest at submission, so this is resolved against the member's own
+    dataset in :func:`ess.apps.batch.apply`, never stored as a fixed reference.
+    """
+
+    kind: Literal['as-of'] = 'as-of'
+    match: Criteria
+
+
 class LookupEntry(BaseModel, frozen=True):
     """
     One row of a lookup: what it matches, and what it fills.
 
     An entry with no criteria is the wildcard, which applies to what nothing
-    else matched.
+    else matched. A fill may be an :class:`AsOf` instead of a value.
     """
 
     name: str
     match: Criteria = Field(default_factory=dict)
-    fills: dict[str, Any] = Field(default_factory=dict)
+    fills: dict[str, AsOf | Any] = Field(default_factory=dict)
 
     @property
     def wildcard(self) -> bool:
@@ -187,9 +201,7 @@ class Lookup(BaseModel, frozen=True):
 
     def entry(self, dataset: Dataset) -> LookupEntry | None:
         """The entry that applies, the wildcard, or None."""
-        hits = [
-            e for e in self.entries if not e.wildcard and _matches(e.match, dataset)
-        ]
+        hits = [e for e in self.entries if not e.wildcard and matches(e.match, dataset)]
         if len(hits) > 1:
             raise ValueError(
                 f'{dataset.ref} matches lookup entries {[e.name for e in hits]}'
@@ -197,6 +209,18 @@ class Lookup(BaseModel, frozen=True):
         if hits:
             return hits[0]
         return next((e for e in self.entries if e.wildcard), None)
+
+
+def precedes(a: Dataset, b: Dataset) -> bool:
+    """
+    Whether ``a`` lies before ``b``: by run number when both carry one, by
+    creation time otherwise; the same two forms as :class:`Bound`.
+    """
+    if a.run is not None and b.run is not None:
+        return a.run < b.run
+    if a.created is not None and b.created is not None:
+        return a.created < b.created
+    return False
 
 
 class Bound(BaseModel, frozen=True):
@@ -234,7 +258,7 @@ class Selector(BaseModel, frozen=True):
 
     def selects(self, dataset: Dataset) -> bool:
         """Whether the criteria match, leaving the bound to :attr:`after`."""
-        return _matches(self.match, dataset)
+        return matches(self.match, dataset)
 
 
 class RetryPolicy(BaseModel, frozen=True):

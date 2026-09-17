@@ -82,9 +82,19 @@ class Backend:
         self.registry = registry
         self.launcher = launcher
         self.sources = list(sources)
+        self._reserved: dict[str, str] = {}
 
     def close(self) -> None:
         self.records.close()
+
+    def reserve(self, label: str, rule: str) -> None:
+        """
+        Hold a label for a rule, so a person cannot land in its batch by hand.
+
+        In memory only: the backend has no rule store, so a process that never
+        runs a trigger loop reserves nothing.
+        """
+        self._reserved[label] = rule
 
     def locate(self, ref: DatasetRef) -> Path | None:
         """
@@ -128,6 +138,17 @@ class Backend:
             consumer = refs.get(field_of(path))
             errors += self._check_ref(ref, consumer, request, group or {})
         errors += self._check_contributions(request, spec, group or {})
+        if (rule := self._reserved.get(request.label)) is not None:
+            submitted = (
+                request.submission.rule.rsplit('/v', 1)[0]
+                if request.submission.rule is not None
+                else None
+            )
+            if submitted != rule:
+                errors.append(
+                    f'label {request.label!r} is reserved for rule {rule!r}; '
+                    'apply the rule instead'
+                )
         if not self.launcher.can_run(request.spec):
             errors.append(f'launcher cannot run {request.spec}')
         return ValidationReport(
@@ -258,6 +279,7 @@ class Backend:
             raise SubmitError({n: r for n, r in reports.items() if not r.ok})
         ids = {name: RunRecord(request=req).id for name, req in group.items()}
         records = {}
+        heads: dict[tuple[str, str | None], str] = {}
         for name, req in group.items():
             params = _rewrite(req.params, {GROUP_PREFIX + n: i for n, i in ids.items()})
             contributions = [
@@ -266,15 +288,40 @@ class Backend:
                 else r
                 for r in req.contributions
             ]
-            records[name] = RunRecord(
+            record = RunRecord(
                 id=ids[name],
                 request=req.model_copy(
                     update={'params': params, 'contributions': contributions}
                 ),
+                supersedes=self._supersedes(req, heads),
             )
+            records[name] = record
+            if req.label is not None:
+                heads[(req.label, req.member_key)] = record.id
         self.records.add(*records.values())
         self._pump()
         return {name: self.records.get(r.id) for name, r in records.items()}
+
+    def _supersedes(
+        self, request: RunRequest, heads: Mapping[tuple[str, str | None], str]
+    ) -> str | None:
+        """
+        The head this request's record supersedes, or None without a label.
+
+        Within one group submitted together, a later request under the same
+        label and member key supersedes the earlier one in the group, not the
+        head that was current before the group; ``heads`` carries those as they
+        are assigned while the group is built.
+        """
+        if request.label is None:
+            return None
+        key = (request.label, request.member_key)
+        if key in heads:
+            return heads[key]
+        head = self.records.latest(
+            request.label, request.proposal, member_key=request.member_key
+        )
+        return None if head is None else head.id
 
     def submit_one(self, request: RunRequest) -> RunRecord:
         return self.submit({'request': request})['request']
@@ -292,7 +339,9 @@ class Backend:
         if not report.ok:
             raise SubmitError({record_id: report})
         new = RunRecord(
-            request=old.request, derives_from=Derivation(record=old.id, reason=reason)
+            request=old.request,
+            derives_from=Derivation(record=old.id, reason=reason),
+            supersedes=self._supersedes(old.request, {}),
         )
         self.records.add(new)
         self._pump()

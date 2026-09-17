@@ -177,6 +177,35 @@ FAIL = WorkflowSpec(
 )
 
 
+class SubtractParams(BaseModel):
+    sample: OpaqueFile
+    can: OpaqueFile
+
+
+class SubtractOutputs(BaseModel):
+    result: Array(ArraySpec(dims=('x',), unit='counts'))
+
+
+def subtract_workflow() -> Any:
+    def run(params: SubtractParams, inputs: Inputs) -> dict[str, Any]:
+        sample = sc.io.load_hdf5(inputs.path(params.sample))
+        can = sc.io.load_hdf5(inputs.path(params.can))
+        return {'result': sample - can}
+
+    return run
+
+
+SUBTRACT = WorkflowSpec(
+    name='subtract',
+    version=1,
+    title='Subtract',
+    description='Subtract a can run from a sample run; two dataset fields, '
+    'for exercising an as-of lookup fill.',
+    params=SubtractParams,
+    outputs=SubtractOutputs,
+)
+
+
 def registry() -> Registry:
     reg = Registry()
     for spec, factory in (
@@ -187,6 +216,7 @@ def registry() -> Registry:
         (HISTOGRAM, histogram_workflow),
         (NORMALIZE, normalize_workflow),
         (EXPORT, export_workflow),
+        (SUBTRACT, subtract_workflow),
     ):
         reg.bind(spec, factory)
     return reg

@@ -20,7 +20,7 @@ from typing import IO, Self
 from .records import RunRecord, Status
 from .spec import Ref, SpecId
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -33,11 +33,13 @@ CREATE TABLE IF NOT EXISTS records (
     instrument TEXT NOT NULL,
     label TEXT,
     member_key TEXT,
+    supersedes TEXT,
     created TEXT NOT NULL,
     doc TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS records_proposal ON records (proposal, created);
 CREATE INDEX IF NOT EXISTS records_label ON records (proposal, label, member_key);
+CREATE INDEX IF NOT EXISTS records_supersedes ON records (supersedes);
 CREATE TABLE IF NOT EXISTS refs (
     from_id TEXT NOT NULL,
     to_id TEXT NOT NULL,
@@ -60,6 +62,12 @@ class StoreLockedError(RuntimeError):
 
 class RecordStore:
     """Single-writer store of records; open it in exactly one backend process."""
+
+    _HEAD = (
+        'NOT EXISTS (SELECT 1 FROM records WHERE proposal=r.proposal'
+        ' AND label=r.label AND member_key IS r.member_key AND supersedes=r.id)'
+    )
+    """The record under (proposal, label, member_key) that nothing supersedes."""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -103,7 +111,7 @@ class RecordStore:
             for record in records:
                 req = record.request
                 self._db.execute(
-                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         record.id,
                         req.spec.name,
@@ -113,6 +121,7 @@ class RecordStore:
                         req.instrument,
                         req.label,
                         req.member_key,
+                        record.supersedes,
                         record.created.isoformat(),
                         record.model_dump_json(),
                     ),
@@ -187,28 +196,28 @@ class RecordStore:
         self, label: str, proposal: str, *, member_key: str | None = None
     ) -> RunRecord | None:
         """
-        The record that supersedes the others under this label, whatever its status.
+        The head of this label and member key's chain, whatever its status.
 
-        With ``member_key`` it is the newest record for that member; without, the
-        newest under the label whatever its member key.
+        The head is the record under (proposal, label, member_key) that no other
+        record supersedes; it does not depend on a clock, which matters once
+        several writers, a rule, a retry, and a person's correction submit under
+        one label from different hosts. Without ``member_key`` this is the chain
+        whose member key is NULL, the slot form (D10).
         """
-        clause = 'AND member_key IS ?' if member_key is not None else ''
-        args = [proposal, label] + ([member_key] if member_key is not None else [])
         row = self._db.execute(
-            'SELECT doc FROM records '  # noqa: S608
-            f'WHERE proposal=? AND label=? {clause} '
-            'ORDER BY created DESC, rowid DESC LIMIT 1',
-            args,
+            'SELECT doc FROM records AS r '  # noqa: S608
+            f'WHERE proposal=? AND label=? AND member_key IS ? AND {self._HEAD} '
+            'ORDER BY rowid DESC LIMIT 1',
+            (proposal, label, member_key),
         ).fetchone()
         return None if row is None else RunRecord.model_validate_json(row[0])
 
     def batch(self, label: str, proposal: str) -> list[RunRecord]:
-        """The records under this label: the latest per member key, by member key."""
+        """The records under this label: the head per member key, by member key."""
         rows = self._db.execute(
-            'SELECT doc FROM records AS r WHERE proposal=? AND label=? AND rowid=('
-            ' SELECT max(rowid) FROM records WHERE proposal=r.proposal'
-            ' AND label=r.label AND member_key IS r.member_key)'
-            ' ORDER BY member_key, rowid',
+            'SELECT doc FROM records AS r '  # noqa: S608
+            f'WHERE proposal=? AND label=? AND {self._HEAD} '
+            'ORDER BY member_key, rowid',
             (proposal, label),
         )
         return [RunRecord.model_validate_json(r[0]) for r in rows]
@@ -218,10 +227,9 @@ class RecordStore:
     ) -> list[RunRecord]:
         """The records of :meth:`batch` whose member key never completed."""
         rows = self._db.execute(
-            'SELECT doc FROM records AS r WHERE proposal=? AND label=? AND rowid=('
-            ' SELECT max(rowid) FROM records WHERE proposal=r.proposal'
-            ' AND label=r.label AND member_key IS r.member_key)'
-            ' AND NOT EXISTS (SELECT 1 FROM records WHERE proposal=r.proposal'
+            'SELECT doc FROM records AS r '  # noqa: S608
+            f'WHERE proposal=? AND label=? AND {self._HEAD} '
+            'AND NOT EXISTS (SELECT 1 FROM records WHERE proposal=r.proposal'
             ' AND label=r.label AND member_key IS r.member_key AND status=?)'
             ' ORDER BY member_key, rowid',
             (proposal, label, Status.COMPLETED.value),

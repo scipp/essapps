@@ -15,12 +15,14 @@ from ess.apps.batch import (
     batch_table,
     reprocess,
     rerun,
+    shadowed,
     trigger_status,
 )
 from ess.apps.client import Client
-from ess.apps.examples import LOAD, NORMALIZE, REBIN, write_run
-from ess.apps.records import Status
+from ess.apps.examples import LOAD, NORMALIZE, REBIN, SUBTRACT, write_run
+from ess.apps.records import RunRecord, Status
 from ess.apps.rules import (
+    AsOf,
     Between,
     Bound,
     Like,
@@ -33,7 +35,7 @@ from ess.apps.rules import (
     Template,
 )
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
+from ess.apps.spec import DatasetRef, OutputRef, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -222,6 +224,58 @@ def test_an_excluded_member_is_not_reprocessed(client: Client, rule: Rule) -> No
     assert sorted(reprocess(client, moved)) == ['pid:pid/2']
 
 
+def test_shadowed_reports_a_typed_value_whose_fill_changed(
+    client: Client, rule: Rule, samples: FakeDatasetSource
+) -> None:
+    lookup = Lookup(
+        name='by-sample',
+        entries=(
+            LookupEntry(
+                name='vanadium',
+                match={'sample': Like(pattern='van*')},
+                fills={'scale': 3.0},
+            ),
+        ),
+    )
+    with_lookup = rule.model_copy(update={'lookup': lookup})
+    client.submit_group(
+        apply(
+            client,
+            with_lookup,
+            client.datasets(),
+            {'pid:pid/1': {'scale': 3.0}, 'pid:pid/2': {'scale': 1.0}},
+        )
+    )
+    revised_lookup = lookup.model_copy(
+        update={
+            'entries': (
+                LookupEntry(
+                    name='vanadium',
+                    match={'sample': Like(pattern='van*')},
+                    fills={'scale': 9.0},
+                ),
+            )
+        }
+    )
+    revised = with_lookup.revise(lookup=revised_lookup)
+    frame = shadowed(client, revised, with_lookup)
+    assert list(frame.index) == ['pid:pid/1']
+    row = frame.loc['pid:pid/1']
+    assert row['field'] == 'scale'
+    assert row['typed'] == 3.0
+    assert row['was'] == 3.0
+    assert row['now'] == 9.0
+
+
+def test_shadowed_is_empty_when_nothing_is_stale(
+    client: Client, rule: Rule, samples: FakeDatasetSource
+) -> None:
+    TriggerLoop(client, rule).run_once()
+    empty = shadowed(client, rule, rule)
+    assert list(empty.columns) == ['field', 'typed', 'was', 'now']
+    assert empty.empty
+
+
 def test_rerun_offers_the_members_with_no_completed_record(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
@@ -352,6 +406,48 @@ def test_a_failure_the_policy_does_not_name_is_not_retried(
     assert len(client.records(label='auto', member_key='pid:pid/9')) == 1
 
 
+# A rule's label is reserved
+
+
+def test_a_bare_request_under_a_reserved_label_is_refused(
+    client: Client, rule: Rule, run_ref: DatasetRef
+) -> None:
+    TriggerLoop(client, rule)  # reserves 'auto-load' for the rule
+    report = client.validate(
+        client.request(rule.template.spec, {'run': run_ref}, label=rule.name)
+    )
+    assert not report.ok
+    assert any(
+        f"label {rule.name!r} is reserved for rule {rule.name!r}; apply the rule "
+        "instead" in e
+        for e in report.errors
+    )
+    with pytest.raises(SubmitError, match='reserved for rule'):
+        client.submit(
+            client.request(rule.template.spec, {'run': run_ref}, label=rule.name)
+        )
+
+
+def test_apply_on_the_rule_passes_its_own_reservation(
+    client: Client, rule: Rule, samples: FakeDatasetSource
+) -> None:
+    """A person adding a dataset the selector missed goes through ``apply``,
+    which sets ``submission.rule``, so the reservation lets it through."""
+    TriggerLoop(client, rule)
+    missed = client.datasets()[-1]
+    records = client.submit_group(apply(client, rule, [missed]))
+    assert records[str(missed.ref)].status == Status.COMPLETED
+    assert str(missed.ref) in batch_table(client, rule).index
+
+
+def test_the_reservation_does_not_affect_other_labels(
+    client: Client, rule: Rule, run_ref: DatasetRef
+) -> None:
+    TriggerLoop(client, rule)
+    record = client.run(LOAD, {'run': run_ref}, label='unrelated')
+    assert record.status == Status.COMPLETED
+
+
 # A series
 
 
@@ -400,6 +496,7 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     ]
     assert combine.status == Status.COMPLETED, combine.failure
     # Successive combines supersede each other under the series value.
+    assert combine.supersedes == first[1].id
     assert client.latest('series', 'sio2').id == combine.id
     assert [r.request.member_key for r in client.batch('series')] == [
         'pid:pid/1',
@@ -493,3 +590,111 @@ def test_the_batch_table_of_a_label_needs_no_rule(
     table = batch_table(client, 'scan1')
     assert list(table.index) == ['300K', '310K']
     assert set(table['template']) == {'load-defaults/v1'}
+
+
+# An as-of fill
+
+
+@pytest.fixture
+def cans_and_samples(client: Client, tmp_path: Path) -> FakeDatasetSource:
+    """A stray sample before any can, two cans, two samples, a third can, and
+    two more samples -- in run-number order."""
+
+    def dataset(name: str, run: int, role: str) -> Dataset:
+        return Dataset(
+            path=write_run(tmp_path / f'{name}.h5', [1.0, 2.0]),
+            instrument='loki',
+            run=run,
+            metadata={'role': role},
+        )
+
+    source = FakeDatasetSource(
+        dataset('sample0', 1, 'sample'),
+        dataset('can1', 2, 'can'),
+        dataset('can2', 3, 'can'),
+        dataset('sample1', 4, 'sample'),
+        dataset('sample2', 5, 'sample'),
+        dataset('can3', 6, 'can'),
+        dataset('sample3', 7, 'sample'),
+        dataset('sample4', 8, 'sample'),
+    )
+    client.sources.append(source)
+    return source
+
+
+@pytest.fixture
+def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
+    return Rule(
+        name='subtract',
+        template=Template(
+            name='subtract-defaults',
+            spec=SUBTRACT.id,
+            blanks=('sample', 'can'),
+            dataset_field='sample',
+        ),
+        lookup=Lookup(
+            name='cans',
+            entries=(
+                LookupEntry(
+                    name='can',
+                    fills={'can': AsOf(match={'role': Like(pattern='can')})},
+                ),
+            ),
+        ),
+        selector=Selector(match={'role': Like(pattern='sample')}),
+    )
+
+
+def _can(record: RunRecord) -> str:
+    return as_ref(record.request.params['can']).dataset
+
+
+def test_an_as_of_fill_is_the_nearest_earlier_matching_dataset(
+    client: Client, as_of_rule: Rule, cans_and_samples: FakeDatasetSource
+) -> None:
+    loop = TriggerLoop(client, as_of_rule)
+    fired = loop.run_once()
+    assert [r.request.member_key for r in fired] == [
+        'run:loki/4',
+        'run:loki/5',
+        'run:loki/7',
+        'run:loki/8',
+    ]
+    assert [r.status for r in fired] == [Status.COMPLETED] * 4
+    by_member = {r.request.member_key: r for r in fired}
+    assert _can(by_member['run:loki/4']) == 'run:loki/3'
+    assert _can(by_member['run:loki/5']) == 'run:loki/3'
+    assert _can(by_member['run:loki/7']) == 'run:loki/6'
+    assert _can(by_member['run:loki/8']) == 'run:loki/6'
+
+    refusal = loop.refusals['subtract run:loki/1']
+    assert 'run:loki/1: no dataset matching' in refusal
+    assert "before it for 'can'" in refusal
+
+
+def test_backlog_and_reprocess_resolve_the_same_can_as_the_live_loop(
+    client: Client, as_of_rule: Rule, cans_and_samples: FakeDatasetSource
+) -> None:
+    """The as-of fill is anchored to the member's own dataset, so it is stable
+    under a reprocess, unlike a fill resolved against the time of resolution."""
+    live = {r.request.member_key: r for r in TriggerLoop(client, as_of_rule).run_once()}
+
+    later = Rule.over(
+        client.datasets(),
+        name='subtract-backlog',
+        template=as_of_rule.template,
+        lookup=as_of_rule.lookup,
+        selector=Selector(
+            match={'role': Like(pattern='sample'), 'run': Between(low=2)}
+        ),
+    )
+    back = client.submit_group(backlog(client, later))
+    assert set(back) == set(live)
+    for member, record in back.items():
+        assert _can(record) == _can(live[member])
+
+    moved = as_of_rule.revise(template=as_of_rule.template.revise())
+    again = client.submit_group(reprocess(client, moved))
+    assert set(again) == set(live)
+    for member, record in again.items():
+        assert _can(record) == _can(live[member])

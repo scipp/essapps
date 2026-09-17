@@ -179,6 +179,15 @@ class RunRecord(BaseModel):
     reused: bool = False
     checksums: dict[str, str] = Field(default_factory=dict)
     derives_from: Derivation | None = None
+    supersedes: str | None = Field(
+        default=None,
+        description="The head under this label and member key when this record "
+        "was submitted: the record nothing supersedes. The order under a label "
+        "never depends on a clock, which matters once several writers, a rule, "
+        "a retry, and a person's correction submit under one label from "
+        "different hosts. ``derives_from`` says why a request was made; this "
+        "says where the record sits in the label's history.",
+    )
     failure: Failure | None = None
     launcher_job: str | None = None
     publishing: list[str] = Field(
