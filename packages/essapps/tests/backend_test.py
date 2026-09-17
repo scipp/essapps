@@ -9,10 +9,11 @@ import pytest
 import scipp as sc
 
 from ess.apps.backend import SubmitError
-from ess.apps.client import Client
+from ess.apps.client import Client, local
 from ess.apps.datastore import MissingCopyError
-from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, write_run
+from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, registry, write_run
 from ess.apps.records import Status
+from ess.apps.sources import Dataset, FolderSource
 from ess.apps.spec import DatasetRef, Kind, Ref, SpecId, as_ref
 
 
@@ -26,6 +27,52 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert record.checksums == {str(run_ref): checksum}
     assert record.resolved_params['run'] == {'instrument': 'dream', 'run': 1}
     assert client.provenance(record)['raw'] == [{'instrument': 'dream', 'run': 1}]
+
+
+class CountingSource:
+    """A folder source that records every dataset it was asked to locate."""
+
+    def __init__(self, folder: Path) -> None:
+        self._source = FolderSource(folder, '*.h5')
+        self.located: list[DatasetRef] = []
+
+    def new_datasets(self, proposal: str) -> list[Dataset]:
+        return list(self._source.new_datasets(proposal))
+
+    def locate(self, ref: DatasetRef) -> Path | None:
+        self.located.append(ref)
+        return self._source.locate(ref)
+
+
+@pytest.fixture
+def counting_source(datasets: Path) -> CountingSource:
+    return CountingSource(datasets)
+
+
+@pytest.fixture
+def counting_client(tmp_path: Path, counting_source: CountingSource):
+    client = local(
+        tmp_path / 'store',
+        instrument='dream',
+        proposal='p1',
+        submitter='simon',
+        registry=registry(),
+        sources=[counting_source],
+    )
+    yield client
+    client.close()
+
+
+def test_a_dataset_two_parameters_name_is_one_origin(
+    counting_client: Client, counting_source: CountingSource, run_ref: DatasetRef
+) -> None:
+    """One dataset, however many parameters name it: located once, listed once."""
+    record = counting_client.run(SUM, {'runs': [run_ref, run_ref]})
+    assert record.status == Status.COMPLETED, record.failure
+    assert counting_source.located == [run_ref]
+    assert counting_client.provenance(record)['raw'] == [
+        {'instrument': 'dream', 'run': 1}
+    ]
 
 
 def test_a_dataset_no_source_has_fails_the_run(client: Client) -> None:

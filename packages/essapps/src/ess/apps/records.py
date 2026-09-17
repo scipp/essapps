@@ -108,8 +108,17 @@ class RunRequest(BaseModel, frozen=True):
         return params + list(self.contributions)
 
     def datasets(self) -> list[DatasetRef]:
-        """References to data the framework did not compute; never pending."""
-        return [r for _, r in walk_refs(self.params) if isinstance(r, DatasetRef)]
+        """
+        Distinct references to data the framework did not compute; never pending.
+
+        One dataset named by two parameters is one origin of the run, so it
+        appears once.
+        """
+        return list(
+            dict.fromkeys(
+                r for _, r in walk_refs(self.params) if isinstance(r, DatasetRef)
+            )
+        )
 
 
 class Derivation(BaseModel, frozen=True):
@@ -149,8 +158,9 @@ class RunRecord(BaseModel):
     Immutable once the run completes, except for status, and never deleted on its
     own. Small output values live in ``outputs``; data-reference outputs are listed
     in ``stored_outputs`` and their bytes live in the data store. ``checksums``
-    holds the checksum of each local file the run read, by parameter path, so
-    that a recompute can tell whether it read the same bytes.
+    holds the checksum of each local file the run read, keyed by the string form
+    of the dataset reference that named it, so that a recompute can tell whether
+    it read the same bytes.
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])

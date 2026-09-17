@@ -377,7 +377,9 @@ class Backend:
             for path, ref in walk_refs(record.request.params)
         ]
         named += [(ref, True) for ref in record.request.contributions]
-        for ref, into_data_field in named:
+        # A reference named by two parameters is one thing to resolve, and
+        # locating a dataset means asking every source.
+        for ref, into_data_field in dict.fromkeys(named):
             failure = self._resolve(ref, into_data_field, locations, literals)
             if failure is not None:
                 self._finish(record, Status.FAILED, failure)
