@@ -87,15 +87,27 @@ Not worth review time: `store.py`, `datastore.py`, `launcher.py`, `records.py`.
 - Splitting `rules.py` (600 lines: criteria, stored data, apply, trigger loop,
   pandas view) if it stays as is after item 4.
 
-## Work in flight without review (status when this was written)
+## Done after the review items were listed, without review
 
-- The branch's edges vocabulary (`QEdges`, `WavelengthEdges`) for the LoKI
-  bins instead of three floats.
-- `WorkflowSpec.serialize()` carrying `contribution` and `finalize_params`.
-- The review deck `docs/developer/team-review-slides.html` refreshed from pass
-  eight to the current sketch.
-- An Amor reflectometry binding as a probe of collection outputs per angle and
-  a non-additive combine; its findings are contract gaps, to be listed here.
+- The LoKI bins are the branch's `QEdges` and `WavelengthEdges`; the Q edges
+  are the one stage input (commit 0d9000d).
+- `WorkflowSpec.serialize()` carries `contribution` and `finalize_params`.
+- The review deck matches the current sketch (cb1f47f).
+- Amor reflectometry is bound as a probe, `packages/essapps/src/ess/apps/amor.py`
+  and `tests/amor_test.py`; its findings are in
+  [amor-probe-2026-09-17.md](amor-probe-2026-09-17.md). The ones that change
+  the sketch, by review item: the opaque combine gets none of D15's member
+  consistency check (item 5); collection keys are the submitter's invention and
+  a pending output's key is never validated (item 3); chaining compares format
+  only, so a declared `ArraySpec` is never read (item 3); a stage input is also
+  how a session shares work across members of a series, which D8 does not say
+  (item 2); every scalar parameter costs a `NewType` and a provider, a
+  `convert=` beside `resolve=` would remove them (item 2); an output needing its
+  own serializer has no place to declare one (item 2); the range vocabulary
+  lacks pixel-index, angle, and Q ranges, and an edges model whose range the
+  data derives (item 3); reflectometry's additive half, same-angle runs, still
+  needs D15 built against `with_filenames` (item 5); the scale-factor feedback
+  cycle is expressible but D14 has no word for it (item 4).
 
 ## How to resume
 

@@ -35,6 +35,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+amor = [
+    "essreflectometry>=26.6.0",
+]
 loki = [
     "esssans>=26.6.0",
 ]
