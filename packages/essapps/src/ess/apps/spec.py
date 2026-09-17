@@ -4,10 +4,10 @@
 Workflow specifications and the parameter vocabulary.
 
 Mirrors the shape proposed in scipp/ess#690 (identity, one params model, declared
-outputs) with the extensions the architecture sketch needs under D13: outputs are a
-model in the same vocabulary as parameters, a data-reference field type marks the
-fields that hold data rather than literals, and collections of either are allowed on
-both sides. Once scipp/ess#690 merges, this module shrinks to the extensions.
+outputs, data-reference fields, collections on both sides) with the extensions the
+architecture sketch needs under D13 and D15: dataset identities, a contribution
+output, and the parameters finalize reads. Once scipp/ess#690 merges, this module
+shrinks to the extensions.
 
 The spec is pure interface: no factory, no sciline keys. Binding a spec to code is
 in :mod:`ess.apps.binding`. This module imports neither scipp nor sciline.
@@ -31,7 +31,6 @@ from pydantic import (
     create_model,
     model_validator,
 )
-from pydantic_core import core_schema
 
 
 class NoParams(BaseModel):
@@ -97,15 +96,15 @@ Reference = Ref | DatasetRef
 """What a parameter field of matching type may hold instead of a literal."""
 
 
-class Kind(StrEnum):
-    """How a data reference is materialized for the workflow callable."""
+class Format(StrEnum):
+    """What the bytes of a data reference are."""
 
     NEXUS = 'nexus'
-    """A raw NeXus file; the callable receives a local path."""
+    """A raw NeXus file."""
+    SCIPP = 'scipp'
+    """A scipp object, held in memory or as scipp HDF5; structure by ArraySpec."""
     OPAQUE = 'opaque'
-    """A file of a format the framework does not know; a local path."""
-    ARRAY = 'array'
-    """A scipp object; served from memory or scipp HDF5."""
+    """A file of a format the framework does not read, such as CIF or ORSO."""
 
 
 class ArraySpec(BaseModel, frozen=True):
@@ -124,53 +123,33 @@ class DataRef:
     """
     Field annotation marking a data-reference field.
 
-    In a request such a field holds a :class:`Ref` or a :class:`DatasetRef`; when
-    the callable runs it holds the materialized value, a path for files or a
-    scipp object for arrays. The union type on the field admits both forms; this
-    annotation says which one the framework must produce.
+    Such a field holds a :class:`Ref` or a :class:`DatasetRef`, in a request and
+    inside the callable alike; the annotation says what the referenced bytes are,
+    so that the backend can check a reference against the field it fills and a
+    picker can list candidates. How the callable gets at the bytes is not the
+    spec's concern: it asks the runner for a path or an object (D8).
     """
 
-    kind: Kind
+    format: Format
     array: ArraySpec | None = None
 
     def __get_pydantic_json_schema__(self, core_schema: Any, handler: Any) -> Any:
         schema = handler(core_schema)
-        schema['dataRef'] = {'kind': self.kind.value}
+        schema['dataRef'] = {'format': self.format.value}
         if self.array is not None:
             schema['dataRef']['array'] = self.array.model_dump()
         return schema
 
 
-class Materialized:
-    """
-    Validation of an in-process value: anything that is not plain data.
-
-    A data-reference field holds a reference in a request and the materialized
-    value, a path or a scipp object, inside the callable. This type admits the
-    second form without naming scipp, which the spec layer must not import.
-    """
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: Any, handler: Any) -> Any:
-        def check(value: Any) -> Any:
-            if isinstance(value, dict | list | str | int | float | bool | type(None)):
-                raise ValueError('expected a reference or an in-process data object')
-            return value
-
-        return core_schema.no_info_plain_validator_function(check)
-
-
-NexusFile = Annotated[Reference | Path, DataRef(kind=Kind.NEXUS)]
-"""A raw NeXus file; the callable receives a local path."""
-OpaqueFile = Annotated[Reference | Path | bytes, DataRef(kind=Kind.OPAQUE)]
-"""A file the framework cannot read; a workflow returns one as bytes."""
-ArrayValue = Annotated[Reference | Materialized, DataRef(kind=Kind.ARRAY)]
-"""A scipp object of any structure; ``Array(spec)`` constrains it."""
+NexusFile = Annotated[Reference, DataRef(format=Format.NEXUS)]
+"""A raw NeXus file."""
+OpaqueFile = Annotated[Reference, DataRef(format=Format.OPAQUE)]
+"""A file the framework cannot read."""
 
 
 def Array(spec: ArraySpec | None = None) -> Any:
-    """Type of a field holding a scipp object with the structure ``spec``."""
-    return Annotated[Reference | Materialized, DataRef(kind=Kind.ARRAY, array=spec)]
+    """Type of a field referencing a scipp object with the structure ``spec``."""
+    return Annotated[Reference, DataRef(format=Format.SCIPP, array=spec)]
 
 
 class Quantity(BaseModel, frozen=True):
@@ -265,6 +244,23 @@ def finalize_model(spec: WorkflowSpec) -> type[BaseModel]:
         for name in sorted(spec.finalize_params)
     }
     return create_model(f'{spec.params.__name__}Finalize', **fields)
+
+
+def literal_model(model: type[BaseModel]) -> type[BaseModel]:
+    """
+    The fields of ``model`` that hold values rather than references to data.
+
+    The runner validates what a callable returns through this: the data fields it
+    returns are objects, checked against their ``ArraySpec`` and stored, and the
+    rest are literals the record keeps inline.
+    """
+    data = data_ref_fields(model)
+    fields = {
+        name: (field.annotation, field)
+        for name, field in model.model_fields.items()
+        if name not in data
+    }
+    return create_model(f'{model.__name__}Literals', **fields)
 
 
 def _members(annotation: Any) -> Iterator[Any]:

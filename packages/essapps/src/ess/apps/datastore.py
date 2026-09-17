@@ -4,9 +4,10 @@
 The data store: a registry of disk copies, a disk tier, and a private cache (D3).
 
 The registry (in the record store) knows disk copies only. Every process that
-holds data has a private in-memory cache that nothing else can see. A runner asks
-the store for an input and hands it an output without knowing which tier serves
-it.
+holds data has a private in-memory cache that nothing else can see. A workflow
+asks for a path or an object and gets it from whichever tier has it; only the
+session shape serves objects from memory, and nothing in a spec or a binding
+can tell.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, Protocol
 
 import scipp as sc
 
-from .spec import Kind, Ref, Reference
+from .spec import Ref, Reference
 from .store import RecordStore
 
 
@@ -136,14 +137,16 @@ class DataStore:
     def in_cache(self, ref: Reference) -> bool:
         return ref in self._cache
 
-    def get(self, ref: Reference, kind: Kind) -> Any:
-        """The value for a workflow: a path for files, a scipp object for arrays."""
-        if kind is Kind.ARRAY:
-            if ref in self._cache:
-                return self._cache[ref]
-            value = self.serializers.load(self._disk_path(ref))
-            self._cache[ref] = value
-            return value
+    def array(self, ref: Reference) -> Any:
+        """The scipp object: from the cache, else loaded from disk and cached."""
+        if ref in self._cache:
+            return self._cache[ref]
+        value = self.serializers.load(self._disk_path(ref))
+        self._cache[ref] = value
+        return value
+
+    def path(self, ref: Reference) -> Path:
+        """A disk copy, written out first when only the cache holds the value."""
         if ref in self._cache and not self.has_copy(ref):
             return self.write_out(ref)
         return self._disk_path(ref)

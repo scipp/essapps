@@ -6,7 +6,7 @@ import pytest
 import scipp as sc
 
 from ess.apps.datastore import DataStore, MissingCopyError
-from ess.apps.spec import Kind, Ref
+from ess.apps.spec import Ref
 from ess.apps.store import RecordStore
 
 
@@ -25,7 +25,7 @@ def test_put_without_disk_serves_from_cache_only(store: DataStore) -> None:
     store.put(ref, data(), to_disk=False)
     assert store.in_cache(ref)
     assert not store.has_copy(ref)
-    assert sc.identical(store.get(ref, Kind.ARRAY), data())
+    assert sc.identical(store.array(ref), data())
 
 
 def test_put_to_disk_registers_a_copy_that_survives_eviction(store: DataStore) -> None:
@@ -34,7 +34,7 @@ def test_put_to_disk_registers_a_copy_that_survives_eviction(store: DataStore) -
     assert store.has_copy(ref)
     store.evict(ref)
     assert not store.in_cache(ref)
-    assert sc.identical(store.get(ref, Kind.ARRAY), data())
+    assert sc.identical(store.array(ref), data())
     assert store.in_cache(ref)
 
 
@@ -53,24 +53,23 @@ def test_collection_elements_are_stored_individually(store: DataStore) -> None:
     store.put(b, data() * 2, to_disk=True)
     store.evict(a)
     store.evict(b)
-    assert sc.identical(store.get(b, Kind.ARRAY), data() * 2)
+    assert sc.identical(store.array(b), data() * 2)
     assert not store.in_cache(a)
 
 
 def test_missing_copy_is_reported_not_recomputed(store: DataStore) -> None:
     with pytest.raises(MissingCopyError):
-        store.get(Ref(record='r1', output='result'), Kind.ARRAY)
+        store.array(Ref(record='r1', output='result'))
 
 
-def test_file_kinds_return_the_registered_path(
+def test_an_adopted_file_returns_the_registered_path(
     store: DataStore, tmp_path: Path
 ) -> None:
     ref = Ref(record='f1', output='file')
     user_file = tmp_path / 'run.nxs'
     user_file.write_bytes(b'nexus')
     store.adopt(ref, user_file, store_owned=False)
-    assert store.get(ref, Kind.NEXUS) == user_file
-    assert store.get(ref, Kind.OPAQUE) == user_file
+    assert store.path(ref) == user_file
 
 
 def test_drop_removes_store_copies_only(store: DataStore, tmp_path: Path) -> None:
@@ -92,7 +91,7 @@ def test_drop_removes_store_copies_only(store: DataStore, tmp_path: Path) -> Non
 def test_bytes_outputs_are_opaque_files(store: DataStore) -> None:
     ref = Ref(record='r1', output='cif')
     store.put(ref, b'data_x', to_disk=True)
-    assert store.get(ref, Kind.OPAQUE).read_bytes() == b'data_x'
+    assert store.path(ref).read_bytes() == b'data_x'
 
 
 def test_unknown_type_needs_a_serializer(store: DataStore) -> None:

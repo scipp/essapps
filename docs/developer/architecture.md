@@ -292,23 +292,21 @@ How does the framework call scientific code, how do inputs get in and outputs ou
 One callable (D8).
 Spec identity is bound to an implementation via Python entry points; in local mode a notebook may also bind a spec in-process, provided it does not claim the name and version of a spec an installed package provides.
 The record says which binding was used, so publication can tell a reproducible record from a development one, and a spec may carry a code revision, a git commit or package version, so that a record made from a development branch is honest about what ran.
-The entry point returns a callable that takes the validated parameter model and returns the output model.
+The entry point returns a callable that takes the validated parameter model, references and all, together with the run's **inputs**, and returns the outputs by field name.
 A throwaway runner constructs it and calls it once.
 A session runner constructs it once per spec version and calls it for every run, so the callable may keep state between calls; that is the warm workflow.
 A session holds the code it imported, so a change to workflow code takes effect in a new session, never in a running one.
 The framework never imports sciline.
 
-Data-reference fields are materialized by kind:
+The inputs are how the callable gets at the bytes a reference names, in the form it asks for: a local path, or the scipp object a scipp-format reference names.
+Which form each parameter takes is the binding's choice, made where the parameter is set on the pipeline: a raw NeXus file is asked for as a path, because loading NeXus is workflow-specific, which detector banks, which monitors, and no single loaded object exists; an opaque file, CIF or ORSO, as a path, because the framework cannot read it; a processed array as an object, or as a path when the workflow has its own loader.
+Where the bytes come from is the runner's: a session serves an object from memory when it holds a copy and from scipp HDF5 otherwise, a throwaway runner from the work directory the backend filled at dispatch.
+Neither the spec nor the binding can tell the two apart, which is what lets an in-memory chain be added to a session without touching a workflow.
+The spec says only what the bytes are, its format, so that the backend can check a reference against the field it fills and the picker can list candidates (D13).
 
-| Reference kind | Arrives in the callable as | Why |
-|---|---|---|
-| Raw NeXus file | local path | Loading NeXus is workflow-specific: which detector banks, which monitors. |
-| Opaque file (CIF, ORSO, ...) | local path | The framework cannot know the format. |
-| scipp array | scipp object | The one format the framework writes itself, so it can read it; served from memory when the process holds a copy, from scipp HDF5 otherwise. |
-
-Outputs are returned as objects matching the output model; an output field may be absent when the workflow's mode does not produce it.
+Outputs are returned as objects by field name; an output field may be absent when the workflow's mode does not produce it.
 The callable never writes files.
-The runner validates outputs against the model, stores vocabulary-typed small values through the backend, and hands the rest to the data store, which serializes scipp objects to scipp HDF5 when they must reach disk and requires other types, such as CIF, ORSO, or NeXus products, to come with their own serializer, declared with the output.
+The runner validates literal outputs against the output model and stores them through the backend, checks array outputs against their declared structure, and hands them to the data store, which serializes scipp objects to scipp HDF5 when they must reach disk and requires other types, such as CIF, ORSO, or NeXus products, to come with their own serializer, declared with the output.
 Chunk-wise processing of one large file, as the NMX workflow does, happens inside the callable and is invisible to the framework; that the NMX product is then held in memory before it is written is a cost accepted here.
 
 **What a warm workflow reuses.**
@@ -332,7 +330,8 @@ Anything past that, such as a file that opens but lacks a monitor, is a run that
 The runner remains authoritative for parameters (ADR 0001 in scipp/ess#690); a disagreement with the backend's check is a deployment bug, and the backend refuses a spec it cannot import unless the request opts out.
 
 **Why.**
-Arrays arriving as objects is what lets a chain in a session stay in memory while workflow code looks the same in every mode.
+The callable asking for a path or an object is what lets a chain in a session stay in memory while workflow code looks the same in every mode, and what keeps the choice between the two out of the spec, where it would presume an execution location.
+An earlier form of D8 typed a data field as a union of the reference and the value the callable receives, a path or a scipp object, and had the runner materialize by a kind declared on the spec; that made the parameter model wrong in both phases, needed a validator that accepted anything not plain data, and put a materialization instruction into an interface meant to be pure.
 One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept, and a combine request (D15) calls two stages of the same binding rather than a second protocol.
 Reuse inside the wrapper is correct by construction from the sciline graph for any choice of stage inputs; the choice cannot be derived, because caching every intermediate is not affordable and the graph does not know which parameters will vary, so the binding makes it.
 Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.
@@ -626,13 +625,14 @@ They are small in the vocabulary and change the shape of the output side while t
 
 **Inputs are parameters of data-reference type (D13).**
 The spec has one parameter model and no separate input section.
-The parameter vocabulary gains a **data reference** type: a field holding a reference to a file or array output, optionally constrained by kind (raw NeXus file, scipp array, opaque file) and, for arrays, by the same `ArraySpec` that outputs declare.
+The parameter vocabulary gains a **data reference** type: a field whose value is a reference, annotated with the **format** of the bytes it names (raw NeXus file, scipp object, opaque file) and, for scipp data, by the same `ArraySpec` that outputs declare.
 A parameter of this type is what we call an **input**.
-A dataset reference satisfies any kind: the consumer's kind decides how it is materialized, and loading a file as a scipp array fails if it is not scipp HDF5.
-A UI choosing a value for such a field asks the **picker**, a client query that returns candidates of matching kind as rows of one shape, a reference, its kind, and display fields: outputs from the record store, and datasets from every dataset source the client has, SciCat for a proposal or a folder in the local application.
+The field holds the reference in the request, in the record, and in the callable alike; the format says what the bytes are and nothing about how a workflow gets at them, which is the callable contract's concern (D8).
+A dataset reference's format is not checked at submission: a dataset that is not what the field declares fails when the workflow reads it.
+A UI choosing a value for such a field asks the **picker**, a client query that returns candidates of matching format as rows of one shape, a reference, its format, and display fields: outputs from the record store, and datasets from every dataset source the client has, SciCat for a proposal or a folder in the local application.
 Nothing is stored to make that list, and a further place to pick from is another dataset-source implementation, not a change to the picker.
 A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run.
-Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, materialization to a file, provenance edges, validation timing, and which widget a UI shows.
+Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, provenance edges, validation timing, and which widget a UI shows.
 esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.
 
 **Collections on both sides (also D13).**
@@ -649,7 +649,7 @@ If one arises, it is a rule on the completed producer, one template instantiatio
 
 **Outputs are a typed model in the same vocabulary (also D13).**
 A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form.
-An array output is a data-reference field constrained by `ArraySpec`, which gains a `binned` flag; a beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of kind "opaque file".
+An array output is a data-reference field constrained by `ArraySpec`, which gains a `binned` flag; a beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of format "opaque file".
 Output fields may be optional.
 Title and description are field metadata.
 A downstream parameter may take a reference to any output field whose type matches, so chaining is a type check between two fields of the same vocabulary.
@@ -668,9 +668,6 @@ The declaration itself stays because the backend validates a combine request wit
 A combine request that reaches the runner carrying a contribute parameter is refused there as well.
 The contribution is typed like any output, so a combine's reference to one is the same type check as chaining; what it holds, a numerator and a denominator or more, is the author's.
 
-**One built-in spec, `file` (D1).**
-No workflow, one output of file type, and no kind, so the rule above that a file satisfies any kind is checked at materialization rather than at submission.
-
 **Cost.**
 The backend must walk the request's values to find references and the spec's JSON Schema, including nested models, to check them.
 Structural validation of an array output against its `ArraySpec` happens in the runner at completion, since pydantic cannot check a scipp object.
@@ -685,7 +682,7 @@ Structural validation of an array output against its `ArraySpec` happens in the 
   Its interface and the data store's are the two seams where implementations are swapped; both are kept narrow and stable from the first implementation, because retrofitting an interface under existing implementations cost Snakemake a major version.
   Two execution shapes; placement is relative to the session holding a run's inputs, and a group runs in one shape.
   Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
-- **Runner**: materializes inputs, validates parameters with the real parameter class, calls the workflow, or for a combine request its combine and finalize stages (D15), stores outputs, writes a completion marker to the disk tier, reports to the backend.
+- **Runner**: validates parameters with the real parameter class, calls the workflow with the run's inputs, or for a combine request its combine and finalize stages (D15), stores outputs, writes a completion marker to the disk tier, reports to the backend.
   In a session it keeps the workflow callable between runs.
   Never touches the record store.
 - **Session**: a runner plus a private memory cache, belonging to one client.
@@ -823,7 +820,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Launcher**: decides where a run executes and starts it there.
 - **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, with at most one wildcard. What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
 - **Local mode**: client, backend, launcher, session, and data store in one Python process. **Shared mode**: the backend as a service used by many people; the **shared service** is that backend's process, which also holds a memory cache.
-- **Picker**: the client query behind an input field: candidates of matching kind from the record store and from every dataset source, as rows of one shape.
+- **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
 - **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
@@ -864,7 +861,7 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D5 | The record store is ours, small, and implementation-agnostic; the backend is its single writer | Choice 2 |
 | D6 | One scheduling primitive: pending outputs as inputs; map and combine are optional uses of it | Choice 2 |
 | D7 | The dataset source is abstracted, declares the matchable metadata fields, and persists nothing; not Kafka | Choice 2 |
-| D8 | Framework-to-workflow contract: a callable from parameters to outputs; stage inputs chosen by the binding; three validation layers | Choice 3 |
+| D8 | Framework-to-workflow contract: a callable from parameters and inputs to outputs, asking for a path or an object; stage inputs chosen by the binding; three validation layers | Choice 3 |
 | D9 | The client interface is the API; validate is separate from submit; HTTP later; notebook first | Choice 4 |
 | D10 | Interactive plotting: views are not runs and return plain arrays; event data is never viewed; reruns live in slots, which are labels | Choice 4 |
 | D11 | Only finalized data enters SciCat; publication reads a cold disk copy; the record store is not a catalogue | Ownership, publication, and deployment |
@@ -888,3 +885,4 @@ An eighth pass asked whether accumulation could be deferred at all, read how ess
 A ninth pass asked whether batch and automatic reduction were more unified than the sketch had set out to make them, and found that a rule is to a batch what a template is to a request, which is what Mantid's reflectometry batch tab already is; it merged the slot and the batch ID into one label with an optional member key, made a rule's records a batch under the rule's name, named the one apply operation behind the form, the trigger loop, and the backlog, reprocess, and rerun operations, made the trigger loop stateless by putting a lower bound on the rule's selector, gave the rule an active state, put the typed values on the submission so that a reprocess carries them, and moved labels and apply from phase 2 into phase 1.
 A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, stores nothing per dataset, since the proposal check happens at submission and the data store registers only the copies it makes, keyed by reference in either form, took a local file's identity from the run identity it carries rather than a hash at submission, made a folder a dataset source for the local application, and named the picker, the query behind an input field, so that listing what can be picked is a query over the record store and the dataset sources rather than a table of ours.
 An eleventh pass read the sketch against scipp/sciline#245, the proposal to replace map/reduce with stages and aggregations composed outside the graph, in [stages.md](stages.md); it renamed accumulation point to accumulation key, sciline's word for the same thing, named the stage, the accumulator, and the aggregation behind the warm workflow and the declared combine, made the split between contribute's and finalize's parameters a declaration the binding checks against the graph, and required the members of one combine to agree on the parameters contribute reads.
+A twelfth pass, prompted by unease over how scipp/ess#690 had grown to carry materialization, asked where the choice between a path and an in-memory object belongs; it found that typing a data field as a union of the reference and the materialized value made the parameter model wrong in both phases and put an execution decision into the spec, so it typed a data field as a reference with a format, moved materialization into the callable contract as the inputs a callable asks for a path or an object, and made the sciline wrappers name the form per parameter next to the key it maps to, so that an in-memory chain in a session changes no spec and no binding.

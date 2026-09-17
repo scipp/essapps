@@ -19,6 +19,7 @@ from ess.apps import loki
 from ess.apps.client import Client, local
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef
+from ess.apps.testing import LocalInputs
 
 RUNS = {
     'sample_run': 60387,
@@ -108,13 +109,15 @@ def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> No
     paths = {name: next(cache.glob(f'{run}-*')) for name, run in RUNS.items()} | {
         'direct_beam': cache / DIRECT_BEAM
     }
+    refs = {name: DatasetRef(path=path) for name, path in paths.items()}
+    inputs = LocalInputs({ref: paths[name] for name, ref in refs.items()})
     center = loki.beam_center_workflow()(
-        loki.BeamCenterParams(sample_run=paths['sample_run'])
-    ).center
+        loki.BeamCenterParams(sample_run=refs['sample_run']), inputs
+    )['center']
     workflow = loki.iofq_workflow()
 
     def call(**overrides: Any) -> None:
-        workflow(loki.IofQParams(**iofq_params(paths, center, **overrides)))
+        workflow(loki.IofQParams(**iofq_params(refs, center, **overrides)), inputs)
 
     call()
     assert not workflow.reused

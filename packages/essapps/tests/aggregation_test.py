@@ -31,7 +31,7 @@ from ess.apps.examples import (
 from ess.apps.records import Status
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, Ref
-from ess.apps.testing import assert_combine_is_associative
+from ess.apps.testing import LocalInputs, assert_combine_is_associative
 from ess.apps.warm import equal
 
 
@@ -86,10 +86,12 @@ def test_the_three_entry_points_compose_into_the_single_callable(
     datasets: Path,
 ) -> None:
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
+    ref = DatasetRef(path=run)
+    inputs = LocalInputs({ref: run})
     workflow = normalize_workflow()
-    params = NormalizeParams(run=run, floor=1.5, scale=2.0)
-    composed = workflow.finalize(workflow.contribute(params), params)
-    assert equal(workflow(params)['normalized'], composed['normalized'])
+    params = NormalizeParams(run=ref, floor=1.5, scale=2.0)
+    composed = workflow.finalize(workflow.contribute(params, inputs), params, inputs)
+    assert equal(workflow(params, inputs)['normalized'], composed['normalized'])
 
 
 def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
@@ -98,9 +100,12 @@ def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
         write_run(datasets / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
         write_run(datasets / 'c.h5', [4.0, 3.0, 2.0, 1.0]),
     ]
+    refs = [DatasetRef(path=run) for run in runs]
+    inputs = LocalInputs(dict(zip(refs, runs, strict=True)))
     assert_combine_is_associative(
         normalize_workflow,
-        [NormalizeParams(run=run, floor=1.5, scale=2.0) for run in runs],
+        [NormalizeParams(run=ref, floor=1.5, scale=2.0) for ref in refs],
+        inputs,
     )
 
 
@@ -152,10 +157,14 @@ def test_a_finalize_parameter_change_does_not_read_the_members_again(
     """``scale`` is an input of the finalize stage; the contribution is kept."""
     loads: list[Path] = []
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
+    ref = DatasetRef(path=run)
+    inputs = LocalInputs({ref: run})
     workflow = build(counting_pipeline(loads))
-    contribution = workflow.contribute(NormalizeParams(run=run, floor=1.5))
-    first = workflow.finalize(contribution, NormalizeParams(run=run, scale=1.0))
-    second = workflow.finalize(contribution, NormalizeParams(run=run, scale=2.0))
+    contribution = workflow.contribute(NormalizeParams(run=ref, floor=1.5), inputs)
+    first = workflow.finalize(contribution, NormalizeParams(run=ref, scale=1.0), inputs)
+    second = workflow.finalize(
+        contribution, NormalizeParams(run=ref, scale=2.0), inputs
+    )
     assert loads == [run]
     assert equal(second['normalized'], first['normalized'] * 2.0)
 

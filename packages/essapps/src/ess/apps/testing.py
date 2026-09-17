@@ -4,33 +4,49 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from .binding import Factory, combining
+from .binding import Factory, Inputs, combining
 from .sources import Dataset
-from .spec import DatasetRef
+from .spec import DatasetRef, Reference
 from .warm import equal
 
 
-def _fields(result: Any) -> dict[str, Any]:
-    if isinstance(result, BaseModel):
-        return {n: getattr(result, n) for n in type(result).model_fields}
-    return dict(result)
+class LocalInputs:
+    """
+    Inputs over the files a test names by reference; arrays load as scipp HDF5.
+
+    A reference not named here fails, so a test that hands a callable literal
+    paths cannot pass by accident.
+    """
+
+    def __init__(self, locations: dict[Reference, Path]) -> None:
+        self._locations = locations
+
+    def path(self, ref: Reference) -> Path:
+        return self._locations[ref]
+
+    def array(self, ref: Reference) -> Any:
+        import scipp as sc
+
+        return sc.io.load_hdf5(self.path(ref))
 
 
-def assert_warm_equals_cold(factory: Factory, param_sets: Iterable[BaseModel]) -> None:
+def assert_warm_equals_cold(
+    factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
+) -> None:
     """
     Drive one callable through ``param_sets`` and compare each result with a
     fresh callable's; the one check on a warm workflow's reuse rules.
     """
     warm = factory()
     for i, params in enumerate(param_sets):
-        cold = _fields(factory()(params))
-        got = _fields(warm(params))
+        cold = dict(factory()(params, inputs))
+        got = dict(warm(params, inputs))
         if cold.keys() != got.keys():
             raise AssertionError(f'step {i}: outputs {sorted(got)} != {sorted(cold)}')
         for name in cold:
@@ -41,7 +57,7 @@ def assert_warm_equals_cold(factory: Factory, param_sets: Iterable[BaseModel]) -
 
 
 def assert_combine_is_associative(
-    factory: Factory, param_sets: Iterable[BaseModel]
+    factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
 ) -> None:
     """
     The one check on a declared combine (D15): grouping and order do not matter.
@@ -57,10 +73,10 @@ def assert_combine_is_associative(
     if len(params) < 3:
         raise ValueError('an associativity check needs at least three members')
     workflow = combining(factory())
-    contributions = [workflow.contribute(p) for p in params]
+    contributions = [workflow.contribute(p, inputs) for p in params]
 
-    def finalized(parts: list[Any]) -> dict[str, Any]:
-        return workflow.finalize(workflow.combine(parts), params[0])
+    def finalized(parts: list[Any]) -> Mapping[str, Any]:
+        return workflow.finalize(workflow.combine(parts), params[0], inputs)
 
     chained = contributions[0]
     for contribution in contributions[1:]:
@@ -79,8 +95,8 @@ def assert_combine_is_associative(
         for name, value in reference.items():
             if not equal(got[name], value):
                 raise AssertionError(f'combining {how} changes output {name!r}')
-    one_shot = _fields(factory()(params[0]))
-    for name, value in workflow.finalize(contributions[0], params[0]).items():
+    one_shot = factory()(params[0], inputs)
+    for name, value in workflow.finalize(contributions[0], params[0], inputs).items():
         if not equal(one_shot[name], value):
             raise AssertionError(
                 f'the single callable differs from contribute then finalize '

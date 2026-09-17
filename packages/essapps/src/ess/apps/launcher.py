@@ -24,7 +24,7 @@ from .binding import Registry, import_object
 from .datastore import DataStore
 from .records import Failure, RunRecord, RunResult, Status
 from .runner import JOB, MARKER, Runner
-from .spec import Kind, Ref, Reference, SpecId
+from .spec import Ref, Reference, SpecId
 
 
 class Launcher(Protocol):
@@ -64,11 +64,15 @@ class _SessionInputs:
         self._data = data
         self._locations = locations
 
-    def get(self, ref: Reference, kind: Kind) -> Any:
-        path = self._locations.get(ref)
-        if path is None:
-            return self._data.get(ref, kind)
-        return self._data.serializers.load(path) if kind is Kind.ARRAY else path
+    def path(self, ref: Reference) -> Path:
+        located = self._locations.get(ref)
+        return self._data.path(ref) if located is None else located
+
+    def array(self, ref: Reference) -> Any:
+        located = self._locations.get(ref)
+        if located is None:
+            return self._data.array(ref)
+        return self._data.serializers.load(located)
 
 
 class SessionLauncher:

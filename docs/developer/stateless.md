@@ -208,8 +208,8 @@ Under the checkpoint model the session concepts never enter the framework at all
 
 Two things the core must keep so that phase 3 stays open in every model:
 
-- The callable contract takes materialized objects, not files (D8).
-  A checkpoint application and a session both call workflow code in-process with scipp objects; a file-based contract would foreclose both.
+- The callable contract lets a workflow ask for an object, not only a file (D8).
+  A checkpoint application and a session both call workflow code in-process with scipp objects; a contract that only ever handed over files would foreclose both.
 - Any client may turn a reference into an object in its own process.
   The sketch grants this to local mode; the core should grant it to any client that can reach the disk tier, which is what lets an application hold its own state without the framework knowing.
 

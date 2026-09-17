@@ -9,9 +9,8 @@ from pydantic import BaseModel, ValidationError
 from ess.apps.spec import (
     Array,
     ArraySpec,
-    ArrayValue,
     DatasetRef,
-    Kind,
+    Format,
     NexusFile,
     Quantity,
     Ref,
@@ -24,7 +23,7 @@ from ess.apps.spec import (
 
 
 class Params(BaseModel):
-    data: ArrayValue
+    data: Array()
     background: Array(ArraySpec(dims=('x',))) | None = None
     runs: list[NexusFile] = []
     banks: dict[str, Array(ArraySpec(dims=('tof',)))] = {}
@@ -38,25 +37,24 @@ REF = {'record': 'r1', 'output': 'data'}
 def test_data_ref_fields_include_optionals_and_collections() -> None:
     fields = data_ref_fields(Params)
     assert set(fields) == {'data', 'background', 'runs', 'banks'}
-    assert fields['data'].kind is Kind.ARRAY
+    assert fields['data'].format is Format.SCIPP
     assert fields['background'].array == ArraySpec(dims=('x',))
     assert fields['banks'].array == ArraySpec(dims=('tof',))
-    assert fields['runs'].kind is Kind.NEXUS
+    assert fields['runs'].format is Format.NEXUS
     assert ref_fields(Params) == {'data', 'background', 'runs', 'banks', 'centre'}
 
 
-def test_array_field_accepts_a_reference_or_a_scipp_object_only() -> None:
+def test_a_data_field_holds_a_reference_only() -> None:
     assert Params(data=REF).data == Ref(record='r1', output='data')
-    assert Params(data=sc.scalar(1.0)).data.value == 1.0
-    for bad in ('a path', 3, [1, 2], {'x': 1}):
+    for bad in (sc.scalar(1.0), 'a path', Path('/data/x.h5'), 3, [1, 2], {'x': 1}):
         with pytest.raises(ValidationError):
             Params(data=bad)
 
 
 def test_json_schema_marks_data_fields() -> None:
     schema = Params.model_json_schema()['properties']
-    assert schema['data']['dataRef'] == {'kind': 'array'}
-    assert schema['runs']['items']['dataRef'] == {'kind': 'nexus'}
+    assert schema['data']['dataRef'] == {'format': 'scipp'}
+    assert schema['runs']['items']['dataRef'] == {'format': 'nexus'}
 
 
 def test_walk_refs_finds_references_at_any_depth() -> None:
@@ -133,12 +131,12 @@ def test_a_contribution_needs_the_other_outputs_optional() -> None:
     """A member run returns the contribution alone, against the full model."""
 
     class Required(BaseModel):
-        contribution: ArrayValue
-        normalized: ArrayValue
+        contribution: Array()
+        normalized: Array()
 
     class Optional(BaseModel):
-        contribution: ArrayValue
-        normalized: ArrayValue | None = None
+        contribution: Array()
+        normalized: Array() | None = None
 
     with pytest.raises(ValidationError, match="\\['normalized'\\] must be optional"):
         spec(Required, contribution='contribution')

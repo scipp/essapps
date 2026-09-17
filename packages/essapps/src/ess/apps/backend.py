@@ -29,7 +29,7 @@ from .sources import DatasetSource
 from .spec import (
     DataRef,
     DatasetRef,
-    Kind,
+    Format,
     Ref,
     Reference,
     WorkflowSpec,
@@ -150,7 +150,7 @@ class Backend:
         errors: list[str] = []
         members: list[tuple[Ref, dict[str, Any]]] = []
         for ref in request.contributions:
-            errors += self._check_ref(ref, DataRef(kind=Kind.ARRAY), request, group)
+            errors += self._check_ref(ref, DataRef(format=Format.SCIPP), request, group)
             producer = self._producer(ref, group)
             if producer is None:
                 continue
@@ -215,13 +215,13 @@ class Backend:
             )
         if produced is None:
             return [f'{ref}: a literal output cannot fill a data field']
-        if (consumer.kind is Kind.ARRAY) != (produced.kind is Kind.ARRAY):
-            return [f'{ref}: {produced.kind} output into {consumer.kind} field']
+        if produced.format is not consumer.format:
+            return [f'{ref}: {produced.format} output into {consumer.format} field']
         return []
 
     def _check_dataset(self, ref: DatasetRef, consumer: DataRef | None) -> list[str]:
         """
-        A dataset satisfies any kind, so only the field it fills is checked.
+        A dataset's format is not known here, so only the field it fills is checked.
 
         This is the seam to the catalogue: a PID's SciCat entry is where a
         dataset's proposal is read and checked against the request's, and where a
@@ -436,7 +436,7 @@ class Backend:
                 kind='missing-copy', message=f'{ref}: no copy; recompute the producer'
             )
         if self.launcher.needs_disk_inputs:
-            locations[ref] = self.data.get(ref, Kind.OPAQUE)
+            locations[ref] = self.data.path(ref)
         return None
 
     # Data
@@ -452,11 +452,13 @@ class Backend:
                 f'{record.id} has no output {ref.output!r}'
                 + (f' key {ref.key!r}' if ref.key else '')
             )
-        kind = data_ref_fields(self.registry.spec(record.spec).outputs)[ref.output].kind
-        return self.data.get(ref, kind)
+        outputs = data_ref_fields(self.registry.spec(record.spec).outputs)
+        if outputs[ref.output].format is Format.SCIPP:
+            return self.data.array(ref)
+        return self.data.path(ref)
 
     def view(self, ref: Ref, spec: ViewSpec) -> dict[str, Any]:
-        return view(self.data.get(ref, Kind.ARRAY), spec)
+        return view(self.data.array(ref), spec)
 
     # Publication (D11)
 
@@ -496,7 +498,7 @@ class Backend:
             raise ValueError(f'{record.id} reused a warm workflow; recompute it first')
         if record.binding == 'in_process' and not allow_reused:
             raise ValueError(f'{record.id} was bound in-process; not reproducible')
-        path = self.data.get(ref, Kind.OPAQUE)
+        path = self.data.path(ref)
         if ref.output not in record.publishing:
             record.publishing.append(ref.output)
             self.records.update(record)

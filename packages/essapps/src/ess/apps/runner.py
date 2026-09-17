@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The runner: materialize inputs, call the workflow, validate and store outputs.
+The runner: call the workflow with its inputs, validate and store the outputs.
 
 One code path for both execution shapes. In a session the runner keeps the
 callable between runs (the warm workflow); in a throwaway process it is
@@ -11,8 +11,13 @@ gets a record ID and parameters and reports a :class:`RunResult`.
 
 A request that runs part of a workflow with a declared contribution (D15) takes
 the same path: a member run calls contribute and stores its contribution as the
-only output, and a combine request materializes the contributions it references,
+only output, and a combine request loads the contributions it references,
 calls combine over them and finalize on the result, and stores both.
+
+The callable receives the validated request, references included, and an
+:class:`Inputs` to get at the bytes; the two shapes differ only in what serves
+those: a work directory the backend filled at dispatch, or the session's data
+store. The runner never turns a reference into anything itself.
 """
 
 from __future__ import annotations
@@ -24,19 +29,17 @@ import json
 import os
 import sys
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
-from .binding import Binding, Factory, Workflow, combining, import_object
+from .binding import Binding, Factory, Inputs, Workflow, combining, import_object
 from .records import Failure, RunResult, RunStage, Status
 from .spec import (
     ArraySpec,
-    DataRef,
-    Kind,
     Ref,
     Reference,
     SpecId,
@@ -45,14 +48,11 @@ from .spec import (
     data_ref_fields,
     dataset_refs,
     finalize_model,
+    literal_model,
 )
 
 MARKER = 'done.json'
 JOB = 'job.json'
-
-
-class Inputs(Protocol):
-    def get(self, ref: Reference, kind: Kind) -> Any: ...
 
 
 class Outputs(Protocol):
@@ -69,16 +69,6 @@ def package_versions() -> dict[str, str]:
 
 def environment_name() -> str | None:
     return os.environ.get('CONDA_DEFAULT_ENV') or os.environ.get('VIRTUAL_ENV')
-
-
-def _materialize(value: Any, ref: DataRef, inputs: Inputs) -> Any:
-    if (found := as_ref(value)) is not None:
-        return inputs.get(found, ref.kind)
-    if isinstance(value, list):
-        return [_materialize(v, ref, inputs) for v in value]
-    if isinstance(value, dict):
-        return {k: _materialize(v, ref, inputs) for k, v in value.items()}
-    return value
 
 
 class OutputShapeError(Exception):
@@ -194,8 +184,8 @@ class Runner:
         """
         checksums = {}
         for ref in dataset_refs(params):
-            located = inputs.get(ref, Kind.OPAQUE)
-            if isinstance(located, Path) and located.is_file():
+            located = inputs.path(ref)
+            if located.is_file():
                 checksums[str(ref)] = self._checksum(located)
         return checksums
 
@@ -240,29 +230,21 @@ class Runner:
             validated = params_model.model_validate(params)
             result.resolved_params = _resolved(validated.model_dump(mode='json'))
             result.checksums = self._checksums(params, inputs)
-            materialized = validated.model_dump()
-            for name, ref in data_ref_fields(params_model).items():
-                if materialized.get(name) is not None:
-                    materialized[name] = _materialize(materialized[name], ref, inputs)
             workflow, kept = self._callable(spec, binding.factory)
             returned = self._call(
                 spec,
                 workflow,
                 stage,
-                params_model.model_validate(materialized),
-                [inputs.get(ref, Kind.ARRAY) for ref in contributions],
+                validated,
+                inputs,
+                [inputs.array(ref) for ref in contributions],
             )
             # The flag means the result came out of held state, which is what
             # D11 reads before publishing. A callable holding a frontier knows
             # whether it reused it; one holding nothing but itself can say only
             # that the runner kept it.
             result.reused = getattr(workflow, 'reused', kept)
-            model = (
-                returned
-                if isinstance(returned, BaseModel)
-                else spec.outputs.model_validate(returned)
-            )
-            self._store(record_id, result, spec, model, outputs)
+            self._store(record_id, result, spec, dict(returned), outputs)
             result.status = Status.COMPLETED
         except Exception as e:
             result.status = Status.FAILED
@@ -276,53 +258,64 @@ class Runner:
         workflow: Workflow,
         stage: RunStage,
         params: BaseModel,
+        inputs: Inputs,
         contributions: list[Any],
-    ) -> Any:
+    ) -> Mapping[str, Any]:
         """The entry points this stage runs, and the outputs they produce (D15)."""
         if stage == 'run':
-            return workflow(params)
+            return workflow(params, inputs)
         if spec.contribution is None:
             raise ValueError(f'{spec.id} declares no contribution to {stage}')
         entry = combining(workflow)
         if stage == 'contribute':
-            return {spec.contribution: entry.contribute(params)}
+            return {spec.contribution: entry.contribute(params, inputs)}
         combined = entry.combine(contributions)
-        return {spec.contribution: combined, **entry.finalize(combined, params)}
+        finalized = entry.finalize(combined, params, inputs)
+        return {spec.contribution: combined, **finalized}
 
     def _store(
         self,
         record_id: str,
         result: RunResult,
         spec: WorkflowSpec,
-        model: BaseModel,
+        values: dict[str, Any],
         outputs: Outputs,
     ) -> None:
-        """Check each output against its declared structure, then store it."""
-        stored = data_ref_fields(spec.outputs)
-        for name in type(model).model_fields:
-            value = getattr(model, name)
+        """
+        Check each output against its declared structure, then store it.
+
+        Literal outputs are validated through the outputs model and kept inline;
+        data outputs come back as objects, are checked against their declared
+        structure, and go to the data store. An optional output may be absent.
+        """
+        data = data_ref_fields(spec.outputs)
+        literals = literal_model(spec.outputs).model_validate(
+            {name: value for name, value in values.items() if name not in data}
+        )
+        result.outputs = literals.model_dump(mode='json', exclude_none=True)
+        for name, ref in data.items():
+            value = values.get(name)
             if value is None:
+                if spec.outputs.model_fields[name].is_required():
+                    raise OutputShapeError(f'output {name!r} is missing')
                 continue
-            if name in stored:
-                if (array := stored[name].array) is not None:
-                    _check_array(name, value, array)
-                result.stored_outputs += _store_output(record_id, name, value, outputs)
-            else:
-                result.outputs[name] = model.model_dump(mode='json', include={name})[
-                    name
-                ]
+            if ref.array is not None:
+                _check_array(name, value, ref.array)
+            result.stored_outputs += _store_output(record_id, name, value, outputs)
 
 
 class FileInputs:
-    """Inputs for a throwaway runner: locations resolved by the backend at dispatch."""
+    """Inputs of a throwaway runner: references the backend located at dispatch."""
 
     def __init__(self, locations: dict[str, Path], load: Any) -> None:
         self._locations = locations
         self._load = load
 
-    def get(self, ref: Reference, kind: Kind) -> Any:
-        path = self._locations[str(ref)]
-        return self._load(path) if kind is Kind.ARRAY else path
+    def path(self, ref: Reference) -> Path:
+        return self._locations[str(ref)]
+
+    def array(self, ref: Reference) -> Any:
+        return self._load(self.path(ref))
 
 
 class WorkdirOutputs:

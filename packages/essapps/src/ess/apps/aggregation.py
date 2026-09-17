@@ -40,6 +40,7 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel
 
+from .binding import Form, Inputs, resolve
 from .warm import Key
 
 Contribution = sc.DataGroup
@@ -50,8 +51,9 @@ class AggregatePipeline:
     """
     The three entry points over a sciline pipeline.
 
-    ``keys`` maps parameter field names to sciline keys and ``targets`` output
-    field names to the keys finalize computes, both as
+    ``keys`` maps parameter field names to sciline keys, ``targets`` output
+    field names to the keys finalize computes, and ``resolve`` names the form
+    each data-reference parameter takes, all as
     :py:class:`ess.apps.warm.WarmPipeline` takes them. ``contribution`` is the
     output field the spec marks, ``accumulation_keys`` maps the fields of that
     data group to the sciline keys at which contributions are combined, and
@@ -70,6 +72,7 @@ class AggregatePipeline:
         *,
         keys: Mapping[str, Key],
         targets: Mapping[str, Key],
+        resolve: Mapping[str, Form] = {},
         contribution: str,
         accumulation_keys: Mapping[str, Key],
         combine: Callable[..., Any],
@@ -81,6 +84,7 @@ class AggregatePipeline:
         self._pipeline = pipeline
         self._keys = dict(keys)
         self._targets = dict(targets)
+        self._resolve = dict(resolve)
         self.contribution = contribution
         self._accumulation_keys = dict(accumulation_keys)
         factories = dict(accumulators or {})
@@ -148,9 +152,19 @@ class AggregatePipeline:
                 "contribution; they are contribute's"
             )
 
-    def contribute(self, params: BaseModel) -> Contribution:
+    def _values(self, params: BaseModel, inputs: Inputs, names: Iterable[str]) -> dict:
+        return {
+            self._keys[name]: resolve(
+                getattr(params, name), self._resolve[name], inputs
+            )
+            if name in self._resolve
+            else getattr(params, name)
+            for name in names
+        }
+
+    def contribute(self, params: BaseModel, inputs: Inputs) -> Contribution:
         """The contribution of one member, at the accumulation keys."""
-        row = {self._keys[name]: getattr(params, name) for name in self._members}
+        row = self._values(params, inputs, self._members)
         return self._group(self._aggregation.contribute(row))
 
     def combine(self, contributions: Iterable[Contribution]) -> Contribution:
@@ -159,19 +173,20 @@ class AggregatePipeline:
             self._aggregation.combine(self._keyed(c) for c in contributions)
         )
 
-    def finalize(self, contribution: Contribution, params: Any) -> dict[str, Any]:
+    def finalize(
+        self, contribution: Contribution, params: Any, inputs: Inputs
+    ) -> dict[str, Any]:
         """The outputs finalize computes from a contribution, by field name."""
         values = self._keyed(contribution)
-        values.update(
-            {self._keys[name]: getattr(params, name) for name in self._finalize_params}
-        )
+        values.update(self._values(params, inputs, self._finalize_params))
         results = self._finalizer.compute(values)
         return {name: results[key] for name, key in self._targets.items()}
 
-    def __call__(self, params: BaseModel) -> dict[str, Any]:
+    def __call__(self, params: BaseModel, inputs: Inputs) -> dict[str, Any]:
         """The single callable of D8: contribute, then finalize."""
-        contribution = self.contribute(params)
-        return {self.contribution: contribution, **self.finalize(contribution, params)}
+        contribution = self.contribute(params, inputs)
+        finalized = self.finalize(contribution, params, inputs)
+        return {self.contribution: contribution, **finalized}
 
     def _group(self, contribution: Mapping[Key, Any]) -> Contribution:
         return sc.DataGroup(

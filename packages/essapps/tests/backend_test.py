@@ -14,7 +14,7 @@ from ess.apps.datastore import MissingCopyError
 from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, registry, write_run
 from ess.apps.records import Status
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, Kind, Ref, SpecId, as_ref
+from ess.apps.spec import DatasetRef, Format, Ref, SpecId, as_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -91,14 +91,14 @@ def test_the_picker_lists_completed_outputs_and_datasets(
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     rows = {str(row.ref): row for row in client.pick()}
-    assert rows[str(run_ref)].kind is None
+    assert rows[str(run_ref)].format is None
     assert rows[str(run_ref)].display['name'] == 'dream_1.h5'
-    assert rows[str(loaded.ref('data'))].kind is Kind.ARRAY
+    assert rows[str(loaded.ref('data'))].format is Format.SCIPP
     assert rows[str(loaded.ref('data'))].display['name'] == 'load/v1 data'
     assert 'total' not in {getattr(r.ref, 'output', None) for r in client.pick()}
-    arrays = {str(row.ref) for row in client.pick(Kind.ARRAY)}
+    arrays = {str(row.ref) for row in client.pick(Format.SCIPP)}
     assert arrays == {str(run_ref), str(loaded.ref('data'))}
-    assert {str(row.ref) for row in client.pick(Kind.NEXUS)} == {str(run_ref)}
+    assert {str(row.ref) for row in client.pick(Format.NEXUS)} == {str(run_ref)}
 
 
 def test_run_completes_with_inline_and_stored_outputs(

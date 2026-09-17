@@ -3,7 +3,12 @@
 """
 Binding specs to code (D8).
 
-A workflow is one callable from the validated params model to the outputs model.
+A workflow is one callable from the validated params model to its outputs by
+field name. The params model holds references where the request does; the
+callable asks the runner's :class:`Inputs` for the form it wants, a local path or
+a scipp object, so which form each parameter takes is decided here, next to the
+sciline key it maps to, and never by the spec (D13). Where the bytes come from,
+a session's memory, the data store, or a work directory, is the runner's.
 A workflow whose spec declares a contribution exposes three entry points as well,
 contribute, combine, and finalize (D15), of which the callable is the first and
 the last composed. A factory makes the callable; a throwaway runner calls it
@@ -18,16 +23,45 @@ in-process, but may not shadow an installed one.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import entry_points
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
-from .spec import SpecId, WorkflowSpec
+from .spec import Reference, SpecId, WorkflowSpec, as_ref
 
-Workflow = Callable[[BaseModel], BaseModel | dict[str, Any]]
+
+class Inputs(Protocol):
+    """How a callable gets at the bytes a reference names."""
+
+    def path(self, ref: Reference) -> Path:
+        """A local file holding the bytes."""
+        ...
+
+    def array(self, ref: Reference) -> Any:
+        """The scipp object a scipp-format reference names; fails for other bytes."""
+        ...
+
+
+Form = Literal['path', 'array']
+"""The form a binding asks for: the name of the :class:`Inputs` method."""
+
+
+def resolve(value: Any, form: Form, inputs: Inputs) -> Any:
+    """``value`` with every reference in it, through collections, in ``form``."""
+    if (ref := as_ref(value)) is not None:
+        return getattr(inputs, form)(ref)
+    if isinstance(value, list):
+        return [resolve(v, form, inputs) for v in value]
+    if isinstance(value, dict):
+        return {k: resolve(v, form, inputs) for k, v in value.items()}
+    return value
+
+
+Workflow = Callable[[BaseModel, Inputs], Mapping[str, Any]]
 Factory = Callable[[], Workflow]
 Loader = Callable[[], Factory]
 SPEC_GROUP = 'ess.apps.specs'
@@ -39,16 +73,18 @@ class CombiningWorkflow(Protocol):
     """
     What a workflow with a declared contribution exposes besides the callable.
 
-    ``contribute`` and ``finalize`` take the validated params model, of which
-    ``finalize`` reads only the parameters the spec declares as its own;
-    ``combine`` takes contributions of members, or combinations of such.
+    ``contribute`` and ``finalize`` take the validated params model and the
+    inputs, of which ``finalize`` reads only the parameters the spec declares as
+    its own; ``combine`` takes contributions of members, or combinations of such.
     """
 
-    def contribute(self, params: BaseModel) -> Any: ...
+    def contribute(self, params: BaseModel, inputs: Inputs) -> Any: ...
 
     def combine(self, contributions: Iterable[Any]) -> Any: ...
 
-    def finalize(self, contribution: Any, params: Any) -> dict[str, Any]: ...
+    def finalize(
+        self, contribution: Any, params: Any, inputs: Inputs
+    ) -> Mapping[str, Any]: ...
 
 
 def combining(workflow: Workflow) -> CombiningWorkflow:

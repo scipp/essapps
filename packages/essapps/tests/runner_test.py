@@ -8,8 +8,8 @@ from typing import Any
 import scipp as sc
 from pydantic import BaseModel
 
-from ess.apps.binding import Binding
-from ess.apps.examples import LOAD, LoadOutputs, LoadParams, write_run
+from ess.apps.binding import Binding, Inputs
+from ess.apps.examples import LOAD, LoadParams, write_run
 from ess.apps.records import Status
 from ess.apps.runner import FileInputs, Runner
 from ess.apps.spec import (
@@ -54,11 +54,11 @@ TWO_RUNS = WorkflowSpec(
 
 
 def two_run_workflow() -> Any:
-    def run(params: TwoRunParams) -> TwoRunOutputs:
-        data = sc.io.load_hdf5(params.background) + sc.io.load_hdf5(params.empty_beam)
-        return TwoRunOutputs(
-            total=Quantity(value=float(data.sum().value), unit=str(data.unit))
-        )
+    def run(params: TwoRunParams, inputs: Inputs) -> dict[str, Any]:
+        background = sc.io.load_hdf5(inputs.path(params.background))
+        empty_beam = sc.io.load_hdf5(inputs.path(params.empty_beam))
+        data = background + empty_beam
+        return {'total': Quantity(value=float(data.sum().value), unit=str(data.unit))}
 
     return run
 
@@ -105,11 +105,11 @@ def test_an_output_without_the_declared_dims_fails_the_run(tmp_path: Path) -> No
     ref = DatasetRef(path=file)
 
     def wrong_dims() -> Any:
-        def run(params: LoadParams) -> LoadOutputs:
-            return LoadOutputs(
-                data=sc.DataArray(sc.arange('y', 3.0, unit='counts')),
-                total=Quantity(value=3.0, unit='counts'),
-            )
+        def run(params: LoadParams, inputs: Inputs) -> dict[str, Any]:
+            return {
+                'data': sc.DataArray(sc.arange('y', 3.0, unit='counts')),
+                'total': Quantity(value=3.0, unit='counts'),
+            }
 
         return run
 
@@ -141,7 +141,7 @@ def test_an_output_without_a_declared_coord_fails_the_run() -> None:
     )
 
     def without_the_coord() -> Any:
-        return lambda params: Outputs(curve=sc.DataArray(sc.arange('x', 3.0)))
+        return lambda params, inputs: {'curve': sc.DataArray(sc.arange('x', 3.0))}
 
     result = Runner(keep=False).run(
         'r1',

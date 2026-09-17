@@ -20,7 +20,7 @@ import scipp as sc
 from pydantic import BaseModel, Field
 
 from .aggregation import AggregatePipeline
-from .binding import Registry
+from .binding import Inputs, Registry
 from .spec import Array, ArraySpec, OpaqueFile, Quantity, Ref, WorkflowSpec
 from .warm import WarmPipeline
 
@@ -41,12 +41,12 @@ def edges(data: sc.DataArray, bins: int) -> sc.Variable:
 
 
 def load_workflow() -> Any:
-    def run(params: LoadParams) -> LoadOutputs:
-        data = sc.io.load_hdf5(params.run) * params.scale
-        return LoadOutputs(
-            data=data,
-            total=Quantity(value=float(data.sum().value), unit=str(data.unit)),
-        )
+    def run(params: LoadParams, inputs: Inputs) -> dict[str, Any]:
+        data = sc.io.load_hdf5(inputs.path(params.run)) * params.scale
+        return {
+            'data': data,
+            'total': Quantity(value=float(data.sum().value), unit=str(data.unit)),
+        }
 
     return run
 
@@ -72,11 +72,11 @@ class RebinOutputs(BaseModel):
 
 
 def rebin_workflow() -> Any:
-    def run(params: RebinParams) -> RebinOutputs:
-        data = params.data
+    def run(params: RebinParams, inputs: Inputs) -> dict[str, Any]:
+        data = inputs.array(params.data)
         if params.offset is not None:
             data = data + sc.scalar(params.offset.value, unit=params.offset.unit)
-        return RebinOutputs(result=data.hist(x=edges(data, params.bins)))
+        return {'result': data.hist(x=edges(data, params.bins))}
 
     return run
 
@@ -102,17 +102,18 @@ class SumOutputs(BaseModel):
 
 
 def sum_workflow() -> Any:
-    def run(params: SumParams) -> SumOutputs:
-        total = params.runs[0].copy()
-        for r in params.runs[1:]:
+    def run(params: SumParams, inputs: Inputs) -> dict[str, Any]:
+        runs = [inputs.array(ref) for ref in params.runs]
+        total = runs[0].copy()
+        for r in runs[1:]:
             total += r
-        return SumOutputs(
-            total=total,
-            per_run={str(i): r for i, r in enumerate(params.runs)},
-            totals={
+        return {
+            'total': total,
+            'per_run': {str(i): r for i, r in enumerate(runs)},
+            'totals': {
                 'x': Quantity(value=float(total.sum().value), unit=str(total.unit))
             },
-        )
+        }
 
     return run
 
@@ -136,10 +137,11 @@ class ExportOutputs(BaseModel):
 
 
 def export_workflow() -> Any:
-    def run(params: ExportParams) -> ExportOutputs:
-        rows = zip(params.data.coords['x'].values, params.data.values, strict=True)
+    def run(params: ExportParams, inputs: Inputs) -> dict[str, Any]:
+        data = inputs.array(params.data)
+        rows = zip(data.coords['x'].values, data.values, strict=True)
         text = 'x,counts\n' + ''.join(f'{x},{y}\n' for x, y in rows)
-        return ExportOutputs(csv=text.encode())
+        return {'csv': text.encode()}
 
     return run
 
@@ -159,7 +161,7 @@ class FailParams(BaseModel):
 
 
 def fail_workflow() -> Any:
-    def run(params: FailParams) -> Any:
+    def run(params: FailParams, inputs: Inputs) -> Any:
         raise RuntimeError(params.message)
 
     return run
@@ -236,8 +238,9 @@ def histogram_workflow() -> WarmPipeline:
     return WarmPipeline(
         pipeline,
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
+        resolve={'data': 'array'},
         targets={'histogram': Histogram},
-        inputs=['bins'],
+        stage_inputs=['bins'],
     )
 
 
@@ -326,6 +329,7 @@ NORMALIZE = WorkflowSpec(
 
 NORMALIZE_WIRING: dict[str, Any] = {
     'keys': {'run': RunFile, 'floor': Floor, 'scale': Scale},
+    'resolve': {'run': 'path'},
     'targets': {'normalized': Normalized},
     'contribution': NORMALIZE.contribution,
     'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},

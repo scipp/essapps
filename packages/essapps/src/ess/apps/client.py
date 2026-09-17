@@ -18,7 +18,7 @@ from .records import RunRecord, RunRequest, RunStage, Status, Submission
 from .sources import Dataset, DatasetSource
 from .spec import (
     DatasetRef,
-    Kind,
+    Format,
     Ref,
     Reference,
     SpecId,
@@ -33,8 +33,8 @@ class Candidate(BaseModel, frozen=True):
     """A row of the picker: what may fill a data-reference field, and how to show it."""
 
     ref: Reference
-    kind: Kind | None = Field(
-        default=None, description="None for a dataset, which satisfies any kind."
+    format: Format | None = Field(
+        default=None, description="None for a dataset, whose format is not known."
     )
     display: dict[str, Any] = Field(default_factory=dict)
 
@@ -135,16 +135,16 @@ class Client:
                 seen.setdefault(dataset.ref, dataset)
         return list(seen.values())
 
-    def pick(self, kind: Kind | None = None) -> list[Candidate]:
+    def pick(self, format: Format | None = None) -> list[Candidate]:
         """
-        The candidates for a data-reference field of this kind: the picker.
+        The candidates for a data-reference field of this format: the picker.
 
         Completed outputs from the record store and datasets from every source.
         Nothing is stored to make the list, and a further place to pick from is
         another dataset source, not a change here.
         """
         rows = [*self._picked_outputs(), *self._picked_datasets()]
-        return [row for row in rows if kind is None or row.kind in (None, kind)]
+        return [row for row in rows if format is None or row.format in (None, format)]
 
     def _picked_outputs(self) -> Iterator[Candidate]:
         for record in self.records(status=Status.COMPLETED):
@@ -155,7 +155,7 @@ class Client:
                 if (data := outputs.get(ref.output)) is not None:
                     yield Candidate(
                         ref=ref,
-                        kind=data.kind,
+                        format=data.format,
                         display={
                             'name': f'{record.spec} {ref.output}',
                             'created': record.created.isoformat(),

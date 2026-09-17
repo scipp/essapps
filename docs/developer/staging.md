@@ -53,7 +53,7 @@ A number means the phase where the part is first needed.
 | D6 | Pending outputs as inputs, groups, cycle check, failure propagation | Optional; first concrete need probably 2 | Phase 1 sequences chains through trigger events on completed records, not through groups; see below. |
 | D7 | Dataset source, fake implementation | Core | |
 | D7 | Real SciCat dataset source | Core | The sketch defers real SciCat; phase 1 cannot. |
-| D8 | One callable, entry points, materialization by kind | Core | |
+| D8 | One callable, entry points, inputs asked for as path or object | Core | |
 | D8 | Three validation layers | Core | The trigger loop's refusals need structured errors from day one. |
 | D8 | Warm reuse, stage inputs, warm-equals-cold helper | 3 only | |
 | D15 | Combine requests over member outputs | Core | Phase 1's angle series is an opaque combine, recomputed on each arrival. |

@@ -42,7 +42,7 @@ from ess.sans.types import (
 )
 from pydantic import BaseModel, Field
 
-from .binding import Registry
+from .binding import Inputs, Registry
 from .spec import Array, ArraySpec, NexusFile, OpaqueFile, Quantity, Ref, WorkflowSpec
 from .warm import WarmPipeline
 
@@ -93,13 +93,11 @@ def beam_center_workflow() -> Any:
     nothing, including the I(Q) reduction that consumes the result.
     """
 
-    def run(params: BeamCenterParams) -> BeamCenterOutputs:
+    def run(params: BeamCenterParams, inputs: Inputs) -> dict[str, Any]:
         pipeline = _instrument_pipeline()
-        pipeline[Filename[SampleRun]] = str(params.sample_run)
+        pipeline[Filename[SampleRun]] = str(inputs.path(params.sample_run))
         center = sans.beam_center_from_center_of_mass(pipeline)
-        return BeamCenterOutputs(
-            center=Quantity(value=tuple(center.value), unit=str(center.unit))
-        )
+        return {'center': Quantity(value=tuple(center.value), unit=str(center.unit))}
 
     return run
 
@@ -183,8 +181,16 @@ def iofq_workflow() -> WarmPipeline:
             'q_max': QMax,
             'q_bins': QNumBins,
         },
+        resolve={
+            'sample_run': 'path',
+            'sample_transmission_run': 'path',
+            'background_run': 'path',
+            'background_transmission_run': 'path',
+            'empty_beam_run': 'path',
+            'direct_beam': 'path',
+        },
         targets={'iofq': BackgroundSubtractedIofQ},
-        inputs=['q_min', 'q_max', 'q_bins'],
+        stage_inputs=['q_min', 'q_max', 'q_bins'],
     )
 
 
