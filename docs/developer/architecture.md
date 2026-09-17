@@ -43,7 +43,7 @@ It is independent of how the workflow is implemented or where it runs, and is de
 A request is complete: sufficient to reproduce the outputs from scratch.
 It is plain, JSON-serializable data, even when it never leaves a process.
 
-A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the workflow object was reused from an earlier run, and the runner's console output, kept beside it.
+A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the result was computed from state held from an earlier run, and the runner's console output, kept beside it.
 A request may carry a **label** and a **member key**, under which records supersede each other (D14).
 The record also carries a **submission**, which says how the request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup, so that a later reprocess can carry them forward.
 The submission is explanation, not provenance, because the resolved request alone reproduces the run.
@@ -339,7 +339,7 @@ Serialization of outputs must be pluggable because the outputs that get publishe
 **Cost.**
 Two validation points, with the runner's being the authoritative one.
 The runner loads scipp arrays whole.
-Reuse is exact only if the wrapper's rules are right; the test helper is the check, and the record's "workflow object reused" flag is what lets publication insist on a cold result (D11).
+Reuse is exact only if the wrapper's rules are right; the test helper is the check, and the record's reused flag, which is what the wrapper reports about the state it held, is what lets publication insist on a cold result (D11).
 Accumulation over a growing list is D15's problem, where normalisation sits after the accumulation key.
 DREAM and imaging masks are Python callables today; each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 
@@ -602,7 +602,7 @@ Stage outputs and unreviewed outputs stay in our store, because data in SciCat c
 Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule.
 The SciCat entry carries a self-contained provenance snapshot: the raw PIDs the output derives from, the resolved parameters, the spec identity, the package versions and environment; it can be read without any service of ours, and our record is then a copy of it.
 A publication may name the PID it supersedes, which the snapshot records, since an entry in SciCat is never removed.
-It reads a disk copy: an output that exists only in a session is first written out, and a record whose workflow object was reused is first recomputed in a throwaway process, so that what enters SciCat was computed cold and the record describes it exactly.
+It reads a disk copy: an output that exists only in a session is first written out, and a record whose result was computed from state held from an earlier run is first recomputed in a throwaway process, so that what enters SciCat was computed cold and the record describes it exactly.
 The backend records the intent to publish before writing to SciCat and the PID after; the output then has a second durable copy, so a miss on it becomes a download rather than a recompute.
 The trigger loop recognizes a published output by the snapshot in its SciCat entry, not by a table of ours, and never fires on it or on records made from its own template; otherwise automatic reduction would reprocess its own output.
 A record bound in-process from a notebook is refused for publication unless the client overrides.
@@ -795,7 +795,7 @@ Then a spike on the two decisions with the most hidden risk, D3 and D6: a data s
 Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
 The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
-The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper with its test helper, slots, views, templates, the trigger loop, and publication, against example workflows and fakes; the Tiled-backed disk tier, a real instrument workflow, the lookup and rules as data (D14), and the contribute, combine, and finalize stages with combine requests (D15) are not in it yet; its trigger rule is still a callable, its loop remembers the datasets it has seen where the text asks the records, its records carry a slot and a batch ID where the text has one label, and its files are records where the text has dataset references.
+The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the warm sciline wrapper built on sciline's `Stage`, labels and member keys with the latest-per-label query, dataset references with a folder source and the picker, contributions with contribute, combine, and finalize over sciline's `Aggregation` and combine requests, the lookup, the rule, `apply`, and the memoryless trigger loop, publication, and a LoKI session notebook on the real esssans workflow bound in-process. Not in it: the Tiled-backed disk tier, a SciCat dataset source, the opaque-combine branch of a rule, the fold, HTTP, and a store for templates and rules.
 
 ## Glossary
 
