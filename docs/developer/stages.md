@@ -169,7 +169,7 @@ Read against the ADR, the design document, and the modules on the PR branch at 0
 
 ## Suggested edits to architecture.md
 
-Not applied; for the next pass.
+Applied to architecture.md and to its HTML edition on 2026-09-17; the list stays as the record of what changed.
 
 - D8: replace "the wrapper caches the nodes just upstream of them" with a reference to the stage's frontier, note that the warm sciline wrapper is a `Stage` with the cheap parameters as inputs, and that a cheap parameter the targets do not need is refused at bind time.
 - D13, contribution output: keep "and declare which parameters finalize reads"; add that the binding derives the split from the graph, refuses a spec whose declaration disagrees with it, and refuses a combine request carrying a contribute parameter.

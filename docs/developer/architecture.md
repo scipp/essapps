@@ -314,7 +314,10 @@ Chunk-wise processing of one large file, as the NMX workflow does, happens insid
 **What a warm workflow reuses.**
 A sciline workflow meets the contract through a thin wrapper that keeps the pipeline and caches the values of the nodes the spec declares expensive.
 A rerun sets the changed parameters and recomputes only what lies downstream of them, which is how every notebook already works: the parameters people move interactively, Q bins, d-spacing bins, cut axes, a beam centre, enter after the expensive load and coordinate conversion.
-The spec therefore declares which parameters are cheap to change, and the wrapper caches the nodes just upstream of them; that declaration is also what lets a UI offer a slider rather than a run button.
+The spec therefore declares which parameters are cheap to change, and the wrapper builds a **stage** from the workflow's targets and those parameters as its inputs: sciline's `Stage` (scipp/sciline#245), the part of a graph from named inputs to named outputs, which computes everything the inputs cannot affect once and holds it at its frontier.
+That frontier is the cache, and a rerun is a call of the stage with the cheap parameters.
+The declaration is also what lets a UI offer a slider rather than a run button, and a stage refuses an input its outputs do not need, so a cheap parameter that never reaches the targets is a bind error rather than a dead slider.
+The wrapper imports sciline; the framework does not.
 A list of runs that only grows is not a case for the warm workflow but a combine (D15); the wrapper caches nodes and never accumulates.
 The framework provides a test helper that drives a callable through a sequence of parameter sets warm and cold and asserts equal outputs; that is the one check on the wrapper's reuse rules, and every workflow with a warm form runs it.
 A second helper recomputes a completed record and compares the outputs, so that a workflow package can keep records from production as regression tests.
@@ -445,6 +448,8 @@ A workflow may declare a **contribution**: an output at its accumulation keys, o
 A workflow with a contribution exposes three entry points instead of one: **contribute**, from parameters to a contribution; **combine**, from two contributions to one, associative and commutative; and **finalize**, from a contribution and the parameters to the outputs.
 The single callable of D8 is the composition contribute, then finalize, and is what a run without a series executes.
 A sciline workflow gets the three from the wrapper given the accumulation keys, which is the declaration `StreamProcessor` already takes: the graph up to the keys is contribute, the graph from the keys to the targets is finalize, and combine is the addition ess.reduce already dispatches on the value.
+The wrapper builds the three from sciline's `Aggregation`, constructed from the accumulation keys, an accumulator per key, and the **member table**, one row per member holding the parameters that vary across the members of the request at hand.
+The accumulator is sciline's `Buffered` over the package's combine function, or a running total where a sum over large dense arrays should hold one array rather than one per member.
 Whether the intermediate is events or a histogram is the author's choice at the accumulation key: events keep rebinning a cheap parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
 The framework does not see the difference.
 
@@ -455,13 +460,15 @@ A **combine request** names the spec, carries the finalize parameters, and refer
 It produces the combined contribution, a stage output kept for the next combine, and the finalized outputs.
 It is complete in D1's sense because its references resolve to records that name the files; a recompute of a chained combine walks the chain back to the members.
 It is one use of pending outputs as inputs (D6) and needs no scheduling of its own; the runner calls combine over the references and finalize on the result, from the same binding that supplied contribute.
-The backend's runnability check requires every referenced contribution to come from the same spec name and version; anything finer, such as histogram bins that do not match, is combine failing fast.
+The backend's runnability check requires every referenced contribution to come from the same spec name and version and, since the spec says which parameters finalize reads and the rest are contribute's, that the referenced member records agree on the contribute parameters; anything finer, such as histogram bins that do not match, is combine failing fast.
+Without that second check a combine over members contributed under different masks concatenates their events without complaint.
 Combine may modify its first argument in place, since D2 makes the partial recomputable.
 
 Which contributions a combine references is the submitter's choice, and it decides the cost.
 A rule chains: each arrival is a combine record referencing the previous combine's contribution and the new member's, one read and one write of the partial per arrival, in a throwaway process, exact because combine is associative.
 That is what a series costs in shared mode, and it is enough for phases 1 and 2: even a four-dimensional partial of a few gigabytes is read and written once per arrival, and arrivals are minutes apart.
-Removing a member is a combine referencing the remaining contributions, never a subtraction; if their disk copies were evicted, contribute runs again from the raw files.
+`Aggregation` holds nothing itself, so the contributions sit where the execution shape puts them: in the record store for a chained series, in the wrapper's mapping by member key in a session, in accumulators in a process for the fold.
+Removing a member is therefore a combine over the contributions the holder kept, never a subtraction; if their disk copies were evicted, contribute runs again from the raw files.
 A superseded combine's partial is needed only by the combine that superseded it, which has already run, so evicting it first (D10) costs nothing until a recompute walks the chain.
 In a session the same request shape serves the growing list of B2: the session holds the previous combine's contribution in memory as it holds any output, and each addition is a combine record in the slot.
 The warm workflow (D8) has no accumulation special case.
@@ -486,9 +493,11 @@ Held state stays a cache: the invariant of D2, that every value in memory is rec
 **Cost.**
 Authors must place normalisation after the accumulation key; ess.sans does, ess.powder does not yet.
 Contributions are stage outputs on disk in shared mode, often large, and a chained series keeps k partials until the superseded ones are evicted, the first to go under D10's rule.
+What is kept in memory is a short list: a stage's frontier, a session's contributions, which are stored as records in any case, and the fold's accumulators, and nothing else; all of it is a private cache under D3.
 The framework cannot check associativity; a test helper runs contribute, combine, and finalize over a list of members in two groupings and compares with the one-shot callable, and every workflow that declares a contribution runs it.
-The fold needs a long-lived process addressed by its series, which phases 1 and 2 do not have, and for event-mode contributions an accumulator that concatenates, which `ess.reduce.streaming` does not have.
-Neither is needed before a series arrives faster than a partial can be read and written.
+The helper needs nothing workflow-specific and is written once for every spec, and it checks one thing more: that a combined value can be pushed in again, which chaining and the fold both rely on.
+The fold needs a long-lived process addressed by its series, which phases 1 and 2 do not have; the accumulator an event-mode contribution needs is `Buffered` over the package's own concatenation and is nothing new.
+The process is not needed before a series arrives faster than a partial can be read and written.
 
 ## Rules: how requests are made from data (D14)
 
@@ -563,6 +572,8 @@ The batch table is a frame, and the pieces above are how it is built:
 
 The picture is exact for the view and wrong for the store: a frame is a stored, mutable table, and Mantid's runs table was one, which is where staleness by reset and the write-back into cells came from; here the records are the append-only log and the frame is a query over them.
 In a notebook the client interface speaks the picture anyway: the batch table comes back as a DataFrame, and apply accepts one, member key as index and typed values as columns; the ISIS batch CSV is that frame on disk.
+That frame is also the member table of D15, each row labelled by its member key, so a batch summed as one request and a batch of independent runs are one table used two ways; pandas stays at the client, and the wrapper maps field names to the workflow's keys.
+Which parameters vary across the members, and so make up the table's columns, follows from the request at hand rather than from a declaration on the spec: what the form filled per member, or the data references of a session's growing list.
 Two words clash and should be read with care: a series here is a groupby group, not a pandas Series, and apply here is a merge and fill, not `DataFrame.apply`.
 
 **Why.**
@@ -651,6 +662,9 @@ A spec may also declare named failure reasons, each with a message; a workflow t
 
 **A contribution output (also D13, D15).**
 A spec may mark one output as its contribution and declare which parameters finalize reads, at which point the binding must supply contribute, combine, and finalize, and a combine request over that spec is valid.
+The binding derives the same split from the graph, since each stage knows which parameters it reads, and refuses a spec whose declaration disagrees with it, so that a wrong declaration is a bind error rather than a wrong result.
+The declaration itself stays because the backend validates a combine request without importing workflow code, and a combine form has to know which fields it has.
+A combine request that reaches the runner carrying a contribute parameter is refused there as well.
 The contribution is typed like any output, so a combine's reference to one is the same type check as chaining; what it holds, a numerator and a denominator or more, is the author's.
 
 **One built-in spec, `file` (D1).**
@@ -787,15 +801,17 @@ The skeleton exists as the package `essapps` under `packages/`, import `ess.apps
 
 Where esslivedata uses a word differently, the clash is noted.
 
-- **Accumulation key**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum.
+- **Accumulation key**: a node of a workflow at which per-member intermediates are added; the contribution is the value there. Usually two, a numerator and a denominator, so that normalisation comes after the sum. One accumulator sits at each.
+- **Accumulator**: an object that takes contributions by `push` and holds their sum as its value, one per accumulation key. sciline's `Buffered` makes one from a combine function; a running total holds one array instead of one per member.
+- **Aggregation**: sciline's object for a declared contribution: the contribute stage, an accumulator per accumulation key, and the finalize stage. It holds nothing between calls, so whoever loops holds the contributions.
 - **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
 - **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations. In a notebook it accepts a DataFrame, member key as index and typed values as columns.
 - **Batch**: the records under one label, made by a person from a template or by a rule; not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
 - **Client interface**: the backend's Python interface, including validate, apply, views, and the picker. The API.
 - **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
-- **Combine request**: a request that references contributions, from member records and optionally a previous combine, and produces the combined contribution and the finalized outputs. Chained when each references the previous.
-- **Contribution**: a workflow's output at its accumulation keys; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize.
+- **Combine request**: a request that references contributions, from member records and optionally a previous combine, and produces the combined contribution and the finalized outputs. Chained when each references the previous. The runner executes it by pushing the referenced contributions into fresh accumulators and calling finalize on their values.
+- **Contribution**: a workflow's output at its accumulation keys; opaque to the framework, additive by declaration. The workflow that declares one exposes contribute, combine, and finalize, which a sciline wrapper takes from an aggregation.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
 - **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path. The second form of reference. Not a record: no request, no status.
@@ -823,6 +839,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its runs and the workflow itself in memory. A cache over records.
 - **Slot**: a label an interactive tool owns, with no member key. The unit of interactive work, and what tools list and replay.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs. Defined in scipp/ess#690.
+- **Stage**: the part of a sciline graph from named inputs to named outputs, with everything else computed once and held at its frontier. The warm workflow is a stage whose inputs are the cheap parameters; contribute and finalize are the two stages of an aggregation. A **stage output**, an output one spec produces and another takes (D4), is such a boundary value kept as a record.
 - **Submission**: the field on a run record that says how its request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup. Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits; the execution shape of shared mode.
@@ -869,4 +886,4 @@ A seventh pass read the three prior-art passes together for incremental creep an
 An eighth pass asked whether accumulation could be deferred at all, read how ess.sans, ess.reflectometry, ess.powder, ess.bifrost, and the streaming module combine runs, and found the sketch had three answers that did not meet; it added D15, the declared additive combine with its three stages, removed the accumulation special case from the warm workflow, and made a series combine a chained request rather than a recombination of member outputs.
 A ninth pass asked whether batch and automatic reduction were more unified than the sketch had set out to make them, and found that a rule is to a batch what a template is to a request, which is what Mantid's reflectometry batch tab already is; it merged the slot and the batch ID into one label with an optional member key, made a rule's records a batch under the rule's name, named the one apply operation behind the form, the trigger loop, and the backlog, reprocess, and rerun operations, made the trigger loop stateless by putting a lower bound on the rule's selector, gave the rule an active state, put the typed values on the submission so that a reprocess carries them, and moved labels and apply from phase 2 into phase 1.
 A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, stores nothing per dataset, since the proposal check happens at submission and the data store registers only the copies it makes, keyed by reference in either form, took a local file's identity from the run identity it carries rather than a hash at submission, made a folder a dataset source for the local application, and named the picker, the query behind an input field, so that listing what can be picked is a query over the record store and the dataset sources rather than a table of ours.
-An eleventh pass read the sketch against scipp/sciline#245, the proposal to replace map/reduce with stages and aggregations composed outside the graph, in [stages.md](stages.md); it renamed accumulation point to accumulation key, sciline's word for the same thing, and lists the edits to D8, D13, D14, and D15 that follow from the proposal.
+An eleventh pass read the sketch against scipp/sciline#245, the proposal to replace map/reduce with stages and aggregations composed outside the graph, in [stages.md](stages.md); it renamed accumulation point to accumulation key, sciline's word for the same thing, named the stage, the accumulator, and the aggregation behind the warm workflow and the declared combine, made the split between contribute's and finalize's parameters a declaration the binding checks against the graph, and required the members of one combine to agree on the parameters contribute reads.
