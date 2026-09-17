@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The session shape: everything in one process, outputs staying in memory."""
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -10,23 +11,62 @@ import scipp as sc
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client
 from ess.apps.datastore import MissingCopyError
-from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM
+from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, write_run
 from ess.apps.records import Status
-from ess.apps.spec import FILE_SPEC, Ref, SpecId
+from ess.apps.spec import DatasetRef, Kind, Ref, SpecId, as_ref
 
 
-def test_file_record_is_created_once_per_path(client: Client, run_file: Path) -> None:
-    first = client.file(run_file)
-    assert client.file(run_file) == first
-    record = client.record(first.record)
-    assert record.spec == FILE_SPEC.id
-    assert record.status == Status.COMPLETED
-    assert record.request.params['origin']['path'] == str(run_file.resolve())
-    assert client.output(first) == run_file
+def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
+    client: Client, run_ref: DatasetRef, run_file: Path
+) -> None:
+    record = client.run(LOAD, {'run': run_ref})
+    assert record.status == Status.COMPLETED, record.failure
+    assert as_ref(record.request.params['run']) == run_ref
+    assert record.checksums['run'] == hashlib.sha256(run_file.read_bytes()).hexdigest()
+    assert client.provenance(record)['raw'] == [{'instrument': 'dream', 'run': 1}]
+
+
+def test_a_dataset_no_source_has_fails_the_run(client: Client) -> None:
+    record = client.run(LOAD, {'run': DatasetRef(instrument='dream', run=77)})
+    assert record.status == Status.FAILED
+    assert record.failure.kind == 'missing-dataset'
+
+
+def test_a_dataset_identified_by_path_is_its_own_location(
+    client: Client, tmp_path: Path
+) -> None:
+    outside = write_run(tmp_path / 'elsewhere.h5', [1.0, 2.0])
+    record = client.run(LOAD, {'run': DatasetRef(path=outside)})
+    assert record.status == Status.COMPLETED, record.failure
+    assert record.outputs['total']['value'] == 3.0
+
+
+def test_a_dataset_cannot_fill_a_literal_field(client: Client, run_ref: DatasetRef):
+    """A literal field admits a value or an output of a record, never a dataset."""
+    report = client.validate(
+        client.request(REBIN, {'data': run_ref, 'offset': run_ref})
+    )
+    assert report.layers == ('schema', 'params')
+    assert any(e.startswith('offset') for e in report.errors)
+
+
+def test_the_picker_lists_completed_outputs_and_datasets(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
+    rows = {str(row.ref): row for row in client.pick()}
+    assert rows[str(run_ref)].kind is None
+    assert rows[str(run_ref)].display['name'] == 'dream_1.h5'
+    assert rows[str(loaded.ref('data'))].kind is Kind.ARRAY
+    assert rows[str(loaded.ref('data'))].display['name'] == 'load/v1 data'
+    assert 'total' not in {getattr(r.ref, 'output', None) for r in client.pick()}
+    arrays = {str(row.ref) for row in client.pick(Kind.ARRAY)}
+    assert arrays == {str(run_ref), str(loaded.ref('data'))}
+    assert {str(row.ref) for row in client.pick(Kind.NEXUS)} == {str(run_ref)}
 
 
 def test_run_completes_with_inline_and_stored_outputs(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     assert record.status == Status.COMPLETED
@@ -40,7 +80,7 @@ def test_run_completes_with_inline_and_stored_outputs(
 
 
 def test_session_outputs_stay_in_memory_until_written_out(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     record = client.run(LOAD, {'run': run_ref})
     data = client.backend.data
@@ -52,7 +92,7 @@ def test_session_outputs_stay_in_memory_until_written_out(
 
 
 def test_chaining_through_memory_and_literal_outputs(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     rebinned = client.run(
@@ -69,7 +109,9 @@ def test_chaining_through_memory_and_literal_outputs(
     assert client.backend.records.referencing(loaded.id, 'data') == [rebinned.id]
 
 
-def test_warm_workflow_is_reused_within_a_session(client: Client, run_ref: Ref) -> None:
+def test_warm_workflow_is_reused_within_a_session(
+    client: Client, run_ref: DatasetRef
+) -> None:
     first = client.run(LOAD, {'run': run_ref}, label='tune')
     second = client.run(LOAD, {'run': run_ref, 'scale': 3.0}, label='tune')
     assert not first.reused
@@ -79,7 +121,7 @@ def test_warm_workflow_is_reused_within_a_session(client: Client, run_ref: Ref) 
 
 
 def test_group_with_pending_outputs_runs_in_dependency_order(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     group = client.submit_group(
         {
@@ -107,7 +149,7 @@ def test_group_with_pending_outputs_runs_in_dependency_order(
 
 
 def test_group_is_refused_whole_when_one_member_is_invalid(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     with pytest.raises(SubmitError, match='no group member'):
         client.submit_group(
@@ -118,7 +160,7 @@ def test_group_is_refused_whole_when_one_member_is_invalid(
                 ),
             }
         )
-    assert client.records() == [client.record(run_ref.record)]
+    assert client.records() == []
 
 
 @pytest.mark.parametrize(
@@ -140,7 +182,7 @@ def test_validation_reports_errors_before_any_record_exists(
     assert client.records() == []
 
 
-def test_validation_checks_reference_types(client: Client, run_ref: Ref) -> None:
+def test_validation_checks_reference_types(client: Client, run_ref: DatasetRef) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     literal_into_data = client.validate(
         client.request(REBIN, {'data': loaded.ref('total')})
@@ -164,14 +206,17 @@ def test_validation_checks_reference_types(client: Client, run_ref: Ref) -> None
     assert unknown_spec.layers == ('schema',)
 
 
-def test_reference_across_proposals_is_refused(client: Client, run_ref: Ref) -> None:
+def test_reference_across_proposals_is_refused(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    loaded = client.run(LOAD, {'run': run_ref})
     other = Client(client.backend, instrument='dream', proposal='p2', submitter='eve')
-    report = other.validate(other.request(LOAD, {'run': run_ref}))
+    report = other.validate(other.request(REBIN, {'data': loaded.ref('data')}))
     assert any('belongs to proposal p1' in e for e in report.errors)
 
 
 def test_failure_is_structured_and_propagates_to_dependents(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     group = client.submit_group(
         {
@@ -187,7 +232,7 @@ def test_failure_is_structured_and_propagates_to_dependents(
 
 
 def test_missing_collection_key_fails_the_consumer_only(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     summed = client.submit_group(
         {
@@ -202,7 +247,7 @@ def test_missing_collection_key_fails_the_consumer_only(
 
 
 def test_retry_and_recompute_link_to_the_old_record(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     old = client.run(LOAD, {'run': run_ref})
     new = client.recompute(old)
@@ -213,13 +258,15 @@ def test_retry_and_recompute_link_to_the_old_record(
     assert new.status == Status.COMPLETED
 
 
-def test_cancel_terminal_record_is_a_no_op(client: Client, run_ref: Ref) -> None:
+def test_cancel_terminal_record_is_a_no_op(client: Client, run_ref: DatasetRef) -> None:
     done = client.run(LOAD, {'run': run_ref})
     client.cancel(done)
     assert client.record(done.id).status == Status.COMPLETED
 
 
-def test_missing_copy_is_reported_after_eviction(client: Client, run_ref: Ref) -> None:
+def test_missing_copy_is_reported_after_eviction(
+    client: Client, run_ref: DatasetRef
+) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     client.backend.data.evict(loaded.ref('data'))
     with pytest.raises(MissingCopyError):
@@ -227,7 +274,7 @@ def test_missing_copy_is_reported_after_eviction(client: Client, run_ref: Ref) -
     assert client.recompute(loaded).status == Status.COMPLETED
 
 
-def test_drop_keeps_the_record(client: Client, run_ref: Ref) -> None:
+def test_drop_keeps_the_record(client: Client, run_ref: DatasetRef) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     client.write_out(loaded.ref('data'))
     client.drop(loaded.ref('data'))
@@ -236,7 +283,7 @@ def test_drop_keeps_the_record(client: Client, run_ref: Ref) -> None:
         client.output(loaded, 'data')
 
 
-def test_view_returns_plain_arrays(client: Client, run_ref: Ref) -> None:
+def test_view_returns_plain_arrays(client: Client, run_ref: DatasetRef) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     v = client.view(loaded.ref('data'))
     assert v['dims'] == ['x']
@@ -247,7 +294,7 @@ def test_view_returns_plain_arrays(client: Client, run_ref: Ref) -> None:
 
 
 def test_record_ref_names_the_single_output_or_demands_a_name(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     with pytest.raises(ValueError, match="has outputs \\['data', 'total'\\]"):
@@ -261,7 +308,7 @@ def test_record_ref_names_the_single_output_or_demands_a_name(
 
 
 def test_element_of_a_literal_collection_output_is_inlined(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     summed = client.run(SUM, {'runs': [loaded.ref('data'), loaded.ref('data')]})
@@ -284,7 +331,7 @@ def test_cyclic_group_is_refused(client: Client) -> None:
     assert client.records() == []
 
 
-def test_session_file_output_is_readable(client: Client, run_ref: Ref) -> None:
+def test_session_file_output_is_readable(client: Client, run_ref: DatasetRef) -> None:
     exported = client.run(
         EXPORT, {'data': client.run(LOAD, {'run': run_ref}).ref('data')}
     )
@@ -293,7 +340,7 @@ def test_session_file_output_is_readable(client: Client, run_ref: Ref) -> None:
 
 
 def test_evicted_session_input_is_a_missing_copy_status(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     loaded = client.run(LOAD, {'run': run_ref})
     client.backend.data.evict(loaded.ref('data'))

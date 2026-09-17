@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from .binding import Factory
+from .sources import Dataset
+from .spec import DatasetRef
 from .warm import equal
 
 
@@ -39,26 +40,20 @@ def assert_warm_equals_cold(factory: Factory, param_sets: Iterable[BaseModel]) -
                 )
 
 
-@dataclass(frozen=True)
-class Dataset:
-    """What a dataset source yields: a PID, a path where its bytes are, metadata."""
-
-    pid: str
-    path: Path
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
 class FakeDatasetSource:
     """Yields whatever was added; repeats and out-of-order arrival are allowed."""
 
-    def __init__(self) -> None:
-        self._datasets: list[Dataset] = []
+    def __init__(self, *datasets: Dataset) -> None:
+        self._datasets = list(datasets)
 
     def add(self, dataset: Dataset) -> None:
         self._datasets.append(dataset)
 
     def new_datasets(self, proposal: str) -> list[Dataset]:
         return list(self._datasets)
+
+    def locate(self, ref: DatasetRef) -> Path | None:
+        return next((d.path for d in self._datasets if d.ref == ref), None)
 
 
 class FakePublisher:

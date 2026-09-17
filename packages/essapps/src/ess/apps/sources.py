@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+Dataset sources: where data the framework did not compute comes from (D7).
+
+A source yields the datasets of a proposal and locates the bytes of a dataset
+reference. It persists nothing: which datasets a rule has already fired on is a
+query over the records, and a dataset enters the store only as a reference in
+the requests that name it. SciCat is the implementation for a facility,
+:class:`FolderSource` the one for the local application, and
+:class:`ess.apps.testing.FakeDatasetSource` the fake for tests.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+from .spec import DatasetRef
+
+
+@dataclass(frozen=True)
+class Dataset:
+    """
+    What a source yields: where the bytes are now, what identifies them, metadata.
+
+    A source fills the identity fields it can: ``pid`` for a catalogue dataset,
+    ``instrument`` and ``run`` for a file that carries a run identity, neither
+    for a file that carries none, whose path is then its identity. ``metadata``
+    is what the source declares for the instrument, an angle, a sample name, a
+    run's role, and is the only thing a rule may match on.
+    """
+
+    path: Path
+    pid: str | None = None
+    instrument: str | None = None
+    run: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ref(self) -> DatasetRef:
+        """This dataset's identity, which is how a request names it."""
+        if self.pid is not None:
+            return DatasetRef(pid=self.pid)
+        if self.run is not None:
+            return DatasetRef(instrument=self.instrument, run=self.run)
+        return DatasetRef(path=self.path)
+
+
+class DatasetSource(Protocol):
+    def new_datasets(self, proposal: str) -> Iterable[Dataset]:
+        """Datasets of this proposal; arrival may be out of order and repeated."""
+        ...
+
+    def locate(self, ref: DatasetRef) -> Path | None:
+        """Where the bytes are now, or None if this source does not have them."""
+        ...
+
+
+_RUN_IDENTITY = re.compile(r'(?P<instrument>[a-zA-Z]+)_(?P<run>\d+)')
+
+
+class FolderSource:
+    """
+    The local application's dataset source: the files of one folder.
+
+    A file whose name carries an instrument and a run number, ``dream_4711.nxs``,
+    is identified by those, which is what a PID is minted from; any other file is
+    identified by its path. The folder is one proposal's, so ``proposal`` selects
+    nothing here.
+    """
+
+    def __init__(self, path: Path | str, pattern: str = '*') -> None:
+        self.path = Path(path)
+        self.pattern = pattern
+
+    def new_datasets(self, proposal: str) -> list[Dataset]:
+        return self._scan()
+
+    def locate(self, ref: DatasetRef) -> Path | None:
+        return next((d.path for d in self._scan() if d.ref == ref), None)
+
+    def _scan(self) -> list[Dataset]:
+        return [
+            self._dataset(p)
+            for p in sorted(self.path.glob(self.pattern))
+            if p.is_file()
+        ]
+
+    def _dataset(self, path: Path) -> Dataset:
+        match = _RUN_IDENTITY.fullmatch(path.stem)
+        if match is None:
+            return Dataset(path=path)
+        return Dataset(
+            path=path,
+            instrument=match['instrument'].lower(),
+            run=int(match['run']),
+        )

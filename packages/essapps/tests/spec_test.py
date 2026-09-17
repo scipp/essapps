@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from pathlib import Path
+
 import pytest
 import scipp as sc
 from pydantic import BaseModel, ValidationError
@@ -8,6 +10,7 @@ from ess.apps.spec import (
     Array,
     ArraySpec,
     ArrayValue,
+    DatasetRef,
     Kind,
     NexusFile,
     Quantity,
@@ -79,3 +82,36 @@ def test_as_ref_decides_what_a_reference_is() -> None:
     assert as_ref({'record': 'r1', 'output': 'o', 'extra': 1}) is None
     assert as_ref({'value': 1.0}) is None
     assert as_ref('r1.data') is None
+
+
+def test_as_ref_tells_a_dataset_from_a_params_dict() -> None:
+    dataset = DatasetRef(instrument='dream', run=4711)
+    assert as_ref(dataset) is dataset
+    assert as_ref(dataset.model_dump()) == dataset
+    assert as_ref(dataset.model_dump(mode='json')) == dataset
+    assert as_ref({'pid': '20.500/abc'}) == DatasetRef(pid='20.500/abc')
+    assert as_ref({'run': 4711}) is None
+    assert as_ref({'run': Ref(record='r1', output='data')}) is None
+    assert as_ref({'pid': None, 'instrument': None, 'run': None, 'path': None}) is None
+
+
+def test_a_dataset_has_exactly_one_identity() -> None:
+    assert str(DatasetRef(pid='20.500/abc')) == 'dataset:20.500/abc'
+    assert str(DatasetRef(instrument='dream', run=4711)) == 'dataset:dream/4711'
+    assert str(DatasetRef(path=Path('/data/x.nxs'))) == 'dataset:/data/x.nxs'
+    with pytest.raises(ValidationError, match='exactly one identity'):
+        DatasetRef(pid='20.500/abc', path=Path('/data/x.nxs'))
+    with pytest.raises(ValidationError, match='exactly one identity'):
+        DatasetRef()
+    with pytest.raises(ValidationError, match='together'):
+        DatasetRef(instrument='dream')
+
+
+def test_a_data_field_holds_either_form_of_reference() -> None:
+    dataset = DatasetRef(instrument='dream', run=4711)
+    assert Params(data=REF, runs=[dataset]).runs == [dataset]
+    params = {'data': REF, 'runs': [dataset.model_dump()]}
+    assert [(p, str(r)) for p, r in walk_refs(params)] == [
+        ('data', 'r1.data'),
+        ('runs[0]', 'dataset:dream/4711'),
+    ]

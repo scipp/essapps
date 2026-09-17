@@ -15,6 +15,7 @@ in :mod:`ess.apps.binding`. This module imports neither scipp nor sciline.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
@@ -22,7 +23,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Annotated, Any, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_core import core_schema
 
 
@@ -32,7 +33,7 @@ class NoParams(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-class Ref(BaseModel, frozen=True):
+class Ref(BaseModel, frozen=True, extra='forbid'):
     """Output ``output`` of record ``record``, optionally one element ``key`` of it."""
 
     record: str
@@ -42,6 +43,51 @@ class Ref(BaseModel, frozen=True):
     def __str__(self) -> str:
         key = f'[{self.key}]' if self.key is not None else ''
         return f'{self.record}.{self.output}{key}'
+
+
+class DatasetRef(BaseModel, frozen=True, extra='forbid'):
+    """
+    Identity of data the framework did not compute: the second form of reference.
+
+    Exactly one identity is set: the PID of a catalogue dataset; the instrument
+    and run number a local file carries, which is what a PID is minted from; or
+    its path when it carries neither, the one case where a path is an identity.
+    Identity is not location: where the bytes are is asked of a dataset source at
+    dispatch (D7). A dataset reference is never pending and has no record.
+    """
+
+    pid: str | None = None
+    instrument: str | None = None
+    run: int | None = None
+    path: Path | None = None
+
+    @model_validator(mode='after')
+    def _one_identity(self) -> DatasetRef:
+        forms = {
+            'pid': self.pid is not None,
+            'instrument and run': self.instrument is not None or self.run is not None,
+            'path': self.path is not None,
+        }
+        given = [name for name, present in forms.items() if present]
+        if len(given) != 1:
+            raise ValueError(
+                'a dataset has exactly one identity, a pid, an instrument and a '
+                f'run number, or a path; got {given or "none"}'
+            )
+        if given == ['instrument and run'] and None in (self.instrument, self.run):
+            raise ValueError('an instrument and a run number identify a file together')
+        return self
+
+    def __str__(self) -> str:
+        if self.pid is not None:
+            return f'dataset:{self.pid}'
+        if self.run is not None:
+            return f'dataset:{self.instrument}/{self.run}'
+        return f'dataset:{self.path}'
+
+
+Reference = Ref | DatasetRef
+"""What a parameter field of matching type may hold instead of a literal."""
 
 
 class Kind(StrEnum):
@@ -71,10 +117,10 @@ class DataRef:
     """
     Field annotation marking a data-reference field.
 
-    In a request such a field holds a :class:`Ref`; when the callable runs it holds
-    the materialized value, a path for files or a scipp object for arrays. The
-    union type on the field admits both forms; this annotation says which one the
-    framework must produce.
+    In a request such a field holds a :class:`Ref` or a :class:`DatasetRef`; when
+    the callable runs it holds the materialized value, a path for files or a
+    scipp object for arrays. The union type on the field admits both forms; this
+    annotation says which one the framework must produce.
     """
 
     kind: Kind
@@ -92,7 +138,7 @@ class Materialized:
     """
     Validation of an in-process value: anything that is not plain data.
 
-    A data-reference field holds a :class:`Ref` in a request and the materialized
+    A data-reference field holds a reference in a request and the materialized
     value, a path or a scipp object, inside the callable. This type admits the
     second form without naming scipp, which the spec layer must not import.
     """
@@ -107,17 +153,17 @@ class Materialized:
         return core_schema.no_info_plain_validator_function(check)
 
 
-NexusFile = Annotated[Ref | Path, DataRef(kind=Kind.NEXUS)]
+NexusFile = Annotated[Reference | Path, DataRef(kind=Kind.NEXUS)]
 """A raw NeXus file; the callable receives a local path."""
-OpaqueFile = Annotated[Ref | Path | bytes, DataRef(kind=Kind.OPAQUE)]
+OpaqueFile = Annotated[Reference | Path | bytes, DataRef(kind=Kind.OPAQUE)]
 """A file the framework cannot read; a workflow returns one as bytes."""
-ArrayValue = Annotated[Ref | Materialized, DataRef(kind=Kind.ARRAY)]
+ArrayValue = Annotated[Reference | Materialized, DataRef(kind=Kind.ARRAY)]
 """A scipp object of any structure; ``Array(spec)`` constrains it."""
 
 
 def Array(spec: ArraySpec | None = None) -> Any:
     """Type of a field holding a scipp object with the structure ``spec``."""
-    return Annotated[Ref | Materialized, DataRef(kind=Kind.ARRAY, array=spec)]
+    return Annotated[Reference | Materialized, DataRef(kind=Kind.ARRAY, array=spec)]
 
 
 class Quantity(BaseModel, frozen=True):
@@ -210,23 +256,36 @@ def ref_fields(model: type[BaseModel]) -> set[str]:
     return {
         name
         for name, field in model.model_fields.items()
-        if name in data_ref_fields(model) or Ref in _members(field.annotation)
+        if name in data_ref_fields(model)
+        or any(member in (Ref, DatasetRef) for member in _members(field.annotation))
     }
 
 
-def as_ref(value: Any) -> Ref | None:
-    """The reference a plain value denotes, if it is one: the one place that decides."""
-    if isinstance(value, Ref):
+def as_ref(value: Any) -> Reference | None:
+    """
+    The reference a plain value denotes, if it is one: the one place that decides.
+
+    A reference is a model, or the dict it dumps to once a request has been
+    through the store. The two forms are told apart by their fields; a dict whose
+    fields could be a dataset identity but do not validate as one, such as the
+    params of a workflow with a ``run`` parameter, is not a reference.
+    """
+    if isinstance(value, Ref | DatasetRef):
         return value
-    if isinstance(value, dict) and 'record' in value and set(value) <= _REF_KEYS:
-        return Ref.model_validate(value)
+    if isinstance(value, dict):
+        if 'record' in value and set(value) <= _REF_KEYS:
+            return Ref.model_validate(value)
+        if value and set(value) <= _DATASET_KEYS:
+            with contextlib.suppress(ValidationError):
+                return DatasetRef.model_validate(value)
     return None
 
 
 _REF_KEYS = frozenset(Ref.model_fields)
+_DATASET_KEYS = frozenset(DatasetRef.model_fields)
 
 
-def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Ref]]:
+def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Reference]]:
     """Yield every reference in a plain (JSON-shaped) value, with its path."""
     if (ref := as_ref(value)) is not None:
         yield path, ref
@@ -236,34 +295,3 @@ def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Ref]]:
     elif isinstance(value, list):
         for i, v in enumerate(value):
             yield from walk_refs(v, f'{path}[{i}]')
-
-
-class LocalOrigin(BaseModel, frozen=True):
-    """A file on a user's disk; the checksum is taken the first time it is read."""
-
-    path: Path
-    checksum: str | None = None
-
-
-class PidOrigin(BaseModel, frozen=True):
-    """A catalogue dataset."""
-
-    pid: str
-
-
-class FileParams(BaseModel, frozen=True):
-    origin: LocalOrigin | PidOrigin
-
-
-class FileOutputs(BaseModel):
-    file: OpaqueFile
-
-
-FILE_SPEC = WorkflowSpec(
-    name='file',
-    version=1,
-    title='File',
-    description='A file record: no workflow, one output, the file.',
-    params=FileParams,
-    outputs=FileOutputs,
-)

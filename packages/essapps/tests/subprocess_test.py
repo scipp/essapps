@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The throwaway shape: every run a subprocess, outputs to disk, marker, reconcile."""
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -9,17 +11,19 @@ import pytest
 from ess.apps.client import Client, local
 from ess.apps.examples import FAIL, LOAD, REBIN, SUM, write_run
 from ess.apps.records import Status
-from ess.apps.spec import Ref
+from ess.apps.sources import FolderSource
+from ess.apps.spec import DatasetRef, Ref
 
 
 @pytest.fixture
-def client(tmp_path: Path):
+def client(tmp_path: Path, datasets: Path):
     client = local(
         tmp_path / 'store',
         instrument='dream',
         proposal='p1',
         submitter='simon',
         registry='ess.apps.examples:registry',
+        sources=[FolderSource(datasets, '*.h5')],
         throwaway=True,
     )
     yield client
@@ -27,12 +31,14 @@ def client(tmp_path: Path):
 
 
 @pytest.fixture
-def run_ref(client: Client, tmp_path: Path) -> Ref:
-    return client.file(write_run(tmp_path / 'run1.h5', [1.0, 2.0, 3.0, 4.0]))
+def run_ref(datasets: Path) -> DatasetRef:
+    """The run identity ``dream_1.h5`` carries; a subprocess gets a path at dispatch."""
+    write_run(datasets / 'dream_1.h5', [1.0, 2.0, 3.0, 4.0])
+    return DatasetRef(instrument='dream', run=1)
 
 
 def test_run_is_dispatched_then_reconciled_from_the_marker(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: DatasetRef
 ) -> None:
     record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     assert record.status == Status.DISPATCHED
@@ -48,7 +54,21 @@ def test_run_is_dispatched_then_reconciled_from_the_marker(
     assert client.backend.data.in_cache(data_ref)
 
 
-def test_map_combine_runs_through_subprocesses(client: Client, run_ref: Ref) -> None:
+def test_a_dataset_is_located_before_the_subprocess_starts(
+    client: Client, run_ref: DatasetRef, datasets: Path
+) -> None:
+    """The subprocess is handed a path; it never asks a dataset source itself."""
+    (done,) = client.wait([client.run(LOAD, {'run': run_ref})])
+    assert done.status == Status.COMPLETED, done.failure
+    file = datasets / 'dream_1.h5'
+    assert done.checksums == {'run': hashlib.sha256(file.read_bytes()).hexdigest()}
+    job = json.loads((client.backend.launcher.workdir(done) / 'job.json').read_text())
+    assert job['locations'] == {'dataset:dream/1': str(file)}
+
+
+def test_map_combine_runs_through_subprocesses(
+    client: Client, run_ref: DatasetRef
+) -> None:
     group = client.submit_group(
         {
             'a': client.request(LOAD, {'run': run_ref}, label='b1', member_key='a'),
@@ -84,7 +104,9 @@ def test_failure_in_subprocess_carries_the_reason(client: Client) -> None:
     assert 'RuntimeError' in done.failure.traceback
 
 
-def test_cancel_kills_the_process_and_dependents(client: Client, run_ref: Ref) -> None:
+def test_cancel_kills_the_process_and_dependents(
+    client: Client, run_ref: DatasetRef
+) -> None:
     group = client.submit_group(
         {
             'a': client.request(LOAD, {'run': run_ref}),
@@ -96,7 +118,9 @@ def test_cancel_kills_the_process_and_dependents(client: Client, run_ref: Ref) -
     assert client.record(group['sum'].id).status == Status.CANCELLED
 
 
-def test_persisted_request_keeps_reference_form(client: Client, run_ref: Ref) -> None:
+def test_persisted_request_keeps_reference_form(
+    client: Client, run_ref: DatasetRef
+) -> None:
     (loaded,) = client.wait([client.run(LOAD, {'run': run_ref})])
     rebinned = client.run(
         REBIN, {'data': loaded.ref('data'), 'offset': loaded.ref('total')}
@@ -112,7 +136,9 @@ def test_persisted_request_keeps_reference_form(client: Client, run_ref: Ref) ->
     assert client.provenance(done)['inputs'][0]['spec'] == 'load/v1'
 
 
-def test_dead_runner_without_marker_is_failed(client: Client, run_ref: Ref) -> None:
+def test_dead_runner_without_marker_is_failed(
+    client: Client, run_ref: DatasetRef
+) -> None:
     record = client.run(LOAD, {'run': run_ref})
     proc = client.backend.launcher._procs.pop(record.id)
     proc.kill()

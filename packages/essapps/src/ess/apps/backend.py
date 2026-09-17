@@ -11,7 +11,7 @@ and is cancelled if any is cancelled (D6). Recompute is explicit (D1).
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,13 +22,13 @@ from .binding import Registry
 from .datastore import DataStore
 from .launcher import Launcher
 from .records import Derivation, Failure, RunRecord, RunRequest, Status
+from .sources import DatasetSource
 from .spec import (
-    FILE_SPEC,
     DataRef,
+    DatasetRef,
     Kind,
-    LocalOrigin,
-    PidOrigin,
     Ref,
+    Reference,
     as_ref,
     data_ref_fields,
     walk_refs,
@@ -68,60 +68,29 @@ class Backend:
         data: DataStore,
         registry: Registry,
         launcher: Launcher,
+        sources: Iterable[DatasetSource] = (),
     ) -> None:
         self.records = records
         self.data = data
         self.registry = registry
         self.launcher = launcher
+        self.sources = list(sources)
 
     def close(self) -> None:
         self.records.close()
 
-    # Stand-ins
+    def locate(self, ref: DatasetRef) -> Path | None:
+        """
+        Where a dataset's bytes are now, or None if nothing has them.
 
-    def file_record(
-        self, path: Path, *, instrument: str, proposal: str, submitter: str
-    ) -> RunRecord:
-        """The file record for a local path, created on first reference."""
-        path = Path(path).resolve()
-        origin = LocalOrigin(path=path)
-        return self._file_record(origin, path, instrument, proposal, submitter)
-
-    def dataset_record(
-        self, pid: str, path: Path, *, instrument: str, proposal: str, submitter: str
-    ) -> RunRecord:
-        """The file record for a catalogue dataset, created on first reference."""
-        return self._file_record(
-            PidOrigin(pid=pid), path, instrument, proposal, submitter
-        )
-
-    def _file_record(
-        self,
-        origin: LocalOrigin | PidOrigin,
-        path: Path,
-        instrument: str,
-        proposal: str,
-        submitter: str,
-    ) -> RunRecord:
-        params = {'origin': origin.model_dump(mode='json')}
-        for existing in self.records.list(proposal=proposal, spec=FILE_SPEC.id):
-            if existing.request.params == params:
-                return existing
-        if not Path(path).is_file():
-            raise FileNotFoundError(path)
-        request = RunRequest(
-            spec=FILE_SPEC.id,
-            params=params,
-            instrument=instrument,
-            proposal=proposal,
-            submitter=submitter,
-        )
-        record = RunRecord(request=request, status=Status.COMPLETED, binding='file')
-        record.finished = record.created
-        record.stored_outputs = [Ref(record=record.id, output='file')]
-        self.records.add(record)
-        self.data.adopt(record.stored_outputs[0], Path(path), store_owned=False)
-        return record
+        Identity is not location, so this is asked again at every dispatch and
+        nothing is kept. A path identity is its own location, the one case where
+        a path is an identity.
+        """
+        for source in self.sources:
+            if (path := source.locate(ref)) is not None:
+                return path
+        return ref.path if ref.path is not None and ref.path.is_file() else None
 
     # Validation
 
@@ -154,11 +123,13 @@ class Backend:
 
     def _check_ref(
         self,
-        ref: Ref,
+        ref: Reference,
         consumer: DataRef | None,
         request: RunRequest,
         group: Mapping[str, RunRequest],
     ) -> list[str]:
+        if isinstance(ref, DatasetRef):
+            return self._check_dataset(ref, consumer)
         if ref.record.startswith(GROUP_PREFIX):
             name = ref.record[len(GROUP_PREFIX) :]
             if name not in group:
@@ -177,12 +148,6 @@ class Backend:
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
         produced = data_ref_fields(outputs).get(ref.output)
-        if producer_spec == FILE_SPEC.id:
-            return (
-                []
-                if consumer is not None
-                else [f'{ref}: a file cannot fill a literal field']
-            )
         if consumer is None:
             return (
                 [] if produced is None else [f'{ref}: data cannot fill a literal field']
@@ -191,6 +156,20 @@ class Backend:
             return [f'{ref}: a literal output cannot fill a data field']
         if (consumer.kind is Kind.ARRAY) != (produced.kind is Kind.ARRAY):
             return [f'{ref}: {produced.kind} output into {consumer.kind} field']
+        return []
+
+    def _check_dataset(self, ref: DatasetRef, consumer: DataRef | None) -> list[str]:
+        """
+        A dataset satisfies any kind, so only the field it fills is checked.
+
+        This is the seam to the catalogue: a PID's SciCat entry is where a
+        dataset's proposal is read and checked against the request's, and where a
+        run number resolves to a PID. The local application has no SciCat, so a
+        dataset reference is accepted as it stands, and whether the bytes are
+        there is found out at dispatch.
+        """
+        if consumer is None:
+            return [f'{ref}: a dataset cannot fill a literal field']
         return []
 
     # Submission
@@ -322,26 +301,11 @@ class Backend:
 
     def _dispatch(self, record: RunRecord) -> None:
         data_fields = data_ref_fields(self.registry.spec(record.spec).params)
-        locations: dict[Ref, Path] = {}
+        locations: dict[Reference, Path] = {}
         literals: dict[str, Any] = {}
         for path, ref in walk_refs(record.request.params):
-            producer = self.records.get(ref.record)
-            failure = None
-            if ref.key is not None and ref.key not in (
-                producer.output_keys(ref.output) or set()
-            ):
-                failure = Failure(kind='missing-key', message=f'{ref}: no such element')
-            elif path.split('.')[0].split('[')[0] in data_fields:
-                if not self.data.available(ref):
-                    failure = Failure(
-                        kind='missing-copy',
-                        message=f'{ref}: no copy; recompute the producer',
-                    )
-                elif self.launcher.needs_disk_inputs:
-                    locations[ref] = self.data.get(ref, Kind.OPAQUE)
-            else:
-                value = producer.outputs[ref.output]
-                literals[str(ref)] = value[ref.key] if ref.key is not None else value
+            field = path.split('.')[0].split('[')[0]
+            failure = self._resolve(ref, field in data_fields, locations, literals)
             if failure is not None:
                 self._finish(record, Status.FAILED, failure)
                 self._propagate(record)
@@ -351,6 +315,45 @@ class Backend:
         self.records.update(done)
         if done.status.terminal:
             self._propagate(done)
+
+    def _resolve(
+        self,
+        ref: Reference,
+        into_data_field: bool,
+        locations: dict[Reference, Path],
+        literals: dict[str, Any],
+    ) -> Failure | None:
+        """
+        What a reference stands for at dispatch, or why the run cannot have it.
+
+        A dataset is located through the sources; an output of a record is a path
+        when the launcher needs disk inputs, the value itself when it fills a
+        literal field, and otherwise served from the data store by the runner.
+        """
+        if isinstance(ref, DatasetRef):
+            located = self.locate(ref)
+            if located is None:
+                return Failure(
+                    kind='missing-dataset', message=f'{ref}: no source has it'
+                )
+            locations[ref] = located
+            return None
+        producer = self.records.get(ref.record)
+        if ref.key is not None and ref.key not in (
+            producer.output_keys(ref.output) or set()
+        ):
+            return Failure(kind='missing-key', message=f'{ref}: no such element')
+        if not into_data_field:
+            value = producer.outputs[ref.output]
+            literals[str(ref)] = value[ref.key] if ref.key is not None else value
+            return None
+        if not self.data.available(ref):
+            return Failure(
+                kind='missing-copy', message=f'{ref}: no copy; recompute the producer'
+            )
+        if self.launcher.needs_disk_inputs:
+            locations[ref] = self.data.get(ref, Kind.OPAQUE)
+        return None
 
     # Data
 
@@ -376,14 +379,6 @@ class Backend:
     def provenance(self, record_id: str) -> dict[str, Any]:
         """A self-contained snapshot: raw origins, resolved params, spec, versions."""
         record = self.records.get(record_id)
-        raw: list[dict[str, Any]] = []
-        inputs: list[dict[str, Any]] = []
-        for ref in record.request.refs():
-            producer = self.records.get(ref.record)
-            if producer.spec == FILE_SPEC.id:
-                raw.append(producer.request.params['origin'])
-            else:
-                inputs.append(self.provenance(producer.id))
         return {
             'record': record.id,
             'spec': str(record.spec),
@@ -391,8 +386,12 @@ class Backend:
             'package_versions': record.package_versions,
             'environment': record.environment,
             'binding': record.binding,
-            'raw': raw,
-            'inputs': inputs,
+            'raw': [
+                d.model_dump(mode='json', exclude_none=True)
+                for d in record.request.datasets()
+            ],
+            'checksums': record.checksums,
+            'inputs': [self.provenance(r.record) for r in record.request.refs()],
         }
 
     def publish(
@@ -448,11 +447,15 @@ def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
 
 
 def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
+    """Point ``@name`` references at the IDs the group's members were given."""
     if isinstance(value, Ref):
         value = value.model_dump()
     if isinstance(value, dict):
-        if (ref := as_ref(value)) is not None:
+        ref = as_ref(value)
+        if isinstance(ref, Ref):
             return ref.model_dump() | {'record': ids.get(ref.record, ref.record)}
+        if ref is not None:
+            return value
         return {k: _rewrite(v, ids) for k, v in value.items()}
     if isinstance(value, list):
         return [_rewrite(v, ids) for v in value]

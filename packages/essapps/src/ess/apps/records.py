@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .spec import Ref, SpecId, walk_refs
+from .spec import DatasetRef, Ref, SpecId, walk_refs
 
 
 class Status(StrEnum):
@@ -33,8 +33,9 @@ class RunRequest(BaseModel, frozen=True):
     Everything needed to execute a workflow once.
 
     ``params`` is the plain JSON form of the spec's params model, with data
-    reference fields holding :class:`Ref` values. A request is complete: it never
-    names a session, a process, or a path.
+    reference fields holding a :class:`Ref` or a :class:`DatasetRef`. A request is
+    complete: it never names a session or a process, and the only path it may
+    name is the identity of a local file that carries no run identity.
     """
 
     spec: SpecId
@@ -52,7 +53,12 @@ class RunRequest(BaseModel, frozen=True):
     )
 
     def refs(self) -> list[Ref]:
-        return [ref for _, ref in walk_refs(self.params)]
+        """References to outputs of records: the edges the scheduler waits on."""
+        return [r for _, r in walk_refs(self.params) if isinstance(r, Ref)]
+
+    def datasets(self) -> list[DatasetRef]:
+        """References to data the framework did not compute; never pending."""
+        return [r for _, r in walk_refs(self.params) if isinstance(r, DatasetRef)]
 
 
 class Derivation(BaseModel, frozen=True):
@@ -81,6 +87,7 @@ class RunResult(BaseModel):
     environment: str | None = None
     binding: Literal['entry_point', 'in_process'] | None = None
     reused: bool = False
+    checksums: dict[str, str] = Field(default_factory=dict)
     failure: Failure | None = None
 
 
@@ -90,7 +97,9 @@ class RunRecord(BaseModel):
 
     Immutable once the run completes, except for status, and never deleted on its
     own. Small output values live in ``outputs``; data-reference outputs are listed
-    in ``stored_outputs`` and their bytes live in the data store.
+    in ``stored_outputs`` and their bytes live in the data store. ``checksums``
+    holds the checksum of each local file the run read, by parameter path, so
+    that a recompute can tell whether it read the same bytes.
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -104,8 +113,9 @@ class RunRecord(BaseModel):
     stored_outputs: list[Ref] = Field(default_factory=list)
     package_versions: dict[str, str] = Field(default_factory=dict)
     environment: str | None = None
-    binding: Literal['entry_point', 'in_process', 'file'] | None = None
+    binding: Literal['entry_point', 'in_process'] | None = None
     reused: bool = False
+    checksums: dict[str, str] = Field(default_factory=dict)
     derives_from: Derivation | None = None
     failure: Failure | None = None
     launcher_job: str | None = None

@@ -4,20 +4,31 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import RunRecord, RunRequest
-from .spec import Ref, SpecId, WorkflowSpec
+from .records import RunRecord, RunRequest, Status
+from .sources import DatasetSource
+from .spec import Kind, Ref, Reference, SpecId, WorkflowSpec, data_ref_fields
 from .store import RecordStore
 from .views import ViewSpec
+
+
+class Candidate(BaseModel, frozen=True):
+    """A row of the picker: what may fill a data-reference field, and how to show it."""
+
+    ref: Reference
+    kind: Kind | None = Field(
+        default=None, description="None for a dataset, which satisfies any kind."
+    )
+    display: dict[str, Any] = Field(default_factory=dict)
 
 
 class Client:
@@ -78,34 +89,45 @@ class Client:
     ) -> RunRecord:
         return self.submit(self.request(spec, params, **kwargs))
 
-    def file(self, path: Path | str) -> Ref:
-        """The reference standing for a file on this machine."""
-        record = self.backend.file_record(
-            Path(path),
-            instrument=self.instrument,
-            proposal=self.proposal,
-            submitter=self.submitter,
-        )
-        return Ref(record=record.id, output='file')
+    @property
+    def sources(self) -> list[DatasetSource]:
+        """Where datasets come from; the picker lists from every one of them."""
+        return self.backend.sources
 
-    def dataset(self, pid: str, path: Path | str) -> Ref:
-        """The reference standing for a catalogue dataset with bytes at ``path``."""
-        record = self.backend.dataset_record(
-            pid,
-            Path(path),
-            instrument=self.instrument,
-            proposal=self.proposal,
-            submitter=self.submitter,
-        )
-        return Ref(record=record.id, output='file')
+    def pick(self, kind: Kind | None = None) -> list[Candidate]:
+        """
+        The candidates for a data-reference field of this kind: the picker.
 
-    def files(self, folder: Path | str, pattern: str = '*') -> dict[str, Ref]:
-        """One file record per file in a folder, by file name; no bytes moved."""
-        return {
-            p.name: self.file(p)
-            for p in sorted(Path(folder).glob(pattern))
-            if p.is_file()
-        }
+        Completed outputs from the record store and datasets from every source.
+        Nothing is stored to make the list, and a further place to pick from is
+        another dataset source, not a change here.
+        """
+        rows = [*self._picked_outputs(), *self._picked_datasets()]
+        return [row for row in rows if kind is None or row.kind in (None, kind)]
+
+    def _picked_outputs(self) -> Iterator[Candidate]:
+        for record in self.records(status=Status.COMPLETED):
+            if record.spec not in self.registry:
+                continue
+            outputs = data_ref_fields(self.registry.spec(record.spec).outputs)
+            for ref in record.stored_outputs:
+                if (data := outputs.get(ref.output)) is not None:
+                    yield Candidate(
+                        ref=ref,
+                        kind=data.kind,
+                        display={
+                            'name': f'{record.spec} {ref.output}',
+                            'created': record.created.isoformat(),
+                        },
+                    )
+
+    def _picked_datasets(self) -> Iterator[Candidate]:
+        for source in self.sources:
+            for dataset in source.new_datasets(self.proposal):
+                yield Candidate(
+                    ref=dataset.ref,
+                    display={'name': dataset.path.name} | dataset.metadata,
+                )
 
     def record(self, record_id: str) -> RunRecord:
         return self.backend.records.get(record_id)
@@ -163,11 +185,13 @@ def local(
     proposal: str,
     submitter: str,
     registry: Registry | str | None = None,
+    sources: Iterable[DatasetSource] = (),
     throwaway: bool = False,
 ) -> Client:
     """
     Local mode: client, backend, launcher, session, and data store in this process.
 
+    ``sources`` is where datasets come from, a folder in the local application.
     With ``throwaway`` every run is a subprocess (the shared-mode shape), and
     ``registry`` must then be importable by name, ``module:function``.
     """
@@ -187,7 +211,7 @@ def local(
             else (registry or Registry())
         )
         launcher = SessionLauncher(reg, data)
-    backend = Backend(records, data, reg, launcher)
+    backend = Backend(records, data, reg, launcher, sources)
     return Client(
         backend, instrument=instrument, proposal=proposal, submitter=submitter
     )

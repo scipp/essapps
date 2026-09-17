@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from ess.apps.records import RunRecord, RunRequest, Status
-from ess.apps.spec import Ref, SpecId
+from ess.apps.spec import DatasetRef, Ref, SpecId
 from ess.apps.store import RecordStore, StoreLockedError
 
 SPEC = SpecId(name='reduce', version=1)
@@ -121,6 +121,9 @@ def test_registry_records_where_copies_are(store: RecordStore, tmp_path: Path) -
     keyed = Ref(record='r1', output='banks', key='b0')
     store.register(keyed, tmp_path / 'b0.h5', store_owned=False)
     assert store.location(keyed) == (tmp_path / 'b0.h5', False)
+    copied = DatasetRef(instrument='dream', run=1)
+    store.register(copied, tmp_path / 'dream_1.h5', store_owned=True)
+    assert store.location(copied) == (tmp_path / 'dream_1.h5', True)
     store.unregister(ref)
     assert store.location(ref) is None
     assert store.location(keyed) is not None

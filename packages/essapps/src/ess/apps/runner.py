@@ -13,6 +13,7 @@ gets a record ID and parameters and reports a :class:`RunResult`.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -26,18 +27,29 @@ from pydantic import BaseModel, ValidationError
 
 from .binding import Binding, Factory, Workflow, import_object
 from .records import Failure, RunResult, Status
-from .spec import DataRef, Kind, Ref, SpecId, WorkflowSpec, as_ref, data_ref_fields
+from .spec import (
+    DataRef,
+    DatasetRef,
+    Kind,
+    Ref,
+    Reference,
+    SpecId,
+    WorkflowSpec,
+    as_ref,
+    data_ref_fields,
+    walk_refs,
+)
 
 MARKER = 'done.json'
 JOB = 'job.json'
 
 
 class Inputs(Protocol):
-    def get(self, ref: Ref, kind: Kind) -> Any: ...
+    def get(self, ref: Reference, kind: Kind) -> Any: ...
 
 
 class Outputs(Protocol):
-    def put(self, ref: Ref, value: Any) -> None: ...
+    def put(self, ref: Reference, value: Any) -> None: ...
 
 
 def package_versions() -> dict[str, str]:
@@ -60,6 +72,27 @@ def _materialize(value: Any, ref: DataRef, inputs: Inputs) -> Any:
     if isinstance(value, dict):
         return {k: _materialize(v, ref, inputs) for k, v in value.items()}
     return value
+
+
+def _checksums(params: dict[str, Any], inputs: Inputs) -> dict[str, str]:
+    """
+    The checksum of every local file the run reads, by parameter path.
+
+    A dataset is the only input whose bytes the framework did not write, so a
+    recompute can only tell whether it read the same bytes if we take these.
+    """
+    checksums = {}
+    for path, ref in walk_refs(params):
+        if not isinstance(ref, DatasetRef):
+            continue
+        located = inputs.get(ref, Kind.OPAQUE)
+        if isinstance(located, Path) and located.is_file():
+            digest = hashlib.sha256()
+            with located.open('rb') as file:
+                while chunk := file.read(1 << 20):
+                    digest.update(chunk)
+            checksums[path] = digest.hexdigest()
+    return checksums
 
 
 def _store_output(record_id: str, name: str, value: Any, outputs: Outputs) -> list[Ref]:
@@ -121,6 +154,7 @@ class Runner:
         try:
             validated = spec.params.model_validate(params)
             result.resolved_params = validated.model_dump(mode='json')
+            result.checksums = _checksums(params, inputs)
             materialized = validated.model_dump()
             for name, ref in data_ref_fields(spec.params).items():
                 if materialized.get(name) is not None:
@@ -174,7 +208,7 @@ class FileInputs:
         self._locations = locations
         self._load = load
 
-    def get(self, ref: Ref, kind: Kind) -> Any:
+    def get(self, ref: Reference, kind: Kind) -> Any:
         path = self._locations[str(ref)]
         return self._load(path) if kind is Kind.ARRAY else path
 

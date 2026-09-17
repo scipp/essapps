@@ -4,7 +4,7 @@ import pytest
 
 from ess.apps.binding import Registry
 from ess.apps.examples import LOAD, load_workflow
-from ess.apps.spec import FILE_SPEC, SpecId
+from ess.apps.spec import SpecId
 
 
 def test_registry_knows_specs_and_hands_out_factories_on_request() -> None:
@@ -22,6 +22,5 @@ def test_registry_knows_specs_and_hands_out_factories_on_request() -> None:
     binding = registry.binding(LOAD.id)
     assert binding.how == 'in_process'
     assert binding.factory is factory
-    assert registry.binding(FILE_SPEC.id).factory is None
     with pytest.raises(KeyError, match='No spec'):
         registry.spec(SpecId(name='nope', version=1))

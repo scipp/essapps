@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .spec import FILE_SPEC, SpecId, WorkflowSpec
+from .spec import SpecId, WorkflowSpec
 
 Workflow = Callable[[BaseModel], BaseModel | dict[str, Any]]
 Factory = Callable[[], Workflow]
@@ -36,15 +36,15 @@ How = Literal['entry_point', 'in_process']
 class Binding:
     spec: WorkflowSpec
     factory: Factory | None
-    how: How | Literal['file']
+    how: How
 
 
 class Registry:
     """The specs an environment knows, and how a runner gets the code for each."""
 
     def __init__(self) -> None:
-        self._specs: dict[SpecId, WorkflowSpec] = {FILE_SPEC.id: FILE_SPEC}
-        self._how: dict[SpecId, How | Literal['file']] = {FILE_SPEC.id: 'file'}
+        self._specs: dict[SpecId, WorkflowSpec] = {}
+        self._how: dict[SpecId, How] = {}
         self._loaders: dict[SpecId, Loader] = {}
 
     def bind(self, spec: WorkflowSpec, factory: Factory) -> None:

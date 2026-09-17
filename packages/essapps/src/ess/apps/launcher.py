@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -23,7 +24,7 @@ from .binding import Registry, import_object
 from .datastore import DataStore
 from .records import Failure, RunRecord, RunResult, Status
 from .runner import JOB, MARKER, Runner
-from .spec import Ref, SpecId
+from .spec import Kind, Ref, Reference, SpecId
 
 
 class Launcher(Protocol):
@@ -33,7 +34,10 @@ class Launcher(Protocol):
     def can_run(self, spec: SpecId) -> bool: ...
 
     def start(
-        self, record: RunRecord, params: dict[str, Any], locations: dict[Ref, Path]
+        self,
+        record: RunRecord,
+        params: dict[str, Any],
+        locations: dict[Reference, Path],
     ) -> RunRecord:
         """Begin executing; returns the record terminal (session) or dispatched."""
         ...
@@ -53,6 +57,20 @@ class _CacheOutputs:
         self._data.put(ref, value, to_disk=False)
 
 
+class _SessionInputs:
+    """Outputs from the private cache, datasets from where dispatch located them."""
+
+    def __init__(self, data: DataStore, locations: Mapping[Reference, Path]) -> None:
+        self._data = data
+        self._locations = locations
+
+    def get(self, ref: Reference, kind: Kind) -> Any:
+        path = self._locations.get(ref)
+        if path is None:
+            return self._data.get(ref, kind)
+        return self._data.serializers.load(path) if kind is Kind.ARRAY else path
+
+
 class SessionLauncher:
     """Runs in this process with a warm workflow per spec; the session shape."""
 
@@ -67,13 +85,16 @@ class SessionLauncher:
         return spec in self.registry
 
     def start(
-        self, record: RunRecord, params: dict[str, Any], locations: dict[Ref, Path]
+        self,
+        record: RunRecord,
+        params: dict[str, Any],
+        locations: dict[Reference, Path],
     ) -> RunRecord:
         result = self.runner.run(
             record.id,
             params,
             self.registry.binding(record.spec),
-            self._data,
+            _SessionInputs(self._data, locations),
             _CacheOutputs(self._data),
         )
         record = record.model_copy()
@@ -119,7 +140,10 @@ class SubprocessLauncher:
         return self._data.root / record.id
 
     def start(
-        self, record: RunRecord, params: dict[str, Any], locations: dict[Ref, Path]
+        self,
+        record: RunRecord,
+        params: dict[str, Any],
+        locations: dict[Reference, Path],
     ) -> RunRecord:
         workdir = self.workdir(record)
         workdir.mkdir(parents=True, exist_ok=True)

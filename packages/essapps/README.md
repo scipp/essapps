@@ -7,14 +7,31 @@ Local mode only: client, backend, launcher, session, and data store in one Pytho
 ## Try it
 
 ```python
+from pathlib import Path
+
 from ess.apps.client import local
 from ess.apps.examples import HISTOGRAM, LOAD, SUM, registry, write_run
-from ess.apps.spec import Ref
+from ess.apps.sources import FolderSource
+from ess.apps.spec import DatasetRef, Ref
 
-client = local('/tmp/essapps', instrument='dream', proposal='p1', submitter='me', registry=registry())
+Path('/tmp/runs').mkdir(exist_ok=True)
+write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])
 
-# Files on this machine are records too; nothing is copied.
-run = client.file(write_run('/tmp/run1.h5', [1.0, 5.0, 2.0, 6.0]))
+client = local(
+    '/tmp/essapps',
+    instrument='dream',
+    proposal='p1',
+    submitter='me',
+    registry=registry(),
+    sources=[FolderSource('/tmp/runs', '*.h5')],
+)
+
+# Data the framework did not compute is named by its identity, here the run the
+# file name carries; where the bytes are is asked of the folder at dispatch, and
+# nothing is copied or stored. client.pick() is the query behind an input field:
+# the datasets of every source and the outputs of completed records.
+run = DatasetRef(instrument='dream', run=1)
+assert run in [candidate.ref for candidate in client.pick()]
 
 # A run in the session: the output stays in memory, the record is complete.
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
@@ -38,6 +55,8 @@ client.output(group['sum'], 'total')
 ```
 
 Every run through `throwaway=True` instead executes in a subprocess that writes its outputs and a completion marker to disk; the backend reconciles from the marker, so `client.wait([...])` is needed before reading outputs. The registry must then be importable by name, for example `registry='ess.apps.examples:registry'`.
+
+The checksum of every dataset file a run reads is on its record, so a recompute can tell whether it read the same bytes.
 
 Workflow authors bind a spec to a factory returning the callable; `ess.apps.warm.WarmPipeline` wraps a sciline pipeline and `ess.apps.testing.assert_warm_equals_cold` is the one check on its reuse rules. Templates, batch, and the trigger loop are in `ess.apps.templates`; publication with a provenance snapshot is `client.publish`.
 

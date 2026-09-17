@@ -4,8 +4,8 @@
 The record store: SQLite, one writer, schema-versioned (D5).
 
 Holds run records, the reference edges between them, and the registry of disk
-copies (the part of the data store that knows where bytes are). Records are never
-deleted one at a time.
+copies (the part of the data store that knows where bytes are), keyed by
+reference in either form. Records are never deleted one at a time.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import IO, Self
 
 from .records import RunRecord, Status
-from .spec import Ref, SpecId
+from .spec import Reference, SpecId
 
 SCHEMA_VERSION = 2
 
@@ -47,12 +47,9 @@ CREATE TABLE IF NOT EXISTS refs (
 CREATE INDEX IF NOT EXISTS refs_to ON refs (to_id, output);
 CREATE INDEX IF NOT EXISTS refs_from ON refs (from_id);
 CREATE TABLE IF NOT EXISTS registry (
-    record_id TEXT NOT NULL,
-    output TEXT NOT NULL,
-    key TEXT NOT NULL DEFAULT '',
+    ref TEXT PRIMARY KEY,
     path TEXT NOT NULL,
-    store_owned INTEGER NOT NULL,
-    PRIMARY KEY (record_id, output, key)
+    store_owned INTEGER NOT NULL
 );
 """
 
@@ -240,25 +237,20 @@ class RecordStore:
 
     # Registry of disk copies
 
-    def register(self, ref: Ref, path: Path, *, store_owned: bool) -> None:
+    def register(self, ref: Reference, path: Path, *, store_owned: bool) -> None:
         with self._db:
             self._db.execute(
-                'INSERT OR REPLACE INTO registry VALUES (?,?,?,?,?)',
-                (ref.record, ref.output, ref.key or '', str(path), int(store_owned)),
+                'INSERT OR REPLACE INTO registry VALUES (?,?,?)',
+                (str(ref), str(path), int(store_owned)),
             )
 
-    def location(self, ref: Ref) -> tuple[Path, bool] | None:
+    def location(self, ref: Reference) -> tuple[Path, bool] | None:
         """Registered path of a copy and whether the store wrote it."""
         row = self._db.execute(
-            'SELECT path, store_owned FROM registry '
-            'WHERE record_id=? AND output=? AND key=?',
-            (ref.record, ref.output, ref.key or ''),
+            'SELECT path, store_owned FROM registry WHERE ref=?', (str(ref),)
         ).fetchone()
         return None if row is None else (Path(row[0]), bool(row[1]))
 
-    def unregister(self, ref: Ref) -> None:
+    def unregister(self, ref: Reference) -> None:
         with self._db:
-            self._db.execute(
-                'DELETE FROM registry WHERE record_id=? AND output=? AND key=?',
-                (ref.record, ref.output, ref.key or ''),
-            )
+            self._db.execute('DELETE FROM registry WHERE ref=?', (str(ref),))

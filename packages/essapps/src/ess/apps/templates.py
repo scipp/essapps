@@ -18,17 +18,17 @@ the seen-set until that lands.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from .backend import SubmitError
 from .client import Client
 from .records import RunRecord, RunRequest
+from .sources import Dataset
 from .spec import SpecId, WorkflowSpec, data_ref_fields
-from .testing import Dataset
 
 
 class Template(BaseModel, frozen=True):
@@ -88,10 +88,6 @@ def batch(
     return client.submit_group(group)
 
 
-class DatasetSource(Protocol):
-    def new_datasets(self, proposal: str) -> Iterable[Dataset]: ...
-
-
 Rule = Callable[[Dataset], Mapping[str, Any] | None]
 """Maps a dataset to the template fills it should trigger, or None to ignore it."""
 
@@ -107,22 +103,21 @@ class TriggerLoop:
     """
     On a new dataset matching ``rule``, instantiate ``template`` and submit.
 
-    Bound to one template version. Datasets are deduplicated by PID, so repeated
-    delivery is a no-op; a refusal at submission is as visible as a failed run.
+    Bound to one template version, and reading from every dataset source the
+    client has. Datasets are deduplicated by identity, so repeated delivery is a
+    no-op; a refusal at submission is as visible as a failed run.
     """
 
     def __init__(
         self,
         client: Client,
         template: Template,
-        source: DatasetSource,
         rule: Rule,
         *,
         dataset_field: str,
     ) -> None:
         self.client = client
         self.template = template
-        self.source = source
         self.rule = rule
         self.dataset_field = dataset_field
         self.status = TriggerStatus()
@@ -130,20 +125,16 @@ class TriggerLoop:
 
     def run_once(self) -> list[RunRecord]:
         fired = []
-        for dataset in self.source.new_datasets(self.client.proposal):
-            if dataset.pid in self._seen:
-                continue
-            self._seen.add(dataset.pid)
+        for dataset in self._unseen():
             fills = self.rule(dataset)
             if fills is None:
                 continue
-            ref = self.client.dataset(dataset.pid, dataset.path)
-            params = self.template.fill(**{self.dataset_field: ref, **fills})
+            params = self.template.fill(**{self.dataset_field: dataset.ref, **fills})
             request = self.client.request(
                 self.template.spec,
                 params,
                 label=self.template.name,
-                member_key=dataset.pid,
+                member_key=str(dataset.ref),
             )
             try:
                 fired.append(self.client.submit(request))
@@ -154,3 +145,11 @@ class TriggerLoop:
             self.status.last_fire = datetime.now(UTC)
             self.status.fired += 1
         return fired
+
+    def _unseen(self) -> Iterator[Dataset]:
+        """Datasets this loop has not decided on yet, from every source."""
+        for source in self.client.sources:
+            for dataset in source.new_datasets(self.client.proposal):
+                if (key := str(dataset.ref)) not in self._seen:
+                    self._seen.add(key)
+                    yield dataset
