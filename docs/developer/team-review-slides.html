@@ -918,7 +918,7 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>The contract with workflow code: one callable</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 300" role="img" aria-label="A spec declares parameters and outputs. The runner materializes each input by kind, calls the workflow callable once, validates the outputs, and stores them.">
+      <svg class="fig" viewBox="0 0 1100 300" role="img" aria-label="A spec declares parameters and outputs. Each input is a reference annotated with a format. The runner calls the workflow callable once with the parameters and the inputs, which the callable asks for a path or an object, then validates the outputs and stores them.">
         <rect class="box" x="20" y="30" width="300" height="240" rx="10"/>
         <text x="36" y="56" class="h">spec · sans_reduction 3.1</text>
         <text x="36" y="84" class="s">parameters</text>
@@ -937,7 +937,7 @@
 
         <rect class="box" x="420" y="60" width="330" height="170" rx="10"/>
         <text x="436" y="86" class="h">runner</text>
-        <rect class="accb" x="440" y="105" width="290" height="50" rx="8"/><text x="585" y="136" text-anchor="middle" class="m">outputs = workflow(params)</text>
+        <rect class="accb" x="440" y="105" width="290" height="50" rx="8"/><text x="585" y="136" text-anchor="middle" class="m">outputs = workflow(params, inputs)</text>
         <text x="436" y="185" class="s">validate params with the real pydantic class</text>
         <text x="436" y="205" class="s">validate outputs against the output model</text>
         <text x="585" y="255" text-anchor="middle" class="s">in a session: the callable is kept between calls</text>
@@ -947,7 +947,7 @@
         <rect class="disk" x="850" y="95" width="230" height="50" rx="8"/><text x="965" y="125" text-anchor="middle">data store · scipp HDF5</text>
         <rect class="disk" x="850" y="150" width="230" height="50" rx="8"/><text x="965" y="180" text-anchor="middle">inline in the record</text>
       </svg>
-      <figcaption>Raw NeXus and opaque files arrive as a local path; scipp arrays arrive as scipp objects, from memory when the process has a copy, from HDF5 otherwise. The callable never writes files. Other output formats, such as ORSO or CIF, come with their own serializer. A workflow that declares a contribution exposes three stages instead, contribute, combine, and finalize; a plain run is contribute then finalize (D15, next slide).</figcaption>
+      <figcaption>The callable asks the inputs for the form it wants: a local path for raw NeXus and opaque files, a scipp object for scipp data, from memory when the process has a copy, from HDF5 otherwise. The callable never writes files. Other output formats, such as ORSO or CIF, come with their own serializer. A workflow that declares a contribution exposes three stages instead, contribute, combine, and finalize; a plain run is contribute then finalize (D15, next slide).</figcaption>
     </figure>
   </div>
   <p class="take">The same callable in every mode. The only difference between runners is <b>whether the callable is kept</b>.</p>
@@ -1043,9 +1043,9 @@
       <h3>Proposed</h3>
 <pre class="spec">spec sans_reduction 3.1
   parameters:
-    <span class="add">sample: DataRef(kind=raw NeXus)</span>
-    <span class="add">vanadium: DataRef(ArraySpec(...))</span>
-    <span class="add">runs_to_sum: list[DataRef]</span>   <span class="cm"># collection</span>
+    <span class="add">sample: NexusFile</span>
+    <span class="add">vanadium: Array(ArraySpec(...))</span>
+    <span class="add">runs_to_sum: list[Array()]</span>   <span class="cm"># collection</span>
     threshold: float [counts]
     q_bins: edges
   outputs:                       <span class="cm"># typed model</span>
