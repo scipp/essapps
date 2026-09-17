@@ -4,9 +4,12 @@
 Binding specs to code (D8).
 
 A workflow is one callable from the validated params model to the outputs model.
-A factory makes the callable; a throwaway runner calls it once, a session runner
-keeps it. Installed packages provide specs through the entry-point group
-``ess.apps.specs`` and factories through ``ess.apps.workflows`` under the same
+A workflow whose spec declares a contribution exposes three entry points as well,
+contribute, combine, and finalize (D15), of which the callable is the first and
+the last composed. A factory makes the callable; a throwaway runner calls it
+once, a session runner keeps it. Installed packages provide specs through the
+entry-point group ``ess.apps.specs`` and factories through
+``ess.apps.workflows`` under the same
 entry-point name, so a backend can load every spec without importing any
 workflow code; only a runner asks for a factory. A notebook may bind a spec
 in-process, but may not shadow an installed one.
@@ -18,7 +21,7 @@ import importlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from importlib.metadata import entry_points
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -30,6 +33,37 @@ Loader = Callable[[], Factory]
 SPEC_GROUP = 'ess.apps.specs'
 WORKFLOW_GROUP = 'ess.apps.workflows'
 How = Literal['entry_point', 'in_process']
+
+
+class CombiningWorkflow(Protocol):
+    """
+    What a workflow with a declared contribution exposes besides the callable.
+
+    ``contribute`` and ``finalize`` take the validated params model, of which
+    ``finalize`` reads only the parameters the spec declares as its own;
+    ``combine`` takes contributions of members, or combinations of such.
+    """
+
+    def contribute(self, params: BaseModel) -> Any: ...
+
+    def combine(self, contributions: Iterable[Any]) -> Any: ...
+
+    def finalize(self, contribution: Any, params: Any) -> dict[str, Any]: ...
+
+
+def combining(workflow: Workflow) -> CombiningWorkflow:
+    """The three entry points of a workflow whose spec declares a contribution."""
+    missing = [
+        name
+        for name in ('contribute', 'combine', 'finalize')
+        if not callable(getattr(workflow, name, None))
+    ]
+    if missing:
+        raise TypeError(
+            f'{type(workflow).__name__} has no {missing}; a spec that declares a '
+            'contribution binds to contribute, combine, and finalize'
+        )
+    return workflow  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)

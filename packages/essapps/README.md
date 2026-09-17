@@ -10,7 +10,7 @@ Local mode only: client, backend, launcher, session, and data store in one Pytho
 from pathlib import Path
 
 from ess.apps.client import local
-from ess.apps.examples import HISTOGRAM, LOAD, SUM, registry, write_run
+from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, Ref
 
@@ -52,13 +52,26 @@ group = client.submit_group({
     'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data'), Ref(record='@b', output='data')]}),
 })
 client.output(group['sum'], 'total')
+
+# A declared additive combine: a member run produces the contribution and none of
+# the other outputs, a combine request adds contributions and normalises. A series
+# grows by combining the previous combine with the new member.
+member = client.run(NORMALIZE, {'run': run, 'floor': 1.5}, stage='contribute')
+total = client.run(NORMALIZE, {'scale': 2.0}, stage='combine', contributions=[member])
+client.output(total, 'normalized')
 ```
 
 Every run through `throwaway=True` instead executes in a subprocess that writes its outputs and a completion marker to disk; the backend reconciles from the marker, so `client.wait([...])` is needed before reading outputs. The registry must then be importable by name, for example `registry='ess.apps.examples:registry'`.
 
 The checksum of every dataset file a run reads is on its record, so a recompute can tell whether it read the same bytes.
 
-Workflow authors bind a spec to a factory returning the callable; `ess.apps.warm.WarmPipeline` wraps a sciline pipeline and `ess.apps.testing.assert_warm_equals_cold` is the one check on its reuse rules. Templates, batch, and the trigger loop are in `ess.apps.templates`; publication with a provenance snapshot is `client.publish`.
+A spec may mark one output as its **contribution**, the value at the workflow's accumulation keys, and declare which parameters its finalize stage reads (D15). Such a workflow has three entry points instead of one callable, contribute, combine, and finalize, of which the callable is the first and the last composed. A request says which of them it runs: `stage='contribute'` is a member run of a series, whose only output is the contribution, and `stage='combine'` carries the finalize parameters and references the contributions to combine, which for a chained series are the previous combine's and the new member's. Contributions are references like any other, so they are in the private cache of a session and on disk in the throwaway shape, and the scheduler waits on them. The backend refuses a combine request that carries a contribute parameter, references a contribution of another spec, or references members that disagree on the parameters contribute reads.
+
+Workflow authors bind a spec to a factory returning the callable; `ess.apps.warm.WarmPipeline` wraps a sciline pipeline and `ess.apps.testing.assert_warm_equals_cold` is the one check on its reuse rules. `ess.apps.aggregation.AggregatePipeline` wraps a sciline pipeline as the three entry points, building a `sciline.Aggregation` from the accumulation keys and an accumulator per key, and refusing at bind time a declaration the graph disagrees with; `ess.apps.testing.assert_combine_is_associative` is the one check on a declared combine. Templates, batch, and the trigger loop are in `ess.apps.templates`; publication with a provenance snapshot is `client.publish`.
+
+## A session on real data
+
+`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the warm stage reruns in a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs `ess.sans` and the tutorial files.
 
 ## Tests
 

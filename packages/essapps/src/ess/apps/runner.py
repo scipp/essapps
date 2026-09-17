@@ -8,6 +8,11 @@ callable between runs (the warm workflow); in a throwaway process it is
 constructed, called once, and the process exits after writing a completion
 marker. The runner never touches the record store and never sees a record: it
 gets a record ID and parameters and reports a :class:`RunResult`.
+
+A request that runs part of a workflow with a declared contribution (D15) takes
+the same path: a member run calls contribute and stores its contribution as the
+only output, and a combine request materializes the contributions it references,
+calls combine over them and finalize on the result, and stores both.
 """
 
 from __future__ import annotations
@@ -19,14 +24,15 @@ import json
 import os
 import sys
 import traceback
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
-from .binding import Binding, Factory, Workflow, import_object
-from .records import Failure, RunResult, Status
+from .binding import Binding, Factory, Workflow, combining, import_object
+from .records import Failure, RunResult, RunStage, Status
 from .spec import (
     DataRef,
     DatasetRef,
@@ -37,6 +43,7 @@ from .spec import (
     WorkflowSpec,
     as_ref,
     data_ref_fields,
+    finalize_model,
     walk_refs,
 )
 
@@ -138,6 +145,9 @@ class Runner:
         binding: Binding,
         inputs: Inputs,
         outputs: Outputs,
+        *,
+        stage: RunStage = 'run',
+        contributions: Iterable[Ref] = (),
     ) -> RunResult:
         """Execute the request ``params`` of ``record_id`` and report what happened."""
         if binding.factory is None:
@@ -152,15 +162,24 @@ class Runner:
             binding=binding.how,
         )
         try:
-            validated = spec.params.model_validate(params)
+            # A combine request carries the finalize parameters and no others, so
+            # it is validated against a model of exactly those fields.
+            params_model = finalize_model(spec) if stage == 'combine' else spec.params
+            validated = params_model.model_validate(params)
             result.resolved_params = validated.model_dump(mode='json')
             result.checksums = _checksums(params, inputs)
             materialized = validated.model_dump()
-            for name, ref in data_ref_fields(spec.params).items():
+            for name, ref in data_ref_fields(params_model).items():
                 if materialized.get(name) is not None:
                     materialized[name] = _materialize(materialized[name], ref, inputs)
             workflow, result.reused = self._callable(spec, binding.factory)
-            returned = workflow(spec.params.model_validate(materialized))
+            returned = self._call(
+                spec,
+                workflow,
+                stage,
+                params_model.model_validate(materialized),
+                [inputs.get(ref, Kind.ARRAY) for ref in contributions],
+            )
             model = (
                 returned
                 if isinstance(returned, BaseModel)
@@ -179,6 +198,25 @@ class Runner:
             )
         result.finished = datetime.now(UTC)
         return result
+
+    def _call(
+        self,
+        spec: WorkflowSpec,
+        workflow: Workflow,
+        stage: RunStage,
+        params: BaseModel,
+        contributions: list[Any],
+    ) -> Any:
+        """The entry points this stage runs, and the outputs they produce (D15)."""
+        if stage == 'run':
+            return workflow(params)
+        if spec.contribution is None:
+            raise ValueError(f'{spec.id} declares no contribution to {stage}')
+        entry = combining(workflow)
+        if stage == 'contribute':
+            return {spec.contribution: entry.contribute(params)}
+        combined = entry.combine(contributions)
+        return {spec.contribution: combined, **entry.finalize(combined, params)}
 
     def _store(
         self,
@@ -239,7 +277,13 @@ def main(workdir: Path) -> None:
     )
     outputs = WorkdirOutputs(workdir, serializers.save)
     result = Runner(keep=False).run(
-        job['record'], job['params'], binding, inputs, outputs
+        job['record'],
+        job['params'],
+        binding,
+        inputs,
+        outputs,
+        stage=job['stage'],
+        contributions=[Ref.model_validate(c) for c in job['contributions']],
     )
     marker = {
         'result': result.model_dump(mode='json'),

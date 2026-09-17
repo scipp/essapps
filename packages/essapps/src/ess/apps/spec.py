@@ -23,7 +23,14 @@ from pathlib import Path
 from types import UnionType
 from typing import Annotated, Any, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    create_model,
+    model_validator,
+)
 from pydantic_core import core_schema
 
 
@@ -189,6 +196,8 @@ class WorkflowSpec(BaseModel, frozen=True):
     output field of one spec can feed a parameter field of another when their
     types match. ``cheap`` names the parameters a warm workflow can change without
     recomputing the expensive part; it is what lets a UI offer a slider.
+    ``contribution`` marks the output a combine request combines, and
+    ``finalize_params`` the parameters the finalize stage reads (D15).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -203,10 +212,52 @@ class WorkflowSpec(BaseModel, frozen=True):
     code_revision: str | None = Field(
         default=None, description="Git commit or package version of the workflow code."
     )
+    contribution: str | None = Field(
+        default=None,
+        description="Output field holding the value at the accumulation keys (D15).",
+    )
+    finalize_params: frozenset[str] = Field(
+        default=frozenset(),
+        description="Parameters finalize reads; every other parameter is contribute's.",
+    )
+
+    @model_validator(mode='after')
+    def _contribution_is_declared(self) -> WorkflowSpec:
+        if (
+            self.contribution is not None
+            and self.contribution not in self.outputs.model_fields
+        ):
+            raise ValueError(f'no output named {self.contribution!r}')
+        if self.finalize_params and self.contribution is None:
+            raise ValueError('finalize parameters without a contribution output')
+        unknown = self.finalize_params - set(self.params.model_fields)
+        if unknown:
+            raise ValueError(f'no parameters named {sorted(unknown)}')
+        return self
 
     @property
     def id(self) -> SpecId:
         return SpecId(name=self.name, version=self.version)
+
+    @property
+    def contribute_params(self) -> frozenset[str]:
+        """Parameters contribute reads: every one finalize does not (D15)."""
+        return frozenset(self.params.model_fields) - self.finalize_params
+
+
+def finalize_model(spec: WorkflowSpec) -> type[BaseModel]:
+    """
+    The parameter model of a combine request: the fields finalize reads.
+
+    A combine request carries these and no others, so it is validated against a
+    model of exactly them, and a combine form asks the spec for the same thing.
+    """
+    declared = spec.params.model_fields
+    fields = {
+        name: (declared[name].annotation, declared[name])
+        for name in sorted(spec.finalize_params)
+    }
+    return create_model(f'{spec.params.__name__}Finalize', **fields)
 
 
 def _members(annotation: Any) -> Iterator[Any]:

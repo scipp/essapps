@@ -2,12 +2,16 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Example workflows exercising the contract: a load-and-histogram stage, a
-per-run reduction, and a combine step, so map-combine and chaining can be tried
-without instrument code. ``registry`` is importable by the subprocess launcher.
+per-run reduction, a combine step, and a workflow with a declared contribution
+over two accumulation keys (D15), so map-combine, chaining, and a combined
+series can be tried without instrument code. ``registry`` is importable by the
+subprocess launcher.
 """
 
 from __future__ import annotations
 
+import operator
+from functools import reduce
 from pathlib import Path
 from typing import Any, NewType
 
@@ -15,6 +19,7 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel, Field
 
+from .aggregation import AggregatePipeline
 from .binding import Registry
 from .spec import Array, ArraySpec, OpaqueFile, Quantity, Ref, WorkflowSpec
 from .warm import WarmPipeline
@@ -179,6 +184,7 @@ def registry() -> Registry:
         (SUM, sum_workflow),
         (FAIL, fail_workflow),
         (HISTOGRAM, histogram_workflow),
+        (NORMALIZE, normalize_workflow),
         (EXPORT, export_workflow),
     ):
         reg.bind(spec, factory)
@@ -244,4 +250,83 @@ HISTOGRAM = WorkflowSpec(
     params=HistogramParams,
     outputs=HistogramOutputs,
     cheap=frozenset({'bins'}),
+)
+
+
+# A declared additive combine (D15): two accumulation keys, normalisation after
+# them, and the run file as the member key.
+
+RunFile = NewType('RunFile', Path)
+Floor = NewType('Floor', float)
+Counts = NewType('Counts', sc.DataArray)
+Numerator = NewType('Numerator', sc.DataArray)
+Denominator = NewType('Denominator', sc.Variable)
+Scale = NewType('Scale', float)
+Normalized = NewType('Normalized', sc.DataArray)
+
+
+def load_counts(path: RunFile) -> Counts:
+    return Counts(sc.io.load_hdf5(path))
+
+
+def numerator(counts: Counts, floor: Floor) -> Numerator:
+    """Counts above the floor; summed over the members."""
+    masked = counts.copy()
+    masked.data = sc.where(
+        counts.data > sc.scalar(floor, unit=counts.unit),
+        counts.data,
+        sc.zeros_like(counts.data),
+    )
+    return Numerator(masked)
+
+
+def denominator(counts: Counts) -> Denominator:
+    """The run's total, standing in for a monitor sum; summed over the members."""
+    return Denominator(counts.data.sum())
+
+
+def normalized(num: Numerator, den: Denominator, scale: Scale) -> Normalized:
+    """Normalisation after the accumulation keys, which is what makes it additive."""
+    return Normalized(num / den * scale)
+
+
+def add(*parts: Any) -> Any:
+    """The package's combine function; ``Buffered`` makes an accumulator of it."""
+    return reduce(operator.add, parts)
+
+
+class NormalizeParams(BaseModel):
+    run: OpaqueFile
+    floor: float = 0.0
+    scale: float = 1.0
+
+
+class NormalizeOutputs(BaseModel):
+    contribution: Array(ArraySpec(dims=('x',)))
+    normalized: Array(ArraySpec(dims=('x',))) | None = None
+
+
+def normalize_workflow() -> AggregatePipeline:
+    return AggregatePipeline(
+        sciline.Pipeline([load_counts, numerator, denominator, normalized]),
+        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
+        targets={'normalized': Normalized},
+        contribution='contribution',
+        accumulation_keys={'numerator': Numerator, 'denominator': Denominator},
+        combine=add,
+        finalize_params=NORMALIZE.finalize_params,
+    )
+
+
+NORMALIZE = WorkflowSpec(
+    name='normalize',
+    version=1,
+    title='Normalize',
+    description='Sum a numerator and a denominator over runs, then normalise: '
+    'the declared additive combine.',
+    params=NormalizeParams,
+    outputs=NormalizeOutputs,
+    cheap=frozenset({'scale'}),
+    contribution='contribution',
+    finalize_params=frozenset({'scale'}),
 )

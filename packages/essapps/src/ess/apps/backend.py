@@ -5,7 +5,10 @@ The backend: validates requests, keeps the records, schedules, and owns the data
 
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
-and is cancelled if any is cancelled (D6). Recompute is explicit (D1).
+and is cancelled if any is cancelled (D6). Recompute is explicit (D1). The
+contributions a combine request references are inputs like any other, so they
+are scheduled, resolved, and checked here as well, and never by importing
+workflow code (D15).
 """
 
 from __future__ import annotations
@@ -29,8 +32,10 @@ from .spec import (
     Kind,
     Ref,
     Reference,
+    WorkflowSpec,
     as_ref,
     data_ref_fields,
+    finalize_model,
     walk_refs,
 )
 from .store import RecordStore
@@ -104,8 +109,12 @@ class Backend:
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
             )
         spec = self.registry.spec(request.spec)
+        if stage_errors := _check_stage(request, spec):
+            return ValidationReport(layers=('schema',), errors=tuple(stage_errors))
+        is_combine = request.stage == 'combine'
+        params_model = finalize_model(spec) if is_combine else spec.params
         try:
-            spec.params.model_validate(request.params)
+            params_model.model_validate(request.params)
         except ValidationError as e:
             errors += [
                 f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
@@ -115,11 +124,62 @@ class Backend:
         for path, ref in walk_refs(request.params):
             field = path.split('.')[0].split('[')[0]
             errors += self._check_ref(ref, refs.get(field), request, group or {})
+        errors += self._check_contributions(request, spec, group or {})
         if not self.launcher.can_run(request.spec):
             errors.append(f'launcher cannot run {request.spec}')
         return ValidationReport(
             layers=('schema', 'params', 'runnability'), errors=tuple(errors)
         )
+
+    def _check_contributions(
+        self, request: RunRequest, spec: WorkflowSpec, group: Mapping[str, RunRequest]
+    ) -> list[str]:
+        """
+        What a combine request may combine (D15).
+
+        Every referenced contribution must be the contribution output of the same
+        spec and version, and the members among them must agree on the parameters
+        contribute reads; without that a combine over members contributed under
+        different masks concatenates their events without complaint. The data
+        references are what varies from member to member, so they are exactly
+        what is not compared.
+        """
+        if not request.contributions:
+            return []
+        errors: list[str] = []
+        members: list[tuple[Ref, dict[str, Any]]] = []
+        for ref in request.contributions:
+            errors += self._check_ref(ref, DataRef(kind=Kind.ARRAY), request, group)
+            producer = self._producer(ref, group)
+            if producer is None:
+                continue
+            if producer.spec != request.spec:
+                errors.append(f'{ref}: contributed by {producer.spec}')
+            elif ref.output != spec.contribution:
+                errors.append(f'{ref}: not the contribution of {spec.id}')
+            elif producer.stage != 'combine':
+                try:
+                    validated = spec.params.model_validate(producer.params)
+                except ValidationError:
+                    continue
+                members.append((ref, validated.model_dump(mode='json')))
+        shared = sorted(spec.contribute_params - set(data_ref_fields(spec.params)))
+        for name in shared:
+            for ref, params in members[1:]:
+                if params[name] != members[0][1][name]:
+                    errors.append(
+                        f'{ref}: contributed with {name}={params[name]!r}, '
+                        f'{members[0][0]} with {members[0][1][name]!r}'
+                    )
+        return errors
+
+    def _producer(self, ref: Ref, group: Mapping[str, RunRequest]) -> RunRequest | None:
+        """The request that produces a reference, in the group or in the store."""
+        if ref.record.startswith(GROUP_PREFIX):
+            return group.get(ref.record[len(GROUP_PREFIX) :])
+        if ref.record in self.records:
+            return self.records.get(ref.record).request
+        return None
 
     def _check_ref(
         self,
@@ -193,8 +253,17 @@ class Backend:
         records = {}
         for name, req in group.items():
             params = _rewrite(req.params, {GROUP_PREFIX + n: i for n, i in ids.items()})
+            contributions = [
+                r.model_copy(update={'record': ids[r.record[len(GROUP_PREFIX) :]]})
+                if r.record.startswith(GROUP_PREFIX)
+                else r
+                for r in req.contributions
+            ]
             records[name] = RunRecord(
-                id=ids[name], request=req.model_copy(update={'params': params})
+                id=ids[name],
+                request=req.model_copy(
+                    update={'params': params, 'contributions': contributions}
+                ),
             )
         self.records.add(*records.values())
         self._pump()
@@ -303,9 +372,13 @@ class Backend:
         data_fields = data_ref_fields(self.registry.spec(record.spec).params)
         locations: dict[Reference, Path] = {}
         literals: dict[str, Any] = {}
-        for path, ref in walk_refs(record.request.params):
-            field = path.split('.')[0].split('[')[0]
-            failure = self._resolve(ref, field in data_fields, locations, literals)
+        named = [
+            (ref, path.split('.')[0].split('[')[0] in data_fields)
+            for path, ref in walk_refs(record.request.params)
+        ]
+        named += [(ref, True) for ref in record.request.contributions]
+        for ref, into_data_field in named:
+            failure = self._resolve(ref, into_data_field, locations, literals)
             if failure is not None:
                 self._finish(record, Status.FAILED, failure)
                 self._propagate(record)
@@ -421,6 +494,23 @@ class Backend:
         record.published[ref.output] = pid
         self.records.update(record)
         return pid
+
+
+def _check_stage(request: RunRequest, spec: WorkflowSpec) -> list[str]:
+    """Whether the spec has the entry points the request asks for (D15)."""
+    if request.stage != 'run' and spec.contribution is None:
+        return [f'{spec.id} declares no contribution, so it has only whole runs']
+    if request.stage == 'combine':
+        if not request.contributions:
+            return ['a combine request references at least one contribution']
+        return [
+            f'a combine request carries the finalize parameters; {name!r} is '
+            "contribute's"
+            for name in sorted(set(request.params) - spec.finalize_params)
+        ]
+    if request.contributions:
+        return ['only a combine request references contributions']
+    return []
 
 
 def _cycle(group: Mapping[str, RunRequest]) -> set[str]:

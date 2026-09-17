@@ -14,7 +14,7 @@ from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import RunRecord, RunRequest, Status
+from .records import RunRecord, RunRequest, RunStage, Status
 from .sources import DatasetSource
 from .spec import Kind, Ref, Reference, SpecId, WorkflowSpec, data_ref_fields
 from .store import RecordStore
@@ -60,19 +60,37 @@ class Client:
         *,
         label: str | None = None,
         member_key: str | None = None,
+        stage: RunStage = 'run',
+        contributions: Iterable[Ref | RunRecord] = (),
     ) -> RunRequest:
+        """
+        A request for this instrument and proposal.
+
+        ``stage='contribute'`` is a member run of a series and
+        ``stage='combine'`` a combine request, whose ``params`` are then the
+        finalize parameters and whose ``contributions`` are the records to
+        combine, or references to their contribution outputs (D15).
+        """
         spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
         if isinstance(params, BaseModel):
             params = params.model_dump(mode='json')
         return RunRequest(
             spec=spec_id,
             params=dict(params or {}),
+            stage=stage,
+            contributions=[self._contribution(spec_id, c) for c in contributions],
             instrument=self.instrument,
             proposal=self.proposal,
             submitter=self.submitter,
             label=label,
             member_key=member_key,
         )
+
+    def _contribution(self, spec_id: SpecId, of: Ref | RunRecord) -> Ref:
+        """The reference to a record's contribution: the output the spec marks."""
+        if isinstance(of, Ref):
+            return of
+        return of.ref(self.registry.spec(spec_id).contribution)
 
     def validate(self, request: RunRequest) -> ValidationReport:
         return self.backend.validate(request)

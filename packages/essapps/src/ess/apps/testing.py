@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .binding import Factory
+from .binding import Factory, combining
 from .sources import Dataset
 from .spec import DatasetRef
 from .warm import equal
@@ -38,6 +38,54 @@ def assert_warm_equals_cold(factory: Factory, param_sets: Iterable[BaseModel]) -
                 raise AssertionError(
                     f'step {i}: warm output {name!r} differs from cold'
                 )
+
+
+def assert_combine_is_associative(
+    factory: Factory, param_sets: Iterable[BaseModel]
+) -> None:
+    """
+    The one check on a declared combine (D15): grouping and order do not matter.
+
+    The contributions of the members are combined in one group, in two groups,
+    one at a time, and in reverse order, and each finalized result is compared
+    with the first. Combining in groups and one at a time pushes combined values
+    back in, which is what a chained series and a fold rely on. The single
+    callable is checked to be contribute then finalize. Nothing here is specific
+    to a workflow, so every spec that declares a contribution runs it.
+    """
+    params = list(param_sets)
+    if len(params) < 3:
+        raise ValueError('an associativity check needs at least three members')
+    workflow = combining(factory())
+    contributions = [workflow.contribute(p) for p in params]
+
+    def finalized(parts: list[Any]) -> dict[str, Any]:
+        return workflow.finalize(workflow.combine(parts), params[0])
+
+    chained = contributions[0]
+    for contribution in contributions[1:]:
+        chained = workflow.combine([chained, contribution])
+    groupings = {
+        'in two groups': [
+            workflow.combine(contributions[:1]),
+            workflow.combine(contributions[1:]),
+        ],
+        'one at a time': [chained],
+        'in reverse order': list(reversed(contributions)),
+    }
+    reference = finalized(contributions)
+    for how, parts in groupings.items():
+        got = finalized(parts)
+        for name, value in reference.items():
+            if not equal(got[name], value):
+                raise AssertionError(f'combining {how} changes output {name!r}')
+    one_shot = _fields(factory()(params[0]))
+    for name, value in workflow.finalize(contributions[0], params[0]).items():
+        if not equal(one_shot[name], value):
+            raise AssertionError(
+                f'the single callable differs from contribute then finalize '
+                f'at output {name!r}'
+            )
 
 
 class FakeDatasetSource:
