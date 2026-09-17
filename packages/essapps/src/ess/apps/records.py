@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from .spec import DatasetRef, Ref, SpecId, walk_refs
+from .spec import DatasetRef, Ref, SpecId, dataset_refs, walk_refs
 
 RunStage = Literal['run', 'contribute', 'combine']
 """
@@ -102,23 +102,24 @@ class RunRequest(BaseModel, frozen=True):
         "and the values the submitter typed (D14).",
     )
 
+    @model_validator(mode='after')
+    def _contributions_are_the_combine_stage(self) -> RunRequest:
+        """The stage and the contributions say one thing, so they cannot disagree."""
+        if (self.stage == 'combine') != bool(self.contributions):
+            raise ValueError(
+                'a combine request references at least one contribution, and no '
+                'other stage references any'
+            )
+        return self
+
     def refs(self) -> list[Ref]:
         """References to outputs of records: the edges the scheduler waits on."""
         params = [r for _, r in walk_refs(self.params) if isinstance(r, Ref)]
         return params + list(self.contributions)
 
     def datasets(self) -> list[DatasetRef]:
-        """
-        Distinct references to data the framework did not compute; never pending.
-
-        One dataset named by two parameters is one origin of the run, so it
-        appears once.
-        """
-        return list(
-            dict.fromkeys(
-                r for _, r in walk_refs(self.params) if isinstance(r, DatasetRef)
-            )
-        )
+        """Distinct references to data the framework did not compute."""
+        return dataset_refs(self.params)
 
 
 class Derivation(BaseModel, frozen=True):

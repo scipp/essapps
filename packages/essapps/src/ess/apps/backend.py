@@ -35,6 +35,7 @@ from .spec import (
     WorkflowSpec,
     as_ref,
     data_ref_fields,
+    field_of,
     finalize_model,
     walk_refs,
 )
@@ -122,8 +123,8 @@ class Backend:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
         refs = data_ref_fields(spec.params)
         for path, ref in walk_refs(request.params):
-            field = path.split('.')[0].split('[')[0]
-            errors += self._check_ref(ref, refs.get(field), request, group or {})
+            consumer = refs.get(field_of(path))
+            errors += self._check_ref(ref, consumer, request, group or {})
         errors += self._check_contributions(request, spec, group or {})
         if not self.launcher.can_run(request.spec):
             errors.append(f'launcher cannot run {request.spec}')
@@ -338,6 +339,11 @@ class Backend:
                 if all(p.status == Status.COMPLETED for p in producers):
                     self._dispatch(record)
                     progressed = True
+                elif (dead := _dead(producers)) is not None:
+                    # A request submitted after its producer failed never sees a
+                    # status transition, so the failure is read here as well.
+                    self._inherit(record, dead)
+                    progressed = True
                 elif record.status == Status.SUBMITTED:
                     record.status = Status.WAITING
                     self.records.update(record)
@@ -348,17 +354,20 @@ class Backend:
             return
         for dependent_id in self.records.referencing(record.id):
             dependent = self.records.get(dependent_id)
-            if dependent.status.terminal:
-                continue
-            if record.status == Status.CANCELLED:
-                self._finish(dependent, Status.CANCELLED)
-            else:
-                self._finish(
-                    dependent,
-                    Status.FAILED,
-                    Failure(kind='upstream', message=f'input {record.id} failed'),
-                )
-            self._propagate(dependent)
+            if not dependent.status.terminal:
+                self._inherit(dependent, record)
+
+    def _inherit(self, record: RunRecord, producer: RunRecord) -> None:
+        """End a record because an input of it failed or was cancelled."""
+        if producer.status == Status.CANCELLED:
+            self._finish(record, Status.CANCELLED)
+        else:
+            self._finish(
+                record,
+                Status.FAILED,
+                Failure(kind='upstream', message=f'input {producer.id} failed'),
+            )
+        self._propagate(record)
 
     def _finish(
         self, record: RunRecord, status: Status, failure: Failure | None = None
@@ -373,7 +382,7 @@ class Backend:
         locations: dict[Reference, Path] = {}
         literals: dict[str, Any] = {}
         named = [
-            (ref, path.split('.')[0].split('[')[0] in data_fields)
+            (ref, field_of(path) in data_fields)
             for path, ref in walk_refs(record.request.params)
         ]
         named += [(ref, True) for ref in record.request.contributions]
@@ -499,20 +508,28 @@ class Backend:
 
 
 def _check_stage(request: RunRequest, spec: WorkflowSpec) -> list[str]:
-    """Whether the spec has the entry points the request asks for (D15)."""
+    """Whether the spec has the entry points the request asks for (D15).
+
+    That a combine request is the one that references contributions is the
+    request's own invariant, checked when it is built.
+    """
     if request.stage != 'run' and spec.contribution is None:
         return [f'{spec.id} declares no contribution, so it has only whole runs']
     if request.stage == 'combine':
-        if not request.contributions:
-            return ['a combine request references at least one contribution']
         return [
             f'a combine request carries the finalize parameters; {name!r} is '
             "contribute's"
             for name in sorted(set(request.params) - spec.finalize_params)
         ]
-    if request.contributions:
-        return ['only a combine request references contributions']
     return []
+
+
+def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:
+    """The first producer that ended without completing, if there is one."""
+    return next(
+        (p for p in producers if p.status.terminal and p.status != Status.COMPLETED),
+        None,
+    )
 
 
 def _cycle(group: Mapping[str, RunRequest]) -> set[str]:

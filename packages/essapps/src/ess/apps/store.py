@@ -213,6 +213,21 @@ class RecordStore:
         )
         return [RunRecord.model_validate_json(r[0]) for r in rows]
 
+    def members_without_completed_record(
+        self, label: str, proposal: str
+    ) -> list[RunRecord]:
+        """The records of :meth:`batch` whose member key never completed."""
+        rows = self._db.execute(
+            'SELECT doc FROM records AS r WHERE proposal=? AND label=? AND rowid=('
+            ' SELECT max(rowid) FROM records WHERE proposal=r.proposal'
+            ' AND label=r.label AND member_key IS r.member_key)'
+            ' AND NOT EXISTS (SELECT 1 FROM records WHERE proposal=r.proposal'
+            ' AND label=r.label AND member_key IS r.member_key AND status=?)'
+            ' ORDER BY member_key, rowid',
+            (proposal, label, Status.COMPLETED.value),
+        )
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
+
     def referencing(self, record_id: str, output: str | None = None) -> list[str]:
         """IDs of records that reference an output of ``record_id``."""
         if output is None:

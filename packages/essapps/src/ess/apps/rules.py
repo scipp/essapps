@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .backend import SubmitError
 from .client import Client
-from .records import RunRecord, RunRequest, Status, Submission
+from .records import RunRecord, RunRequest, Submission
 from .sources import Dataset
 from .spec import Ref, SpecId, WorkflowSpec, data_ref_fields
 
@@ -475,14 +475,9 @@ def rerun(
 ) -> dict[str, RunRequest]:
     """The members under a label that have no completed record."""
     label = label or rule.name
-    records = client.records(label=label)
-    done = {r.request.member_key for r in records if r.status is Status.COMPLETED}
-    latest = {
-        r.request.member_key: r
-        for r in records
-        if r.request.member_key not in done and r.request.stage != 'combine'
-    }
-    return _again(client, rule, list(latest.values()), label=label)
+    return _again(
+        client, rule, client.members_without_completed_record(label), label=label
+    )
 
 
 def _again(
@@ -494,10 +489,13 @@ def _again(
 ) -> dict[str, RunRequest]:
     """Apply again over the datasets of these records, carrying the typed values."""
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
+    excluded = rule.exclusions if isinstance(rule, Rule) else {}
     members = [
         record
         for record in records
-        if record.request.member_key in known and record.request.stage != 'combine'
+        if record.request.member_key in known
+        and record.request.member_key not in excluded
+        and record.request.stage != 'combine'
     ]
     return apply(
         client,

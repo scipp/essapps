@@ -7,6 +7,7 @@ from typing import Any, NewType
 
 import pytest
 import sciline
+from pydantic import ValidationError
 
 from ess.apps.aggregation import AggregatePipeline
 from ess.apps.backend import SubmitError
@@ -14,17 +15,13 @@ from ess.apps.client import Client, local
 from ess.apps.examples import (
     LOAD,
     NORMALIZE,
+    NORMALIZE_WIRING,
     Counts,
-    Denominator,
-    Floor,
-    Normalized,
     NormalizeParams,
-    Numerator,
     RunFile,
-    Scale,
-    add,
     denominator,
     load_counts,
+    normalize_pipeline,
     normalize_workflow,
     normalized,
     numerator,
@@ -64,20 +61,14 @@ def runs(datasets: Path) -> list[DatasetRef]:
     return [DatasetRef(instrument='dream', run=i) for i in (1, 2, 3)]
 
 
-def pipeline() -> sciline.Pipeline:
-    return sciline.Pipeline([load_counts, numerator, denominator, normalized])
-
-
-def build(**kwargs: Any) -> AggregatePipeline:
-    settings = {
-        'keys': {'run': RunFile, 'floor': Floor, 'scale': Scale},
-        'targets': {'normalized': Normalized},
-        'contribution': 'contribution',
-        'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},
-        'combine': add,
-        'finalize_params': frozenset({'scale'}),
-    }
-    return AggregatePipeline(pipeline(), **(settings | kwargs))
+def build(
+    pipeline: sciline.Pipeline | None = None, **changes: Any
+) -> AggregatePipeline:
+    """The wiring the example ships, with what a test changes."""
+    return AggregatePipeline(
+        pipeline if pipeline is not None else normalize_pipeline(),
+        **(NORMALIZE_WIRING | changes),
+    )
 
 
 Baseline = NewType('Baseline', float)
@@ -127,20 +118,12 @@ def test_a_parameter_the_contribution_does_not_depend_on_is_refused() -> None:
 
 def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() -> None:
     with pytest.raises(ValueError, match='do not depend on the members'):
-        AggregatePipeline(
+        build(
             sciline.Pipeline(
                 [load_counts, numerator, denominator, normalized, baseline]
             ),
-            keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-            targets={'normalized': Normalized},
-            contribution='contribution',
-            accumulation_keys={
-                'numerator': Numerator,
-                'denominator': Denominator,
-                'baseline': Baseline,
-            },
-            combine=add,
-            finalize_params=frozenset({'scale'}),
+            accumulation_keys=NORMALIZE_WIRING['accumulation_keys']
+            | {'baseline': Baseline},
         )
 
 
@@ -148,7 +131,7 @@ def test_a_finalize_parameter_the_outputs_do_not_depend_on_is_refused() -> None:
     Unused = NewType('Unused', float)
     with pytest.raises(ValueError, match='outputs do not depend on them'):
         build(
-            keys={'run': RunFile, 'floor': Floor, 'scale': Scale, 'unused': Unused},
+            keys=NORMALIZE_WIRING['keys'] | {'unused': Unused},
             finalize_params=frozenset({'scale', 'unused'}),
         )
 
@@ -162,15 +145,7 @@ def test_a_finalize_parameter_change_does_not_recontribute(datasets: Path) -> No
         return load_counts(path)
 
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    workflow = AggregatePipeline(
-        sciline.Pipeline([counted, numerator, denominator, normalized]),
-        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-        targets={'normalized': Normalized},
-        contribution='contribution',
-        accumulation_keys={'numerator': Numerator, 'denominator': Denominator},
-        combine=add,
-        finalize_params=frozenset({'scale'}),
-    )
+    workflow = build(sciline.Pipeline([counted, numerator, denominator, normalized]))
     contribution = workflow.contribute(NormalizeParams(run=run, floor=1.5))
     first = workflow.finalize(contribution, NormalizeParams(run=run, scale=1.0))
     second = workflow.finalize(contribution, NormalizeParams(run=run, scale=2.0))
@@ -296,6 +271,15 @@ def test_a_contribution_of_another_spec_is_refused(
             stage='combine',
             contributions=[Ref(record=loaded.id, output='data')],
         )
+
+
+def test_a_stage_and_its_contributions_cannot_disagree(client: Client) -> None:
+    """One fact, said once: a combine request is the one with contributions."""
+    contribution = Ref(record='r1', output='contribution')
+    with pytest.raises(ValidationError, match='at least one contribution'):
+        client.request(NORMALIZE, {'scale': 2.0}, stage='combine')
+    with pytest.raises(ValidationError, match='no other stage references any'):
+        client.request(NORMALIZE, {'floor': 1.5}, contributions=[contribution])
 
 
 def test_a_spec_without_a_contribution_has_only_whole_runs(

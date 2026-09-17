@@ -15,6 +15,7 @@ from ess.apps.spec import (
     NexusFile,
     Quantity,
     Ref,
+    WorkflowSpec,
     as_ref,
     data_ref_fields,
     ref_fields,
@@ -115,3 +116,31 @@ def test_a_data_field_holds_either_form_of_reference() -> None:
         ('data', 'r1.data'),
         ('runs[0]', 'dataset:dream/4711'),
     ]
+
+
+def spec(outputs: type[BaseModel], **fields: object) -> WorkflowSpec:
+    return WorkflowSpec(
+        name='combining',
+        version=1,
+        title='Combining',
+        description='A workflow that declares a contribution.',
+        outputs=outputs,
+        **fields,
+    )
+
+
+def test_a_contribution_needs_the_other_outputs_optional() -> None:
+    """A member run returns the contribution alone, against the full model."""
+
+    class Required(BaseModel):
+        contribution: ArrayValue
+        normalized: ArrayValue
+
+    class Optional(BaseModel):
+        contribution: ArrayValue
+        normalized: ArrayValue | None = None
+
+    with pytest.raises(ValidationError, match="\\['normalized'\\] must be optional"):
+        spec(Required, contribution='contribution')
+    assert spec(Optional, contribution='contribution').contribution == 'contribution'
+    assert spec(Required).contribution is None

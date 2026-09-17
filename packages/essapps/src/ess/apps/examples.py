@@ -306,16 +306,12 @@ class NormalizeOutputs(BaseModel):
     normalized: Array(ArraySpec(dims=('x',))) | None = None
 
 
+def normalize_pipeline() -> sciline.Pipeline:
+    return sciline.Pipeline([load_counts, numerator, denominator, normalized])
+
+
 def normalize_workflow() -> AggregatePipeline:
-    return AggregatePipeline(
-        sciline.Pipeline([load_counts, numerator, denominator, normalized]),
-        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-        targets={'normalized': Normalized},
-        contribution='contribution',
-        accumulation_keys={'numerator': Numerator, 'denominator': Denominator},
-        combine=add,
-        finalize_params=NORMALIZE.finalize_params,
-    )
+    return AggregatePipeline(normalize_pipeline(), **NORMALIZE_WIRING)
 
 
 NORMALIZE = WorkflowSpec(
@@ -330,3 +326,14 @@ NORMALIZE = WorkflowSpec(
     contribution='contribution',
     finalize_params=frozenset({'scale'}),
 )
+
+NORMALIZE_WIRING: dict[str, Any] = {
+    'keys': {'run': RunFile, 'floor': Floor, 'scale': Scale},
+    'targets': {'normalized': Normalized},
+    'contribution': NORMALIZE.contribution,
+    'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},
+    'combine': add,
+    'finalize_params': NORMALIZE.finalize_params,
+}
+"""How NORMALIZE binds to its pipeline: the field-to-key maps, the accumulation
+keys, and the spec's own declaration of what is combined and what finalize reads."""

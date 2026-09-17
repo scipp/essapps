@@ -119,6 +119,16 @@ def test_cancel_kills_the_process_and_dependents(
     assert client.record(group['sum'].id).status == Status.CANCELLED
 
 
+def test_a_request_on_a_cancelled_record_is_cancelled(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    """The producer ended before the request existed, so no transition reaches it."""
+    loaded = client.run(LOAD, {'run': run_ref})
+    client.cancel(loaded)
+    consumer = client.run(REBIN, {'data': loaded.ref('data')})
+    assert consumer.status == Status.CANCELLED
+
+
 def test_persisted_request_keeps_reference_form(
     client: Client, run_ref: DatasetRef
 ) -> None:

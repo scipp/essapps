@@ -183,6 +183,12 @@ class Client:
         """The batch table under a label: the latest record per member key."""
         return self.backend.records.batch(label, self.proposal)
 
+    def members_without_completed_record(self, label: str) -> list[RunRecord]:
+        """The latest record of every member under a label that never completed."""
+        return self.backend.records.members_without_completed_record(
+            label, self.proposal
+        )
+
     def wait(
         self, records: Iterable[RunRecord | str], timeout: float = 60.0
     ) -> list[RunRecord]:

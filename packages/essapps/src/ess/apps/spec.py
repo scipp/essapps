@@ -223,11 +223,21 @@ class WorkflowSpec(BaseModel, frozen=True):
 
     @model_validator(mode='after')
     def _contribution_is_declared(self) -> WorkflowSpec:
-        if (
-            self.contribution is not None
-            and self.contribution not in self.outputs.model_fields
-        ):
-            raise ValueError(f'no output named {self.contribution!r}')
+        if self.contribution is not None:
+            if self.contribution not in self.outputs.model_fields:
+                raise ValueError(f'no output named {self.contribution!r}')
+            # A member run produces the contribution alone, and its outputs are
+            # validated against the full model, so the rest must be optional.
+            required = sorted(
+                name
+                for name, field in self.outputs.model_fields.items()
+                if name != self.contribution and field.is_required()
+            )
+            if required:
+                raise ValueError(
+                    f'a member run produces only {self.contribution!r}, so the '
+                    f'outputs {required} must be optional'
+                )
         if self.finalize_params and self.contribution is None:
             raise ValueError('finalize parameters without a contribution output')
         unknown = self.finalize_params - set(self.params.model_fields)
@@ -334,6 +344,23 @@ def as_ref(value: Any) -> Reference | None:
 
 _REF_KEYS = frozenset(Ref.model_fields)
 _DATASET_KEYS = frozenset(DatasetRef.model_fields)
+
+
+def field_of(path: str) -> str:
+    """The parameter field a reference path belongs to: ``banks.a`` is ``banks``."""
+    return path.split('.')[0].split('[')[0]
+
+
+def dataset_refs(params: Any) -> list[DatasetRef]:
+    """
+    The distinct datasets a plain value names; never pending.
+
+    Two parameters may name one dataset -- a run that is both the background
+    transmission and the empty beam -- which is one origin of a run and one file
+    to locate and hash.
+    """
+    refs = (ref for _, ref in walk_refs(params) if isinstance(ref, DatasetRef))
+    return list(dict.fromkeys(refs))
 
 
 def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Reference]]:

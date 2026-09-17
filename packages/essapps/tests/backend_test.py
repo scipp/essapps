@@ -13,8 +13,9 @@ from ess.apps.client import Client, local
 from ess.apps.datastore import MissingCopyError
 from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, registry, write_run
 from ess.apps.records import Status
-from ess.apps.sources import Dataset, FolderSource
+from ess.apps.sources import Dataset
 from ess.apps.spec import DatasetRef, Kind, Ref, SpecId, as_ref
+from ess.apps.testing import FakeDatasetSource
 
 
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
@@ -29,28 +30,14 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert client.provenance(record)['raw'] == [{'instrument': 'dream', 'run': 1}]
 
 
-class CountingSource:
-    """A folder source that records every dataset it was asked to locate."""
-
-    def __init__(self, folder: Path) -> None:
-        self._source = FolderSource(folder, '*.h5')
-        self.located: list[DatasetRef] = []
-
-    def new_datasets(self, proposal: str) -> list[Dataset]:
-        return list(self._source.new_datasets(proposal))
-
-    def locate(self, ref: DatasetRef) -> Path | None:
-        self.located.append(ref)
-        return self._source.locate(ref)
+@pytest.fixture
+def counting_source(run_file: Path) -> FakeDatasetSource:
+    """A source that records every dataset it was asked to locate."""
+    return FakeDatasetSource(Dataset(path=run_file, instrument='dream', run=1))
 
 
 @pytest.fixture
-def counting_source(datasets: Path) -> CountingSource:
-    return CountingSource(datasets)
-
-
-@pytest.fixture
-def counting_client(tmp_path: Path, counting_source: CountingSource):
+def counting_client(tmp_path: Path, counting_source: FakeDatasetSource):
     client = local(
         tmp_path / 'store',
         instrument='dream',
@@ -64,7 +51,7 @@ def counting_client(tmp_path: Path, counting_source: CountingSource):
 
 
 def test_a_dataset_two_parameters_name_is_one_origin(
-    counting_client: Client, counting_source: CountingSource, run_ref: DatasetRef
+    counting_client: Client, counting_source: FakeDatasetSource, run_ref: DatasetRef
 ) -> None:
     """One dataset, however many parameters name it: located once, listed once."""
     record = counting_client.run(SUM, {'runs': [run_ref, run_ref]})
@@ -278,6 +265,16 @@ def test_failure_is_structured_and_propagates_to_dependents(
     assert group['bad'].failure.message == 'no monitor'
     assert group['sum'].status == Status.FAILED
     assert group['sum'].failure.kind == 'upstream'
+
+
+def test_a_request_on_a_failed_record_fails_at_once(client: Client) -> None:
+    """Nothing transitions after the producer ended, so the wait would never end."""
+    failed = client.run(FAIL, {'message': 'no monitor'})
+    assert failed.status == Status.FAILED
+    consumer = client.run(REBIN, {'data': failed.ref('data')})
+    assert consumer.status == Status.FAILED
+    assert consumer.failure.kind == 'upstream'
+    assert failed.id in consumer.failure.message
 
 
 def test_missing_collection_key_fails_the_consumer_only(

@@ -36,7 +36,6 @@ from .records import Failure, RunResult, RunStage, Status
 from .spec import (
     ArraySpec,
     DataRef,
-    DatasetRef,
     Kind,
     Ref,
     Reference,
@@ -44,8 +43,8 @@ from .spec import (
     WorkflowSpec,
     as_ref,
     data_ref_fields,
+    dataset_refs,
     finalize_model,
-    walk_refs,
 )
 
 MARKER = 'done.json'
@@ -90,17 +89,6 @@ def file_checksum(path: Path) -> str:
     """The sha256 of a file's bytes."""
     with path.open('rb') as file:
         return hashlib.file_digest(file, 'sha256').hexdigest()
-
-
-def _datasets(params: dict[str, Any]) -> list[DatasetRef]:
-    """
-    The distinct datasets a request names.
-
-    Two parameters may name one dataset -- a run that is both the background
-    transmission and the empty beam -- and that is one file to locate and hash.
-    """
-    refs = (ref for _, ref in walk_refs(params) if isinstance(ref, DatasetRef))
-    return list(dict.fromkeys(refs))
 
 
 def _resolved(value: Any) -> Any:
@@ -205,7 +193,7 @@ class Runner:
         ``resolved_params``.
         """
         checksums = {}
-        for ref in _datasets(params):
+        for ref in dataset_refs(params):
             located = inputs.get(ref, Kind.OPAQUE)
             if isinstance(located, Path) and located.is_file():
                 checksums[str(ref)] = self._checksum(located)
@@ -343,11 +331,11 @@ class WorkdirOutputs:
     def __init__(self, workdir: Path, save: Any) -> None:
         self.workdir = workdir
         self._save = save
-        self.paths: dict[str, Path] = {}
+        self.written: list[tuple[Ref, Path]] = []
 
     def put(self, ref: Ref, value: Any) -> None:
         name = ref.output if ref.key is None else f'{ref.output}/{ref.key}'
-        self.paths[str(ref)] = self._save(value, self.workdir / name)
+        self.written.append((ref, self._save(value, self.workdir / name)))
 
 
 def main(workdir: Path) -> None:
@@ -373,7 +361,10 @@ def main(workdir: Path) -> None:
     )
     marker = {
         'result': result.model_dump(mode='json'),
-        'paths': {k: str(v) for k, v in outputs.paths.items()},
+        'outputs': [
+            {'ref': ref.model_dump(mode='json'), 'path': str(path)}
+            for ref, path in outputs.written
+        ],
     }
     tmp = workdir / (MARKER + '.tmp')
     tmp.write_text(json.dumps(marker))

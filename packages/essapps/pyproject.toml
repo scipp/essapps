@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+loki = [
+    "esssans>=26.6.0",
+]
 test = [
     "pytest>=9.0",
     "pytest-xdist>=3.6",

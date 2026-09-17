@@ -36,24 +36,6 @@ from ess.apps.spec import DatasetRef, Ref
 from ess.apps.testing import FakeDatasetSource
 
 
-class UnlocatableSource:
-    """
-    Announces datasets whose bytes have not landed.
-
-    A run over one fails with ``missing-dataset``, which is a failure kind a
-    retry policy names.
-    """
-
-    def __init__(self, *datasets: Dataset) -> None:
-        self.datasets = list(datasets)
-
-    def new_datasets(self, proposal: str) -> list[Dataset]:
-        return list(self.datasets)
-
-    def locate(self, ref: DatasetRef) -> Path | None:
-        return None
-
-
 @pytest.fixture
 def template(client: Client, run_ref: DatasetRef) -> Template:
     request = client.request(LOAD, {'run': run_ref, 'scale': 2.0})
@@ -331,11 +313,20 @@ def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) 
     assert group['dataset:pid/2'].params['scale'] == 7.0  # filled again
 
 
+def test_an_excluded_member_is_not_reprocessed(client: Client, rule: Rule) -> None:
+    TriggerLoop(client, rule).run_once()
+    moved = rule.revise(template=rule.template.revise(scale=7.0))
+    moved.exclude('dataset:pid/1', 'chopper was off')
+    assert sorted(reprocess(client, moved)) == ['dataset:pid/2']
+
+
 def test_rerun_offers_the_members_with_no_completed_record(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
     client.sources.append(
-        UnlocatableSource(Dataset(path=tmp_path / 'gone.h5', pid='pid/9'))
+        FakeDatasetSource(
+            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+        )
     )
     rule = Rule(name='auto', template=template)
     TriggerLoop(client, rule).run_once()
@@ -427,7 +418,9 @@ def test_a_failure_the_policy_names_is_retried_up_to_the_limit(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
     client.sources.append(
-        UnlocatableSource(Dataset(path=tmp_path / 'gone.h5', pid='pid/9'))
+        FakeDatasetSource(
+            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+        )
     )
     rule = Rule(
         name='auto',
@@ -447,7 +440,9 @@ def test_a_failure_the_policy_does_not_name_is_not_retried(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
     client.sources.append(
-        UnlocatableSource(Dataset(path=tmp_path / 'gone.h5', pid='pid/9'))
+        FakeDatasetSource(
+            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+        )
     )
     loop = TriggerLoop(client, Rule(name='auto', template=template))
     loop.run_once()
@@ -509,6 +504,45 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
         'dataset:pid/2',
         'sio2',
     ]
+
+
+def test_a_series_whose_latest_combine_failed_does_not_freeze(
+    client: Client, tmp_path: Path
+) -> None:
+    """The next arrival chains onto the failed combine, so it must end, not wait."""
+    client.sources.append(
+        FakeDatasetSource(
+            Dataset(
+                path=tmp_path / 'gone.h5', pid='pid/1', metadata={'sample': 'sio2'}
+            ),
+            locates=False,
+        )
+    )
+    rule = Rule(
+        name='series',
+        template=Template(
+            name='normalize', spec=NORMALIZE.id, params={'floor': 1.5}, blanks=('run',)
+        ),
+        series=Series(key='sample', finalize={'scale': 2.0}),
+    )
+    loop = TriggerLoop(client, rule)
+    member, combine = client.wait(loop.run_once())
+    assert member.failure.kind == 'missing-dataset'
+    assert combine.status == Status.FAILED
+
+    client.sources.append(
+        FakeDatasetSource(
+            Dataset(
+                path=write_run(tmp_path / 'b.h5', [2.0, 2.0]),
+                pid='pid/2',
+                metadata={'sample': 'sio2'},
+            )
+        )
+    )
+    next_member, next_combine = client.wait(loop.run_once())
+    assert next_member.status == Status.COMPLETED, next_member.failure
+    assert next_combine.status == Status.FAILED
+    assert combine.id in next_combine.failure.message
 
 
 # The batch table

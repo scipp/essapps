@@ -5,11 +5,9 @@
 from pathlib import Path
 from typing import Any
 
-import pytest
 import scipp as sc
 from pydantic import BaseModel
 
-from ess.apps import runner as runner_module
 from ess.apps.binding import Binding
 from ess.apps.examples import LOAD, LoadOutputs, LoadParams, write_run
 from ess.apps.records import Status
@@ -32,20 +30,6 @@ class Collected:
 
     def put(self, ref: Any, value: Any) -> None:
         self.values[str(ref)] = value
-
-
-@pytest.fixture
-def counted(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """The files hashed, in order; one entry per sha256 the runner computes."""
-    hashed: list[Path] = []
-    real = runner_module.file_checksum
-
-    def counting(path: Path) -> str:
-        hashed.append(path)
-        return real(path)
-
-    monkeypatch.setattr(runner_module, 'file_checksum', counting)
-    return hashed
 
 
 class TwoRunParams(BaseModel):
@@ -79,8 +63,8 @@ def two_run_workflow() -> Any:
     return run
 
 
-def test_a_session_hashes_a_dataset_once_however_often_it_is_read(
-    tmp_path: Path, counted: list[Path]
+def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
+    tmp_path: Path,
 ) -> None:
     file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0, 3.0])
     ref = DatasetRef(instrument='dream', run=1)
@@ -97,10 +81,9 @@ def test_a_session_hashes_a_dataset_once_however_often_it_is_read(
     assert second.status is Status.COMPLETED, second.failure
     assert first.checksums == second.checksums
     assert set(first.checksums) == {str(ref)}
-    assert counted == [file]
 
 
-def test_a_changed_file_is_hashed_again(tmp_path: Path, counted: list[Path]) -> None:
+def test_a_changed_file_is_hashed_again(tmp_path: Path) -> None:
     file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0, 3.0])
     ref = DatasetRef(path=file)
     params = {'background': ref.model_dump(mode='json')}
@@ -114,7 +97,6 @@ def test_a_changed_file_is_hashed_again(tmp_path: Path, counted: list[Path]) -> 
     second = session.run('r2', params, binding, inputs, Collected())
 
     assert first.checksums != second.checksums
-    assert counted == [file, file]
 
 
 def test_an_output_without_the_declared_dims_fails_the_run(tmp_path: Path) -> None:

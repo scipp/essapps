@@ -180,8 +180,9 @@ class SubprocessLauncher:
         marker = self.workdir(record) / MARKER
         if marker.exists():
             done = json.loads(marker.read_text())
-            for ref_str, path in done['paths'].items():
-                self._data.adopt(_parse_ref(ref_str), Path(path), store_owned=True)
+            for output in done['outputs']:
+                ref = Ref.model_validate(output['ref'])
+                self._data.adopt(ref, Path(output['path']), store_owned=True)
             self._reap(record)
             record = record.model_copy()
             record.apply(RunResult.model_validate(done['result']))
@@ -222,11 +223,3 @@ class SubprocessLauncher:
         if proc is not None and proc.poll() is None:
             proc.kill()
             proc.wait()
-
-
-def _parse_ref(text: str) -> Ref:
-    record, rest = text.split('.', 1)
-    if rest.endswith(']'):
-        output, key = rest[:-1].split('[', 1)
-        return Ref(record=record, output=output, key=key)
-    return Ref(record=record, output=rest)

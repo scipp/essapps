@@ -89,10 +89,18 @@ def assert_combine_is_associative(
 
 
 class FakeDatasetSource:
-    """Yields whatever was added; repeats and out-of-order arrival are allowed."""
+    """
+    Yields whatever was added; repeats and out-of-order arrival are allowed.
 
-    def __init__(self, *datasets: Dataset) -> None:
+    ``locates=False`` announces datasets whose bytes have not landed, so that a
+    run over one fails with ``missing-dataset``. ``located`` is every reference
+    the source was asked to locate, in order.
+    """
+
+    def __init__(self, *datasets: Dataset, locates: bool = True) -> None:
         self._datasets = list(datasets)
+        self._locates = locates
+        self.located: list[DatasetRef] = []
 
     def add(self, dataset: Dataset) -> None:
         self._datasets.append(dataset)
@@ -101,6 +109,9 @@ class FakeDatasetSource:
         return list(self._datasets)
 
     def locate(self, ref: DatasetRef) -> Path | None:
+        self.located.append(ref)
+        if not self._locates:
+            return None
         return next((d.path for d in self._datasets if d.ref == ref), None)
 
 

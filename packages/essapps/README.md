@@ -76,7 +76,7 @@ A **batch** is the records under one label, and nothing else is stored: `client.
 
 ## A session on real data
 
-`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the warm stage reruns in a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs `ess.sans` and the tutorial files.
+`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the warm stage reruns in a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
 
 ## Tests
 
