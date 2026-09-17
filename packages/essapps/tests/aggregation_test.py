@@ -113,13 +113,7 @@ def test_a_finalize_parameter_that_contribute_reads_is_refused() -> None:
 def test_a_parameter_the_contribution_does_not_depend_on_is_refused() -> None:
     """Declaring nothing for finalize makes ``scale`` a member key, which it is not."""
     with pytest.raises(ValueError, match="does not depend on \\['scale'\\]"):
-        build(finalize_params=frozenset(), cheap=frozenset())
-
-
-def test_a_cheap_parameter_that_contribute_reads_is_refused() -> None:
-    """``floor`` is contribute's, so no contribution survives a change of it."""
-    with pytest.raises(ValueError, match='declared cheap'):
-        build(cheap=frozenset({'floor'}))
+        build(finalize_params=frozenset())
 
 
 def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() -> None:
@@ -135,7 +129,7 @@ def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() ->
 
 def test_a_finalize_parameter_the_outputs_do_not_depend_on_is_refused() -> None:
     Unused = NewType('Unused', float)
-    with pytest.raises(ValueError, match='outputs do not depend on them'):
+    with pytest.raises(ValueError, match='not needed'):
         build(
             keys=NORMALIZE_WIRING['keys'] | {'unused': Unused},
             finalize_params=frozenset({'scale', 'unused'}),
@@ -152,33 +146,16 @@ def counting_pipeline(loads: list[Path]) -> sciline.Pipeline:
     return sciline.Pipeline([counted, numerator, denominator, normalized])
 
 
-def test_a_cheap_finalize_parameter_change_reuses_the_finalize_stage(
+def test_a_finalize_parameter_change_does_not_read_the_members_again(
     datasets: Path,
 ) -> None:
-    """``scale`` is an input of the finalize stage, so a change keeps it."""
+    """``scale`` is an input of the finalize stage; the contribution is kept."""
     loads: list[Path] = []
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
     workflow = build(counting_pipeline(loads))
     contribution = workflow.contribute(NormalizeParams(run=run, floor=1.5))
     first = workflow.finalize(contribution, NormalizeParams(run=run, scale=1.0))
-    assert not workflow.reused
     second = workflow.finalize(contribution, NormalizeParams(run=run, scale=2.0))
-    assert workflow.reused
-    assert loads == [run]
-    assert equal(second['normalized'], first['normalized'] * 2.0)
-
-
-def test_a_finalize_parameter_that_is_not_cheap_rebuilds_only_finalize(
-    datasets: Path,
-) -> None:
-    """Rebuilding the finalize stage must not read the members again."""
-    loads: list[Path] = []
-    run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    workflow = build(counting_pipeline(loads), cheap=frozenset())
-    contribution = workflow.contribute(NormalizeParams(run=run, floor=1.5))
-    first = workflow.finalize(contribution, NormalizeParams(run=run, scale=1.0))
-    second = workflow.finalize(contribution, NormalizeParams(run=run, scale=2.0))
-    assert not workflow.reused
     assert loads == [run]
     assert equal(second['normalized'], first['normalized'] * 2.0)
 

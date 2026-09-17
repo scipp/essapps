@@ -925,7 +925,7 @@
         <text x="36" y="106" class="m">sample: data ref, raw NeXus</text>
         <text x="36" y="126" class="m">vanadium: data ref, scipp array</text>
         <text x="36" y="146" class="m">threshold: float [counts]</text>
-        <text x="36" y="166" class="m">q_bins: edges   ⟵ cheap</text>
+        <text x="36" y="166" class="m">q_bins: edges   ⟵ stage input</text>
         <text x="36" y="196" class="s">outputs</text>
         <text x="36" y="218" class="m">iofq: scipp array, 1D</text>
         <text x="36" y="238" class="m">beam_centre: vector [m]</text>
@@ -1047,7 +1047,7 @@
     <span class="add">vanadium: DataRef(ArraySpec(...))</span>
     <span class="add">runs_to_sum: list[DataRef]</span>   <span class="cm"># collection</span>
     threshold: float [counts]
-    q_bins: edges                <span class="add">cheap=True</span>
+    q_bins: edges
   outputs:                       <span class="cm"># typed model</span>
     iofq: ArraySpec(dims=[Q], <span class="add">binned=False</span>)
     <span class="add">beam_centre: Vector [m]</span>
@@ -1063,7 +1063,7 @@
     <span class="chip">collections on both sides; a reference may name one element</span>
     <span class="chip">binned flag: event outputs are never plotted, a dense twin is</span>
     <span class="chip">a contribution output, and the parameters finalize reads (D13, D15)</span>
-    <span class="chip open">cheap parameters: what a slider may move (phase 3)</span>
+    <span class="chip open">stage inputs: what a slider may move, chosen by the binding (phase 3)</span>
   </div>
   <p class="take">Chaining becomes <b>a type check between two fields</b> of one vocabulary. Storage placement stops being a spec concept.</p>
   <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
@@ -1195,7 +1195,7 @@
         <tr><td>The batch form: members and values typed by hand over the same apply and table; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Contribution output with contribute, combine, and finalize; chained combines; grouping helper</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>HTTP transport, when the first client lives outside the backend process; cluster launcher</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Sessions, warm workflows, cheap parameters, private caches, slots, local files as datasets; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
+        <tr><td>Sessions, warm workflows, private caches, slots, local files as datasets; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
       </tbody>
     </table>
     <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>
@@ -1248,11 +1248,11 @@
     <table>
       <thead><tr><th></th><th>Session</th><th>Checkpoint</th><th>Stateless with splits</th></tr></thead>
       <tbody>
-        <tr><td>Feedback on a cheap parameter</td><td>sub-second</td><td>sub-second</td><td>seconds; sub-second on rung 2</td></tr>
+        <tr><td>Feedback on a post-processing parameter</td><td>sub-second</td><td>sub-second</td><td>seconds; sub-second on rung 2</td></tr>
         <tr><td>Records while exploring</td><td>one per change, hidden by slots</td><td>none</td><td>one per change</td></tr>
         <tr><td>New framework concepts</td><td>session, warm workflow, slots, private caches, two shapes</td><td>none; the warm wrapper becomes a library</td><td>none on rung 1; a placement policy and a memory index on rung 2</td></tr>
         <tr><td>Interactive use in the shared web UI</td><td>remote sessions owned by the framework</td><td>a hosted process per user, owned by infrastructure</td><td>works, slowly; on rung 2 with no per-user process at all</td></tr>
-        <tr><td>Burden on workflow authors</td><td>declare cheap parameters correctly</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
+        <tr><td>Burden on workflow authors</td><td>choose the stage inputs</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
         <tr><td>Combining an unattended growing series</td><td>a chained combine (D15); no session is involved</td><td>a chained combine; the application is not running</td><td>a chained combine, this model's own shape; the fold is its second rung</td></tr>
       </tbody>
     </table>
@@ -1273,7 +1273,7 @@
       <span class="q">How far does SciCat ingestion lag the file?</span><span class="rec">Measure before phase 1</span>
       <span class="why">ISIS's interfaces discover runs from the archive because the catalogue lagged; a filesystem source can only get ahead of SciCat and wait for the PID, never replace it.</span>
       <span class="q">Spec changes to scipp/ess#690: typed outputs, data-reference parameters, collections, binned flag?</span><span class="rec">Recommend yes, while the PR is open</span>
-      <span class="why">Cheap parameters and code revision are one optional field each.</span>
+      <span class="why">Code revision is one optional field.</span>
       <span class="q">Confirm D15: workflow authors declare accumulation keys and place normalisation after them?</span><span class="rec">Recommend yes</span>
       <span class="why">The framework can then chain, fold, and parallelise a combine without knowing scipp. ess.sans already has the shape; ess.powder does not yet.</span>
       <span class="q">Accept uploads of local files in the shared service?</span><span class="rec">Recommend no</span>

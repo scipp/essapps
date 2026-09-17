@@ -34,7 +34,7 @@ def raw() -> sc.DataArray:
     )
 
 
-def test_a_cheap_change_does_not_rerun_the_expensive_part() -> None:
+def test_a_change_to_an_input_does_not_rerun_the_held_part() -> None:
     calls: list[float] = []
 
     def counted(data: RawData, threshold: Threshold) -> Filtered:
@@ -45,7 +45,7 @@ def test_a_cheap_change_does_not_rerun_the_expensive_part() -> None:
         sciline.Pipeline([counted, histogram]),
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
         targets={'histogram': Histogram},
-        cheap={'bins'},
+        inputs={'bins'},
     )
     workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
     workflow(HistogramParams(data=raw(), threshold=1.5, bins=4))
@@ -54,7 +54,7 @@ def test_a_cheap_change_does_not_rerun_the_expensive_part() -> None:
     assert calls == [1.5, 3.0]
 
 
-def test_warm_pipeline_reuses_only_when_expensive_params_are_unchanged() -> None:
+def test_warm_pipeline_reuses_only_when_held_params_are_unchanged() -> None:
     workflow = histogram_workflow()
     first = workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
     assert not workflow.reused
@@ -78,20 +78,20 @@ def test_warm_equals_cold_for_the_example() -> None:
     )
 
 
-def test_cheap_parameter_without_a_key_is_refused() -> None:
+def test_an_input_without_a_key_is_refused() -> None:
     pipeline = sciline.Pipeline([filter_data, histogram])
     with pytest.raises(ValueError, match='bins'):
-        WarmPipeline(pipeline, keys={}, targets={}, cheap={'bins'})
+        WarmPipeline(pipeline, keys={}, targets={}, inputs={'bins'})
 
 
-def test_cheap_parameter_the_targets_do_not_need_is_refused() -> None:
+def test_an_input_the_targets_do_not_need_is_refused() -> None:
     pipeline = sciline.Pipeline([filter_data, histogram])
     with pytest.raises(ValueError, match='not needed'):
         WarmPipeline(
             pipeline,
             keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
             targets={'filtered': Filtered},
-            cheap={'bins'},
+            inputs={'bins'},
         )
 
 
@@ -102,18 +102,18 @@ def test_session_reruns_record_reuse_of_the_expensive_part_not_of_the_callable(
     loaded = client.run(LOAD, {'run': run_ref})
     data = loaded.ref('data')
     first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
-    cheap = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
-    expensive = client.run(
+    rebinned = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
+    refiltered = client.run(
         HISTOGRAM, {'data': data, 'bins': 8, 'threshold': 2.0}, label='hist'
     )
     assert not first.reused
-    assert cheap.reused
-    assert not expensive.reused
-    assert client.output(cheap).sizes == {'x': 8}
-    assert client.latest('hist').id == expensive.id
+    assert rebinned.reused
+    assert not refiltered.reused
+    assert client.output(rebinned).sizes == {'x': 8}
+    assert client.latest('hist').id == refiltered.id
 
 
-def test_reuse_keeps_outputs_that_no_cheap_parameter_feeds() -> None:
+def test_reuse_keeps_outputs_that_no_input_feeds() -> None:
     Total = NewType('Total', float)
 
     def total(data: RawData) -> Total:
@@ -124,7 +124,7 @@ def test_reuse_keeps_outputs_that_no_cheap_parameter_feeds() -> None:
         pipeline,
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
         targets={'histogram': Histogram, 'total': Total},
-        cheap={'bins'},
+        inputs={'bins'},
     )
     first = workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
     second = workflow(HistogramParams(data=raw(), threshold=1.5, bins=4))

@@ -312,11 +312,12 @@ The runner validates outputs against the model, stores vocabulary-typed small va
 Chunk-wise processing of one large file, as the NMX workflow does, happens inside the callable and is invisible to the framework; that the NMX product is then held in memory before it is written is a cost accepted here.
 
 **What a warm workflow reuses.**
-A sciline workflow meets the contract through a thin wrapper that keeps the pipeline and caches the values of the nodes the spec declares expensive.
+A sciline workflow meets the contract through a thin wrapper that keeps the pipeline and holds the values that the parameters it takes per call cannot affect.
 A rerun sets the changed parameters and recomputes only what lies downstream of them, which is how every notebook already works: the parameters people move interactively, Q bins, d-spacing bins, cut axes, a beam centre, enter after the expensive load and coordinate conversion.
-The spec therefore declares which parameters are cheap to change, and the wrapper builds a **stage** from the workflow's targets and those parameters as its inputs: sciline's `Stage` (scipp/sciline#245), the part of a graph from named inputs to named outputs, which computes once everything the inputs cannot affect and holds it at its frontier.
-That frontier is the cache, and a rerun is a call of the stage with the cheap parameters.
-The declaration is also what lets a UI offer a slider rather than a run button, and a stage refuses an input its outputs do not need, so a cheap parameter that never reaches the targets is a bind error rather than a dead slider.
+The binding therefore names the parameters that vary per call, and the wrapper builds a **stage** from the workflow's targets and those parameters as its inputs: sciline's `Stage` (scipp/sciline#245), the part of a graph from named inputs to named outputs, which computes once everything the inputs cannot affect and holds it at its frontier.
+That frontier is the cache, a rerun is a call of the stage with its inputs, and a change to any other parameter rebuilds the stage.
+Which parameters are inputs is the binding's choice and not part of the spec, since nothing in the framework reads it and correctness does not depend on it: an input with expensive work downstream costs that work per rerun and nothing the input cannot affect, and fewer inputs hold more at the frontier.
+A stage refuses an input its outputs do not need, so an input that never reaches the targets is a bind error rather than a dead slider.
 The wrapper imports sciline; the framework does not.
 A list of runs that only grows is not a case for the warm workflow but a combine (D15); the wrapper caches nodes and never accumulates.
 The framework provides a test helper that drives a callable through a sequence of parameter sets warm and cold and asserts equal outputs; that is the one check on the wrapper's reuse rules, and every workflow with a warm form runs it.
@@ -333,7 +334,7 @@ The runner remains authoritative for parameters (ADR 0001 in scipp/ess#690); a d
 **Why.**
 Arrays arriving as objects is what lets a chain in a session stay in memory while workflow code looks the same in every mode.
 One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept, and a combine request (D15) calls two stages of the same binding rather than a second protocol.
-Reuse inside the wrapper is correct by construction from the sciline graph, given the declared cheap parameters; the declaration cannot be avoided, because caching every intermediate is not affordable and the graph does not know compute cost.
+Reuse inside the wrapper is correct by construction from the sciline graph for any choice of stage inputs; the choice cannot be derived, because caching every intermediate is not affordable and the graph does not know which parameters will vary, so the binding makes it.
 Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.
 
 **Cost.**
@@ -450,11 +451,11 @@ The single callable of D8 is the composition contribute, then finalize, and is w
 A sciline workflow gets the three from the wrapper given the accumulation keys, which is the declaration `StreamProcessor` already takes: the graph up to the keys is contribute, the graph from the keys to the targets is finalize, and combine is the addition ess.reduce already dispatches on the value.
 The wrapper builds the three from sciline's `Aggregation`, constructed from the accumulation keys, an accumulator per key, and the **member table**, one row per member holding the parameters that vary across the members of the request at hand.
 The accumulator is sciline's `Buffered` over the package's combine function, or a running total where a sum over large dense arrays should hold one array rather than one per member.
-Whether the intermediate is events or a histogram is the author's choice at the accumulation key: events keep rebinning a cheap parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
+Whether the intermediate is events or a histogram is the author's choice at the accumulation key: events keep the binning a parameter of finalize and cost memory and disk; a histogram fixes the bins at contribute and is small.
 The framework does not see the difference.
 
 A spec that declares a contribution also declares which of its parameters finalize reads; the rest, every data reference among them, are contribute's.
-The two sets usually coincide with the expensive and cheap parameters of D8, since the parameters people move interactively are the ones that enter after the sum, but they are separate declarations because they answer different questions.
+The finalize parameters are usually the ones a warm binding makes stage inputs (D8), since the parameters people move interactively are the ones that enter after the sum, but this declaration is the spec's because it has readers that cannot import workflow code: the backend validating a combine request, and a combine form.
 A member run of a declared series executes contribute only, and its other output fields are absent, which D13 allows.
 A **combine request** names the spec, carries the finalize parameters, and references contributions: the contribution outputs of member records, and usually the contribution output of the previous combine record.
 It produces the combined contribution, a stage output kept for the next combine, and the finalized outputs.
@@ -655,9 +656,9 @@ A downstream parameter may take a reference to any output field whose type match
 The spec as proposed allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow.
 Storage placement, inline or in the data store, stops being a spec concept.
 
-**Cheap parameters, an optional code revision, and declared failure reasons (also D13).**
-A spec declares which parameters are cheap to change once the workflow is warm, and may carry a code revision.
-Both are read by the framework and by UIs and mean nothing to a throwaway run.
+**An optional code revision and declared failure reasons (also D13).**
+A spec may carry a code revision; it is read by the framework and by UIs and means nothing to a throwaway run.
+Which parameters a warm workflow takes per call is the binding's choice (D8) and not part of the interface.
 A spec may also declare named failure reasons, each with a message; a workflow that fails for a declared reason returns it, the record carries its name, and a UI can explain it and a rule's retry policy can match it.
 
 **A contribution output (also D13, D15).**
@@ -839,7 +840,7 @@ Where esslivedata uses a word differently, the clash is noted.
 - **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its runs and the workflow itself in memory. A cache over records.
 - **Slot**: a label an interactive tool owns, with no member key. The unit of interactive work, and what tools list and replay.
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs. Defined in scipp/ess#690.
-- **Stage**: the part of a sciline graph from named inputs to named outputs, with everything else computed once and held at its frontier. The warm workflow is a stage whose inputs are the cheap parameters; contribute and finalize are the two stages of an aggregation. A **stage output**, an output one spec produces and another takes (D4), is such a boundary value kept as a record.
+- **Stage**: the part of a sciline graph from named inputs to named outputs, with everything else computed once and held at its frontier. The warm workflow is a stage whose inputs are the parameters the binding names as varying per call; contribute and finalize are the two stages of an aggregation. A **stage output**, an output one spec produces and another takes (D4), is such a boundary value kept as a record.
 - **Submission**: the field on a run record that says how its request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup. Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits; the execution shape of shared mode.
@@ -863,7 +864,7 @@ Numbering follows reading order. It is provisional until the wider review and st
 | D5 | The record store is ours, small, and implementation-agnostic; the backend is its single writer | Choice 2 |
 | D6 | One scheduling primitive: pending outputs as inputs; map and combine are optional uses of it | Choice 2 |
 | D7 | The dataset source is abstracted, declares the matchable metadata fields, and persists nothing; not Kafka | Choice 2 |
-| D8 | Framework-to-workflow contract: a callable from parameters to outputs; declared cheap parameters; three validation layers | Choice 3 |
+| D8 | Framework-to-workflow contract: a callable from parameters to outputs; stage inputs chosen by the binding; three validation layers | Choice 3 |
 | D9 | The client interface is the API; validate is separate from submit; HTTP later; notebook first | Choice 4 |
 | D10 | Interactive plotting: views are not runs and return plain arrays; event data is never viewed; reruns live in slots, which are labels | Choice 4 |
 | D11 | Only finalized data enters SciCat; publication reads a cold disk copy; the record store is not a catalogue | Ownership, publication, and deployment |

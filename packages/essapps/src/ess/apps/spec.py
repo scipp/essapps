@@ -194,9 +194,7 @@ class WorkflowSpec(BaseModel, frozen=True):
 
     ``params`` and ``outputs`` are pydantic model classes over one vocabulary, so an
     output field of one spec can feed a parameter field of another when their
-    types match. ``cheap`` names the parameters a warm workflow can change without
-    recomputing the expensive part; it is what lets a UI offer a slider.
-    ``contribution`` marks the output a combine request combines, and
+    types match. ``contribution`` marks the output a combine request combines, and
     ``finalize_params`` the parameters the finalize stage reads (D15).
     """
 
@@ -208,7 +206,6 @@ class WorkflowSpec(BaseModel, frozen=True):
     description: str = Field(min_length=1)
     params: type[BaseModel] = NoParams
     outputs: type[BaseModel]
-    cheap: frozenset[str] = frozenset()
     code_revision: str | None = Field(
         default=None, description="Git commit or package version of the workflow code."
     )

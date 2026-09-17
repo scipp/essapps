@@ -6,8 +6,8 @@ LoKI at Larmor bound to the spec vocabulary: a beam centre and an I(Q) reduction
 The two specs are the instrument half of the notebook story in
 ``notebooks/loki-session.ipynb``: the beam centre is computed once from the
 sample run, its output feeds the I(Q) reduction as a reference, and the Q
-binning is declared cheap so that a slider reruns only the part of the sciline
-graph that depends on it.
+binning parameters are the inputs of the warm stage, so that a slider reruns
+only the part of the sciline graph that depends on them.
 
 The workflow is the one of the ``loki-iofq`` tutorial in esssans. Everything the
 tutorial sets that is not a parameter here -- the detector name, gravity
@@ -184,7 +184,7 @@ def iofq_workflow() -> WarmPipeline:
             'q_bins': QNumBins,
         },
         targets={'iofq': BackgroundSubtractedIofQ},
-        cheap=IOFQ.cheap,
+        inputs=['q_min', 'q_max', 'q_bins'],
     )
 
 
@@ -198,7 +198,6 @@ IOFQ = WorkflowSpec(
     ),
     params=IofQParams,
     outputs=IofQOutputs,
-    cheap=frozenset({'q_min', 'q_max', 'q_bins'}),
 )
 
 

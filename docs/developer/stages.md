@@ -14,12 +14,12 @@ They are one construction seen from four sides.
 
 | In the sketch | Where | As stages and accumulators |
 |---|---|---|
-| Warm workflow: the wrapper caches the nodes just upstream of the cheap parameters and reruns what lies downstream | D8, `warm.py` in the skeleton | `Stage(pipeline, outputs=targets, inputs=cheap_keys)`; the cache is the stage's frontier |
+| Warm workflow: the wrapper caches the nodes just upstream of the stage inputs and reruns what lies downstream | D8, `warm.py` in the skeleton | `Stage(pipeline, outputs=targets, inputs=input_keys)`; the cache is the stage's frontier |
 | Contribute, combine, finalize: the graph up to the accumulation keys, the addition, the graph from the keys to the targets | D15 | `Aggregation(pipeline, members=member_keys, accumulators={key: factory}, outputs=targets)`, whose three entry points are those three |
 | A stage output: a value one spec produces and another takes, at a cut the author chose | D4, phase 3 split model | The frontier of a `Stage`, held in a forwarder that is a record |
 | The fold: a process holding the running contribution and writing a combine record every n arrivals | D15, stateless.md | Accumulators from `agg.accumulators()` held by a process; their `value` is the record |
 
-The skeleton's `WarmPipeline` is already the first row: its `frontier()` computes the nodes not downstream of a cheap key that feed one that is, holds their values, and reruns from them.
+The skeleton's `WarmPipeline` is already the first row: its `frontier()` computes the nodes not downstream of an input key that feed one that is, holds their values, and reruns from them.
 That is the `Stage` frontier, with the same rule and the same "extra parameters are harmless" remark.
 What the skeleton adds on top, the field-name-to-key mapping, the `reused` flag, and the rebuild when an expensive parameter changes, stays; what it does by hand, the graph walk and the cache, becomes the library's.
 
@@ -33,17 +33,17 @@ Judgment: "fold" stays as the name of the process shape, since it names a deploy
 Small, and all in one direction: declarations the sketch asks of the author become derivations from the graph, or declarations the binding checks against the graph.
 
 **D8.**
-The spec still declares the cheap parameters, because that declaration answers a UI question, slider or run button, that the graph cannot.
+The binding names the stage inputs, the parameters that vary per call; the spec does not, because nothing in the framework reads them and correctness does not depend on the choice.
 The sentence "the wrapper caches the nodes just upstream of them" becomes a property of `Stage` rather than a rule the wrapper implements, and "reuse is correct by construction from the sciline graph" is now literally true: the stage is a snapshot of the pipeline, and a value it holds cannot be affected by an input it takes.
-`Stage` refuses an input the outputs do not need, so a cheap parameter that never reaches the targets is a bind error rather than a dead slider.
+`Stage` refuses an input the outputs do not need, so an input that never reaches the targets is a bind error rather than a dead slider.
 The warm-equals-cold helper stays, since providers may be impure and the snapshot does not know; so does the `reused` flag.
 
 **D13 and D15, which parameters finalize reads.**
 The binding can derive the split: `contribute_stage.keys` and `finalize_stage.keys` say which parameters each stage reads, and a parameter in both, read upstream and downstream of the accumulation keys, is contribute's, because changing it invalidates the contributions.
 An earlier reading of this note, and the sciline design document's paragraph on this framework, concluded that the declaration in D13 can therefore go.
-Judgment: keep the declaration and check it, for the reason D8 keeps the cheap parameters declared.
+Judgment: keep the declaration and check it, because unlike the stage inputs of D8 it has readers that cannot import workflow code.
 The backend validates a combine request at submission and never imports workflow code, and a combine form or a rule's combine template has to know which fields it has; only the spec can tell them.
-The binding derives the split at bind time and refuses a spec whose declaration disagrees with the graph, so a wrong declaration is a bind error rather than a wrong result, and the sketch's remark that the two sets "usually coincide with the expensive and cheap parameters of D8" becomes something the binding can report.
+The binding derives the split at bind time and refuses a spec whose declaration disagrees with the graph, so a wrong declaration is a bind error rather than a wrong result, and the sketch's remark that the finalize parameters usually coincide with the stage inputs of D8 becomes something the binding can report.
 A combine request that reaches the runner with a contribute parameter is refused there as well, which is the runnability check the sketch did not have.
 
 **D15, the chained series.**
@@ -86,7 +86,7 @@ With `Stage` the three hold the same object and the difference is placement alon
 
 | Model | The Stage and what sits after it |
 |---|---|
-| Session | Held by the session's runner; each rerun is a call with the cheap parameters, recorded in a slot |
+| Session | Held by the session's runner; each rerun is a call with the stage inputs, recorded in a slot |
 | Checkpoint | Held by the application; calls create no records; a kept result is a cold request |
 | Stateless with splits, first rung | Two stages with a spec boundary between them; the forwarder's value is a stored stage output, and each rerun is a throwaway process calling the second stage |
 | Stateless with splits, second rung | The second stage held by a warm runner keyed by the frontier reference it holds |
@@ -95,7 +95,7 @@ The stateless note recommends measuring the throwaway feedback loop "cold, with 
 Those are one `Stage` built per call, one built once per process, and one built once and called; the spike can measure all three with one class.
 
 The note also says the fold "is the third model's second rung" and that solving one solves the other.
-That is now visible in code: a keyed warm runner holds a `Stage` for a cheap-parameter loop and a set of accumulators for a series, and both are addressed by what they hold.
+That is now visible in code: a keyed warm runner holds a `Stage` for an interactive loop and a set of accumulators for a series, and both are addressed by what they hold.
 
 The sciline proposal considered and deferred a generic object that holds a network of stages and accumulators and routes pushes through it.
 The candidates for it are the per-package objects, such as esssans's, holding a pipeline, two aggregations, a finalize stage, and contributions, and this framework's wrapper, which holds the same things for one aggregation.
@@ -112,7 +112,7 @@ The framework sees the wrapper's callable, or for a declared contribution its th
 
 The wrapper sets a request's parameters on the pipeline, builds one `Aggregation` from the spec's accumulation keys, the accumulator factory per key, and the member keys of the request at hand, holds the contributions where the execution shape says, and maps between the aggregation's world and the spec's: the contribution, keyed by sciline types, to the typed output the spec declares, a data group keyed by field name, and back.
 Its finalize is not the aggregation's: `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a parameter people move after the sum, the Q bins, would have to be set on the pipeline before the snapshot and would rebuild it on every change.
-The wrapper instead builds a `Stage` from the targets with the accumulation keys and the spec's cheap parameters (D8) as inputs, so a combined contribution and a slider value arrive in one call and the frontier holds what depends on neither; a cheap parameter contribute reads is a bind error, since changing it would invalidate the contributions.
+The wrapper instead builds a `Stage` from the targets with the accumulation keys and the finalize parameters as inputs, so a combined contribution and a slider value arrive in one call and the frontier holds what depends on neither; a finalize parameter contribute reads is a bind error, since changing it would invalidate the contributions.
 That mapping is the wrapper's, is fixed per spec version, and is the same as the mapping the skeleton's `WarmPipeline` already keeps between field names and keys.
 The accumulator per key is part of the declaration: `Buffered` over the package's combine function is the default, and a running-total accumulator is the author's choice where a sum over large dense arrays should hold one array instead of one per member.
 
@@ -184,3 +184,4 @@ Applied to architecture.md and to its HTML edition on 2026-09-17; the list stays
 - D14, apply: say that the member table is the aggregation's table with the member key as its label, and that the member keys are whatever varies in the request at hand.
 - Glossary: stage, accumulator, accumulation key, aggregation.
 - Next step: the D3/D6 spike's fake workflow with two accumulation keys is an `Aggregation`, and the feedback-loop measurement is one `Stage` under three lifetimes.
+- D8, D13, second pass: the stage inputs are the binding's choice rather than a spec declaration, and the finalize stage takes every finalize parameter as an input.

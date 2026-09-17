@@ -29,7 +29,7 @@ The list is long because the session touches many sections, not because any one 
   What remains is a disk tier with a registry, a read cache in the view server if measurements ask for one, and retention.
 - D4 loses its second reason and the remark that it disappears inside a session.
   The rule becomes: split a workflow wherever a stage should be reusable or tunable on its own, always.
-- D8 loses the warm workflow, the sciline wrapper and its frontier, the declaration of cheap parameters as a framework concept, the warm-equals-cold helper, and the `reused` flag.
+- D8 loses the warm workflow, the sciline wrapper and its frontier, the warm-equals-cold helper, and the `reused` flag.
   In-process binding goes with it, because a throwaway process imports code by name.
 - D10 loses slots and everything on them.
   Views stay, served by the service from disk copies, with one routing rule instead of three.
@@ -160,7 +160,7 @@ Interactive work in the shared web UI needs remote sessions, which the framework
 
 **The checkpoint model.**
 State lives in the application's process and the framework does not know about it.
-The application holds its workflow object, reruns it in memory as a notebook does, wrapped by the same sciline wrapper if it wants cheap reruns, and plots with plopp or with the view function called in-process.
+The application holds its workflow object, reruns it in memory as a notebook does, wrapped by the same sciline wrapper if it wants warm reruns, and plots with plopp or with the view function called in-process.
 None of that creates records.
 When the user keeps a result, the application submits the complete parameter set as an ordinary request, which runs cold in a throwaway process and yields a record indistinguishable from a batch member.
 The application may compare the cold output with what was on screen and warn if they differ; that is the warm-equals-cold check, moved to the one moment it matters.
@@ -175,14 +175,14 @@ Where the first rung's cost is disk and the workflow authors, the second's is a 
 
 | | Session model | Checkpoint model | Stateless with splits |
 |---|---|---|---|
-| Feedback on a cheap parameter | Sub-second | Sub-second | Seconds; sub-second on the second rung |
+| Feedback on a post-processing parameter | Sub-second | Sub-second | Seconds; sub-second on the second rung |
 | Records created while exploring | One per change, hidden by slots | None | One per change |
 | Provenance of a kept result | Complete | Complete | Complete |
 | What the user saw equals the record | By the wrapper's rules plus a test helper | Checked once at checkpoint, cold | By construction |
-| New framework concepts | Session, warm workflow, cheap parameters, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None on the first rung; a placement policy and a memory index on the second |
+| New framework concepts | Session, warm workflow, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None on the first rung; a placement policy and a memory index on the second |
 | Interactive use in the shared web UI | Remote sessions owned by the framework | A hosted process per user, owned by infrastructure | Works, slowly; on the second rung with no per-user process at all |
 | Disk volume | Low | Low | High; lower on the second rung |
-| Burden on workflow authors | Declare cheap parameters and cache nodes correctly | None beyond the callable | Split at every tunable boundary |
+| Burden on workflow authors | Choose the stage inputs | None beyond the callable | Split at every tunable boundary |
 | Losing the process | Lose time; every step was recorded | Lose the exploration since the last checkpoint | Lose nothing |
 | Exploring a large volume in the browser | Views from session memory | Views from the application's memory, or a hosted process | Chunked layout on disk |
 | Combining an unattended growing series | A chained combine (D15); no session is involved | A chained combine; the application is not running | A chained combine, this model's own shape; the fold is its second rung |

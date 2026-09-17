@@ -79,9 +79,9 @@ Actor: user in a notebook.
 2. Changes Q binning, wavelength range, and a detector mask several times, looking at I(Q) after each change within a second or two.
 3. Saves the final parameters as a template for the beamtime.
 
-Checks: which changes are cheap and who declares that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
+Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
-Outcome: gap, closed in the sketch. Cheap parameters are declared on the spec (D8, D13) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
+Outcome: gap, closed in the sketch. The binding names the parameters the warm stage takes per call (D8) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
 
 ### B2. Add a run to a sum, then remove one
 

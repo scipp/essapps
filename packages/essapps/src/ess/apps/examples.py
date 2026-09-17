@@ -85,10 +85,9 @@ REBIN = WorkflowSpec(
     name='rebin',
     version=1,
     title='Rebin',
-    description='Histogram a run onto a coarser axis; the cheap stage after loading.',
+    description='Histogram a run onto a coarser axis; the stage after loading.',
     params=RebinParams,
     outputs=RebinOutputs,
-    cheap=frozenset({'bins'}),
 )
 
 
@@ -201,7 +200,7 @@ def write_run(path: Path, values: list[float]) -> Path:
     return path
 
 
-# A sciline pipeline behind the contract: threshold is expensive, bins is cheap.
+# A sciline pipeline behind the contract: threshold is held, bins is a stage input.
 
 RawData = NewType('RawData', sc.DataArray)
 Threshold = NewType('Threshold', float)
@@ -238,7 +237,7 @@ def histogram_workflow() -> WarmPipeline:
         pipeline,
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
         targets={'histogram': Histogram},
-        cheap=HISTOGRAM.cheap,
+        inputs=['bins'],
     )
 
 
@@ -249,7 +248,6 @@ HISTOGRAM = WorkflowSpec(
     description='Filter then histogram; a sciline pipeline kept warm in a session.',
     params=HistogramParams,
     outputs=HistogramOutputs,
-    cheap=frozenset({'bins'}),
 )
 
 
@@ -322,7 +320,6 @@ NORMALIZE = WorkflowSpec(
     'the declared additive combine.',
     params=NormalizeParams,
     outputs=NormalizeOutputs,
-    cheap=frozenset({'scale'}),
     contribution='contribution',
     finalize_params=frozenset({'scale'}),
 )
@@ -334,9 +331,7 @@ NORMALIZE_WIRING: dict[str, Any] = {
     'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},
     'combine': add,
     'finalize_params': NORMALIZE.finalize_params,
-    'cheap': NORMALIZE.cheap,
 }
 """How NORMALIZE binds to its pipeline: the field-to-key maps, the accumulation
-keys, and the spec's own declaration of what is combined, what finalize reads,
-and which of those parameters are cheap enough to be inputs of the finalize
-stage rather than values it is rebuilt for."""
+keys, and the spec's own declaration of what is combined and what finalize
+reads."""

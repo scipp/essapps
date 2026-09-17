@@ -3,7 +3,7 @@
 """
 The LoKI session of ``notebooks/loki-session.ipynb``, without the notebook.
 
-Two records chained by a reference, a cheap rerun under a label, and provenance
+Two records chained by a reference, a rebinning under a label, and provenance
 back to the dataset references the requests name.
 """
 
@@ -82,7 +82,7 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     # 60392 is both the background transmission and the empty beam: one file.
     assert len(first.checksums) == len(set(RUNS.values())) + 1
 
-    # A cheap change under the same label: a new record that supersedes the first.
+    # A rebinning under the same label: a new record that supersedes the first.
     second = client.run(
         loki.IOFQ, iofq_params(refs, center.ref(), q_bins=50), label='iofq'
     )
@@ -99,9 +99,9 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert refs['background_run'] in [DatasetRef(**raw) for raw in provenance['raw']]
 
 
-def test_only_a_cheap_change_reuses_the_warm_stage(cache: Path) -> None:
+def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> None:
     """
-    ``WarmPipeline.reused`` is the signal that the expensive part was held, and
+    ``WarmPipeline.reused`` is the signal that the held part was kept, and
     it is what a record's ``reused`` flag reports: the run came out of the warm
     stage rather than merely out of a kept callable.
     """
