@@ -111,6 +111,8 @@ Whichever model is chosen, the object it runs is built and tested in phases 1 an
 The framework sees the wrapper's callable, or for a declared contribution its three entry points, and nothing behind them.
 
 The wrapper sets a request's parameters on the pipeline, builds one `Aggregation` from the spec's accumulation keys, the accumulator factory per key, and the member keys of the request at hand, holds the contributions where the execution shape says, and maps between the aggregation's world and the spec's: the contribution, keyed by sciline types, to the typed output the spec declares, a data group keyed by field name, and back.
+Its finalize is not the aggregation's: `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a parameter people move after the sum, the Q bins, would have to be set on the pipeline before the snapshot and would rebuild it on every change.
+The wrapper instead builds a `Stage` from the targets with the accumulation keys and the spec's cheap parameters (D8) as inputs, so a combined contribution and a slider value arrive in one call and the frontier holds what depends on neither; a cheap parameter contribute reads is a bind error, since changing it would invalidate the contributions.
 That mapping is the wrapper's, is fixed per spec version, and is the same as the mapping the skeleton's `WarmPipeline` already keeps between field names and keys.
 The accumulator per key is part of the declaration: `Buffered` over the package's combine function is the default, and a running-total accumulator is the author's choice where a sum over large dense arrays should hold one array instead of one per member.
 
@@ -154,6 +156,11 @@ Read against the ADR, the design document, and the modules on the PR branch at 0
 - **Static accumulation keys** pass silently to finalize, which the ADR lists as a consequence for package tests to check.
   For this framework a declared accumulation key that does not depend on the members is a bind error, since a contribution without it is not what the spec promised; the wrapper compares `agg.accumulation_keys` with the declaration.
   No change to sciline is needed, but the ADR could name the check as the consumer's rather than leave it to tests.
+- **Finalize inputs.**
+  `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a finalize parameter cannot be given per call; the limit is the convenience class's, since a `Stage` with the accumulation keys and that parameter as inputs takes both.
+  The mechanism supports it inside `Aggregation` already: a parameter named as a member key and as an accumulation key with a forwarding accumulator passes through contribute, the forwarder keeps the last value, and finalize takes it per call; named as an accumulation key alone it is dropped, since only keys that depend on the members are accumulated.
+  That form misdescribes the parameter, every contribution carrying a value that is not the member's, so an additive `finalize_inputs=` argument, or a documented recipe for building the finalize stage from `agg.accumulation_keys`, would spare consumers the wrapper's own stage.
+  Found on 2026-09-17 while building the wrapper; not yet applied on the sciline branch.
 
 ## Settled in the proposal since the draft this note first read
 
