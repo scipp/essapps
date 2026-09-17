@@ -24,7 +24,7 @@ from ess.apps.examples import (
 )
 from ess.apps.spec import Ref
 from ess.apps.testing import assert_warm_equals_cold
-from ess.apps.warm import WarmPipeline, frontier
+from ess.apps.warm import WarmPipeline
 
 
 def raw() -> sc.DataArray:
@@ -34,15 +34,28 @@ def raw() -> sc.DataArray:
     )
 
 
-def test_frontier_is_just_upstream_of_cheap_keys() -> None:
-    pipeline = sciline.Pipeline([filter_data, histogram])
-    assert frontier(pipeline, {Threshold}) == {RawData, Bins}
-    assert frontier(pipeline, set()) == set()
+def test_a_cheap_change_does_not_rerun_the_expensive_part() -> None:
+    calls: list[float] = []
+
+    def counted(data: RawData, threshold: Threshold) -> Filtered:
+        calls.append(threshold)
+        return filter_data(data, threshold)
+
+    workflow = WarmPipeline(
+        sciline.Pipeline([counted, histogram]),
+        keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
+        targets={'histogram': Histogram},
+        cheap={'bins'},
+    )
+    workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
+    workflow(HistogramParams(data=raw(), threshold=1.5, bins=4))
+    assert calls == [1.5]
+    workflow(HistogramParams(data=raw(), threshold=3.0, bins=4))
+    assert calls == [1.5, 3.0]
 
 
 def test_warm_pipeline_reuses_only_when_expensive_params_are_unchanged() -> None:
     workflow = histogram_workflow()
-    assert workflow.frontier == {Filtered}
     first = workflow(HistogramParams(data=raw(), threshold=1.5, bins=2))
     assert not workflow.reused
     second = workflow(HistogramParams(data=raw(), threshold=1.5, bins=4))
@@ -69,6 +82,17 @@ def test_cheap_parameter_without_a_key_is_refused() -> None:
     pipeline = sciline.Pipeline([filter_data, histogram])
     with pytest.raises(ValueError, match='bins'):
         WarmPipeline(pipeline, keys={}, targets={}, cheap={'bins'})
+
+
+def test_cheap_parameter_the_targets_do_not_need_is_refused() -> None:
+    pipeline = sciline.Pipeline([filter_data, histogram])
+    with pytest.raises(ValueError, match='not needed'):
+        WarmPipeline(
+            pipeline,
+            keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
+            targets={'filtered': Filtered},
+            cheap={'bins'},
+        )
 
 
 def test_session_reruns_of_a_sciline_workflow_record_reuse(
