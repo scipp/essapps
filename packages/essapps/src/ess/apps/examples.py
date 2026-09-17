@@ -334,6 +334,9 @@ NORMALIZE_WIRING: dict[str, Any] = {
     'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},
     'combine': add,
     'finalize_params': NORMALIZE.finalize_params,
+    'cheap': NORMALIZE.cheap,
 }
 """How NORMALIZE binds to its pipeline: the field-to-key maps, the accumulation
-keys, and the spec's own declaration of what is combined and what finalize reads."""
+keys, and the spec's own declaration of what is combined, what finalize reads,
+and which of those parameters are cheap enough to be inputs of the finalize
+stage rather than values it is rebuilt for."""
