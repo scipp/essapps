@@ -14,9 +14,17 @@ from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import RunRecord, RunRequest, RunStage, Status
-from .sources import DatasetSource
-from .spec import Kind, Ref, Reference, SpecId, WorkflowSpec, data_ref_fields
+from .records import RunRecord, RunRequest, RunStage, Status, Submission
+from .sources import Dataset, DatasetSource
+from .spec import (
+    DatasetRef,
+    Kind,
+    Ref,
+    Reference,
+    SpecId,
+    WorkflowSpec,
+    data_ref_fields,
+)
 from .store import RecordStore
 from .views import ViewSpec
 
@@ -62,6 +70,7 @@ class Client:
         member_key: str | None = None,
         stage: RunStage = 'run',
         contributions: Iterable[Ref | RunRecord] = (),
+        submission: Submission | None = None,
     ) -> RunRequest:
         """
         A request for this instrument and proposal.
@@ -84,6 +93,7 @@ class Client:
             submitter=self.submitter,
             label=label,
             member_key=member_key,
+            submission=submission or Submission(),
         )
 
     def _contribution(self, spec_id: SpecId, of: Ref | RunRecord) -> Ref:
@@ -111,6 +121,19 @@ class Client:
     def sources(self) -> list[DatasetSource]:
         """Where datasets come from; the picker lists from every one of them."""
         return self.backend.sources
+
+    def datasets(self) -> list[Dataset]:
+        """
+        Every dataset the sources know for this proposal, by identity.
+
+        Arrival may be repeated and out of order (D7), so the first dataset of
+        each identity wins; nothing is stored to make the list.
+        """
+        seen: dict[DatasetRef, Dataset] = {}
+        for source in self.sources:
+            for dataset in source.new_datasets(self.proposal):
+                seen.setdefault(dataset.ref, dataset)
+        return list(seen.values())
 
     def pick(self, kind: Kind | None = None) -> list[Candidate]:
         """
@@ -140,12 +163,11 @@ class Client:
                     )
 
     def _picked_datasets(self) -> Iterator[Candidate]:
-        for source in self.sources:
-            for dataset in source.new_datasets(self.proposal):
-                yield Candidate(
-                    ref=dataset.ref,
-                    display={'name': dataset.path.name} | dataset.metadata,
-                )
+        for dataset in self.datasets():
+            yield Candidate(
+                ref=dataset.ref,
+                display={'name': dataset.path.name} | dataset.metadata,
+            )
 
     def record(self, record_id: str) -> RunRecord:
         return self.backend.records.get(record_id)

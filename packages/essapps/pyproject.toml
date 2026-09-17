@@ -27,6 +27,7 @@ requires-python = ">=3.12"
 dynamic = ["version"]
 
 dependencies = [
+    "pandas>=2.0",
     "pydantic>=2.10",
     "sciline>=25.11.0",
     "scipp>=26.3.1",

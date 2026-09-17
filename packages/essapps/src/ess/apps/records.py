@@ -39,6 +39,27 @@ class Status(StrEnum):
         return self in (Status.COMPLETED, Status.FAILED, Status.CANCELLED)
 
 
+class Submission(BaseModel, frozen=True):
+    """
+    How a request was made (D14): explanation, not provenance.
+
+    The resolved request alone reproduces the run; this says which template
+    version, rule version and lookup entry filled it, and which values the
+    submitter typed beyond them, so that a reprocess under a new template or
+    lookup version carries what was typed and recomputes what was filled.
+    """
+
+    template: str | None = None
+    rule: str | None = None
+    entry: str | None = Field(
+        default=None, description="Name of the lookup entry that matched."
+    )
+    typed: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Values the submitter supplied beyond template and lookup.",
+    )
+
+
 class RunRequest(BaseModel, frozen=True):
     """
     Everything needed to execute a workflow once.
@@ -74,6 +95,11 @@ class RunRequest(BaseModel, frozen=True):
     member_key: str | None = Field(
         default=None,
         description="Which member of the batch under the label this is.",
+    )
+    submission: Submission = Field(
+        default_factory=Submission,
+        description="How the request was made: template, rule, lookup entry, "
+        "and the values the submitter typed (D14).",
     )
 
     def refs(self) -> list[Ref]:

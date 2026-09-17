@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,14 +32,26 @@ class Dataset:
     ``instrument`` and ``run`` for a file that carries a run identity, neither
     for a file that carries none, whose path is then its identity. ``metadata``
     is what the source declares for the instrument, an angle, a sample name, a
-    run's role, and is the only thing a rule may match on.
+    run's role; ``created`` is when the acquisition wrote the dataset, which is
+    the other form a rule's lower bound takes.
     """
 
     path: Path
     pid: str | None = None
     instrument: str | None = None
     run: int | None = None
+    created: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def fields(self) -> dict[str, Any]:
+        """
+        What a lookup entry or a selector may match on (D7, D14).
+
+        The metadata the source declares for the instrument, plus the run
+        number, which every source that knows one declares under ``run``.
+        """
+        return ({'run': self.run} if self.run is not None else {}) | self.metadata
 
     @property
     def ref(self) -> DatasetRef:
@@ -108,11 +121,20 @@ class FolderSource:
     def _dataset(self, path: Path) -> Dataset:
         match = self.identity.fullmatch(path.stem)
         if match is None:
-            return Dataset(path=path)
+            return Dataset(path=path, created=self._created(path))
         instrument = match.groupdict().get('instrument') or self.instrument
         if instrument is None:
             raise ValueError(
                 f'{path.name} carries a run number but no instrument; give the '
                 'source an instrument name'
             )
-        return Dataset(path=path, instrument=instrument.lower(), run=int(match['run']))
+        return Dataset(
+            path=path,
+            instrument=instrument.lower(),
+            run=int(match['run']),
+            created=self._created(path),
+        )
+
+    @staticmethod
+    def _created(path: Path) -> datetime:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
