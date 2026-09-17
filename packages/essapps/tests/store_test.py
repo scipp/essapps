@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from ess.apps.records import RunRecord, RunRequest, Status
-from ess.apps.spec import DatasetRef, Ref, SpecId
+from ess.apps.spec import OutputRef, SpecId, dataset_ref
 from ess.apps.store import RecordStore, StoreLockedError
 
 SPEC = SpecId(name='reduce', version=1)
@@ -102,7 +102,9 @@ def test_batch_table_is_the_latest_record_per_member_key(store: RecordStore) -> 
 def test_referencing_finds_records_by_output_of_producer(store: RecordStore) -> None:
     producer = RunRecord(request=request())
     consumer = RunRecord(
-        request=request(params={'vanadium': Ref(record=producer.id, output='result')})
+        request=request(
+            params={'vanadium': OutputRef(record=producer.id, output='result')}
+        )
     )
     other = RunRecord(request=request())
     for r in (producer, consumer, other):
@@ -114,14 +116,14 @@ def test_referencing_finds_records_by_output_of_producer(store: RecordStore) -> 
 
 
 def test_registry_records_where_copies_are(store: RecordStore, tmp_path: Path) -> None:
-    ref = Ref(record='r1', output='result')
+    ref = OutputRef(record='r1', output='result')
     assert store.location(ref) is None
     store.register(ref, tmp_path / 'r1.h5', store_owned=True)
     assert store.location(ref) == (tmp_path / 'r1.h5', True)
-    keyed = Ref(record='r1', output='banks', key='b0')
+    keyed = OutputRef(record='r1', output='banks', key='b0')
     store.register(keyed, tmp_path / 'b0.h5', store_owned=False)
     assert store.location(keyed) == (tmp_path / 'b0.h5', False)
-    copied = DatasetRef(instrument='dream', run=1)
+    copied = dataset_ref(instrument='dream', run=1)
     store.register(copied, tmp_path / 'dream_1.h5', store_owned=True)
     assert store.location(copied) == (tmp_path / 'dream_1.h5', True)
     store.unregister(ref)

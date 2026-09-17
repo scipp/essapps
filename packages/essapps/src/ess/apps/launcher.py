@@ -24,7 +24,7 @@ from .binding import Registry, import_object
 from .datastore import DataStore
 from .records import Failure, RunRecord, RunResult, Status
 from .runner import JOB, MARKER, Runner
-from .spec import Ref, Reference, SpecId
+from .spec import OutputRef, Ref, SpecId
 
 
 class Launcher(Protocol):
@@ -37,7 +37,7 @@ class Launcher(Protocol):
         self,
         record: RunRecord,
         params: dict[str, Any],
-        locations: dict[Reference, Path],
+        locations: dict[Ref, Path],
     ) -> RunRecord:
         """Begin executing; returns the record terminal (session) or dispatched."""
         ...
@@ -53,22 +53,22 @@ class _CacheOutputs:
     def __init__(self, data: DataStore) -> None:
         self._data = data
 
-    def put(self, ref: Ref, value: Any) -> None:
+    def put(self, ref: OutputRef, value: Any) -> None:
         self._data.put(ref, value, to_disk=False)
 
 
 class _SessionInputs:
     """Outputs from the private cache, datasets from where dispatch located them."""
 
-    def __init__(self, data: DataStore, locations: Mapping[Reference, Path]) -> None:
+    def __init__(self, data: DataStore, locations: Mapping[Ref, Path]) -> None:
         self._data = data
         self._locations = locations
 
-    def path(self, ref: Reference) -> Path:
+    def path(self, ref: Ref) -> Path:
         located = self._locations.get(ref)
         return self._data.path(ref) if located is None else located
 
-    def array(self, ref: Reference) -> Any:
+    def array(self, ref: Ref) -> Any:
         located = self._locations.get(ref)
         if located is None:
             return self._data.array(ref)
@@ -92,7 +92,7 @@ class SessionLauncher:
         self,
         record: RunRecord,
         params: dict[str, Any],
-        locations: dict[Reference, Path],
+        locations: dict[Ref, Path],
     ) -> RunRecord:
         result = self.runner.run(
             record.id,
@@ -149,7 +149,7 @@ class SubprocessLauncher:
         self,
         record: RunRecord,
         params: dict[str, Any],
-        locations: dict[Reference, Path],
+        locations: dict[Ref, Path],
     ) -> RunRecord:
         workdir = self.workdir(record)
         workdir.mkdir(parents=True, exist_ok=True)
@@ -185,7 +185,7 @@ class SubprocessLauncher:
         if marker.exists():
             done = json.loads(marker.read_text())
             for output in done['outputs']:
-                ref = Ref.model_validate(output['ref'])
+                ref = OutputRef.model_validate(output['ref'])
                 self._data.adopt(ref, Path(output['path']), store_owned=True)
             self._reap(record)
             record = record.model_copy()

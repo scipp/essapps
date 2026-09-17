@@ -27,6 +27,7 @@ requires-python = ">=3.12"
 dynamic = ["version"]
 
 dependencies = [
+    "essreduce @ git+https://github.com/scipp/ess.git@653-minimal-workflow-spec#subdirectory=packages/essreduce",
     "pandas>=2.0",
     "pydantic>=2.10",
     "sciline>=25.11.0",

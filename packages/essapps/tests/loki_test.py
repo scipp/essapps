@@ -18,7 +18,7 @@ pytest.importorskip('ess.loki')
 from ess.apps import loki
 from ess.apps.client import Client, local
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef
+from ess.apps.spec import DatasetRef, dataset_ref
 from ess.apps.testing import LocalInputs
 
 RUNS = {
@@ -67,10 +67,10 @@ def iofq_params(
 def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     client: Client, cache: Path
 ) -> None:
-    sample = DatasetRef(instrument='loki', run=RUNS['sample_run'])
+    sample = dataset_ref(instrument='loki', run=RUNS['sample_run'])
     refs = {
-        name: DatasetRef(instrument='loki', run=run) for name, run in RUNS.items()
-    } | {'direct_beam': DatasetRef(path=cache / DIRECT_BEAM)}
+        name: dataset_ref(instrument='loki', run=run) for name, run in RUNS.items()
+    } | {'direct_beam': dataset_ref(path=cache / DIRECT_BEAM)}
     assert sample in [candidate.ref for candidate in client.pick()]
 
     center = client.run(loki.BEAM_CENTER, {'sample_run': sample})
@@ -109,7 +109,7 @@ def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> No
     paths = {name: next(cache.glob(f'{run}-*')) for name, run in RUNS.items()} | {
         'direct_beam': cache / DIRECT_BEAM
     }
-    refs = {name: DatasetRef(path=path) for name, path in paths.items()}
+    refs = {name: dataset_ref(path=path) for name, path in paths.items()}
     inputs = LocalInputs({ref: paths[name] for name, ref in refs.items()})
     center = loki.beam_center_workflow()(
         loki.BeamCenterParams(sample_run=refs['sample_run']), inputs

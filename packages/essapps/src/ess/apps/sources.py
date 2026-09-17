@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from .spec import DatasetRef
+from .spec import DatasetRef, dataset_ref
 
 
 @dataclass(frozen=True)
@@ -57,10 +57,10 @@ class Dataset:
     def ref(self) -> DatasetRef:
         """This dataset's identity, which is how a request names it."""
         if self.pid is not None:
-            return DatasetRef(pid=self.pid)
+            return dataset_ref(pid=self.pid)
         if self.run is not None:
-            return DatasetRef(instrument=self.instrument, run=self.run)
-        return DatasetRef(path=self.path)
+            return dataset_ref(instrument=self.instrument, run=self.run)
+        return dataset_ref(path=self.path)
 
 
 class DatasetSource(Protocol):

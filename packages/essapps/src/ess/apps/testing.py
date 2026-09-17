@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .binding import Factory, Inputs, combining
 from .sources import Dataset
-from .spec import DatasetRef, Reference
+from .spec import DatasetRef, Ref
 from .warm import equal
 
 
@@ -24,13 +24,13 @@ class LocalInputs:
     paths cannot pass by accident.
     """
 
-    def __init__(self, locations: dict[Reference, Path]) -> None:
+    def __init__(self, locations: dict[Ref, Path]) -> None:
         self._locations = locations
 
-    def path(self, ref: Reference) -> Path:
+    def path(self, ref: Ref) -> Path:
         return self._locations[ref]
 
-    def array(self, ref: Reference) -> Any:
+    def array(self, ref: Ref) -> Any:
         import scipp as sc
 
         return sc.io.load_hdf5(self.path(ref))

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from .aggregation import AggregatePipeline
 from .binding import Inputs, Registry
-from .spec import Array, ArraySpec, OpaqueFile, Quantity, Ref, WorkflowSpec
+from .spec import Array, ArraySpec, OpaqueFile, OutputRef, Quantity, WorkflowSpec
 from .warm import WarmPipeline
 
 
@@ -64,7 +64,7 @@ LOAD = WorkflowSpec(
 class RebinParams(BaseModel):
     data: Array(ArraySpec(dims=('x',), unit='counts'))
     bins: int = Field(default=4, ge=1)
-    offset: Quantity | Ref | None = None
+    offset: Quantity | OutputRef | None = None
 
 
 class RebinOutputs(BaseModel):

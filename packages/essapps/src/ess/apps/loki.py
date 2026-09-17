@@ -43,7 +43,15 @@ from ess.sans.types import (
 from pydantic import BaseModel, Field
 
 from .binding import Inputs, Registry
-from .spec import Array, ArraySpec, NexusFile, OpaqueFile, Quantity, Ref, WorkflowSpec
+from .spec import (
+    Array,
+    ArraySpec,
+    NexusFile,
+    OpaqueFile,
+    OutputRef,
+    Quantity,
+    WorkflowSpec,
+)
 from .warm import WarmPipeline
 
 DETECTOR = 'larmor_detector'
@@ -147,7 +155,7 @@ class IofQParams(BaseModel):
     background_transmission_run: NexusFile
     empty_beam_run: NexusFile
     direct_beam: OpaqueFile
-    beam_center: Quantity | Ref
+    beam_center: Quantity | OutputRef
     wavelength_min: float = 1.0
     wavelength_max: float = 13.0
     wavelength_bins: int = Field(default=200, ge=1)

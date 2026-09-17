@@ -14,7 +14,7 @@ from ess.apps.datastore import MissingCopyError
 from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, registry, write_run
 from ess.apps.records import Status
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, Format, Ref, SpecId, as_ref
+from ess.apps.spec import DatasetRef, Format, OutputRef, SpecId, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -26,8 +26,8 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert as_ref(record.request.params['run']) == run_ref
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
-    assert record.resolved_params['run'] == {'instrument': 'dream', 'run': 1}
-    assert client.provenance(record)['raw'] == [{'instrument': 'dream', 'run': 1}]
+    assert record.resolved_params['run'] == {'dataset': 'run:dream/1'}
+    assert client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
 
 
 @pytest.fixture
@@ -57,13 +57,11 @@ def test_a_dataset_two_parameters_name_is_one_origin(
     record = counting_client.run(SUM, {'runs': [run_ref, run_ref]})
     assert record.status == Status.COMPLETED, record.failure
     assert counting_source.located == [run_ref]
-    assert counting_client.provenance(record)['raw'] == [
-        {'instrument': 'dream', 'run': 1}
-    ]
+    assert counting_client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
 
 
 def test_a_dataset_no_source_has_fails_the_run(client: Client) -> None:
-    record = client.run(LOAD, {'run': DatasetRef(instrument='dream', run=77)})
+    record = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=77)})
     assert record.status == Status.FAILED
     assert record.failure.kind == 'missing-dataset'
 
@@ -72,7 +70,7 @@ def test_a_dataset_identified_by_path_is_its_own_location(
     client: Client, tmp_path: Path
 ) -> None:
     outside = write_run(tmp_path / 'elsewhere.h5', [1.0, 2.0])
-    record = client.run(LOAD, {'run': DatasetRef(path=outside)})
+    record = client.run(LOAD, {'run': dataset_ref(path=outside)})
     assert record.status == Status.COMPLETED, record.failure
     assert record.outputs['total']['value'] == 3.0
 
@@ -165,8 +163,8 @@ def test_group_with_pending_outputs_runs_in_dependency_order(
                 SUM,
                 {
                     'runs': [
-                        Ref(record='@a', output='data'),
-                        Ref(record='@b', output='data'),
+                        OutputRef(record='@a', output='data'),
+                        OutputRef(record='@b', output='data'),
                     ]
                 },
             ),
@@ -192,7 +190,7 @@ def test_group_is_refused_whole_when_one_member_is_invalid(
             {
                 'a': client.request(LOAD, {'run': run_ref}),
                 'sum': client.request(
-                    SUM, {'runs': [Ref(record='@nope', output='data')]}
+                    SUM, {'runs': [OutputRef(record='@nope', output='data')]}
                 ),
             }
         )
@@ -257,7 +255,9 @@ def test_failure_is_structured_and_propagates_to_dependents(
     group = client.submit_group(
         {
             'bad': client.request(FAIL, {'message': 'no monitor'}),
-            'sum': client.request(SUM, {'runs': [Ref(record='@bad', output='data')]}),
+            'sum': client.request(
+                SUM, {'runs': [OutputRef(record='@bad', output='data')]}
+            ),
         }
     )
     assert group['bad'].status == Status.FAILED
@@ -283,7 +283,9 @@ def test_missing_collection_key_fails_the_consumer_only(
     summed = client.submit_group(
         {
             'a': client.request(LOAD, {'run': run_ref}),
-            'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data')]}),
+            'sum': client.request(
+                SUM, {'runs': [OutputRef(record='@a', output='data')]}
+            ),
         }
     )['sum']
     consumer = client.run(SUM, {'runs': [summed.ref('per_run', '7')]})
@@ -345,9 +347,9 @@ def test_record_ref_names_the_single_output_or_demands_a_name(
     loaded = client.run(LOAD, {'run': run_ref})
     with pytest.raises(ValueError, match="has outputs \\['data', 'total'\\]"):
         loaded.ref()
-    assert loaded.ref('data') == Ref(record=loaded.id, output='data')
+    assert loaded.ref('data') == OutputRef(record=loaded.id, output='data')
     rebinned = client.run(REBIN, {'data': loaded.ref('data')})
-    assert rebinned.ref() == Ref(record=rebinned.id, output='result')
+    assert rebinned.ref() == OutputRef(record=rebinned.id, output='result')
     failed = client.run(FAIL)
     with pytest.raises(ValueError, match='is failed'):
         failed.ref()
@@ -370,8 +372,12 @@ def test_cyclic_group_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='cycle'):
         client.submit_group(
             {
-                'a': client.request(SUM, {'runs': [Ref(record='@b', output='total')]}),
-                'b': client.request(SUM, {'runs': [Ref(record='@a', output='total')]}),
+                'a': client.request(
+                    SUM, {'runs': [OutputRef(record='@b', output='total')]}
+                ),
+                'b': client.request(
+                    SUM, {'runs': [OutputRef(record='@a', output='total')]}
+                ),
             }
         )
     assert client.records() == []

@@ -12,7 +12,7 @@ from ess.apps.client import Client, local
 from ess.apps.examples import FAIL, LOAD, REBIN, SUM, write_run
 from ess.apps.records import Status
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, Ref
+from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def client(tmp_path: Path, datasets: Path):
 def run_ref(datasets: Path) -> DatasetRef:
     """The run identity ``dream_1.h5`` carries; a subprocess gets a path at dispatch."""
     write_run(datasets / 'dream_1.h5', [1.0, 2.0, 3.0, 4.0])
-    return DatasetRef(instrument='dream', run=1)
+    return dataset_ref(instrument='dream', run=1)
 
 
 def test_run_is_dispatched_then_reconciled_from_the_marker(
@@ -64,7 +64,7 @@ def test_a_dataset_is_located_before_the_subprocess_starts(
     checksum = hashlib.sha256(file.read_bytes()).hexdigest()
     assert done.checksums == {str(run_ref): checksum}
     job = json.loads((client.backend.launcher.workdir(done) / 'job.json').read_text())
-    assert job['locations'] == {'dataset:dream/1': str(file)}
+    assert job['locations'] == {'run:dream/1': str(file)}
 
 
 def test_map_combine_runs_through_subprocesses(
@@ -80,8 +80,8 @@ def test_map_combine_runs_through_subprocesses(
                 SUM,
                 {
                     'runs': [
-                        Ref(record='@a', output='data'),
-                        Ref(record='@b', output='data'),
+                        OutputRef(record='@a', output='data'),
+                        OutputRef(record='@b', output='data'),
                     ]
                 },
             ),
@@ -111,7 +111,9 @@ def test_cancel_kills_the_process_and_dependents(
     group = client.submit_group(
         {
             'a': client.request(LOAD, {'run': run_ref}),
-            'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data')]}),
+            'sum': client.request(
+                SUM, {'runs': [OutputRef(record='@a', output='data')]}
+            ),
         }
     )
     client.cancel(group['a'])

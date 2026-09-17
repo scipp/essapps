@@ -19,11 +19,11 @@ from .sources import Dataset, DatasetSource
 from .spec import (
     DatasetRef,
     Format,
+    OutputRef,
     Ref,
-    Reference,
     SpecId,
     WorkflowSpec,
-    data_ref_fields,
+    data_fields,
 )
 from .store import RecordStore
 from .views import ViewSpec
@@ -32,7 +32,7 @@ from .views import ViewSpec
 class Candidate(BaseModel, frozen=True):
     """A row of the picker: what may fill a data-reference field, and how to show it."""
 
-    ref: Reference
+    ref: Ref
     format: Format | None = Field(
         default=None, description="None for a dataset, whose format is not known."
     )
@@ -69,7 +69,7 @@ class Client:
         label: str | None = None,
         member_key: str | None = None,
         stage: RunStage = 'run',
-        contributions: Iterable[Ref | RunRecord] = (),
+        contributions: Iterable[OutputRef | RunRecord] = (),
         submission: Submission | None = None,
     ) -> RunRequest:
         """
@@ -96,9 +96,9 @@ class Client:
             submission=submission or Submission(),
         )
 
-    def _contribution(self, spec_id: SpecId, of: Ref | RunRecord) -> Ref:
+    def _contribution(self, spec_id: SpecId, of: OutputRef | RunRecord) -> OutputRef:
         """The reference to a record's contribution: the output the spec marks."""
-        if isinstance(of, Ref):
+        if isinstance(of, OutputRef):
             return of
         return of.ref(self.registry.spec(spec_id).contribution)
 
@@ -109,7 +109,7 @@ class Client:
         return self.backend.submit_one(request)
 
     def submit_group(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
-        """Submit together; ``@name`` in a Ref names another member of the group."""
+        """Submit together; ``@name`` in a reference names a member of the group."""
         return self.backend.submit(group)
 
     def run(
@@ -150,7 +150,7 @@ class Client:
         for record in self.records(status=Status.COMPLETED):
             if record.spec not in self.registry:
                 continue
-            outputs = data_ref_fields(self.registry.spec(record.spec).outputs)
+            outputs = data_fields(self.registry.spec(record.spec).outputs)
             for ref in record.stored_outputs:
                 if (data := outputs.get(ref.output)) is not None:
                     yield Candidate(
@@ -202,22 +202,25 @@ class Client:
         return self.backend.recompute(record if isinstance(record, str) else record.id)
 
     def output(
-        self, ref: Ref | RunRecord, output: str | None = None, key: str | None = None
+        self,
+        ref: OutputRef | RunRecord,
+        output: str | None = None,
+        key: str | None = None,
     ) -> Any:
         if isinstance(ref, RunRecord):
             ref = ref.ref(output, key)
         return self.backend.output(ref)
 
-    def view(self, ref: Ref, **spec: Any) -> dict[str, Any]:
+    def view(self, ref: OutputRef, **spec: Any) -> dict[str, Any]:
         return self.backend.view(ref, ViewSpec(**spec))
 
-    def write_out(self, ref: Ref) -> Path:
+    def write_out(self, ref: OutputRef) -> Path:
         return self.backend.data.write_out(ref)
 
-    def drop(self, ref: Ref) -> None:
+    def drop(self, ref: OutputRef) -> None:
         self.backend.data.drop(ref)
 
-    def publish(self, ref: Ref, publisher: Publisher, **kwargs: Any) -> str:
+    def publish(self, ref: OutputRef, publisher: Publisher, **kwargs: Any) -> str:
         return self.backend.publish(ref, publisher, **kwargs)
 
     def provenance(self, record: RunRecord | str) -> dict[str, Any]:

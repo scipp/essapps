@@ -18,7 +18,7 @@ from typing import Any, Protocol
 
 import scipp as sc
 
-from .spec import Ref, Reference
+from .spec import OutputRef, Ref
 from .store import RecordStore
 
 
@@ -105,20 +105,20 @@ class DataStore:
         self._records = records
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self._cache: dict[Reference, Any] = {}
+        self._cache: dict[Ref, Any] = {}
         self.serializers = Serializers()
 
-    def path_for(self, ref: Ref, suffix: str = '') -> Path:
+    def path_for(self, ref: OutputRef, suffix: str = '') -> Path:
         """Where the disk tier keeps this output; also used by throwaway runners."""
         name = ref.output if ref.key is None else f'{ref.output}/{ref.key}'
         return self.root / ref.record / f'{name}{suffix}'
 
-    def put(self, ref: Ref, value: Any, *, to_disk: bool) -> None:
+    def put(self, ref: OutputRef, value: Any, *, to_disk: bool) -> None:
         self._cache[ref] = value
         if to_disk:
             self.write_out(ref)
 
-    def write_out(self, ref: Ref) -> Path:
+    def write_out(self, ref: OutputRef) -> Path:
         """Write the cached value to the disk tier and register it."""
         if self.has_copy(ref):
             return self._records.location(ref)[0]  # type: ignore[index]
@@ -126,18 +126,18 @@ class DataStore:
         self._records.register(ref, path, store_owned=True)
         return path
 
-    def adopt(self, ref: Reference, path: Path, *, store_owned: bool) -> None:
+    def adopt(self, ref: Ref, path: Path, *, store_owned: bool) -> None:
         """Register a copy this process did not write, such as a runner's output."""
         self._records.register(ref, path, store_owned=store_owned)
 
-    def has_copy(self, ref: Reference) -> bool:
+    def has_copy(self, ref: Ref) -> bool:
         loc = self._records.location(ref)
         return loc is not None and loc[0].exists()
 
-    def in_cache(self, ref: Reference) -> bool:
+    def in_cache(self, ref: Ref) -> bool:
         return ref in self._cache
 
-    def array(self, ref: Reference) -> Any:
+    def array(self, ref: Ref) -> Any:
         """The scipp object: from the cache, else loaded from disk and cached."""
         if ref in self._cache:
             return self._cache[ref]
@@ -145,22 +145,22 @@ class DataStore:
         self._cache[ref] = value
         return value
 
-    def path(self, ref: Reference) -> Path:
+    def path(self, ref: Ref) -> Path:
         """A disk copy, written out first when only the cache holds the value."""
         if ref in self._cache and not self.has_copy(ref):
             return self.write_out(ref)
         return self._disk_path(ref)
 
-    def available(self, ref: Reference) -> bool:
+    def available(self, ref: Ref) -> bool:
         return ref in self._cache or self.has_copy(ref)
 
-    def _disk_path(self, ref: Reference) -> Path:
+    def _disk_path(self, ref: Ref) -> Path:
         loc = self._records.location(ref)
         if loc is None or not loc[0].exists():
             raise MissingCopyError(f'No copy of {ref}')
         return loc[0]
 
-    def drop(self, ref: Reference) -> None:
+    def drop(self, ref: Ref) -> None:
         """Drop the bytes of a store-owned copy; the record stays."""
         loc = self._records.location(ref)
         if loc is None:
@@ -175,6 +175,6 @@ class DataStore:
         self._records.unregister(ref)
         self._cache.pop(ref, None)
 
-    def evict(self, ref: Reference) -> None:
+    def evict(self, ref: Ref) -> None:
         """Forget a cached value; disk copies are untouched."""
         self._cache.pop(ref, None)

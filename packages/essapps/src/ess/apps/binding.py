@@ -31,17 +31,17 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
-from .spec import Reference, SpecId, WorkflowSpec, as_ref
+from .spec import Ref, SpecId, WorkflowSpec, as_ref
 
 
 class Inputs(Protocol):
     """How a callable gets at the bytes a reference names."""
 
-    def path(self, ref: Reference) -> Path:
+    def path(self, ref: Ref) -> Path:
         """A local file holding the bytes."""
         ...
 
-    def array(self, ref: Reference) -> Any:
+    def array(self, ref: Ref) -> Any:
         """The scipp object a scipp-format reference names; fails for other bytes."""
         ...
 

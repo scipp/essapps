@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import IO, Self
 
 from .records import RunRecord, Status
-from .spec import Reference, SpecId
+from .spec import Ref, SpecId
 
 SCHEMA_VERSION = 2
 
@@ -252,20 +252,20 @@ class RecordStore:
 
     # Registry of disk copies
 
-    def register(self, ref: Reference, path: Path, *, store_owned: bool) -> None:
+    def register(self, ref: Ref, path: Path, *, store_owned: bool) -> None:
         with self._db:
             self._db.execute(
                 'INSERT OR REPLACE INTO registry VALUES (?,?,?)',
                 (str(ref), str(path), int(store_owned)),
             )
 
-    def location(self, ref: Reference) -> tuple[Path, bool] | None:
+    def location(self, ref: Ref) -> tuple[Path, bool] | None:
         """Registered path of a copy and whether the store wrote it."""
         row = self._db.execute(
             'SELECT path, store_owned FROM registry WHERE ref=?', (str(ref),)
         ).fetchone()
         return None if row is None else (Path(row[0]), bool(row[1]))
 
-    def unregister(self, ref: Reference) -> None:
+    def unregister(self, ref: Ref) -> None:
         with self._db:
             self._db.execute('DELETE FROM registry WHERE ref=?', (str(ref),))

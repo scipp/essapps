@@ -15,10 +15,10 @@ from ess.apps.runner import FileInputs, Runner
 from ess.apps.spec import (
     Array,
     ArraySpec,
-    DatasetRef,
     OpaqueFile,
     Quantity,
     WorkflowSpec,
+    dataset_ref,
 )
 
 
@@ -67,7 +67,7 @@ def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
     tmp_path: Path,
 ) -> None:
     file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0, 3.0])
-    ref = DatasetRef(instrument='dream', run=1)
+    ref = dataset_ref(instrument='dream', run=1)
     params = {'background': ref.model_dump(mode='json')}
     params['empty_beam'] = params['background']
     session = Runner(keep=True)
@@ -85,7 +85,7 @@ def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
 
 def test_a_changed_file_is_hashed_again(tmp_path: Path) -> None:
     file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0, 3.0])
-    ref = DatasetRef(path=file)
+    ref = dataset_ref(path=file)
     params = {'background': ref.model_dump(mode='json')}
     params['empty_beam'] = params['background']
     session = Runner(keep=True)
@@ -102,7 +102,7 @@ def test_a_changed_file_is_hashed_again(tmp_path: Path) -> None:
 def test_an_output_without_the_declared_dims_fails_the_run(tmp_path: Path) -> None:
     """The spec's ``data`` is over ``x``; the run must not store a ``y`` array."""
     file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0])
-    ref = DatasetRef(path=file)
+    ref = dataset_ref(path=file)
 
     def wrong_dims() -> Any:
         def run(params: LoadParams, inputs: Inputs) -> dict[str, Any]:

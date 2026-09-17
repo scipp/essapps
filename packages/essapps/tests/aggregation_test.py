@@ -30,7 +30,7 @@ from ess.apps.examples import (
 )
 from ess.apps.records import Status
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, Ref
+from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
 from ess.apps.testing import LocalInputs, assert_combine_is_associative
 from ess.apps.warm import equal
 
@@ -58,7 +58,7 @@ def runs(datasets: Path) -> list[DatasetRef]:
         [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]], start=1
     ):
         write_run(datasets / f'dream_{i}.h5', values)
-    return [DatasetRef(instrument='dream', run=i) for i in (1, 2, 3)]
+    return [dataset_ref(instrument='dream', run=i) for i in (1, 2, 3)]
 
 
 def build(
@@ -86,7 +86,7 @@ def test_the_three_entry_points_compose_into_the_single_callable(
     datasets: Path,
 ) -> None:
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    ref = DatasetRef(path=run)
+    ref = dataset_ref(path=run)
     inputs = LocalInputs({ref: run})
     workflow = normalize_workflow()
     params = NormalizeParams(run=ref, floor=1.5, scale=2.0)
@@ -100,7 +100,7 @@ def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
         write_run(datasets / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
         write_run(datasets / 'c.h5', [4.0, 3.0, 2.0, 1.0]),
     ]
-    refs = [DatasetRef(path=run) for run in runs]
+    refs = [dataset_ref(path=run) for run in runs]
     inputs = LocalInputs(dict(zip(refs, runs, strict=True)))
     assert_combine_is_associative(
         normalize_workflow,
@@ -157,7 +157,7 @@ def test_a_finalize_parameter_change_does_not_read_the_members_again(
     """``scale`` is an input of the finalize stage; the contribution is kept."""
     loads: list[Path] = []
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    ref = DatasetRef(path=run)
+    ref = dataset_ref(path=run)
     inputs = LocalInputs({ref: run})
     workflow = build(counting_pipeline(loads))
     contribution = workflow.contribute(NormalizeParams(run=ref, floor=1.5), inputs)
@@ -226,8 +226,8 @@ def test_one_shot_a_batch_and_a_chained_series_agree(
                 {'scale': 2.0},
                 stage='combine',
                 contributions=[
-                    Ref(record='@a', output='contribution'),
-                    Ref(record='@b', output='contribution'),
+                    OutputRef(record='@a', output='contribution'),
+                    OutputRef(record='@b', output='contribution'),
                 ],
             ),
         }
@@ -285,13 +285,13 @@ def test_a_contribution_of_another_spec_is_refused(
             NORMALIZE,
             {'scale': 2.0},
             stage='combine',
-            contributions=[Ref(record=loaded.id, output='data')],
+            contributions=[OutputRef(record=loaded.id, output='data')],
         )
 
 
 def test_a_stage_and_its_contributions_cannot_disagree(client: Client) -> None:
     """One fact, said once: a combine request is the one with contributions."""
-    contribution = Ref(record='r1', output='contribution')
+    contribution = OutputRef(record='r1', output='contribution')
     with pytest.raises(ValidationError, match='at least one contribution'):
         client.request(NORMALIZE, {'scale': 2.0}, stage='combine')
     with pytest.raises(ValidationError, match='no other stage references any'):

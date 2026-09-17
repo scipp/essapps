@@ -27,7 +27,7 @@ from .client import Client
 from .records import RunRecord, RunRequest, Submission
 from .rules import Lookup, Rule, Series, Template
 from .sources import Dataset
-from .spec import Ref
+from .spec import OutputRef
 
 
 def apply(
@@ -68,7 +68,7 @@ def apply(
         else [(key, None) for key in values]
     )
     group: dict[str, RunRequest] = {}
-    chain: dict[str, Ref] = {}
+    chain: dict[str, OutputRef] = {}
     for key, dataset in members:
         entry = (
             lookup.entry(dataset)
@@ -105,7 +105,7 @@ def _combine(
     dataset: Dataset,
     member: str,
     label: str,
-    chain: dict[str, Ref],
+    chain: dict[str, OutputRef],
 ) -> tuple[str, RunRequest]:
     """
     The combine request one arrival of a series submits (D15).
@@ -123,9 +123,9 @@ def _combine(
     value = str(dataset.fields[series.key])
     previous = chain.get(value)
     if previous is None and (last := client.latest(label, value)) is not None:
-        previous = Ref(record=last.id, output=spec.contribution)
+        previous = OutputRef(record=last.id, output=spec.contribution)
     name = f'{member}+combine'
-    chain[value] = Ref(record=f'@{name}', output=spec.contribution)
+    chain[value] = OutputRef(record=f'@{name}', output=spec.contribution)
     return name, client.request(
         spec.id,
         series.finalize,
@@ -134,7 +134,7 @@ def _combine(
         stage='combine',
         contributions=[
             *([] if previous is None else [previous]),
-            Ref(record=f'@{member}', output=spec.contribution),
+            OutputRef(record=f'@{member}', output=spec.contribution),
         ],
         submission=Submission(rule=rule.id),
     )

@@ -8,7 +8,7 @@ from ess.apps.client import Client, local
 from ess.apps.examples import LOAD, registry, write_run
 from ess.apps.rules import Template
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef
+from ess.apps.spec import DatasetRef, dataset_ref
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def run_file(datasets: Path) -> Path:
 @pytest.fixture
 def run_ref(run_file: Path) -> DatasetRef:
     """The run identity ``dream_1.h5`` carries; the folder source locates it."""
-    return DatasetRef(instrument='dream', run=1)
+    return dataset_ref(instrument='dream', run=1)
 
 
 @pytest.fixture

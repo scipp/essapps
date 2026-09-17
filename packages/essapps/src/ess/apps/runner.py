@@ -40,12 +40,12 @@ from .binding import Binding, Factory, Inputs, Workflow, combining, import_objec
 from .records import Failure, RunResult, RunStage, Status
 from .spec import (
     ArraySpec,
+    OutputRef,
     Ref,
-    Reference,
     SpecId,
     WorkflowSpec,
     as_ref,
-    data_ref_fields,
+    data_fields,
     dataset_refs,
     finalize_model,
     literal_model,
@@ -56,7 +56,7 @@ JOB = 'job.json'
 
 
 class Outputs(Protocol):
-    def put(self, ref: Reference, value: Any) -> None: ...
+    def put(self, ref: Ref, value: Any) -> None: ...
 
 
 def package_versions() -> dict[str, str]:
@@ -132,20 +132,23 @@ def _failure(error: Exception) -> Failure:
     return Failure(kind=kind, message=str(error), traceback=traceback.format_exc())
 
 
-def _store_output(record_id: str, name: str, value: Any, outputs: Outputs) -> list[Ref]:
+def _store_output(
+    record_id: str, name: str, value: Any, outputs: Outputs
+) -> list[OutputRef]:
     if isinstance(value, dict):
-        refs = [Ref(record=record_id, output=name, key=str(k)) for k in value]
+        refs = [OutputRef(record=record_id, output=name, key=str(k)) for k in value]
         for ref, v in zip(refs, value.values(), strict=True):
             outputs.put(ref, v)
         return refs
     if isinstance(value, list):
         refs = [
-            Ref(record=record_id, output=name, key=str(i)) for i in range(len(value))
+            OutputRef(record=record_id, output=name, key=str(i))
+            for i in range(len(value))
         ]
         for ref, v in zip(refs, value, strict=True):
             outputs.put(ref, v)
         return refs
-    ref = Ref(record=record_id, output=name)
+    ref = OutputRef(record=record_id, output=name)
     outputs.put(ref, value)
     return [ref]
 
@@ -209,7 +212,7 @@ class Runner:
         outputs: Outputs,
         *,
         stage: RunStage = 'run',
-        contributions: Iterable[Ref] = (),
+        contributions: Iterable[OutputRef] = (),
     ) -> RunResult:
         """Execute the request ``params`` of ``record_id`` and report what happened."""
         if binding.factory is None:
@@ -288,7 +291,7 @@ class Runner:
         data outputs come back as objects, are checked against their declared
         structure, and go to the data store. An optional output may be absent.
         """
-        data = data_ref_fields(spec.outputs)
+        data = data_fields(spec.outputs)
         literals = literal_model(spec.outputs).model_validate(
             {name: value for name, value in values.items() if name not in data}
         )
@@ -311,10 +314,10 @@ class FileInputs:
         self._locations = locations
         self._load = load
 
-    def path(self, ref: Reference) -> Path:
+    def path(self, ref: Ref) -> Path:
         return self._locations[str(ref)]
 
-    def array(self, ref: Reference) -> Any:
+    def array(self, ref: Ref) -> Any:
         return self._load(self.path(ref))
 
 
@@ -324,9 +327,9 @@ class WorkdirOutputs:
     def __init__(self, workdir: Path, save: Any) -> None:
         self.workdir = workdir
         self._save = save
-        self.written: list[tuple[Ref, Path]] = []
+        self.written: list[tuple[OutputRef, Path]] = []
 
-    def put(self, ref: Ref, value: Any) -> None:
+    def put(self, ref: OutputRef, value: Any) -> None:
         name = ref.output if ref.key is None else f'{ref.output}/{ref.key}'
         self.written.append((ref, self._save(value, self.workdir / name)))
 
@@ -350,7 +353,7 @@ def main(workdir: Path) -> None:
         inputs,
         outputs,
         stage=job['stage'],
-        contributions=[Ref.model_validate(c) for c in job['contributions']],
+        contributions=[OutputRef.model_validate(c) for c in job['contributions']],
     )
     marker = {
         'result': result.model_dump(mode='json'),

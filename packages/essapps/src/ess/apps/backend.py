@@ -27,14 +27,15 @@ from .launcher import Launcher
 from .records import Derivation, Failure, RunRecord, RunRequest, Status
 from .sources import DatasetSource
 from .spec import (
-    DataRef,
+    DataField,
     DatasetRef,
     Format,
+    OutputRef,
     Ref,
-    Reference,
     WorkflowSpec,
     as_ref,
-    data_ref_fields,
+    data_fields,
+    dataset_path,
     field_of,
     finalize_model,
     walk_refs,
@@ -96,7 +97,8 @@ class Backend:
         for source in self.sources:
             if (path := source.locate(ref)) is not None:
                 return path
-        return ref.path if ref.path is not None and ref.path.is_file() else None
+        path = dataset_path(ref)
+        return path if path is not None and path.is_file() else None
 
     # Validation
 
@@ -121,7 +123,7 @@ class Backend:
                 f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
             ]
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
-        refs = data_ref_fields(spec.params)
+        refs = data_fields(spec.params)
         for path, ref in walk_refs(request.params):
             consumer = refs.get(field_of(path))
             errors += self._check_ref(ref, consumer, request, group or {})
@@ -148,9 +150,11 @@ class Backend:
         if not request.contributions:
             return []
         errors: list[str] = []
-        members: list[tuple[Ref, dict[str, Any]]] = []
+        members: list[tuple[OutputRef, dict[str, Any]]] = []
         for ref in request.contributions:
-            errors += self._check_ref(ref, DataRef(format=Format.SCIPP), request, group)
+            errors += self._check_ref(
+                ref, DataField(format=Format.SCIPP), request, group
+            )
             producer = self._producer(ref, group)
             if producer is None:
                 continue
@@ -164,7 +168,7 @@ class Backend:
                 except ValidationError:
                     continue
                 members.append((ref, validated.model_dump(mode='json')))
-        shared = sorted(spec.contribute_params - set(data_ref_fields(spec.params)))
+        shared = sorted(spec.contribute_params - set(data_fields(spec.params)))
         for name in shared:
             for ref, params in members[1:]:
                 if params[name] != members[0][1][name]:
@@ -174,7 +178,9 @@ class Backend:
                     )
         return errors
 
-    def _producer(self, ref: Ref, group: Mapping[str, RunRequest]) -> RunRequest | None:
+    def _producer(
+        self, ref: OutputRef, group: Mapping[str, RunRequest]
+    ) -> RunRequest | None:
         """The request that produces a reference, in the group or in the store."""
         if ref.record.startswith(GROUP_PREFIX):
             return group.get(ref.record[len(GROUP_PREFIX) :])
@@ -184,8 +190,8 @@ class Backend:
 
     def _check_ref(
         self,
-        ref: Reference,
-        consumer: DataRef | None,
+        ref: Ref,
+        consumer: DataField | None,
         request: RunRequest,
         group: Mapping[str, RunRequest],
     ) -> list[str]:
@@ -208,7 +214,7 @@ class Backend:
         outputs = self.registry.spec(producer_spec).outputs
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
-        produced = data_ref_fields(outputs).get(ref.output)
+        produced = data_fields(outputs).get(ref.output)
         if consumer is None:
             return (
                 [] if produced is None else [f'{ref}: data cannot fill a literal field']
@@ -219,7 +225,7 @@ class Backend:
             return [f'{ref}: {produced.format} output into {consumer.format} field']
         return []
 
-    def _check_dataset(self, ref: DatasetRef, consumer: DataRef | None) -> list[str]:
+    def _check_dataset(self, ref: DatasetRef, consumer: DataField | None) -> list[str]:
         """
         A dataset's format is not known here, so only the field it fills is checked.
 
@@ -378,11 +384,11 @@ class Backend:
         self.records.update(record)
 
     def _dispatch(self, record: RunRecord) -> None:
-        data_fields = data_ref_fields(self.registry.spec(record.spec).params)
-        locations: dict[Reference, Path] = {}
+        data = data_fields(self.registry.spec(record.spec).params)
+        locations: dict[Ref, Path] = {}
         literals: dict[str, Any] = {}
         named = [
-            (ref, field_of(path) in data_fields)
+            (ref, field_of(path) in data)
             for path, ref in walk_refs(record.request.params)
         ]
         named += [(ref, True) for ref in record.request.contributions]
@@ -402,9 +408,9 @@ class Backend:
 
     def _resolve(
         self,
-        ref: Reference,
+        ref: Ref,
         into_data_field: bool,
-        locations: dict[Reference, Path],
+        locations: dict[Ref, Path],
         literals: dict[str, Any],
     ) -> Failure | None:
         """
@@ -441,7 +447,7 @@ class Backend:
 
     # Data
 
-    def output(self, ref: Ref) -> Any:
+    def output(self, ref: OutputRef) -> Any:
         """The value of an output: inline from the record, or from the data store."""
         record = self.records.get(ref.record)
         if ref.output in record.outputs:
@@ -452,12 +458,12 @@ class Backend:
                 f'{record.id} has no output {ref.output!r}'
                 + (f' key {ref.key!r}' if ref.key else '')
             )
-        outputs = data_ref_fields(self.registry.spec(record.spec).outputs)
+        outputs = data_fields(self.registry.spec(record.spec).outputs)
         if outputs[ref.output].format is Format.SCIPP:
             return self.data.array(ref)
         return self.data.path(ref)
 
-    def view(self, ref: Ref, spec: ViewSpec) -> dict[str, Any]:
+    def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
         return view(self.data.array(ref), spec)
 
     # Publication (D11)
@@ -481,7 +487,7 @@ class Backend:
         }
 
     def publish(
-        self, ref: Ref, publisher: Publisher, *, allow_reused: bool = False
+        self, ref: OutputRef, publisher: Publisher, *, allow_reused: bool = False
     ) -> str:
         """
         Publish an output: idempotent, from a disk copy, with a provenance snapshot.
@@ -559,11 +565,11 @@ def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
 
 def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
     """Point ``@name`` references at the IDs the group's members were given."""
-    if isinstance(value, Ref):
+    if isinstance(value, OutputRef):
         value = value.model_dump()
     if isinstance(value, dict):
         ref = as_ref(value)
-        if isinstance(ref, Ref):
+        if isinstance(ref, OutputRef):
             return ref.model_dump() | {'record': ids.get(ref.record, ref.record)}
         if ref is not None:
             return value

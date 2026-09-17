@@ -12,7 +12,7 @@ from pathlib import Path
 from ess.apps.client import local
 from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, Ref
+from ess.apps.spec import DatasetRef, OutputRef
 
 Path('/tmp/runs').mkdir(exist_ok=True)
 write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])
@@ -30,7 +30,7 @@ client = local(
 # file name carries; where the bytes are is asked of the folder at dispatch, and
 # nothing is copied or stored. client.pick() is the query behind an input field:
 # the datasets of every source and the outputs of completed records.
-run = DatasetRef(instrument='dream', run=1)
+run = dataset_ref(instrument='dream', run=1)
 assert run in [candidate.ref for candidate in client.pick()]
 
 # A run in the session: the output stays in memory, the record is complete.
@@ -50,7 +50,7 @@ client.view(second.ref('histogram'))  # plain numpy arrays
 group = client.submit_group({
     'a': client.request(LOAD, {'run': run}),
     'b': client.request(LOAD, {'run': run, 'scale': 3.0}),
-    'sum': client.request(SUM, {'runs': [Ref(record='@a', output='data'), Ref(record='@b', output='data')]}),
+    'sum': client.request(SUM, {'runs': [OutputRef(record='@a', output='data'), OutputRef(record='@b', output='data')]}),
 })
 client.output(group['sum'], 'total')
 

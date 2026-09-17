@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .records import RunRequest
 from .sources import Dataset
-from .spec import SpecId, WorkflowSpec, data_ref_fields
+from .spec import SpecId, WorkflowSpec, data_fields
 
 
 class Criterion(BaseModel, frozen=True):
@@ -108,7 +108,7 @@ class Template(BaseModel, frozen=True):
         blank: Iterable[str] = (),
     ) -> Template:
         """Save a request as a template with its data-reference fields blank."""
-        blanks = tuple(sorted(set(data_ref_fields(spec.params)) | set(blank)))
+        blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
         params = {k: v for k, v in request.params.items() if k not in blanks}
         return cls(name=name, spec=request.spec, params=params, blanks=blanks)
 

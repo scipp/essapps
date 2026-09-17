@@ -33,7 +33,7 @@ from ess.apps.rules import (
     Template,
 )
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, Ref
+from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -43,8 +43,8 @@ def scan(datasets: Path) -> dict[str, DatasetRef]:
     write_run(datasets / 'dream_2.h5', [1.0, 2.0])
     write_run(datasets / 'dream_3.h5', [3.0, 4.0])
     return {
-        '300K': DatasetRef(instrument='dream', run=2),
-        '310K': DatasetRef(instrument='dream', run=3),
+        '300K': dataset_ref(instrument='dream', run=2),
+        '310K': dataset_ref(instrument='dream', run=3),
     }
 
 
@@ -100,19 +100,19 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
         client,
         template,
         client.datasets(),
-        {'dataset:pid/2': {'scale': 4.0}},
+        {'pid:pid/2': {'scale': 4.0}},
         lookup=lookup,
         label='ladder',
     )
     scales = {key: request.params['scale'] for key, request in group.items()}
-    assert scales['dataset:pid/1'] == 3.0  # the lookup entry over the template
-    assert scales['dataset:pid/2'] == 4.0  # what was typed over both
-    assert scales['dataset:dream/1'] == 2.0  # the template, matching no entry
-    typed = group['dataset:pid/2'].submission
+    assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
+    assert scales['pid:pid/2'] == 4.0  # what was typed over both
+    assert scales['run:dream/1'] == 2.0  # the template, matching no entry
+    typed = group['pid:pid/2'].submission
     assert typed.typed == {'scale': 4.0}
     assert typed.entry == 'rest'
     assert typed.template == 'load-defaults/v1'
-    assert group['dataset:pid/1'].params['run'] == DatasetRef(pid='pid/1')
+    assert group['pid:pid/1'].params['run'] == dataset_ref(pid='pid/1')
 
 
 def test_apply_without_datasets_is_the_batch_form(
@@ -188,9 +188,9 @@ def test_the_backlog_is_what_lies_before_a_new_rules_bound(
         selector=Selector(match={'run': Between(low=2)}),
     )
     assert rule.selector.after == Bound.newest(client.datasets())
-    assert sorted(backlog(client, rule)) == ['dataset:dream/2', 'dataset:dream/3']
-    rule.exclude('dataset:dream/3', 'chopper was off')
-    assert sorted(backlog(client, rule)) == ['dataset:dream/2']
+    assert sorted(backlog(client, rule)) == ['run:dream/2', 'run:dream/3']
+    rule.exclude('run:dream/3', 'chopper was off')
+    assert sorted(backlog(client, rule)) == ['run:dream/2']
 
 
 def test_reprocess_offers_the_members_an_older_rule_version_made(
@@ -200,26 +200,26 @@ def test_reprocess_offers_the_members_an_older_rule_version_made(
     assert reprocess(client, rule) == {}
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
-    assert sorted(group) == ['dataset:pid/1', 'dataset:pid/2']
-    assert group['dataset:pid/1'].params['scale'] == 7.0
-    assert group['dataset:pid/1'].submission.rule == 'auto-load/v2'
+    assert sorted(group) == ['pid:pid/1', 'pid:pid/2']
+    assert group['pid:pid/1'].params['scale'] == 7.0
+    assert group['pid:pid/1'].submission.rule == 'auto-load/v2'
 
 
 def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) -> None:
     client.submit_group(
-        apply(client, rule, client.datasets(), {'dataset:pid/1': {'scale': 8.0}})
+        apply(client, rule, client.datasets(), {'pid:pid/1': {'scale': 8.0}})
     )
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
-    assert group['dataset:pid/1'].params['scale'] == 8.0  # typed, carried forward
-    assert group['dataset:pid/2'].params['scale'] == 7.0  # filled again
+    assert group['pid:pid/1'].params['scale'] == 8.0  # typed, carried forward
+    assert group['pid:pid/2'].params['scale'] == 7.0  # filled again
 
 
 def test_an_excluded_member_is_not_reprocessed(client: Client, rule: Rule) -> None:
     TriggerLoop(client, rule).run_once()
     moved = rule.revise(template=rule.template.revise(scale=7.0))
-    moved.exclude('dataset:pid/1', 'chopper was off')
-    assert sorted(reprocess(client, moved)) == ['dataset:pid/2']
+    moved.exclude('pid:pid/1', 'chopper was off')
+    assert sorted(reprocess(client, moved)) == ['pid:pid/2']
 
 
 def test_rerun_offers_the_members_with_no_completed_record(
@@ -232,9 +232,9 @@ def test_rerun_offers_the_members_with_no_completed_record(
     )
     rule = Rule(name='auto', template=template)
     TriggerLoop(client, rule).run_once()
-    stuck = client.records(label='auto', member_key='dataset:pid/9')
+    stuck = client.records(label='auto', member_key='pid:pid/9')
     assert [r.failure.kind for r in stuck] == ['missing-dataset']
-    assert sorted(rerun(client, rule)) == ['dataset:pid/9']
+    assert sorted(rerun(client, rule)) == ['pid:pid/9']
     assert rerun(client, rule, label='nothing') == {}
 
 
@@ -274,7 +274,7 @@ def test_the_loop_fires_once_per_dataset_and_a_restart_changes_nothing(
 ) -> None:
     loop = TriggerLoop(client, rule)
     fired = loop.run_once()
-    assert [r.request.member_key for r in fired] == ['dataset:pid/1', 'dataset:pid/2']
+    assert [r.request.member_key for r in fired] == ['pid:pid/1', 'pid:pid/2']
     assert [r.status for r in fired] == [Status.COMPLETED] * 2
     assert [r.request.label for r in fired] == ['auto-load'] * 2
     assert fired[0].request.submission.rule == 'auto-load/v1'
@@ -291,7 +291,7 @@ def test_the_loop_fires_once_per_dataset_and_a_restart_changes_nothing(
             metadata={'sample': 'sio2'},
         )
     )
-    assert [r.request.member_key for r in loop.run_once()] == ['dataset:pid/3']
+    assert [r.request.member_key for r in loop.run_once()] == ['pid:pid/3']
 
 
 def test_a_paused_rule_fires_on_what_arrived_when_it_is_resumed(
@@ -332,7 +332,7 @@ def test_a_failure_the_policy_names_is_retried_up_to_the_limit(
     loop = TriggerLoop(client, rule)
     for _ in range(4):
         loop.run_once()
-    assert len(client.records(label='auto', member_key='dataset:pid/9')) == 3
+    assert len(client.records(label='auto', member_key='pid:pid/9')) == 3
     assert (
         'retried 3 times' in trigger_status(client, rule, client.datasets()[-1]).reason
     )
@@ -349,7 +349,7 @@ def test_a_failure_the_policy_does_not_name_is_not_retried(
     loop = TriggerLoop(client, Rule(name='auto', template=template))
     loop.run_once()
     loop.run_once()
-    assert len(client.records(label='auto', member_key='dataset:pid/9')) == 1
+    assert len(client.records(label='auto', member_key='pid:pid/9')) == 1
 
 
 # A series
@@ -379,9 +379,9 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     loop = TriggerLoop(client, rule)
     first = loop.run_once()
     assert [r.request.stage for r in first] == ['contribute', 'combine']
-    assert [r.request.member_key for r in first] == ['dataset:pid/1', 'sio2']
+    assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
     assert first[1].request.contributions == [
-        Ref(record=first[0].id, output='contribution')
+        OutputRef(record=first[0].id, output='contribution')
     ]
     client.wait(first)
 
@@ -395,15 +395,15 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     member, combine = loop.run_once()
     client.wait([member, combine])
     assert combine.request.contributions == [
-        Ref(record=first[1].id, output='contribution'),
-        Ref(record=member.id, output='contribution'),
+        OutputRef(record=first[1].id, output='contribution'),
+        OutputRef(record=member.id, output='contribution'),
     ]
     assert combine.status == Status.COMPLETED, combine.failure
     # Successive combines supersede each other under the series value.
     assert client.latest('series', 'sio2').id == combine.id
     assert [r.request.member_key for r in client.batch('series')] == [
-        'dataset:pid/1',
-        'dataset:pid/2',
+        'pid:pid/1',
+        'pid:pid/2',
         'sio2',
     ]
 
@@ -463,20 +463,20 @@ def test_the_batch_table_is_a_query_over_the_records(
             client,
             with_lookup,
             client.datasets()[-2:],
-            {'dataset:pid/2': {'scale': 5.0}},
+            {'pid:pid/2': {'scale': 5.0}},
         )
     )
-    with_lookup.exclude('dataset:pid/9', 'chopper was off')
+    with_lookup.exclude('pid:pid/9', 'chopper was off')
     table = batch_table(client, with_lookup)
     assert table.index.name == 'member'
-    assert list(table.index) == ['dataset:pid/1', 'dataset:pid/2', 'dataset:pid/9']
-    assert list(table.loc['dataset:pid/1', ['rule', 'entry', 'status']]) == [
+    assert list(table.index) == ['pid:pid/1', 'pid:pid/2', 'pid:pid/9']
+    assert list(table.loc['pid:pid/1', ['rule', 'entry', 'status']]) == [
         'auto-load/v1',
         'vanadium',
         'completed',
     ]
-    assert table.loc['dataset:pid/2', 'scale'] == 5.0
-    assert table.loc['dataset:pid/9', 'reason'] == 'chopper was off'
+    assert table.loc['pid:pid/2', 'scale'] == 5.0
+    assert table.loc['pid:pid/9', 'reason'] == 'chopper was off'
 
 
 def test_the_batch_table_of_a_label_needs_no_rule(

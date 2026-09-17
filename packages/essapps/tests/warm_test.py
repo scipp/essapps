@@ -22,12 +22,12 @@ from ess.apps.examples import (
     histogram,
     histogram_workflow,
 )
-from ess.apps.spec import Ref
+from ess.apps.spec import OutputRef
 from ess.apps.testing import assert_warm_equals_cold
 from ess.apps.warm import WarmPipeline
 
-DATA_REF = Ref(record='raw', output='data')
-DOUBLED_REF = Ref(record='raw', output='doubled')
+DATA_REF = OutputRef(record='raw', output='data')
+DOUBLED_REF = OutputRef(record='raw', output='doubled')
 
 
 def raw() -> sc.DataArray:
@@ -123,7 +123,7 @@ def test_an_input_the_targets_do_not_need_is_refused() -> None:
 
 
 def test_session_reruns_record_reuse_of_the_expensive_part_not_of_the_callable(
-    client: Client, run_ref: Ref
+    client: Client, run_ref: OutputRef
 ) -> None:
     """``reused`` is what D11 reads: the result came out of held state."""
     loaded = client.run(LOAD, {'run': run_ref})

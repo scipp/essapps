@@ -620,7 +620,7 @@ Nothing in the model needs cross-instrument state, and a facility-wide entry poi
 
 ## Changes needed in the workflow spec
 
-The spec in scipp/ess#690 is assumed merged as-is, with these extensions.
+The spec in scipp/ess#690 is assumed merged as-is, with these extensions; until it merges, the skeleton depends on the PR branch and adds the extensions in one module.
 They are small in the vocabulary and change the shape of the output side while the PR is open.
 
 **Inputs are parameters of data-reference type (D13).**

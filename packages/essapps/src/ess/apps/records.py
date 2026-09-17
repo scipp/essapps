@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .spec import DatasetRef, Ref, SpecId, dataset_refs, walk_refs
+from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
 
 RunStage = Literal['run', 'contribute', 'combine']
 """
@@ -65,7 +65,7 @@ class RunRequest(BaseModel, frozen=True):
     Everything needed to execute a workflow once.
 
     ``params`` is the plain JSON form of the spec's params model, with data
-    reference fields holding a :class:`Ref` or a :class:`DatasetRef`. A request is
+    reference fields holding a :class:`OutputRef` or a :class:`DatasetRef`. A request is
     complete: it never names a session or a process, and the only path it may
     name is the identity of a local file that carries no run identity.
 
@@ -80,7 +80,7 @@ class RunRequest(BaseModel, frozen=True):
         default='run',
         description="Which entry points of the workflow this request runs (D15).",
     )
-    contributions: list[Ref] = Field(
+    contributions: list[OutputRef] = Field(
         default_factory=list,
         description="What a combine request combines: contribution outputs of "
         "member records and of the previous combine.",
@@ -112,9 +112,9 @@ class RunRequest(BaseModel, frozen=True):
             )
         return self
 
-    def refs(self) -> list[Ref]:
+    def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""
-        params = [r for _, r in walk_refs(self.params) if isinstance(r, Ref)]
+        params = [r for _, r in walk_refs(self.params) if isinstance(r, OutputRef)]
         return params + list(self.contributions)
 
     def datasets(self) -> list[DatasetRef]:
@@ -143,7 +143,7 @@ class RunResult(BaseModel):
     finished: datetime
     resolved_params: dict[str, Any] | None = None
     outputs: dict[str, Any] = Field(default_factory=dict)
-    stored_outputs: list[Ref] = Field(default_factory=list)
+    stored_outputs: list[OutputRef] = Field(default_factory=list)
     package_versions: dict[str, str] = Field(default_factory=dict)
     environment: str | None = None
     binding: Literal['entry_point', 'in_process'] | None = None
@@ -172,7 +172,7 @@ class RunRecord(BaseModel):
     finished: datetime | None = None
     resolved_params: dict[str, Any] | None = None
     outputs: dict[str, Any] = Field(default_factory=dict)
-    stored_outputs: list[Ref] = Field(default_factory=list)
+    stored_outputs: list[OutputRef] = Field(default_factory=list)
     package_versions: dict[str, str] = Field(default_factory=dict)
     environment: str | None = None
     binding: Literal['entry_point', 'in_process'] | None = None
@@ -192,7 +192,7 @@ class RunRecord(BaseModel):
         for name, value in result:
             setattr(self, name, value)
 
-    def ref(self, output: str | None = None, key: str | None = None) -> Ref:
+    def ref(self, output: str | None = None, key: str | None = None) -> OutputRef:
         """A reference to an output; the output name may be omitted if there is one."""
         if output is None:
             names = sorted(self.output_names())
@@ -202,7 +202,7 @@ class RunRecord(BaseModel):
                 )
                 raise ValueError(f'{self.id} {what}; name the output')
             output = names[0]
-        return Ref(record=self.id, output=output, key=key)
+        return OutputRef(record=self.id, output=output, key=key)
 
     @property
     def spec(self) -> SpecId:
