@@ -591,7 +591,7 @@ Contributions are stage outputs on disk in shared mode, often large, and a chain
 Changing a finalize parameter on a combined result, outside a session, is a combine request over the one previous contribution and writes that contribution again; an author who minds publishes a finalize-only spec as a further cut (D4).
 The check that members share their parameters runs in the combine, not at validation.
 A value at an accumulation key must be storable in a scipp data group.
-The framework cannot check that a combination is independent of grouping and order; a test helper runs the contribute and the combine callable over a list of members in two groupings and one permutation, pushes a combined value in again, and compares the results, and every combine spec with an accumulating parameter runs it.
+The framework cannot check that a combination is independent of grouping and order; a test helper runs the contribute and the combine callable over a list of members in two groupings and one permutation, pushes a combined value in again, and compares the results, and every combine spec that declares `chain` runs it.
 The fold needs a long-lived runner addressed by its series, which phases 1 and 2 do not have; it is not needed before a series arrives faster than a partial can be read and written.
 
 ## Rules: how requests are made from data (D14)
@@ -914,7 +914,7 @@ An output the framework cannot serialize, an ORSO file, has no place to declare 
 The parameter vocabulary lacks a pixel-index range, an angle range, and a Q range, and an edges model whose range the data derives, which is what a workflow whose binning follows the geometry needs (D13).
 Pixel masks are a graph rewrite in the LoKI workflow, so they are fixed in the callable's factory and not on the record, and the request is not complete; the same rewrite, a list of filenames rebuilding the graph, is what stops the additive half of reflectometry, same-angle runs, from being bound, and a contribute and a combine spec are the way out for both (D8, D15).
 Summing same-angle runs and then stitching angles is an aggregation whose members are aggregations; both levels are expressible as specs, but a rule has one combine clause, so the second level would be a second rule whose candidates are the completed combine records of the first, which is untested (D14).
-A rule that feeds sample runs into one accumulating parameter and background runs into another needs a role per dataset and a mapping from role to parameter, which "a series of fixed roles" names and does not define (D14).
+A rule that feeds sample runs into one chained parameter and background runs into another needs a role per dataset and a mapping from role to parameter, which "a series of fixed roles" names and does not define (D14).
 The beam-centre finder takes a pipeline rather than a key, so it is a plain callable and its expensive part is not shared with the reduction that consumes its result (D8).
 Fitting scale factors over all members and re-reducing each member with its factor is a cycle, members to combine to members, which three requests express but no rule can, since a rule only ever runs members then a combine (D14).
 

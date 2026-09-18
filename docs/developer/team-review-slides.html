@@ -515,7 +515,7 @@
     <div class="card panel">
       <h3>Nobody waits for a series</h3>
       <p>FIA sums a series again on every arrival; SANS pairs a scatter with its transmission whichever comes last; reflectometry resets the group and stitches again. None waits, because nobody at the instrument can say when the series is complete: the user decides to measure one more angle.</p>
-      <p><b>So:</b> a rule with a series key (D14). Key a dataset into a series by metadata; on each arrival the rule submits a combine request, chained when the combine spec's parameter is accumulating and the previous combine's members are still current, and over all current members otherwise (D14, D15); successive combines of one series supersede each other under the series key.</p>
+      <p><b>So:</b> a rule with a series key (D14). Key a dataset into a series by metadata; on each arrival the rule submits a combine request, chained when the combine spec declares chain and the previous combine's members are still current, and over all current members otherwise (D14, D15); successive combines of one series supersede each other under the series key.</p>
     </div>
     <div class="card panel">
       <h3>Staleness by reset, exclusions beside the data</h3>
@@ -603,7 +603,7 @@
         <li>outputs: small values inline, large ones in the data store</li>
         <li>resolved parameter values, defaults included</li>
         <li>package versions and the conda environment</li>
-        <li>how the spec was bound to code, and whether a warm callable was reused</li>
+        <li>how the spec was bound to code, and whether a held stage served the request (reused)</li>
         <li>one link to the record it derives from: retry, recompute, or copy</li>
         <li>a label and member key, under which records supersede: a batch name, a rule's name, or a slot; and a submission, how the request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed. Explanation, not provenance</li>
         <li>beside it, annotations a user adds after inspection: mutable, outside provenance, read by nothing in the framework</li>
@@ -701,7 +701,7 @@
         <text x="130" y="156" text-anchor="middle" class="s">held until A completes; A fails → B fails</text>
       </svg>
       <h3>Chain and combine</h3>
-      <p>A reference may name a pending output. That is the only scheduling primitive: an aggregation is one use of it. A combine spec's collection parameter may be accumulating, so a chained arrival references only the previous combine's contribution and the new member's (D15).</p>
+      <p>A reference may name a pending output. That is the only scheduling primitive: an aggregation is one use of it. A combine spec may declare chain on its collection parameter, so a chained arrival references only the previous combine's contribution and the new member's (D15).</p>
     </div>
   </div>
   <p class="take">Four modes, <b>one kind of request and one kind of record</b>. The scheduler has one kind of dependency.</p>
@@ -760,7 +760,7 @@
       <figcaption>A lookup is a stored, versioned list of entries beside a template: each entry matches dataset metadata, an angle within a tolerance, a title pattern, a run-number range, and supplies template fills; one wildcard entry catches the rest. Batch uses it to default each member from its metadata; the trigger loop uses it to fill the template from a new dataset. One operation, apply, does both: fill the template through the lookup for a set of datasets and return a group to preview. A rule names the template and lookup version, and adds a selector with a lower bound, a retry policy, exclusions with reasons, an active state, and optionally a series key and a combine clause: the template of a combine spec, the member output that is the contribution, and the collection parameter it fills; the trigger loop applies rules and nothing else, and keeps no memory: whether a dataset still needs firing on is a query over the records. A batch is the records under one label, not a stored unit; a rule's records carry its name (D14).</figcaption>
     </figure>
   </div>
-  <p class="take">The lookup and the rule are <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle, and which datasets to reduce. Both are data, so the web UI shows them, a batch file carries them, and a record's submission names the rule version, the entry, and the typed values that filled it. <b>A rule is to a batch what a template is to a request</b>: the batch form and the trigger loop call one apply, and a rule's records are a batch under its name. A rule with a series key aggregates the series again whenever a run joins it, chained when the combine spec's parameter is accumulating and its previous combine's members are still current, and never waits (D14, D15).</p>
+  <p class="take">The lookup and the rule are <b>what the instrument scientist edits during a beamtime</b>: which transmission run and Q range go with which angle, and which datasets to reduce. Both are data, so the web UI shows them, a batch file carries them, and a record's submission names the rule version, the entry, and the typed values that filled it. <b>A rule is to a batch what a template is to a request</b>: the batch form and the trigger loop call one apply, and a rule's records are a batch under its name. A rule with a series key aggregates the series again whenever a run joins it, chained when the combine spec declares chain and its previous combine's members are still current, and never waits (D14, D15).</p>
   <aside class="notes">The lookup and the rule are one section of the document, D14, so give this slide a minute. Every ISIS interface has the lookup table under a different name; the sketch had it as a Python callable in the trigger loop, invisible to the UI and unversioned. Three rules: entries are ordered with one wildcard; a dataset matching two entries is a validation error found before anything runs; editing a lookup makes a new version, and reprocessing runs made from the old version is a separate, previewed batch, never automatic. The rule is what the trigger loop applies; its exclusions and its active state are the only mutable state on it. The batch is not a stored unit: the members table is the latest record per member key under the rule's label, and the ISIS batch file is a rendering of it plus the rule's exclusions. The slot and the batch ID are one label field now, so one query supersedes, cancels, and evicts for a slot, a batch, and a rule; a series' combines supersede under the rule's label with the series value as member key. The loop keeps no memory: it fires on a dataset after the rule's bound that has no record under the rule's label, so restart reconciliation falls out. Creating a rule offers the backlog as a previewed batch; moving it offers the reprocess. Phase 1 therefore already has labels, apply, and the batch table; phase 2 adds the form. If someone thinks in pandas: the batch table is a frame indexed by member key, the template is column defaults, the lookup is an as-of join with tolerance, the ladder is combine_first, the series key is a groupby, and latest-per-member is groupby-last; exact for the view, wrong for the store, because the frame is a query over immutable records, not a mutable table. The document has the full mapping under D14. The skeleton does not have this yet.</aside>
 </section>
 
@@ -925,7 +925,7 @@
         <text x="36" y="106" class="m">sample: data ref, raw NeXus</text>
         <text x="36" y="126" class="m">vanadium: data ref, scipp array</text>
         <text x="36" y="146" class="m">threshold: float [counts]</text>
-        <text x="36" y="166" class="m">q_bins: edges   ⟵ stage input</text>
+        <text x="36" y="166" class="m">q_bins: edges</text>
         <text x="36" y="196" class="s">outputs</text>
         <text x="36" y="218" class="m">iofq: scipp array, 1D</text>
         <text x="36" y="238" class="m">beam_centre: vector [m]</text>
@@ -940,7 +940,7 @@
         <rect class="accb" x="440" y="105" width="290" height="50" rx="8"/><text x="585" y="136" text-anchor="middle" class="m">outputs = workflow(params, inputs)</text>
         <text x="436" y="185" class="s">validate params with the real pydantic class</text>
         <text x="436" y="205" class="s">validate outputs against the output model</text>
-        <text x="585" y="255" text-anchor="middle" class="s">in a session: the callable is kept between calls</text>
+        <text x="585" y="255" text-anchor="middle" class="s">in a session: a stage the session holds may serve the call</text>
 
         <path class="e" d="M750,120 L850,120"/><text x="800" y="110" text-anchor="middle" class="s">large</text>
         <path class="e" d="M750,170 L850,170"/><text x="800" y="192" text-anchor="middle" class="s">small</text>
@@ -950,7 +950,7 @@
       <figcaption>The callable asks the inputs for the form it wants: a local path for raw NeXus and opaque files, a scipp object for scipp data, from memory when the process has a copy, from HDF5 otherwise. The callable never writes files. Other output formats, such as ORSO or CIF, come with their own serializer. An aggregation over runs is two plain specs cut from one pipeline, not a mode of this one; a sciline adapter serves each spec's callable through a Stage (D15, next slide).</figcaption>
     </figure>
   </div>
-  <p class="take">A spec is the signature of <b>one callable</b>; a record is one call of it. The runner decides how long it lives, and a kept callable may be warm.</p>
+  <p class="take">A spec is the signature of <b>one callable</b>; a record is one call of it. The callable is stateless: a session may serve a request from a stage it holds.</p>
   <aside class="notes">Rejected: a file-based contract, which forces every chain through disk; and a framework that knows sciline and caches intermediates itself, which is not affordable with event data. Arrays as objects is what keeps the phase 3 options open in every model.</aside>
 </section>
 
@@ -959,7 +959,7 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Reduction is combination: a contribute spec and a combine spec</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Each member run's contribute spec writes a contribution to disk. A combine spec call reads the previous combined contribution and the new contribution and produces a new combined contribution plus results, because its collection parameter is accumulating. A fold, later, holds the running contribution in memory and writes a record every n arrivals.">
+      <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Each member run's contribute spec writes a contribution to disk. A combine spec call reads the previous combined contribution and the new contribution and produces a new combined contribution plus results, because the combine spec declares chain. A fold, later, holds the running contribution in memory and writes a record every n arrivals.">
         <!-- members and contribute -->
         <rect class="box" x="20" y="20" width="100" height="40" rx="6"/><text x="70" y="45" text-anchor="middle">run 1</text>
         <rect class="box" x="290" y="20" width="100" height="40" rx="6"/><text x="340" y="45" text-anchor="middle">run 2</text>
@@ -997,11 +997,11 @@
 
         <!-- the fold, later -->
         <rect class="mem open" x="295" y="284" width="485" height="44" rx="8"/>
-        <text x="537" y="302" text-anchor="middle">fold · later · a runner keeps the combine callable, holding the contribution in memory</text>
+        <text x="537" y="302" text-anchor="middle">fold · later · a runner holds the latest combined contribution and chains in memory</text>
         <text x="537" y="320" text-anchor="middle" class="s">the memory copy is a cache, recomputable from the last record and the members since</text>
         <path class="e memc open" d="M740,284 L740,244"/><text x="750" y="268" class="s">a record every n arrivals</text>
       </svg>
-      <figcaption>Every additive workflow has this shape: a per-member stage produces an intermediate at one or more accumulation keys, the intermediates are added, and a finalize stage turns the sum into the outputs. The contribute spec's callable computes the intermediate; the combine spec's callable pushes contributions into accumulators and calls finalize in the same call, producing the combined contribution and the results together. Chained, it references the previous combine's contribution and the new member's, because the collection parameter is accumulating. Solid is built regardless; the dashed amber fold is phase 3.</figcaption>
+      <figcaption>Every additive workflow has this shape: a per-member stage produces an intermediate at one or more accumulation keys, the intermediates are added, and a finalize stage turns the sum into the outputs. The contribute spec's callable computes the intermediate; the combine spec's callable pushes contributions into accumulators and calls finalize in the same call, producing the combined contribution and the results together. Chained, it references the previous combine's contribution and the new member's, because the combine spec declares chain. Solid is built regardless; the dashed amber fold is phase 3.</figcaption>
     </figure>
     <div class="grid3">
       <div class="card panel">
@@ -1010,7 +1010,7 @@
       </div>
       <div class="card panel">
         <h3>The declaration</h3>
-        <p>Two plain specs cut from one pipeline: a <b>contribute spec</b>, parameters to a <b>contribution</b> at the accumulation keys; a <b>combine spec</b>, a collection of contributions and finalize parameters to the combined contribution and the results. The one declaration: the collection parameter may be <b>accumulating</b>, so its own output can be passed back in. The framework never sums and never sees whether it is events or a histogram.</p>
+        <p>Two plain specs cut from one pipeline: a <b>contribute spec</b>, parameters to a <b>contribution</b> at the accumulation keys; a <b>combine spec</b>, a collection of contributions and finalize parameters to the combined contribution and the results. The one declaration: <b>chain</b>, a mapping from the collection parameter to one of the spec's own outputs, so that output can be passed back in as an element. The framework never sums and never sees whether it is events or a histogram.</p>
       </div>
       <div class="card panel">
         <h3>What it buys</h3>
@@ -1019,7 +1019,7 @@
     </div>
   </div>
   <p class="take">Authors must put normalisation <b>after the accumulation key</b>; ess.sans does, ess.powder does not yet (D15).</p>
-  <aside class="notes">A spec is always one callable and one record shape (D8); an aggregation is not a callable, so it has no spec of its own. The framework's aggregation is member requests plus one combine request that references their contributions (D6). D14 used to say the rule recombines the members' outputs, which is wrong for the first technique it meets: a SANS member's output is I(Q), and I(Q) curves do not add; what adds is the numerator and the denominator before normalisation. The notebook, the rule, and the fold differ only in how often the contribution is written as a record: every addition, every arrival, every n arrivals. Chaining happens when the combine spec's parameter is accumulating and every record the previous combine covers is still current; otherwise apply combines over all current members. The fold's records carry the reused flag, so publication recomputes them cold along the chain, and a rule that publishes its combine therefore chains. A combine that is not additive has the same shape without the mark: reflectometry's stitch or a tomographic reconstruction, recomputed on every arrival; the rule's combine clause has one form for both.</aside>
+  <aside class="notes">A spec is always one callable and one record shape (D8); an aggregation is not a callable, so it has no spec of its own. The framework's aggregation is member requests plus one combine request that references their contributions (D6). D14 used to say the rule recombines the members' outputs, which is wrong for the first technique it meets: a SANS member's output is I(Q), and I(Q) curves do not add; what adds is the numerator and the denominator before normalisation. The notebook, the rule, and the fold differ only in how often the contribution is written as a record: every addition, every arrival, every n arrivals. Chaining happens when the combine spec declares chain and every record the previous combine covers is still current; otherwise apply combines over all current members. The fold's records carry the reused flag, so publication recomputes them cold along the chain, and a rule that publishes its combine therefore chains. A combine that is not additive has the same shape without the declaration: reflectometry's stitch or a tomographic reconstruction, recomputed on every arrival; the rule's combine clause has one form for both.</aside>
 </section>
 
 <!-- ===================== 21 SPEC CHANGES ===================== -->
@@ -1055,11 +1055,12 @@
 
 <span class="add">spec sans_combine 3.1</span>
   <span class="add">parameters:</span>
-    <span class="add">contributions: list[Array()]</span>  <span class="cm"># accumulating</span>
+    <span class="add">contributions: list[Array()]</span>
     <span class="add">q_bins: edges</span>
   <span class="add">outputs:</span>
-    <span class="add">contribution: DataGroup</span>      <span class="cm"># may be passed back in</span>
-    <span class="add">iofq: ArraySpec(dims=[Q])</span></pre>
+    <span class="add">contribution: DataGroup</span>
+    <span class="add">iofq: ArraySpec(dims=[Q])</span>
+  <span class="add">chain: {contributions: contribution}</span>  <span class="cm"># may be passed back in</span></pre>
     </div>
   </div>
   <div class="chips">
@@ -1067,8 +1068,8 @@
     <span class="chip">outputs are a typed model in the same vocabulary</span>
     <span class="chip">collections on both sides; a reference may name one element</span>
     <span class="chip">binned flag: event outputs are never plotted, a dense twin is</span>
-    <span class="chip">a collection parameter may be accumulating: the one declaration an aggregation needs (D13, D15)</span>
-    <span class="chip open">stage inputs: what a slider may move, chosen by the adapter (phase 3)</span>
+    <span class="chip">chain maps a collection parameter to an output: the one declaration an aggregation needs (D13, D15)</span>
+    <span class="chip open">stage inputs: chosen by the session from what changed since the predecessor (phase 3)</span>
   </div>
   <p class="take">Chaining becomes <b>a type check between two fields</b> of one vocabulary. Storage placement stops being a spec concept.</p>
   <aside class="notes">Small in the vocabulary; changes the output side while the PR is open. DREAM produces per-bank outputs and reflectometry consumes lists of runs in phase 1 already, so collections are core.</aside>
@@ -1079,7 +1080,7 @@
   <header><div class="eyebrow"><span>Part 2 · The proposal</span></div><h2>Where state lives: records never, disk always, memory only in a session</h2></header>
   <div class="body">
     <figure>
-      <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Left: a throwaway process reads inputs from disk, runs once, writes outputs and a completion marker, and exits. Right, dashed: a session process keeps warm callables and a private cache in memory, reruns in memory, and writes out only on demand.">
+      <svg class="fig" viewBox="0 0 1100 340" role="img" aria-label="Left: a throwaway process reads inputs from disk, runs once, writes outputs and a completion marker, and exits. Right, dashed: a session process holds stages and a private cache in memory, reruns in memory, and writes out only on demand.">
         <text x="270" y="30" text-anchor="middle" class="h">Throwaway process</text>
         <text x="270" y="50" text-anchor="middle" class="s">every run in shared mode · phases 1 and 2</text>
         <rect class="box" x="120" y="70" width="300" height="130" rx="10"/>
@@ -1095,17 +1096,17 @@
         <text x="820" y="56" text-anchor="middle" class="s">phase 3 · one of three candidate models</text>
         <rect class="mem" x="670" y="76" width="300" height="124" rx="10"/>
         <text x="820" y="104" text-anchor="middle">process belonging to one client</text>
-        <text x="820" y="128" text-anchor="middle" class="s">warm callables + private cache of outputs</text>
+        <text x="820" y="128" text-anchor="middle" class="s">stages + private cache of outputs</text>
         <text x="820" y="152" text-anchor="middle" class="s">a rerun recomputes only what changed</text>
         <path class="e memc" d="M970,92 C1030,80 1030,140 972,128"/><text x="1025" y="152" text-anchor="middle" class="s">rerun in memory</text>
         <path class="e diskc open" d="M820,200 L820,250"/><text x="832" y="232" class="s">write out on demand only</text>
         <rect class="disk" x="610" y="250" width="420" height="60" rx="8"/><text x="820" y="286" text-anchor="middle" class="h">disk tier · registered copies</text>
       </svg>
-      <figcaption>The registry knows disk copies only. A memory cache is invisible to every other process, so there is no cache-coherence protocol to build. Losing a session costs time, never data: everything in it can be recomputed from records.</figcaption>
+      <figcaption>The registry knows disk copies only. A memory cache is invisible to every other process, so there is no cache-coherence protocol to build. Losing a session costs time, never data: everything in it can be recomputed from records. A stage is a callable with the signature of the workflow, built and held by the session, and addressed by the spec, its stage inputs, and the values of the other fields. The session picks the stage inputs from what a request changes against its predecessor; the first move of a parameter that is not yet a stage input costs one full computation, because its stage must be built.</figcaption>
     </figure>
   </div>
-  <p class="take"><b>Requests are stateless everywhere.</b> Execution may be stateful in a session, and a session's identity never appears in a record.</p>
-  <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound at seconds per rerun, unless warm runners are keyed by the reference they hold; see the three-models slide), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
+  <p class="take"><b>A workflow holds nothing between runs; a session does.</b> Execution may be stateful in a session, through the stages it holds, and a session's identity never appears in a record.</p>
+  <aside class="notes">Rejected: stateful jobs (esslivedata's model), stateless-everywhere for interactive use (disk-bound at seconds per rerun, unless kept runners are keyed by the reference they hold; see the three-models slide), and a shared object store across processes (scipp is not chunk-aware). The right half is where the phase 3 discussion goes; see the three-models slide.</aside>
 </section>
 
 <!-- ===================== 23 NOT A CATALOGUE ===================== -->
@@ -1200,7 +1201,7 @@
         <tr><td>The batch form: members and values typed by hand over the same apply and table; templates saved from a form; run-number entry; recompute; retention</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>Contribute spec and combine spec, cut from one pipeline; chained combines; grouping helper</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot on"></span></td><td class="c"><span class="dot on"></span></td></tr>
         <tr><td>HTTP transport, when the first client lives outside the backend process; cluster launcher</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td><td class="c"><span class="dot on"></span></td></tr>
-        <tr><td>Sessions, warm callables, private caches, slots, local files as datasets; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
+        <tr><td>Sessions, stages, private caches, slots, local files as datasets; the fold holding a running contribution</td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot no"></span></td><td class="c"><span class="dot opt"></span></td></tr>
       </tbody>
     </table>
     <div class="keys"><span><i class="dot on"></i> needed</span><span><i class="dot opt"></i> when a workflow or a client asks for it</span><span><i class="dot no"></i> not needed</span></div>
@@ -1215,9 +1216,9 @@
   <div class="body">
     <div class="grid3">
       <div class="panel">
-        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Session model: a framework-owned session holds warm callables; every slider move is a record in a slot.">
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Session model: a framework-owned session holds stages; every slider move is a record in a slot.">
           <rect class="box open" x="10" y="10" width="300" height="130" rx="8"/><text x="22" y="30" class="s">framework</text>
-          <rect class="mem" x="30" y="45" width="150" height="70" rx="8"/><text x="105" y="74" text-anchor="middle">session</text><text x="105" y="94" text-anchor="middle" class="s">warm callables</text>
+          <rect class="mem" x="30" y="45" width="150" height="70" rx="8"/><text x="105" y="74" text-anchor="middle">session</text><text x="105" y="94" text-anchor="middle" class="s">stages</text>
           <rect class="box" x="205" y="45" width="90" height="70" rx="8"/><text x="250" y="74" text-anchor="middle">records</text><text x="250" y="94" text-anchor="middle" class="s">one per move</text>
           <path class="e" d="M180,80 L205,80"/>
         </svg>
@@ -1225,9 +1226,9 @@
         <p>The framework owns the process. Each change is a complete record, hidden behind a slot label. Shared use needs remote sessions the framework launches, times out, and caps.</p>
       </div>
       <div class="panel">
-        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Checkpoint model: the application holds warm callables privately; only kept results are submitted as cold runs.">
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Checkpoint model: the application holds a stage privately; only kept results are submitted as cold runs.">
           <rect class="box open" x="170" y="10" width="140" height="130" rx="8"/><text x="182" y="30" class="s">framework</text>
-          <rect class="mem" x="10" y="45" width="140" height="70" rx="8"/><text x="80" y="74" text-anchor="middle">application</text><text x="80" y="94" text-anchor="middle" class="s">warm callable</text>
+          <rect class="mem" x="10" y="45" width="140" height="70" rx="8"/><text x="80" y="74" text-anchor="middle">application</text><text x="80" y="94" text-anchor="middle" class="s">stage</text>
           <rect class="box" x="200" y="45" width="90" height="70" rx="8"/><text x="245" y="74" text-anchor="middle">records</text><text x="245" y="94" text-anchor="middle" class="s">cold runs</text>
           <path class="e" d="M150,80 L200,80"/><text x="175" y="100" text-anchor="middle" class="s">keep</text>
         </svg>
@@ -1235,8 +1236,8 @@
         <p>The application reruns in its own memory, as a notebook does. When the user keeps a result, the full parameter set is submitted and runs cold. The framework never sees a session.</p>
       </div>
       <div class="panel">
-        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Stateless with splits: the cheap stage reads the stored intermediate from disk on rung 1, or from a warm runner keyed by that reference on rung 2.">
-          <rect class="mem" x="62" y="6" width="196" height="30" rx="8"/><text x="160" y="26" text-anchor="middle" class="s">warm runner, keyed by the reference</text>
+        <svg class="fig" viewBox="0 0 320 150" role="img" aria-label="Stateless with splits: the cheap stage reads the stored intermediate from disk on rung 1, or from a kept runner keyed by that reference on rung 2.">
+          <rect class="mem" x="62" y="6" width="196" height="30" rx="8"/><text x="160" y="26" text-anchor="middle" class="s">kept runner, keyed by the reference</text>
           <path class="e memc" d="M55,62 L55,21 L62,21"/>
           <path class="e memc" d="M258,21 L272,21 L272,62"/>
           <rect class="box" x="10" y="62" width="90" height="60" rx="8"/><text x="55" y="86" text-anchor="middle">expensive</text><text x="55" y="104" text-anchor="middle" class="s">stage, once</text>
@@ -1247,7 +1248,7 @@
           <text x="160" y="144" text-anchor="middle" class="s">rung 1 through disk · rung 2 through memory</text>
         </svg>
         <h3>Stateless with splits <span class="hint">(two rungs)</span></h3>
-        <p><b>Rung 1:</b> every change is a fresh process over a stored intermediate. Seconds. <b>Rung 2:</b> warm runners keyed by the reference they hold serve the rerun from memory. Sub-second, additive, and a routing miss is rung 1.</p>
+        <p><b>Rung 1:</b> every change is a fresh process over a stored intermediate. Seconds. <b>Rung 2:</b> kept runners keyed by the reference they hold serve the rerun from memory. Sub-second, additive, and a routing miss is rung 1.</p>
       </div>
     </div>
     <table>
@@ -1255,15 +1256,15 @@
       <tbody>
         <tr><td>Feedback on a post-processing parameter</td><td>sub-second</td><td>sub-second</td><td>seconds; sub-second on rung 2</td></tr>
         <tr><td>Records while exploring</td><td>one per change, hidden by slots</td><td>none</td><td>one per change</td></tr>
-        <tr><td>New framework concepts</td><td>session, warm callables, slots, private caches, two shapes</td><td>none; the warm adapter becomes a library</td><td>none on rung 1; a placement policy and a memory index on rung 2</td></tr>
+        <tr><td>New framework concepts</td><td>session, stages, slots, private caches, two shapes</td><td>none; the adapter becomes a library</td><td>none on rung 1; a placement policy and a memory index on rung 2</td></tr>
         <tr><td>Interactive use in the shared web UI</td><td>remote sessions owned by the framework</td><td>a hosted process per user, owned by infrastructure</td><td>works, slowly; on rung 2 with no per-user process at all</td></tr>
-        <tr><td>Burden on workflow authors</td><td>choose the stage inputs</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
+        <tr><td>Burden on workflow authors</td><td>none required; an optional default stage input for a series' first request</td><td>none beyond the callable</td><td>split at every tunable boundary</td></tr>
         <tr><td>Combining an unattended growing series</td><td>a chained combine (D15); no session is involved</td><td>a chained combine; the application is not running</td><td>a chained combine, this model's own shape; the fold is its second rung</td></tr>
       </tbody>
     </table>
   </div>
   <p class="take">All three keep <b>the same records, spec, and API</b>. Decide when phase 3 is designed, with measurements from the spike; the checkpoint model is the default to beat, and the third is not to be dismissed on its feedback number, because seconds is rung 1 rather than the model.</p>
-  <aside class="notes">Rung 2 is the session model with the addressing rule changed: keyed by the reference held, not owned by a client. D2's invariant survives, the fallback on a miss is the ordinary stateless path, and the cost is a placement policy, because the placement that maximises reuse is the one that destroys fan-out. The last row is not a phase 3 row: D15 answers it the same way in every column, so the model chosen for interactive work does not decide how a growing series is combined, and no column can be justified by accumulation. If a series arrives faster than its partial can be read and written, the fold D15 allows is the third model's second rung, and phase 3 then has a keyed warm pool it did not have to pay for. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process. And one word to keep: nothing may <em>require</em> a request to reach a particular process, which still allows a placement hint.</aside>
+  <aside class="notes">Rung 2 is the session model with the addressing rule changed: keyed by the reference held, not owned by a client. D2's invariant survives, the fallback on a miss is the ordinary stateless path, and the cost is a placement policy, because the placement that maximises reuse is the one that destroys fan-out. The last row is not a phase 3 row: D15 answers it the same way in every column, so the model chosen for interactive work does not decide how a growing series is combined, and no column can be justified by accumulation. If a series arrives faster than its partial can be read and written, the fold D15 allows is the third model's second rung, and phase 3 then has a keyed pool of kept runners it did not have to pay for. Two things the core must keep so all three stay open: the callable takes objects, not files; any client may turn a reference into an object in its own process. And one word to keep: nothing may <em>require</em> a request to reach a particular process, which still allows a placement hint.</aside>
 </section>
 
 <!-- ===================== 27 DECISIONS ===================== -->
@@ -1304,7 +1305,7 @@
         <li><b>The architecture sketch</b>, with rejected alternatives per choice, a glossary, and a decision index. A reading edition with diagrams is published.</li>
         <li><b>38 user stories</b> run against the sketch: getting data in, interactive, chaining, batch, automatic, publication, roles, operations. Every gap found was closed or became an open question.</li>
         <li><b>Five review notes</b>: what each phase needs, what all-in stateless would remove and cost, and what the histories of Snakemake, AiiDA, and Mantid's ISIS interfaces say about the sketch.</li>
-        <li><b>A walking skeleton</b>, <code>ess.apps</code>, local mode: spec vocabulary, records, SQLite store, data store, both execution shapes, group submit with pending outputs, warm sciline adapter with a warm-equals-cold test helper, templates, batch, trigger loop, publication, fakes. 64 tests.</li>
+        <li><b>A walking skeleton</b>, <code>ess.apps</code>, local mode: spec vocabulary, records, SQLite store, data store, both execution shapes, group submit with pending outputs, a sciline adapter with stages held by the session and a test helper that checks a stage against its workflow, templates, batch, trigger loop, publication, fakes. 166 tests.</li>
         <li class="hint">Not in it: real SciCat, HTTP, a UI, a cluster launcher, Tiled, a real instrument workflow, the contribute spec, the combine spec, combine requests.</li>
       </ul>
     </div>
