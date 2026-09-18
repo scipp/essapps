@@ -11,11 +11,6 @@ constructed, called once, and the process exits after writing a completion
 marker. The runner never touches the record store and never sees a record: it
 gets a record ID and parameters and reports a :class:`RunResult`.
 
-A request that runs part of a workflow with a declared contribution (D15) takes
-the same path: a member run calls contribute and stores its contribution as the
-only output, and a combine request loads the contributions it references,
-calls combine over them and finalize on the result, and stores both.
-
 The callable receives the validated request, references included, and an
 :class:`Inputs` to get at the bytes; the two shapes differ only in what serves
 those: a work directory the backend filled at dispatch, or the session's data
@@ -31,15 +26,14 @@ import json
 import os
 import sys
 import traceback
-from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from .binding import Binding, Factory, Inputs, Workflow, combining, import_object
-from .records import Failure, RunResult, RunStage, Status
+from .binding import Binding, Factory, Inputs, Workflow, import_object
+from .records import Failure, RunResult, Status
 from .spec import (
     ArraySpec,
     OutputRef,
@@ -49,7 +43,6 @@ from .spec import (
     as_ref,
     data_fields,
     dataset_refs,
-    finalize_model,
     literal_model,
 )
 from .stages import Stages
@@ -222,15 +215,15 @@ class Runner:
         inputs: Inputs,
         outputs: Outputs,
         *,
-        stage: RunStage = 'run',
-        contributions: Iterable[OutputRef] = (),
         label: str | None = None,
+        member_key: str | None = None,
     ) -> RunResult:
         """
         Execute the request ``params`` of ``record_id`` and report what happened.
 
-        ``label`` is the request's slot (D14). A session reads it to tell which
-        parameters a person is moving, and nothing else here uses it.
+        ``label`` and ``member_key`` say where the request sits in a label's
+        history (D14). A session reads them to find the request's predecessor and
+        with it the parameters a person is moving; nothing else here uses them.
         """
         if binding.factory is None:
             raise ValueError(f'{binding.spec.id} has no workflow to run')
@@ -244,56 +237,29 @@ class Runner:
             binding=binding.how,
         )
         try:
-            # A combine request carries the finalize parameters and no others, so
-            # it is validated against a model of exactly those fields.
-            params_model = finalize_model(spec) if stage == 'combine' else spec.params
-            validated = params_model.model_validate(params)
+            validated = spec.params.model_validate(params)
             result.resolved_params = _resolved(validated.model_dump(mode='json'))
             result.checksums = self._checksums(params, inputs)
-            workflow = self._callable(spec, binding.factory)
-            called = workflow
-            if self._stages is not None and stage == 'run':
-                # Only a whole run goes through a stage: contribute and combine
-                # are entry points of the workflow object itself.
+            called = workflow = self._callable(spec, binding.factory)
+            if self._stages is not None:
                 called, result.reused = self._stages.workflow_for(
-                    spec.id, workflow, validated, inputs, label
+                    spec.id,
+                    workflow,
+                    validated,
+                    inputs,
+                    label=label,
+                    member_key=member_key,
+                    checksums=result.checksums,
                 )
-            returned = self._call(
-                spec,
-                called,
-                stage,
-                validated,
-                inputs,
-                [inputs.array(ref) for ref in contributions],
+            self._store(
+                record_id, result, spec, dict(called(validated, inputs)), outputs
             )
-            self._store(record_id, result, spec, dict(returned), outputs)
             result.status = Status.COMPLETED
         except Exception as e:
             result.status = Status.FAILED
             result.failure = _failure(e)
         result.finished = datetime.now(UTC)
         return result
-
-    def _call(
-        self,
-        spec: WorkflowSpec,
-        workflow: Workflow,
-        stage: RunStage,
-        params: BaseModel,
-        inputs: Inputs,
-        contributions: list[Any],
-    ) -> Mapping[str, Any]:
-        """The entry points this stage runs, and the outputs they produce (D15)."""
-        if stage == 'run':
-            return workflow(params, inputs)
-        if spec.contribution is None:
-            raise ValueError(f'{spec.id} declares no contribution to {stage}')
-        entry = combining(workflow)
-        if stage == 'contribute':
-            return {spec.contribution: entry.contribute(params, inputs)}
-        combined = entry.combine(contributions)
-        finalized = entry.finalize(combined, params, inputs)
-        return {spec.contribution: combined, **finalized}
 
     def _store(
         self,
@@ -366,13 +332,7 @@ def main(workdir: Path) -> None:
     )
     outputs = WorkdirOutputs(workdir, serializers.save)
     result = Runner(keep=False).run(
-        job['record'],
-        job['params'],
-        binding,
-        inputs,
-        outputs,
-        stage=job['stage'],
-        contributions=[OutputRef.model_validate(c) for c in job['contributions']],
+        job['record'], job['params'], binding, inputs, outputs
     )
     marker = {
         'result': result.model_dump(mode='json'),

@@ -100,9 +100,8 @@ class SessionLauncher:
             self.registry.binding(record.spec),
             _SessionInputs(self._data, locations),
             _CacheOutputs(self._data),
-            stage=record.request.stage,
-            contributions=record.request.contributions,
             label=record.request.label,
+            member_key=record.request.member_key,
         )
         record = record.model_copy()
         record.apply(result)
@@ -158,10 +157,6 @@ class SubprocessLauncher:
             'record': record.id,
             'spec': record.spec.model_dump(),
             'params': params,
-            'stage': record.request.stage,
-            'contributions': [
-                c.model_dump(mode='json') for c in record.request.contributions
-            ],
             'registry': self.registry_path,
             'locations': {str(k): str(v) for k, v in locations.items()},
         }

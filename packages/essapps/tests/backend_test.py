@@ -213,6 +213,7 @@ def test_group_is_refused_whole_when_one_member_is_invalid(
         ({'run': {'record': 'zzz', 'output': 'file'}}, 'no such record'),
         ({'run': 'not-a-ref-or-path-dict', 'scale': 'x'}, 'scale'),
         ({}, 'run'),
+        ({'run': {'instrument': 'dream', 'run': 1}, 'sacle': 2.0}, 'sacle'),
     ],
 )
 def test_validation_reports_errors_before_any_record_exists(

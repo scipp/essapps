@@ -10,9 +10,11 @@ Local mode only: client, backend, launcher, session, and data store in one Pytho
 from pathlib import Path
 
 from ess.apps.client import local
-from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
+from ess.apps.examples import (
+    HISTOGRAM, LOAD, NORMALIZE_COMBINE, NORMALIZE_CONTRIBUTE, SUM, registry, write_run
+)
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, OutputRef
+from ess.apps.spec import OutputRef, dataset_ref
 
 Path('/tmp/runs').mkdir(exist_ok=True)
 write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])
@@ -54,11 +56,13 @@ group = client.submit_group({
 })
 client.output(group['sum'], 'total')
 
-# A declared additive combine: a member run produces the contribution and none of
-# the other outputs, a combine request adds contributions and normalises. A series
-# grows by combining the previous combine with the new member.
-member = client.run(NORMALIZE, {'run': run, 'floor': 1.5}, stage='contribute')
-total = client.run(NORMALIZE, {'scale': 2.0}, stage='combine', contributions=[member])
+# One pipeline cut into two specs: a member run produces a contribution, and a
+# combine run sums contributions and normalises the sum. A series grows by
+# passing the previous combine's contribution back in beside the new member.
+member = client.run(NORMALIZE_CONTRIBUTE, {'run': run, 'floor': 1.5})
+total = client.run(NORMALIZE_COMBINE, {
+    'contributions': [member.ref('contribution')], 'scale': 2.0,
+})
 client.output(total, 'normalized')
 ```
 
@@ -66,13 +70,13 @@ Every run through `throwaway=True` instead executes in a subprocess that writes 
 
 The checksum of every dataset file a run reads is on its record, so a recompute can tell whether it read the same bytes.
 
-A spec may mark one output as its **contribution**, the value at the workflow's accumulation keys, and declare which parameters its finalize stage reads (D15). Such a workflow has three entry points instead of one callable, contribute, combine, and finalize, of which the callable is the first and the last composed. A request says which of them it runs: `stage='contribute'` is a member run of a series, whose only output is the contribution, and `stage='combine'` carries the finalize parameters and references the contributions to combine, which for a chained series are the previous combine's and the new member's. Contributions are references like any other, so they are in the private cache of a session and on disk in the throwaway shape, and the scheduler waits on them. The backend refuses a combine request that carries a contribute parameter, references a contribution of another spec, or references members that disagree on the parameters contribute reads.
+A spec is the signature of one callable and a record one call of it, so a sum over runs is **two specs**, not one with three entry points (D15): a contribute spec, whose one output holds the values at the workflow's accumulation keys, and a combine spec, which takes a collection of those contributions beside the parameters read after the sum and produces the combined contribution and the results. Both are ordinary specs: ordinary validation, forms, templates, records, and recompute, and the contributions are an ordinary collection parameter of data references, so the scheduler waits on them and nothing in the backend knows what a contribution is. The one thing a spec declares is `chain={'contributions': 'contribution'}`: that the output may come back as an element of the parameter and then stands for everything it was combined from. The spec checks that the two ends are a collection of data references and a data output of the same format; that the combination does not depend on grouping or order is checked by `ess.apps.testing.assert_combine_is_associative`.
 
-Workflow authors bind a spec to a factory returning the callable; `ess.apps.adapter.PipelineAdapter` wraps a sciline pipeline as a stateless callable and as an offer of a `sciline.Stage` over any subset of its parameters, resolving each data reference as the path or object the binding asks for; which subset is the session's decision and lives in `ess.apps.stages.Stages`, and `ess.apps.testing.assert_stage_equals_workflow` is the one check that a stage returns what the workflow returns. `ess.apps.aggregation.AggregatePipeline` wraps a sciline pipeline as the three entry points, building a `sciline.Aggregation` from the accumulation keys and an accumulator per key, and refusing at bind time a declaration the graph disagrees with; `ess.apps.testing.assert_combine_is_associative` is the one check on a declared combine. Publication with a provenance snapshot is `client.publish`.
+Workflow authors bind a spec to a factory returning the callable; `ess.apps.adapter.PipelineAdapter` wraps a sciline pipeline as a stateless callable and as an offer of a `sciline.Stage` over any subset of its parameters, resolving each data reference as the path or object the binding asks for; which subset is the session's decision and lives in `ess.apps.stages.Stages`, and `ess.apps.testing.assert_stage_equals_workflow` is the one check that a stage returns what the workflow returns. `ess.apps.aggregation.Aggregation` cuts one sciline pipeline into the contribute and combine callables, and the pipeline's own single-run callable, reading the split back off the graph and refusing specs it disagrees with. It writes the contribute parameters that are not member parameters into the contribution, and the combine refuses contributions that disagree on them, which is the check no backend can make because only the binding knows which parameters may differ between members. Publication with a provenance snapshot is `client.publish`.
 
 Templates, lookups, and rules are the stored data in `ess.apps.rules`, and the operations over them are in `ess.apps.batch` (D14). A **template** is an immutable, versioned partial request; a **lookup** is an ordered table beside it whose entries match dataset fields by a value within a tolerance, a glob pattern, or an open-ended run-number range, and supply fills; a **rule** adds a selector with a lower bound, a retry policy, exclusions, and optionally a series. `apply` is the one operation that makes requests from any of them: it fills each member through the ladder template, lookup entry, typed values, and returns a group to preview and submit whole, never submitting on its own. It accepts a `DataFrame` with the member key as index and the typed values as columns, and `batch_table` gives the batch back in the same shape; pandas stays at the client. `backlog`, `reprocess`, and `rerun` are the same operation over a query: the datasets before a new rule's bound, the members made by an older rule version, and the members with no completed record.
 
-A **batch** is the records under one label, and nothing else is stored: `client.batch(label)` is the latest record per member key. `TriggerLoop` runs rules and keeps no memory. It fires on a dataset when the rule is active, the selector matches, the dataset lies after the rule's bound, it is not excluded, and no record exists under the rule's label with it as member key, or its failure is one the retry policy names and the records under that member key are fewer than the limit. Every clause is a query, so a restart fires on nothing twice, and `trigger_status` answers the same question for one dataset, with the reason. A rule with a series submits, per arrival, the member's contribute run and a combine request chained to the previous combine of that series, both in one group.
+A **batch** is the records under one label, and nothing else is stored: `client.batch(label)` is the latest record per member key. `TriggerLoop` runs rules and keeps no memory. It fires on a dataset when the rule is active, the selector matches, the dataset lies after the rule's bound, it is not excluded, and no record exists under the rule's label with it as member key, or its failure is one the retry policy names and the records under that member key are fewer than the limit. Every clause is a query, so a restart fires on nothing twice, and `trigger_status` answers the same question for one dataset, with the reason. A rule with a series submits, per arrival, the member's run and a combine request over that series, both in one group. The combine references the previous combine and the members it does not cover when the combine spec declares a chain and every record that combine covers is still a current member; otherwise it references all current members, so a corrected member is not counted twice.
 
 ## A session on real data
 

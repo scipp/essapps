@@ -9,20 +9,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
-
-RunStage = Literal['run', 'contribute', 'combine']
-"""
-Which entry points a request runs (D15).
-
-``run`` is the whole workflow, contribute then finalize, and the only stage a
-spec without a contribution has. ``contribute`` is a member run of a series: it
-produces the contribution and none of the other outputs. ``combine`` combines
-the referenced contributions and finalizes the result; it carries the finalize
-parameters and no others.
-"""
 
 
 class Status(StrEnum):
@@ -68,23 +57,10 @@ class RunRequest(BaseModel, frozen=True):
     reference fields holding a :class:`OutputRef` or a :class:`DatasetRef`. A request is
     complete: it never names a session or a process, and the only path it may
     name is the identity of a local file that carries no run identity.
-
-    ``stage`` says which entry points run. A combine request carries the finalize
-    parameters in ``params`` and its members in ``contributions``, which are
-    references like any other and are what the scheduler waits on.
     """
 
     spec: SpecId
     params: dict[str, Any] = Field(default_factory=dict)
-    stage: RunStage = Field(
-        default='run',
-        description="Which entry points of the workflow this request runs (D15).",
-    )
-    contributions: list[OutputRef] = Field(
-        default_factory=list,
-        description="What a combine request combines: contribution outputs of "
-        "member records and of the previous combine.",
-    )
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)
@@ -102,20 +78,9 @@ class RunRequest(BaseModel, frozen=True):
         "and the values the submitter typed (D14).",
     )
 
-    @model_validator(mode='after')
-    def _contributions_are_the_combine_stage(self) -> RunRequest:
-        """The stage and the contributions say one thing, so they cannot disagree."""
-        if (self.stage == 'combine') != bool(self.contributions):
-            raise ValueError(
-                'a combine request references at least one contribution, and no '
-                'other stage references any'
-            )
-        return self
-
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""
-        params = [r for _, r in walk_refs(self.params) if isinstance(r, OutputRef)]
-        return params + list(self.contributions)
+        return [r for _, r in walk_refs(self.params) if isinstance(r, OutputRef)]
 
     def datasets(self) -> list[DatasetRef]:
         """Distinct references to data the framework did not compute."""

@@ -24,12 +24,12 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel
 
-from .backend import SubmitError
+from .backend import GROUP_PREFIX, SubmitError
 from .client import Client
-from .records import RunRecord, RunRequest, Submission
+from .records import RunRecord, RunRequest, Status, Submission
 from .rules import AsOf, Lookup, LookupEntry, Rule, Series, Template, matches, precedes
 from .sources import Dataset
-from .spec import DatasetRef, OutputRef
+from .spec import DatasetRef, OutputRef, SpecId, as_ref
 
 
 def apply(
@@ -53,8 +53,8 @@ def apply(
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
-    member's request is a contribute run and is followed by a combine request
-    chained to the previous combine of its series (D15).
+    member's request is followed by a combine request over the series it belongs
+    to (D15).
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -70,7 +70,8 @@ def apply(
         else [(key, None) for key in values]
     )
     group: dict[str, RunRequest] = {}
-    chain: dict[str, OutputRef] = {}
+    arrived: dict[str, list[str]] = {}
+    combines: dict[str, str] = {}
     for key, dataset in members:
         entry = (
             lookup.entry(dataset)
@@ -83,7 +84,6 @@ def apply(
             template.fill(**fills),
             label=label,
             member_key=key,
-            stage='run' if series is None else 'contribute',
             submission=Submission(
                 template=template.id,
                 rule=of_rule.id if of_rule is not None else None,
@@ -92,10 +92,24 @@ def apply(
             ),
         )
         if of_rule is not None and series is not None and dataset is not None:
-            name, request = _combine(
-                client, of_rule, series, dataset, key, label, chain
+            if series.key not in dataset.fields:
+                raise ValueError(
+                    f'{dataset.ref} has no field {series.key!r} to key a series'
+                )
+            value = str(dataset.fields[series.key])
+            arrived.setdefault(value, []).append(key)
+            name = f'{key}+combine'
+            group[name] = _combine(
+                client,
+                of_rule,
+                series,
+                label,
+                value,
+                group,
+                arrived[value],
+                combines.get(value),
             )
-            group[name] = request
+            combines[value] = name
     return group
 
 
@@ -103,42 +117,125 @@ def _combine(
     client: Client,
     rule: Rule,
     series: Series,
-    dataset: Dataset,
-    member: str,
     label: str,
-    chain: dict[str, OutputRef],
-) -> tuple[str, RunRequest]:
+    value: str,
+    group: Mapping[str, RunRequest],
+    arrived: Iterable[str],
+    previous_name: str | None,
+) -> RunRequest:
     """
     The combine request one arrival of a series submits (D15).
 
-    It is chained to the previous combine of the series, which is the latest
-    record under the series value as member key, or to the one made earlier in
-    this group. Which series a dataset belongs to is asked of the source here
-    and never stored, so a metadata correction moves a run between series.
+    It references the contribution of every current member of the series. If the
+    combine spec declares that its combined output may come back as an element of
+    the collection, and the previous combine covers only records that are still
+    current members, it references that combine instead of the members it covers.
+    A member that was corrected, excluded, or reprocessed leaves the previous
+    combine covering a record that is no longer current, and then the combine is
+    made over all current members, so that a correction is not counted twice.
     """
-    spec = client.registry.spec(rule.template.spec)
-    if spec.contribution is None:
-        raise ValueError(f'{spec.id} declares no contribution to combine (D15)')
-    if series.key not in dataset.fields:
-        raise ValueError(f'{dataset.ref} has no field {series.key!r} to key a series')
-    value = str(dataset.fields[series.key])
-    previous = chain.get(value)
-    if previous is None and (last := client.latest(label, value)) is not None:
-        previous = OutputRef(record=last.id, output=spec.contribution)
-    name = f'{member}+combine'
-    chain[value] = OutputRef(record=f'@{name}', output=spec.contribution)
-    return name, client.request(
+    spec = client.registry.spec(series.template.spec)
+    members = _current_members(client, rule, series, label, value)
+    members |= {str(group[name].member_key): GROUP_PREFIX + name for name in arrived}
+    contributions = [
+        OutputRef(record=record, output=series.output) for record in members.values()
+    ]
+    chained = spec.chain.get(series.parameter)
+    previous = _previous_combine(client, group, label, value, previous_name)
+    if chained is not None and previous is not None:
+        record, request = previous
+        covered = _covers(client, group, series.parameter, spec.id, request)
+        if covered <= set(members.values()):
+            contributions = [OutputRef(record=record, output=chained)] + [
+                OutputRef(record=r, output=series.output)
+                for r in members.values()
+                if r not in covered
+            ]
+    return client.request(
         spec.id,
-        series.finalize,
+        series.template.fill(**{series.parameter: contributions}),
         label=label,
         member_key=value,
-        stage='combine',
-        contributions=[
-            *([] if previous is None else [previous]),
-            OutputRef(record=f'@{member}', output=spec.contribution),
-        ],
-        submission=Submission(rule=rule.id),
+        submission=Submission(template=series.template.id, rule=rule.id),
     )
+
+
+def _current_members(
+    client: Client, rule: Rule, series: Series, label: str, value: str
+) -> dict[str, str]:
+    """
+    The current members of one series: record ID by member key.
+
+    The latest record per member key under the label that is a member of this
+    rule's template, is not excluded, did not fail or get cancelled, and whose
+    dataset still carries this series value.
+    """
+    known = {str(dataset.ref): dataset for dataset in client.datasets()}
+    members: dict[str, str] = {}
+    for record in client.batch(label):
+        key = str(record.request.member_key)
+        dataset = known.get(key)
+        if record.spec != rule.template.spec or key in rule.exclusions:
+            continue
+        if record.status in (Status.FAILED, Status.CANCELLED):
+            continue
+        if dataset is None or str(dataset.fields.get(series.key)) != value:
+            continue
+        members[key] = record.id
+    return members
+
+
+def _previous_combine(
+    client: Client,
+    group: Mapping[str, RunRequest],
+    label: str,
+    value: str,
+    previous_name: str | None,
+) -> tuple[str, RunRequest] | None:
+    """The combine this arrival may chain onto, by record ID and request."""
+    if previous_name is not None:
+        return GROUP_PREFIX + previous_name, group[previous_name]
+    record = client.latest(label, value)
+    if record is None or record.status in (Status.FAILED, Status.CANCELLED):
+        return None
+    return record.id, record.request
+
+
+def _covers(
+    client: Client,
+    group: Mapping[str, RunRequest],
+    parameter: str,
+    spec: SpecId,
+    request: RunRequest,
+) -> set[str]:
+    """
+    The member records a combine covers, directly or through the combines it
+    chains onto, found by following the chained parameter back.
+
+    The walk reads one record per element of the chain, so a series chained one
+    arrival at a time costs a record read per member of it. Keeping the covered
+    set on the record instead would make every writer responsible for it.
+    """
+    covered: set[str] = set()
+    for element in request.params.get(parameter, []):
+        ref = as_ref(element)
+        if ref is None or not isinstance(ref, OutputRef):
+            continue
+        producer = _producer(client, group, ref.record)
+        if producer is not None and producer.spec == spec:
+            covered |= _covers(client, group, parameter, spec, producer)
+        else:
+            covered.add(ref.record)
+    return covered
+
+
+def _producer(
+    client: Client, group: Mapping[str, RunRequest], record: str
+) -> RunRequest | None:
+    """The request behind a reference, in this group or in the record store."""
+    if record.startswith(GROUP_PREFIX):
+        return group.get(record[len(GROUP_PREFIX) :])
+    return client.record(record).request
 
 
 def _member_fill(
@@ -236,14 +333,19 @@ def rerun(
 def _selected_members(
     known: Mapping[str, Dataset], rule: Rule | Template, records: Iterable[RunRecord]
 ) -> list[RunRecord]:
-    """Records of ``records`` whose dataset is known, not excluded, not a combine."""
+    """Records of ``records`` that are members: a known dataset, not excluded.
+
+    A combine of a series is under the same label; it is told from a member by
+    its spec, which is the combine template's and not the member template's.
+    """
     excluded = rule.exclusions if isinstance(rule, Rule) else {}
+    spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
     return [
         record
         for record in records
-        if record.request.member_key in known
+        if record.spec == spec
+        and record.request.member_key in known
         and record.request.member_key not in excluded
-        and record.request.stage != 'combine'
     ]
 
 
@@ -400,7 +502,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
         rows[str(record.request.member_key)] = {
             'record': record.id,
             'status': record.status.value,
-            'stage': record.request.stage,
+            'spec': str(record.spec),
             'template': submission.template,
             'rule': submission.rule,
             'entry': submission.entry,

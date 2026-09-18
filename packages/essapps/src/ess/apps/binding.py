@@ -13,9 +13,7 @@ The callable is stateless: no call affects a later one. It may offer a stage as
 well, a callable over a subset of its parameters that holds what those
 parameters cannot affect, which a session asks for and keeps; see
 :class:`StagedWorkflow`.
-A workflow whose spec declares a contribution exposes three entry points as well,
-contribute, combine, and finalize (D15), of which the callable is the first and
-the last composed. A factory makes the callable; a throwaway runner calls it
+A factory makes the callable; a throwaway runner calls it
 once, a session runner keeps it. Installed packages provide specs through the
 entry-point group ``ess.apps.specs`` and factories through
 ``ess.apps.workflows`` under the same
@@ -103,39 +101,6 @@ def staged(workflow: Workflow) -> StagedWorkflow | None:
     """The workflow as a stage offer, or None if it offers no stage."""
     if not callable(getattr(workflow, 'stage', None)):
         return None
-    return workflow  # type: ignore[return-value]
-
-
-class CombiningWorkflow(Protocol):
-    """
-    What a workflow with a declared contribution exposes besides the callable.
-
-    ``contribute`` and ``finalize`` take the validated params model and the
-    inputs, of which ``finalize`` reads only the parameters the spec declares as
-    its own; ``combine`` takes contributions of members, or combinations of such.
-    """
-
-    def contribute(self, params: BaseModel, inputs: Inputs) -> Any: ...
-
-    def combine(self, contributions: Iterable[Any]) -> Any: ...
-
-    def finalize(
-        self, contribution: Any, params: Any, inputs: Inputs
-    ) -> Mapping[str, Any]: ...
-
-
-def combining(workflow: Workflow) -> CombiningWorkflow:
-    """The three entry points of a workflow whose spec declares a contribution."""
-    missing = [
-        name
-        for name in ('contribute', 'combine', 'finalize')
-        if not callable(getattr(workflow, name, None))
-    ]
-    if missing:
-        raise TypeError(
-            f'{type(workflow).__name__} has no {missing}; a spec that declares a '
-            'contribution binds to contribute, combine, and finalize'
-        )
     return workflow  # type: ignore[return-value]
 
 

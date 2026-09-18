@@ -3,6 +3,7 @@
 """What a session holds between runs, and what it saves (D8)."""
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, NewType
 
 import pytest
@@ -24,8 +25,9 @@ from ess.apps.examples import (
     filter_data,
     histogram,
     histogram_workflow,
+    write_run,
 )
-from ess.apps.spec import OutputRef, SpecId
+from ess.apps.spec import OutputRef, SpecId, dataset_ref
 from ess.apps.stages import Stages
 from ess.apps.testing import assert_stage_equals_workflow, equal
 
@@ -63,9 +65,14 @@ class Session:
         self._stages = Stages(limit=limit)
         self.reused: list[bool] = []
 
-    def run(self, params: BaseModel, label: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        params: BaseModel,
+        label: str | None = None,
+        member_key: str | None = None,
+    ) -> dict[str, Any]:
         called, reused = self._stages.workflow_for(
-            SPEC, self._workflow, params, self._inputs, label
+            SPEC, self._workflow, params, self._inputs, label, member_key
         )
         self.reused.append(reused)
         return dict(called(params, self._inputs))
@@ -245,6 +252,38 @@ def test_the_cap_drops_the_least_recently_used_stage(
     assert equal(again['histogram'], expected['histogram'])
 
 
+def test_a_new_member_of_a_batch_differs_from_the_previous_member(
+    adapter: Callable[..., PipelineAdapter], inputs: ArrayInputs, filtered: list[float]
+) -> None:
+    """
+    A request that supersedes nothing has the latest earlier request under its
+    label as predecessor, which for a batch is the member before it.
+    """
+    session = Session(adapter(), inputs)
+    session.run(params(threshold=1.0), 'batch', '1')
+    session.run(params(threshold=2.0), 'batch', '2')
+    session.run(params(threshold=3.0), 'batch', '3')
+    # The second member names the threshold; the third is served from its stage.
+    assert session.reused == [False, False, True]
+    assert filtered == [1.0, 2.0, 3.0]
+
+
+def test_a_corrected_member_differs_from_the_record_it_supersedes(
+    adapter: Callable[..., PipelineAdapter], inputs: ArrayInputs, filtered: list[float]
+) -> None:
+    """Under one member key a request supersedes the previous one, not the member
+    that happened to run last."""
+    session = Session(adapter(), inputs)
+    session.run(params(threshold=1.0, bins=2), 'batch', '1')
+    session.run(params(threshold=2.0, bins=2), 'batch', '2')
+    session.run(params(threshold=1.0, bins=8), 'batch', '1')
+    session.run(params(threshold=1.0, bins=16), 'batch', '1')
+    # The correction moved the bin count against member 1, not the threshold as
+    # well against member 2, so the stage it builds holds the filtered run.
+    assert filtered == [1.0, 2.0, 1.0]
+    assert session.reused == [False, False, False, True]
+
+
 # The Amor pattern: a series of runs against one reference, then a binning slider
 
 SampleRun = NewType('SampleRun', str)
@@ -320,3 +359,22 @@ def test_session_reruns_record_reuse_of_the_stage_not_of_the_callable(
     assert not refiltered.reused
     assert client.output(rebinned).sizes == {'x': 8}
     assert client.latest('hist').id == refiltered.id
+
+
+def test_a_file_that_changed_on_disk_does_not_find_the_stage_built_from_its_bytes(
+    client: Client, run_file: Path
+) -> None:
+    """
+    A dataset reference is the same when the bytes behind it are not, so the
+    checksums of the datasets a stage fixed are part of its address.
+    """
+    run = dataset_ref(instrument='dream', run=1)
+    first = client.run(HISTOGRAM, {'data': run, 'bins': 2}, label='hist')
+    served = client.run(HISTOGRAM, {'data': run, 'bins': 4}, label='hist')
+    assert not first.reused
+    assert served.reused
+
+    write_run(run_file, [9.0] * 6)
+    again = client.run(HISTOGRAM, {'data': run, 'bins': 4}, label='hist')
+    assert not again.reused
+    assert client.output(again).sum().value == 54.0

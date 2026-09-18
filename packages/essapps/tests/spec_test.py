@@ -121,56 +121,67 @@ def test_a_data_field_holds_either_form_of_reference() -> None:
     ]
 
 
-def spec(outputs: type[BaseModel], **fields: object) -> WorkflowSpec:
+class CombineParams(BaseModel):
+    contributions: list[Array()]
+    one: Array()
+    files: list[NexusFile] = []
+    scale: float = 1.0
+
+
+class CombineOutputs(BaseModel):
+    contribution: Array()
+    result: Array()
+    count: int = 0
+
+
+def spec(**fields: object) -> WorkflowSpec:
     return WorkflowSpec(
-        name='combining',
+        name='combine',
         version=1,
-        title='Combining',
-        description='A workflow that declares a contribution.',
-        outputs=outputs,
+        title='Combine',
+        description='A workflow that declares a chain.',
+        params=CombineParams,
+        outputs=CombineOutputs,
         **fields,
     )
 
 
-def test_a_contribution_needs_the_other_outputs_optional() -> None:
-    """A member run returns the contribution alone, against the full model."""
-
-    class Required(BaseModel):
-        contribution: Array()
-        normalized: Array()
-
-    class Optional(BaseModel):
-        contribution: Array()
-        normalized: Array() | None = None
-
-    with pytest.raises(ValidationError, match="\\['normalized'\\] must be optional"):
-        spec(Required, contribution='contribution')
-    assert spec(Optional, contribution='contribution').contribution == 'contribution'
-    assert spec(Required).contribution is None
+def test_a_chain_declares_a_collection_parameter_and_the_output_it_takes() -> None:
+    assert spec(chain={'contributions': 'contribution'}).chain == {
+        'contributions': 'contribution'
+    }
+    assert spec().chain == {}
 
 
-def test_serialized_spec_carries_the_combine_declaration() -> None:
-    class Outputs(BaseModel):
-        contribution: Array()
-        result: Array() | None = None
+@pytest.mark.parametrize(
+    ('chain', 'message'),
+    [
+        ({'absent': 'contribution'}, 'no parameter named'),
+        ({'scale': 'contribution'}, 'not a collection of data references'),
+        ({'one': 'contribution'}, 'not a collection of data references'),
+        ({'contributions': 'absent'}, 'no data output named'),
+        ({'contributions': 'count'}, 'no data output named'),
+        ({'files': 'contribution'}, 'takes'),
+    ],
+    ids=[
+        'no-parameter',
+        'literal',
+        'not-a-collection',
+        'no-output',
+        'literal-output',
+        'format',
+    ],
+)
+def test_the_two_ends_of_a_chain_are_checked_on_the_spec_alone(
+    chain: dict[str, str], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        spec(chain=chain)
 
-    class Params(BaseModel):
-        run: NexusFile
-        scale: float = 1.0
 
-    spec = WorkflowSpec(
-        name='w',
-        version=1,
-        title='W',
-        description='d',
-        params=Params,
-        outputs=Outputs,
-        contribution='contribution',
-        finalize_params=frozenset({'scale'}),
-    )
+def test_serialized_spec_carries_the_chain_declaration() -> None:
     serialized = SerializedWorkflowSpec.model_validate_json(
-        spec.serialize().model_dump_json()
+        spec(chain={'contributions': 'contribution'}).serialize().model_dump_json()
     )
-    assert serialized.contribution == 'contribution'
-    assert serialized.finalize_params == frozenset({'scale'})
+    assert serialized.chain == {'contributions': 'contribution'}
     assert 'scale' in serialized.params_schema['properties']

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from typing import Any
 
 import sciline
@@ -33,6 +34,33 @@ from pydantic import BaseModel
 from .binding import Form, Inputs, Workflow, resolve
 
 Key = Any
+
+
+@dataclass(frozen=True)
+class Wiring:
+    """
+    How the fields of a params model reach a sciline pipeline.
+
+    ``keys`` is the sciline key each field sets, ``resolve`` the form a data
+    reference is asked for, a local path or a scipp object. The two together are
+    everything a spec's signature does not say and the pipeline needs.
+    """
+
+    keys: dict[str, Key]
+    resolve: dict[str, Form]
+
+    def values(
+        self, params: BaseModel, inputs: Inputs, names: Iterable[str]
+    ) -> dict[Key, Any]:
+        """The value of each named field, by sciline key, references resolved."""
+        values = {}
+        for name in names:
+            value = getattr(params, name)
+            form = self.resolve.get(name)
+            values[self.keys[name]] = (
+                value if form is None else resolve(value, form, inputs)
+            )
+        return values
 
 
 class PipelineAdapter:
@@ -62,31 +90,20 @@ class PipelineAdapter:
         self._pipeline = pipeline
         self._keys = dict(keys)
         self._targets = dict(targets)
-        self._resolve = dict(resolve)
+        self._wiring = Wiring(self._keys, dict(resolve))
         self.default_stage_inputs = frozenset(default_stage_inputs)
-        unknown = (self.default_stage_inputs | self._resolve.keys()) - self._keys.keys()
+        unknown = (
+            self.default_stage_inputs | self._wiring.resolve.keys()
+        ) - self._keys.keys()
         if unknown:
             raise ValueError(f'parameters without a key: {sorted(unknown)}')
-
-    def _values(
-        self, params: BaseModel, inputs: Inputs, names: Iterable[str]
-    ) -> dict[Key, Any]:
-        """The value of each named field, by sciline key, references resolved."""
-        values = {}
-        for name in names:
-            value = getattr(params, name)
-            form = self._resolve.get(name)
-            values[self._keys[name]] = (
-                value if form is None else resolve(value, form, inputs)
-            )
-        return values
 
     def _outputs(self, results: Mapping[Key, Any]) -> dict[str, Any]:
         return {name: results[key] for name, key in self._targets.items()}
 
     def __call__(self, params: BaseModel, inputs: Inputs) -> dict[str, Any]:
         pipeline = self._pipeline.copy()
-        for key, value in self._values(params, inputs, self._keys).items():
+        for key, value in self._wiring.values(params, inputs, self._keys).items():
             pipeline[key] = value
         return self._outputs(pipeline.compute(tuple(self._targets.values())))
 
@@ -96,7 +113,7 @@ class PipelineAdapter:
         """A callable over the pipeline with ``stage_inputs`` fed on every call."""
         pipeline = self._pipeline.copy()
         fixed = [name for name in self._keys if name not in stage_inputs]
-        for key, value in self._values(params, inputs, fixed).items():
+        for key, value in self._wiring.values(params, inputs, fixed).items():
             pipeline[key] = value
         targets = list(self._targets.values())
         needed = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
@@ -110,6 +127,8 @@ class PipelineAdapter:
         )
 
         def call(params: BaseModel, inputs: Inputs) -> dict[str, Any]:
-            return self._outputs(stage.compute(self._values(params, inputs, fed)))
+            return self._outputs(
+                stage.compute(self._wiring.values(params, inputs, fed))
+            )
 
         return call

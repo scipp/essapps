@@ -5,16 +5,16 @@ The workflow spec of scipp/ess#690, plus what the architecture sketch adds.
 
 Everything a spec author sees comes from :mod:`ess.reduce.spec` and is
 re-exported here. The additions are the identity a dataset reference carries
-(D1), the contribution output and the parameters finalize reads (D15), and the
-derived models the runner and the backend validate against. This module imports
-neither scipp nor sciline.
+(D1), the declared additive combine (D15), and the derived models the runner and
+the backend validate against. This module imports neither scipp nor sciline.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from types import UnionType
+from typing import Annotated, Any, Union, get_args, get_origin
 
 from ess.reduce.spec import (
     Array,
@@ -58,9 +58,9 @@ __all__ = [
     'dataset_ref',
     'dataset_refs',
     'field_of',
-    'finalize_model',
     'literal_model',
     'ref_fields',
+    'submodel',
     'walk_refs',
 ]
 
@@ -117,54 +117,67 @@ class SpecId(BaseModel, frozen=True):
         return f'{self.name}/v{self.version}'
 
 
+def _is_collection(annotation: Any) -> bool:
+    """Whether the annotation is a ``list`` or a ``dict``, through unions."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _is_collection(get_args(annotation)[0])
+    if origin in (Union, UnionType):
+        return any(_is_collection(arg) for arg in get_args(annotation))
+    return origin in (list, dict)
+
+
 class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
     """The plain-data form of scipp/ess#690 with the D15 declaration."""
 
-    contribution: str | None = None
-    finalize_params: frozenset[str] = frozenset()
+    chain: Mapping[str, str] = {}
 
 
 class WorkflowSpec(_WorkflowSpec, frozen=True):
     """
     The spec of scipp/ess#690 with the declared additive combine (D15).
 
-    ``contribution`` marks the output a combine request combines, and
-    ``finalize_params`` the parameters the finalize stage reads. Both are read
-    by the backend, which cannot import workflow code, which is what earns them
-    a place on the spec.
+    A spec is the signature of one callable and a record one call of it, so an
+    aggregation over runs is two specs, a contribute spec and a combine spec,
+    and nothing about the split is declared here. What is declared is ``chain``:
+    that an output of one run may come back as an element of a collection
+    parameter of a later run of the same spec, and then stands for all the
+    elements it was combined from.
     """
 
-    contribution: str | None = Field(
-        default=None,
-        description="Output field holding the value at the accumulation keys (D15).",
-    )
-    finalize_params: frozenset[str] = Field(
-        default=frozenset(),
-        description="Parameters finalize reads; every other parameter is contribute's.",
+    chain: Mapping[str, str] = Field(
+        default_factory=dict,
+        description="Collection parameter -> output whose value may be passed as "
+        "one of its elements and then stands for everything it combined (D15).",
     )
 
     @model_validator(mode='after')
-    def _contribution_is_declared(self) -> WorkflowSpec:
-        if self.contribution is not None:
-            if self.contribution not in self.outputs.model_fields:
-                raise ValueError(f'no output named {self.contribution!r}')
-            # A member run produces the contribution alone, and its outputs are
-            # validated against the full model, so the rest must be optional.
-            required = sorted(
-                name
-                for name, field in self.outputs.model_fields.items()
-                if name != self.contribution and field.is_required()
-            )
-            if required:
+    def _chain_is_a_collection_of_the_output(self) -> WorkflowSpec:
+        """
+        What the spec can check on its own: the shapes at the two ends.
+
+        That the combination does not depend on grouping or order is a property
+        of the code, which no spec can check;
+        :func:`ess.apps.testing.assert_combine_is_associative` checks it.
+        """
+        params = data_fields(self.params)
+        outputs = data_fields(self.outputs)
+        for parameter, output in self.chain.items():
+            if parameter not in self.params.model_fields:
+                raise ValueError(f'no parameter named {parameter!r}')
+            if parameter not in params or not _is_collection(
+                self.params.model_fields[parameter].annotation
+            ):
                 raise ValueError(
-                    f'a member run produces only {self.contribution!r}, so the '
-                    f'outputs {required} must be optional'
+                    f'parameter {parameter!r} is not a collection of data references'
                 )
-        if self.finalize_params and self.contribution is None:
-            raise ValueError('finalize parameters without a contribution output')
-        unknown = self.finalize_params - set(self.params.model_fields)
-        if unknown:
-            raise ValueError(f'no parameters named {sorted(unknown)}')
+            if output not in outputs:
+                raise ValueError(f'no data output named {output!r}')
+            if outputs[output].format is not params[parameter].format:
+                raise ValueError(
+                    f'output {output!r} is {outputs[output].format} and parameter '
+                    f'{parameter!r} takes {params[parameter].format}'
+                )
         return self
 
     @property
@@ -173,30 +186,19 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
 
     def serialize(self) -> SerializedWorkflowSpec:
         return SerializedWorkflowSpec(
-            **super().serialize().model_dump(),
-            contribution=self.contribution,
-            finalize_params=self.finalize_params,
+            **super().serialize().model_dump(), chain=dict(self.chain)
         )
 
-    @property
-    def contribute_params(self) -> frozenset[str]:
-        """Parameters contribute reads: every one finalize does not (D15)."""
-        return frozenset(self.params.model_fields) - self.finalize_params
 
-
-def finalize_model(spec: WorkflowSpec) -> type[BaseModel]:
-    """
-    The parameter model of a combine request: the fields finalize reads.
-
-    A combine request carries these and no others, so it is validated against a
-    model of exactly them, and a combine form asks the spec for the same thing.
-    """
-    declared = spec.params.model_fields
+def submodel(
+    model: type[BaseModel], names: Iterable[str], suffix: str
+) -> type[BaseModel]:
+    """A model of the named fields of ``model``, with their annotations intact."""
     fields = {
-        name: (declared[name].annotation, declared[name])
-        for name in sorted(spec.finalize_params)
+        name: (model.model_fields[name].annotation, model.model_fields[name])
+        for name in names
     }
-    return create_model(f'{spec.params.__name__}Finalize', **fields)
+    return create_model(f'{model.__name__}{suffix}', **fields)
 
 
 def literal_model(model: type[BaseModel]) -> type[BaseModel]:
@@ -208,12 +210,7 @@ def literal_model(model: type[BaseModel]) -> type[BaseModel]:
     rest are literals the record keeps inline.
     """
     data = data_fields(model)
-    fields = {
-        name: (field.annotation, field)
-        for name, field in model.model_fields.items()
-        if name not in data
-    }
-    return create_model(f'{model.__name__}Literals', **fields)
+    return submodel(model, [n for n in model.model_fields if n not in data], 'Literals')
 
 
 def field_of(path: str) -> str:

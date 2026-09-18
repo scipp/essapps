@@ -19,7 +19,14 @@ from ess.apps.batch import (
     trigger_status,
 )
 from ess.apps.client import Client
-from ess.apps.examples import LOAD, NORMALIZE, REBIN, SUBTRACT, write_run
+from ess.apps.examples import (
+    LOAD,
+    NORMALIZE_COMBINE,
+    NORMALIZE_CONTRIBUTE,
+    REBIN,
+    SUBTRACT,
+    write_run,
+)
 from ess.apps.records import RunRecord, Status
 from ess.apps.rules import (
     AsOf,
@@ -451,46 +458,57 @@ def test_the_reservation_does_not_affect_other_labels(
 # A series
 
 
-def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
-    client: Client, tmp_path: Path
-) -> None:
-    source = FakeDatasetSource(
-        Dataset(
-            path=write_run(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0]),
-            pid='pid/1',
-            metadata={'sample': 'sio2'},
-        )
-    )
-    client.sources.append(source)
-    rule = Rule(
+def series_rule() -> Rule:
+    """A rule whose members contribute and whose series combines per sample."""
+    return Rule(
         name='series',
         template=Template(
             name='normalize',
-            spec=NORMALIZE.id,
+            spec=NORMALIZE_CONTRIBUTE.id,
             params={'floor': 1.5},
             blanks=('run',),
         ),
-        series=Series(key='sample', finalize={'scale': 2.0}),
+        series=Series(
+            key='sample',
+            template=Template(
+                name='normalize-combine',
+                spec=NORMALIZE_COMBINE.id,
+                params={'scale': 2.0},
+                blanks=('contributions',),
+            ),
+            output='contribution',
+            parameter='contributions',
+        ),
     )
+
+
+def sample(path: Path, values: list[float], pid: str) -> Dataset:
+    return Dataset(path=write_run(path, values), pid=pid, metadata={'sample': 'sio2'})
+
+
+def _contributions(record: RunRecord) -> list[OutputRef]:
+    return [as_ref(r) for r in record.request.params['contributions']]
+
+
+def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
+    client: Client, tmp_path: Path
+) -> None:
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
+    client.sources.append(source)
+    rule = series_rule()
     loop = TriggerLoop(client, rule)
     first = loop.run_once()
-    assert [r.request.stage for r in first] == ['contribute', 'combine']
+    assert [r.spec.name for r in first] == ['normalize-contribute', 'normalize-combine']
     assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
-    assert first[1].request.contributions == [
+    assert _contributions(first[1]) == [
         OutputRef(record=first[0].id, output='contribution')
     ]
     client.wait(first)
 
-    source.add(
-        Dataset(
-            path=write_run(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
-            pid='pid/2',
-            metadata={'sample': 'sio2'},
-        )
-    )
+    source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
     member, combine = loop.run_once()
     client.wait([member, combine])
-    assert combine.request.contributions == [
+    assert _contributions(combine) == [
         OutputRef(record=first[1].id, output='contribution'),
         OutputRef(record=member.id, output='contribution'),
     ]
@@ -505,10 +523,47 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     ]
 
 
-def test_a_series_whose_latest_combine_failed_does_not_freeze(
+def test_a_corrected_member_is_not_counted_twice(
     client: Client, tmp_path: Path
 ) -> None:
-    """The next arrival chains onto the failed combine, so it must end, not wait."""
+    """
+    Chaining is valid only while the previous combine covers current members.
+
+    The correction gives the member a new record, so the previous combine covers
+    one that is no longer current, and the combine is made over all members
+    instead of adding the correction to a sum that still holds the old value.
+    """
+    first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')
+    source = FakeDatasetSource(first)
+    client.sources.append(source)
+    rule = series_rule()
+    loop = TriggerLoop(client, rule)
+    client.wait(loop.run_once())
+    source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
+    _, chained = client.wait(loop.run_once())
+    assert client.output(chained, 'contribution')['denominator'].value == 18.0
+
+    # The first run is acquired again and reduced again under its member key.
+    write_run(first.path, [5.0, 5.0, 5.0, 5.0])
+    corrected = client.submit_group(apply(client, rule, [first]))
+    combine = corrected['pid:pid/1+combine']
+    assert _contributions(combine) == [
+        OutputRef(record=corrected['pid:pid/1'].id, output='contribution'),
+        OutputRef(
+            record=client.latest('series', 'pid:pid/2').id, output='contribution'
+        ),
+    ]
+    (done,) = client.wait([combine])
+    assert done.status == Status.COMPLETED, done.failure
+    # The corrected member counts once: 20 from it and 8 from the other member,
+    # not 18 from the superseded sum plus 20 again.
+    assert client.output(done, 'contribution')['denominator'].value == 28.0
+
+
+def test_a_series_recovers_from_a_member_that_failed(
+    client: Client, tmp_path: Path
+) -> None:
+    """A failed member is not a current member, so the next combine leaves it out."""
     client.sources.append(
         FakeDatasetSource(
             Dataset(
@@ -517,31 +572,21 @@ def test_a_series_whose_latest_combine_failed_does_not_freeze(
             locates=False,
         )
     )
-    rule = Rule(
-        name='series',
-        template=Template(
-            name='normalize', spec=NORMALIZE.id, params={'floor': 1.5}, blanks=('run',)
-        ),
-        series=Series(key='sample', finalize={'scale': 2.0}),
-    )
+    rule = series_rule()
     loop = TriggerLoop(client, rule)
     member, combine = client.wait(loop.run_once())
     assert member.failure.kind == 'missing-dataset'
     assert combine.status == Status.FAILED
 
     client.sources.append(
-        FakeDatasetSource(
-            Dataset(
-                path=write_run(tmp_path / 'b.h5', [2.0, 2.0]),
-                pid='pid/2',
-                metadata={'sample': 'sio2'},
-            )
-        )
+        FakeDatasetSource(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2'))
     )
     next_member, next_combine = client.wait(loop.run_once())
     assert next_member.status == Status.COMPLETED, next_member.failure
-    assert next_combine.status == Status.FAILED
-    assert combine.id in next_combine.failure.message
+    assert _contributions(next_combine) == [
+        OutputRef(record=next_member.id, output='contribution')
+    ]
+    assert next_combine.status == Status.COMPLETED, next_combine.failure
 
 
 # The batch table

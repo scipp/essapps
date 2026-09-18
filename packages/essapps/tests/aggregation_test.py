@@ -1,34 +1,40 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A declared additive combine: contribute, combine, finalize (D15)."""
+"""One pipeline as two plain specs: contribute and combine (D15)."""
 
 from pathlib import Path
 from typing import Any, NewType
 
 import pytest
 import sciline
-from pydantic import ValidationError
+import scipp as sc
 
-from ess.apps.aggregation import AggregatePipeline
-from ess.apps.backend import SubmitError
+from ess.apps.aggregation import Aggregation
 from ess.apps.client import Client, local
 from ess.apps.examples import (
     LOAD,
     NORMALIZE,
+    NORMALIZE_COMBINE,
+    NORMALIZE_CONTRIBUTE,
     NORMALIZE_WIRING,
+    ContributeParams,
     Counts,
-    NormalizeParams,
+    Denominator,
+    Floor,
+    Normalized,
+    Numerator,
     RunFile,
+    Scale,
     denominator,
     load_counts,
+    normalize_aggregation,
     normalize_pipeline,
-    normalize_workflow,
     normalized,
     numerator,
     registry,
     write_run,
 )
-from ess.apps.records import Status
+from ess.apps.records import RunRecord, Status
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
 from ess.apps.testing import LocalInputs, assert_combine_is_associative, equal
@@ -60,11 +66,9 @@ def runs(datasets: Path) -> list[DatasetRef]:
     return [dataset_ref(instrument='dream', run=i) for i in (1, 2, 3)]
 
 
-def build(
-    pipeline: sciline.Pipeline | None = None, **changes: Any
-) -> AggregatePipeline:
+def build(pipeline: sciline.Pipeline | None = None, **changes: Any) -> Aggregation:
     """The wiring the example ships, with what a test changes."""
-    return AggregatePipeline(
+    return Aggregation(
         pipeline if pipeline is not None else normalize_pipeline(),
         **(NORMALIZE_WIRING | changes),
     )
@@ -78,46 +82,19 @@ def baseline() -> Baseline:
     return Baseline(1.0)
 
 
-# Binding: the declaration against the graph
+# What the adapter checks against the graph when it is built
 
 
-def test_the_three_entry_points_compose_into_the_single_callable(
-    datasets: Path,
-) -> None:
-    run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    ref = dataset_ref(path=run)
-    inputs = LocalInputs({ref: run})
-    workflow = normalize_workflow()
-    params = NormalizeParams(run=ref, floor=1.5, scale=2.0)
-    composed = workflow.finalize(workflow.contribute(params, inputs), params, inputs)
-    assert equal(workflow(params, inputs)['normalized'], composed['normalized'])
+def test_a_spec_whose_parameters_the_graph_disagrees_with_is_refused() -> None:
+    """``floor`` reaches the accumulation keys, so it is not the combine's."""
+    with pytest.raises(ValueError, match='normalize-combine/v1 declares params'):
+        build(combine=NORMALIZE_COMBINE.model_copy(update={'params': NORMALIZE.params}))
 
 
-def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
-    runs = [
-        write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0]),
-        write_run(datasets / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
-        write_run(datasets / 'c.h5', [4.0, 3.0, 2.0, 1.0]),
-    ]
-    refs = [dataset_ref(path=run) for run in runs]
-    inputs = LocalInputs(dict(zip(refs, runs, strict=True)))
-    assert_combine_is_associative(
-        normalize_workflow,
-        [NormalizeParams(run=ref, floor=1.5, scale=2.0) for ref in refs],
-        inputs,
-    )
-
-
-def test_a_finalize_parameter_that_contribute_reads_is_refused() -> None:
-    """``floor`` decides what a contribution holds, so a change invalidates it."""
-    with pytest.raises(ValueError, match='contribute reads them too'):
-        build(finalize_params=frozenset({'floor', 'scale'}))
-
-
-def test_a_parameter_the_contribution_does_not_depend_on_is_refused() -> None:
-    """Declaring nothing for finalize makes ``scale`` a member key, which it is not."""
-    with pytest.raises(ValueError, match="does not depend on \\['scale'\\]"):
-        build(finalize_params=frozenset())
+def test_a_member_parameter_the_contribution_does_not_depend_on_is_refused() -> None:
+    """``scale`` is read after the accumulation keys, so it cannot be a member's."""
+    with pytest.raises(ValueError, match='are not needed by outputs'):
+        build(members=['run', 'scale'])
 
 
 def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() -> None:
@@ -131,13 +108,30 @@ def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() ->
         )
 
 
-def test_a_finalize_parameter_the_outputs_do_not_depend_on_is_refused() -> None:
-    Unused = NewType('Unused', float)
-    with pytest.raises(ValueError, match='not needed'):
-        build(
-            keys=NORMALIZE_WIRING['keys'] | {'unused': Unused},
-            finalize_params=frozenset({'scale', 'unused'}),
-        )
+def test_a_combine_spec_must_chain_exactly_one_collection() -> None:
+    with pytest.raises(ValueError, match='exactly one collection parameter'):
+        build(combine=NORMALIZE_COMBINE.model_copy(update={'chain': {}}))
+
+
+# The two callables
+
+
+def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
+    runs = [
+        write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0]),
+        write_run(datasets / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
+        write_run(datasets / 'c.h5', [4.0, 3.0, 2.0, 1.0]),
+    ]
+    refs = [dataset_ref(path=run) for run in runs]
+    aggregation = normalize_aggregation()
+    assert_combine_is_associative(
+        aggregation.contribute_workflow(),
+        aggregation.combine_workflow(),
+        NORMALIZE_COMBINE,
+        [ContributeParams(run=ref, floor=1.5) for ref in refs],
+        {'scale': 2.0},
+        LocalInputs(dict(zip(refs, runs, strict=True))),
+    )
 
 
 def counting_pipeline(loads: list[Path]) -> sciline.Pipeline:
@@ -150,32 +144,97 @@ def counting_pipeline(loads: list[Path]) -> sciline.Pipeline:
     return sciline.Pipeline([counted, numerator, denominator, normalized])
 
 
-def test_a_finalize_parameter_change_does_not_read_the_members_again(
+def test_a_stage_over_a_finalize_parameter_does_not_read_the_members_again(
     datasets: Path,
 ) -> None:
-    """``scale`` is an input of the finalize stage; the contribution is kept."""
+    """The stage combines once and holds the sum; only the scaling is redone."""
     loads: list[Path] = []
     run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
     ref = dataset_ref(path=run)
     inputs = LocalInputs({ref: run})
-    workflow = build(counting_pipeline(loads))
-    contribution = workflow.contribute(NormalizeParams(run=ref, floor=1.5), inputs)
-    first = workflow.finalize(contribution, NormalizeParams(run=ref, scale=1.0), inputs)
-    second = workflow.finalize(
-        contribution, NormalizeParams(run=ref, scale=2.0), inputs
-    )
+    aggregation = build(counting_pipeline(loads))
+    contribution = aggregation.contribute_workflow()(
+        ContributeParams(run=ref, floor=1.5), inputs
+    )['contribution']
+    held = OutputRef(record='member', output='contribution')
+    served = _Served(inputs, {held: contribution})
+    combine = aggregation.combine_workflow()
+
+    def params(scale: float) -> Any:
+        return NORMALIZE_COMBINE.params.model_validate(
+            {'contributions': [held], 'scale': scale}
+        )
+
+    stage = combine.stage(params(1.0), {'scale'}, served)
+    first = stage(params(1.0), served)
+    second = stage(params(2.0), served)
     assert loads == [run]
     assert equal(second['normalized'], first['normalized'] * 2.0)
 
 
-# The three executions
+def test_a_parameter_both_halves_read_reaches_finalize_from_the_contribution(
+    datasets: Path,
+) -> None:
+    """
+    ``floor`` decides what a contribution holds, so it is the contribute spec's
+    alone and the combine request cannot set it; the finalize half reads it back
+    off the contribution with the value the members were reduced with.
+    """
 
+    def normalized_over_floor(
+        num: Numerator, den: Denominator, scale: Scale, floor: Floor
+    ) -> Normalized:
+        return Normalized(num / den * scale + sc.scalar(floor))
 
-def contribute(client: Client, run: DatasetRef, **params: Any) -> str:
-    request = client.request(
-        NORMALIZE, {'run': run, 'floor': 1.5, **params}, stage='contribute'
+    run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
+    ref = dataset_ref(path=run)
+    inputs = LocalInputs({ref: run})
+    aggregation = build(
+        sciline.Pipeline([load_counts, numerator, denominator, normalized_over_floor])
     )
-    return client.submit(request).id
+    contribution = aggregation.contribute_workflow()(
+        ContributeParams(run=ref, floor=1.5), inputs
+    )['contribution']
+    held = OutputRef(record='member', output='contribution')
+    served = _Served(inputs, {held: contribution})
+    params = NORMALIZE_COMBINE.params.model_validate(
+        {'contributions': [held], 'scale': 0.0}
+    )
+    combined = aggregation.combine_workflow()(params, served)
+    assert combined['normalized'].sum().value == pytest.approx(4 * 1.5)
+
+
+class _Served:
+    """Inputs that serve contributions a test made, beside the run files."""
+
+    def __init__(self, inputs: LocalInputs, made: dict[Any, Any]) -> None:
+        self._inputs = inputs
+        self._made = made
+
+    def path(self, ref: Any) -> Path:
+        return self._inputs.path(ref)
+
+    def array(self, ref: Any) -> Any:
+        return self._made[ref] if ref in self._made else self._inputs.array(ref)
+
+
+# Through the framework
+
+
+def contribute(client: Client, run: DatasetRef, **params: Any) -> RunRecord:
+    return client.submit(
+        client.request(NORMALIZE_CONTRIBUTE, {'run': run, 'floor': 1.5, **params})
+    )
+
+
+def combine(client: Client, *of: RunRecord, output: str = 'contribution') -> RunRecord:
+    return client.run(
+        NORMALIZE_COMBINE,
+        {
+            'contributions': [OutputRef(record=r.id, output=output) for r in of],
+            'scale': 2.0,
+        },
+    )
 
 
 def test_a_member_run_produces_the_contribution_and_no_other_output(
@@ -184,50 +243,40 @@ def test_a_member_run_produces_the_contribution_and_no_other_output(
     (member,) = client.wait([contribute(client, runs[0])])
     assert member.status == Status.COMPLETED, member.failure
     assert member.output_names() == {'contribution'}
-    assert set(client.output(member, 'contribution')) == {'numerator', 'denominator'}
+    assert set(client.output(member, 'contribution')) == {
+        'numerator',
+        'denominator',
+        'shared',
+    }
 
 
 def test_one_shot_a_batch_and_a_chained_series_agree(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    params = {'floor': 1.5, 'scale': 2.0}
-    one_shot = client.run(NORMALIZE, {'run': runs[0], **params})
+    one_shot = client.run(NORMALIZE, {'run': runs[0], 'floor': 1.5, 'scale': 2.0})
 
     # A chained series: one combine record per arrival, over the previous combine.
     first = contribute(client, runs[0])
     client.wait([first])
-    chain = client.run(
-        NORMALIZE,
-        {'scale': 2.0},
-        stage='combine',
-        contributions=[client.record(first)],
-    )
+    chain = combine(client, first)
     second = contribute(client, runs[1])
-    client.wait([chain.id, second])
-    chained = client.run(
-        NORMALIZE,
-        {'scale': 2.0},
-        stage='combine',
-        contributions=[client.record(chain.id), client.record(second)],
-    )
+    client.wait([chain, second])
+    chained = combine(client, chain, second)
 
     # A batch: both members and one combine over them, submitted together.
     batch = client.submit_group(
         {
-            'a': client.request(
-                NORMALIZE, {'run': runs[0], **params}, stage='contribute'
-            ),
-            'b': client.request(
-                NORMALIZE, {'run': runs[1], **params}, stage='contribute'
-            ),
+            'a': client.request(NORMALIZE_CONTRIBUTE, {'run': runs[0], 'floor': 1.5}),
+            'b': client.request(NORMALIZE_CONTRIBUTE, {'run': runs[1], 'floor': 1.5}),
             'combine': client.request(
-                NORMALIZE,
-                {'scale': 2.0},
-                stage='combine',
-                contributions=[
-                    OutputRef(record='@a', output='contribution'),
-                    OutputRef(record='@b', output='contribution'),
-                ],
+                NORMALIZE_COMBINE,
+                {
+                    'contributions': [
+                        OutputRef(record='@a', output='contribution'),
+                        OutputRef(record='@b', output='contribution'),
+                    ],
+                    'scale': 2.0,
+                },
             ),
         }
     )
@@ -246,59 +295,32 @@ def test_one_shot_a_batch_and_a_chained_series_agree(
     assert client.output(chained, 'contribution')['denominator'].value == 18.0
 
 
-def test_a_combine_carrying_a_contribute_parameter_is_refused(
+def test_members_that_disagree_on_a_shared_parameter_fail_the_combine(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    member = contribute(client, runs[0])
-    client.wait([member])
-    with pytest.raises(SubmitError, match="'floor' is contribute's"):
-        client.run(
-            NORMALIZE,
-            {'scale': 2.0, 'floor': 1.5},
-            stage='combine',
-            contributions=[client.record(member)],
-        )
-
-
-def test_members_that_disagree_on_a_contribute_parameter_are_refused(
-    client: Client, runs: list[DatasetRef]
-) -> None:
+    """Which parameters may differ is the adapter's knowledge, so the combine
+    refuses before computing and the backend never sees the question."""
     a = contribute(client, runs[0], floor=1.5)
     b = contribute(client, runs[1], floor=0.0)
     client.wait([a, b])
-    with pytest.raises(SubmitError, match='contributed with floor='):
-        client.run(
-            NORMALIZE,
-            {'scale': 2.0},
-            stage='combine',
-            contributions=[client.record(a), client.record(b)],
-        )
+    (failed,) = client.wait([combine(client, a, b)])
+    assert failed.status == Status.FAILED
+    assert 'must share' in failed.failure.message
 
 
-def test_a_contribution_of_another_spec_is_refused(
+def test_a_contribution_of_another_spec_passes_validation_and_fails_the_combine(
     client: Client, runs: list[DatasetRef]
 ) -> None:
+    """Chaining between specs is checked by format only, an open point of D15."""
     loaded = client.wait([client.run(LOAD, {'run': runs[0]})])[0]
-    with pytest.raises(SubmitError, match='contributed by load/v1'):
-        client.run(
-            NORMALIZE,
-            {'scale': 2.0},
-            stage='combine',
-            contributions=[OutputRef(record=loaded.id, output='data')],
+    assert client.validate(
+        client.request(
+            NORMALIZE_COMBINE,
+            {
+                'contributions': [OutputRef(record=loaded.id, output='data')],
+                'scale': 2.0,
+            },
         )
-
-
-def test_a_stage_and_its_contributions_cannot_disagree(client: Client) -> None:
-    """One fact, said once: a combine request is the one with contributions."""
-    contribution = OutputRef(record='r1', output='contribution')
-    with pytest.raises(ValidationError, match='at least one contribution'):
-        client.request(NORMALIZE, {'scale': 2.0}, stage='combine')
-    with pytest.raises(ValidationError, match='no other stage references any'):
-        client.request(NORMALIZE, {'floor': 1.5}, contributions=[contribution])
-
-
-def test_a_spec_without_a_contribution_has_only_whole_runs(
-    client: Client, runs: list[DatasetRef]
-) -> None:
-    with pytest.raises(SubmitError, match='declares no contribution'):
-        client.run(LOAD, {'run': runs[0]}, stage='contribute')
+    ).ok
+    (failed,) = client.wait([combine(client, loaded, output='data')])
+    assert failed.status == Status.FAILED

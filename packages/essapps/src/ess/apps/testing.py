@@ -11,9 +11,9 @@ from typing import Any
 import scipp as sc
 from pydantic import BaseModel
 
-from .binding import Factory, Inputs, combining
+from .binding import Factory, Inputs, Workflow
 from .sources import Dataset
-from .spec import DatasetRef, Ref, SpecId
+from .spec import DatasetRef, OutputRef, Ref, SpecId, WorkflowSpec
 from .stages import Stages
 
 CHECKED = SpecId(name='checked', version=1)
@@ -82,52 +82,76 @@ def assert_stage_equals_workflow(
                 )
 
 
+class _Contributions:
+    """Inputs that also serve the contributions a check made, by reference."""
+
+    def __init__(self, inputs: Inputs) -> None:
+        self._inputs = inputs
+        self._made: dict[Ref, Any] = {}
+
+    def keep(self, value: Any, output: str) -> OutputRef:
+        ref = OutputRef(record=f'contribution-{len(self._made)}', output=output)
+        self._made[ref] = value
+        return ref
+
+    def path(self, ref: Ref) -> Path:
+        return self._inputs.path(ref)
+
+    def array(self, ref: Ref) -> Any:
+        return self._made[ref] if ref in self._made else self._inputs.array(ref)
+
+
 def assert_combine_is_associative(
-    factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
+    contribute: Workflow,
+    combine: Workflow,
+    spec: WorkflowSpec,
+    member_params: Iterable[BaseModel],
+    params: Mapping[str, Any],
+    inputs: Inputs,
 ) -> None:
     """
     The one check on a declared combine (D15): grouping and order do not matter.
 
-    The contributions of the members are combined in one group, in two groups,
-    one at a time, and in reverse order, and each finalized result is compared
-    with the first. Combining in groups and one at a time pushes combined values
-    back in, which is what a chained series and a fold rely on. The single
-    callable is checked to be contribute then finalize. Nothing here is specific
-    to a workflow, so every spec that declares a contribution runs it.
+    ``spec`` is the combine spec, whose ``chain`` names the collection parameter
+    the contributions fill and the output that may come back as one of its
+    elements; ``params`` are the combine's other parameters. The contributions of
+    the members are combined in one group, in two groups, one at a time, and in
+    reverse order, and each result is compared with the first. Combining in
+    groups and one at a time pushes combined values back in, which is what a
+    chained series and a fold rely on. Nothing here is specific to a workflow, so
+    every spec that declares a chain runs it.
     """
-    params = list(param_sets)
-    if len(params) < 3:
+    ((collection, output),) = spec.chain.items()
+    members = list(member_params)
+    if len(members) < 3:
         raise ValueError('an associativity check needs at least three members')
-    workflow = combining(factory())
-    contributions = [workflow.contribute(p, inputs) for p in params]
+    served = _Contributions(inputs)
+    contributions = [
+        served.keep(next(iter(contribute(p, inputs).values())), output) for p in members
+    ]
 
-    def finalized(parts: list[Any]) -> Mapping[str, Any]:
-        return workflow.finalize(workflow.combine(parts), params[0], inputs)
+    def combined(parts: list[OutputRef]) -> Mapping[str, Any]:
+        return combine(
+            spec.params.model_validate({**params, collection: parts}), served
+        )
 
     chained = contributions[0]
     for contribution in contributions[1:]:
-        chained = workflow.combine([chained, contribution])
+        chained = served.keep(combined([chained, contribution])[output], output)
     groupings = {
         'in two groups': [
-            workflow.combine(contributions[:1]),
-            workflow.combine(contributions[1:]),
+            served.keep(combined(contributions[:1])[output], output),
+            served.keep(combined(contributions[1:])[output], output),
         ],
         'one at a time': [chained],
         'in reverse order': list(reversed(contributions)),
     }
-    reference = finalized(contributions)
+    reference = combined(contributions)
     for how, parts in groupings.items():
-        got = finalized(parts)
+        got = combined(parts)
         for name, value in reference.items():
             if not equal(got[name], value):
                 raise AssertionError(f'combining {how} changes output {name!r}')
-    one_shot = factory()(params[0], inputs)
-    for name, value in workflow.finalize(contributions[0], params[0], inputs).items():
-        if not equal(one_shot[name], value):
-            raise AssertionError(
-                f'the single callable differs from contribute then finalize '
-                f'at output {name!r}'
-            )
 
 
 class FakeDatasetSource:

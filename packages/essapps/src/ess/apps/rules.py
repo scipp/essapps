@@ -278,14 +278,20 @@ class Series(BaseModel, frozen=True):
     How a rule combines its members (D15).
 
     ``key`` is the dataset field whose value keys datasets into a series and is
-    the member key of the series' combines; ``finalize`` are the finalize
-    parameters of each combine request. The rule's spec must declare a
-    contribution: a series over a workflow without one is an opaque combine
-    over all members, which D14 allows and this prototype does not build.
+    the member key of the series' combines. ``template`` is the combine
+    template, versioned with the rule like the member's; ``output`` is the
+    member output each member contributes, and ``parameter`` the collection
+    parameter of the combine template's spec it fills.
+
+    Nothing here says whether a combine may chain onto the previous one: that is
+    a property of the combine's code, which the person writing a rule cannot
+    know, and it is declared by ``chain`` on the combine spec.
     """
 
     key: str
-    finalize: dict[str, Any] = Field(default_factory=dict)
+    template: Template
+    output: str
+    parameter: str
 
 
 class Rule(BaseModel):

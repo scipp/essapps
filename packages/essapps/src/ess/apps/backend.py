@@ -6,9 +6,9 @@ The backend: validates requests, keeps the records, schedules, and owns the data
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
 and is cancelled if any is cancelled (D6). Recompute is explicit (D1). The
-contributions a combine request references are inputs like any other, so they
-are scheduled, resolved, and checked here as well, and never by importing
-workflow code (D15).
+contributions a combine request combines are an ordinary collection parameter of
+data references, so they are scheduled, resolved, and checked like any other
+input, and nothing here reads what a spec means by them (D15).
 """
 
 from __future__ import annotations
@@ -32,12 +32,10 @@ from .spec import (
     Format,
     OutputRef,
     Ref,
-    WorkflowSpec,
     as_ref,
     data_fields,
     dataset_path,
     field_of,
-    finalize_model,
     walk_refs,
 )
 from .store import RecordStore
@@ -122,22 +120,30 @@ class Backend:
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
             )
         spec = self.registry.spec(request.spec)
-        if stage_errors := _check_stage(request, spec):
-            return ValidationReport(layers=('schema',), errors=tuple(stage_errors))
-        is_combine = request.stage == 'combine'
-        params_model = finalize_model(spec) if is_combine else spec.params
+        # A params model ignores fields it does not declare unless its author
+        # forbids them, and a reduction parameter dropped in silence gives a wrong
+        # number without an error.
+        declared = {
+            name
+            for field, info in spec.params.model_fields.items()
+            for name in (field, info.alias)
+        }
+        errors += [
+            f'{name}: not a parameter of {spec.id}'
+            for name in sorted(set(request.params) - declared)
+        ]
         try:
-            params_model.model_validate(request.params)
+            spec.params.model_validate(request.params)
         except ValidationError as e:
             errors += [
                 f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
             ]
+        if errors:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
         refs = data_fields(spec.params)
         for path, ref in walk_refs(request.params):
             consumer = refs.get(field_of(path))
             errors += self._check_ref(ref, consumer, request, group or {})
-        errors += self._check_contributions(request, spec, group or {})
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
                 request.submission.rule.rsplit('/v', 1)[0]
@@ -154,60 +160,6 @@ class Backend:
         return ValidationReport(
             layers=('schema', 'params', 'runnability'), errors=tuple(errors)
         )
-
-    def _check_contributions(
-        self, request: RunRequest, spec: WorkflowSpec, group: Mapping[str, RunRequest]
-    ) -> list[str]:
-        """
-        What a combine request may combine (D15).
-
-        Every referenced contribution must be the contribution output of the same
-        spec and version, and the members among them must agree on the parameters
-        contribute reads; without that a combine over members contributed under
-        different masks concatenates their events without complaint. The data
-        references are what varies from member to member, so they are exactly
-        what is not compared.
-        """
-        if not request.contributions:
-            return []
-        errors: list[str] = []
-        members: list[tuple[OutputRef, dict[str, Any]]] = []
-        for ref in request.contributions:
-            errors += self._check_ref(
-                ref, DataField(format=Format.SCIPP), request, group
-            )
-            producer = self._producer(ref, group)
-            if producer is None:
-                continue
-            if producer.spec != request.spec:
-                errors.append(f'{ref}: contributed by {producer.spec}')
-            elif ref.output != spec.contribution:
-                errors.append(f'{ref}: not the contribution of {spec.id}')
-            elif producer.stage != 'combine':
-                try:
-                    validated = spec.params.model_validate(producer.params)
-                except ValidationError:
-                    continue
-                members.append((ref, validated.model_dump(mode='json')))
-        shared = sorted(spec.contribute_params - set(data_fields(spec.params)))
-        for name in shared:
-            for ref, params in members[1:]:
-                if params[name] != members[0][1][name]:
-                    errors.append(
-                        f'{ref}: contributed with {name}={params[name]!r}, '
-                        f'{members[0][0]} with {members[0][1][name]!r}'
-                    )
-        return errors
-
-    def _producer(
-        self, ref: OutputRef, group: Mapping[str, RunRequest]
-    ) -> RunRequest | None:
-        """The request that produces a reference, in the group or in the store."""
-        if ref.record.startswith(GROUP_PREFIX):
-            return group.get(ref.record[len(GROUP_PREFIX) :])
-        if ref.record in self.records:
-            return self.records.get(ref.record).request
-        return None
 
     def _check_ref(
         self,
@@ -282,17 +234,9 @@ class Backend:
         heads: dict[tuple[str, str | None], str] = {}
         for name, req in group.items():
             params = _rewrite(req.params, {GROUP_PREFIX + n: i for n, i in ids.items()})
-            contributions = [
-                r.model_copy(update={'record': ids[r.record[len(GROUP_PREFIX) :]]})
-                if r.record.startswith(GROUP_PREFIX)
-                else r
-                for r in req.contributions
-            ]
             record = RunRecord(
                 id=ids[name],
-                request=req.model_copy(
-                    update={'params': params, 'contributions': contributions}
-                ),
+                request=req.model_copy(update={'params': params}),
                 supersedes=self._supersedes(req, heads),
             )
             records[name] = record
@@ -440,7 +384,6 @@ class Backend:
             (ref, field_of(path) in data)
             for path, ref in walk_refs(record.request.params)
         ]
-        named += [(ref, True) for ref in record.request.contributions]
         # A reference named by two parameters is one thing to resolve, and
         # locating a dataset means asking every source.
         for ref, into_data_field in dict.fromkeys(named):
@@ -562,23 +505,6 @@ class Backend:
         record.published[ref.output] = pid
         self.records.update(record)
         return pid
-
-
-def _check_stage(request: RunRequest, spec: WorkflowSpec) -> list[str]:
-    """Whether the spec has the entry points the request asks for (D15).
-
-    That a combine request is the one that references contributions is the
-    request's own invariant, checked when it is built.
-    """
-    if request.stage != 'run' and spec.contribution is None:
-        return [f'{spec.id} declares no contribution, so it has only whole runs']
-    if request.stage == 'combine':
-        return [
-            f'a combine request carries the finalize parameters; {name!r} is '
-            "contribute's"
-            for name in sorted(set(request.params) - spec.finalize_params)
-        ]
-    return []
 
 
 def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:

@@ -27,6 +27,7 @@ SAMPLE_RUNS = (608, 609, 610, 611)
 REFERENCE_RUN = 614
 IDENTITY = r'amor\d+n(?P<run>\d+)'
 CRITICAL_EDGE = {'start': 0.01, 'stop': 0.014}
+LABEL = 'reflectivity'
 
 # The tutorial files carry transformations scippnexus cannot read, and the
 # tutorial silences the warnings; ``filterwarnings = ["error"]`` in the project
@@ -77,13 +78,19 @@ def reflectivity_params(run: int, **overrides: Any) -> dict[str, Any]:
 
 
 def members(client: Client, **overrides: Any) -> dict[int, RunRecord]:
-    """One reduced sample run per rotation, under a label of its own."""
+    """
+    One reduced sample run per rotation: one batch, as ``apply`` would submit it.
+
+    All four share the label and are told apart by their member key, so each one
+    after the first has the previous member as its predecessor (D14).
+    """
     records = {}
     for run in SAMPLE_RUNS:
         record = client.run(
             amor.REFLECTIVITY,
             reflectivity_params(run, **overrides),
-            label=f'reflectivity-{run}',
+            label=LABEL,
+            member_key=str(run),
         )
         assert record.failure is None, record.failure
         records[run] = record
@@ -94,9 +101,9 @@ def test_curves_of_four_rotations_stitch_into_one(client: Client) -> None:
     curves = members(client)
     for run, record in curves.items():
         assert client.output(record, 'reflectivity').sizes == {'Q': 200}, run
-    # The binding names the sample run as the default stage input, so the
-    # reference is reduced once and every further rotation is served from that
-    # stage, even though each member runs under a label of its own.
+    # The binding names the sample run as the default stage input, so the first
+    # member builds a stage over it and the other three, which differ from their
+    # predecessor in nothing else, are served from it.
     assert [r.reused for r in curves.values()] == [False, True, True, True]
 
     combined = client.run(
@@ -177,17 +184,60 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
     rescaled = client.run(
         amor.REFLECTIVITY,
         reflectivity_params(608, scale_factor=combined.ref('scale_factors', key='608')),
-        label='reflectivity-608',
+        label=LABEL,
+        member_key='608',
     )
     assert rescaled.failure is None, rescaled.failure
-    # The members share a stage that fixes the scale factor, so moving it builds
-    # a stage of its own rather than being served from theirs.
+    # The rerun supersedes the member it corrects, so its predecessor is that
+    # member and the field they differ in is the scale factor. The members' stage
+    # fixes that field, so this request does not fit it and builds its own.
     assert not rescaled.reused
     assert rescaled.resolved_params['scale_factor'] == factor
     expected = client.output(combined, 'scaled', key='608')
     assert client.output(rescaled, 'reflectivity').sum().value == pytest.approx(
         expected.sum().value
     )
+
+
+def local_inputs(cache: Path) -> LocalInputs:
+    """The tutorial files by the reference the dataset source gives them."""
+    return LocalInputs(
+        {
+            dataset_ref(instrument='amor', run=run): next(cache.glob(f'*{run}.hdf'))
+            for run in (*SAMPLE_RUNS, REFERENCE_RUN)
+        }
+    )
+
+
+def test_without_the_bindings_hint_the_second_member_names_the_stage_input(
+    cache: Path,
+) -> None:
+    """
+    A new member of a batch has the previous member as its predecessor.
+
+    The first member has no predecessor and, without a default, nothing to build
+    a stage from: it computes everything and holds nothing. The second differs
+    from it in the sample run alone, which names the stage input, and the rest of
+    the batch is served from that stage.
+    """
+    inputs = local_inputs(cache)
+    workflow = amor.reflectivity_workflow()
+    workflow.default_stage_inputs = frozenset()
+    stages = Stages()
+    reused = []
+    for run in SAMPLE_RUNS:
+        params = amor.ReflectivityParams(**reflectivity_params(run))
+        called, hit = stages.workflow_for(
+            amor.REFLECTIVITY.id,
+            workflow,
+            params,
+            inputs,
+            label=LABEL,
+            member_key=str(run),
+        )
+        called(params, inputs)
+        reused.append(hit)
+    assert reused == [False, False, True, True]
 
 
 def test_a_moved_binning_parameter_builds_a_stage_of_its_own(cache: Path) -> None:
