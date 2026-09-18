@@ -1,7 +1,7 @@
 # What all-in stateless would remove, and what it would cost
 
 Companion to [architecture.md](architecture.md) and [staging.md](staging.md).
-The sketch keeps state between runs in one place, the session, so that interactive work can rerun a warm workflow in memory.
+The sketch keeps state between runs in one place, the session, so that interactive work can rerun a workflow through a stage held in memory.
 This note asks what the design looks like if it never does that: no caching, no reuse, and a changed parameter means a fresh process.
 It then asks whether that makes phases 1 and 2 a separate, simpler system from phase 3, and what the three ways of doing phase 3 look like.
 
@@ -29,7 +29,7 @@ The list is long because the session touches many sections, not because any one 
   What remains is a disk tier with a registry, a read cache in the view server if measurements ask for one, and retention.
 - D4 loses its second reason and the remark that it disappears inside a session.
   The rule becomes: split a workflow wherever a stage should be reusable or tunable on its own, always.
-- D8 loses the warm workflow, the sciline wrapper and its frontier, the warm-equals-cold helper, and the `reused` flag.
+- D8 loses the stages a session holds, the adapter's `stage` and its frontier, the helper that compares results through stages with direct results, and the `reused` flag.
   In-process binding goes with it, because a throwaway process imports code by name.
 - D10 loses slots and everything on them.
   Views stay, served by the service from disk copies, with one routing rule instead of three.
@@ -49,7 +49,7 @@ The two-notebooks question changes shape: a notebook is a client of the service 
 The interpreter-sharing cost of a one-process application.
 
 **Code.**
-In the skeleton, roughly one seventh of the source, isolated in `warm.py`, the session launcher, the runner's keep flag, the data store's cache paths, the slot column, in-process binding, and the local-file helpers; see the table in [staging.md](staging.md).
+In the skeleton, roughly one seventh of the source, isolated in `stages.py`, the `stage` method of the adapters, the session launcher, the runner's keep flag, the data store's cache paths, the slot column, in-process binding, and the local-file helpers; see the table in [staging.md](staging.md).
 The tests for those parts go with them.
 
 **What stays is still most of the system.**
@@ -139,7 +139,7 @@ Only the stories that the session touched change outcome.
 | B3 compare two variants | Two slot labels | Fits, two records, the UI keeps two IDs |
 | B4 explore a 4D volume | Served from session memory | Needs the deferred chunked on-disk layout, or the application loads the volume itself |
 | B5 kernel dies mid-session | Records survive, warm state is recomputed | Fits better: there was no state to lose |
-| C5 vanadium and sample tuned together | Two warm workflows chained in memory | Correct but slow: each vanadium change reruns both stages cold, and a warm runner helps only the second |
+| C5 vanadium and sample tuned together | A stage of each workflow, chained in memory | Correct but slow: each vanadium change reruns both stages cold, and a warm runner helps only the second |
 | F3 publish what was tuned | Recompute cold first | Fits trivially; the rule is gone |
 | G2 developer iterates on a workflow | In-process binding | Editable install plus a throwaway run; a slower loop |
 | G3 local application, remote compute | Session on the laptop | The stage output crosses once; the cheap stage reruns in local throwaway processes |
@@ -155,15 +155,15 @@ When phase 3 arrives there are three models, and they differ in where the intera
 
 **The session model**, which is the sketch.
 State lives in a session the framework knows about.
-Every slider move is a complete record in a slot; the framework guarantees, through the wrapper and the test helper, that the warm result equals the cold one; publication recomputes cold to be sure.
+Every slider move is a complete record in a slot; the framework guarantees, through the adapter and the test helper, that the result through a stage equals the direct one; publication recomputes without a stage to be sure.
 Interactive work in the shared web UI needs remote sessions, which the framework must launch, route requests to, time out, and cap.
 
 **The checkpoint model.**
 State lives in the application's process and the framework does not know about it.
-The application holds its workflow object, reruns it in memory as a notebook does, wrapped by the same sciline wrapper if it wants warm reruns, and plots with plopp or with the view function called in-process.
+The application holds its workflow object, reruns it in memory as a notebook does, through the same sciline adapter and its stages if it wants fast reruns, and plots with plopp or with the view function called in-process.
 None of that creates records.
 When the user keeps a result, the application submits the complete parameter set as an ordinary request, which runs cold in a throwaway process and yields a record indistinguishable from a batch member.
-The application may compare the cold output with what was on screen and warn if they differ; that is the warm-equals-cold check, moved to the one moment it matters.
+The application may compare the cold output with what was on screen and warn if they differ; that is the check of a stage against the workflow, moved to the one moment it matters.
 Templates are saved from checkpoints; publication reads checkpoints; chains are checkpointed as a group.
 Shared interactive use is then a hosting question, a process per user as JupyterHub or a per-user web server already provides, and the framework never sees a session.
 
@@ -179,7 +179,7 @@ Where the first rung's cost is disk and the workflow authors, the second's is a 
 | Records created while exploring | One per change, hidden by slots | None | One per change |
 | Provenance of a kept result | Complete | Complete | Complete |
 | What the user saw equals the record | By the wrapper's rules plus a test helper | Checked once at checkpoint, cold | By construction |
-| New framework concepts | Session, warm workflow, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None on the first rung; a placement policy and a memory index on the second |
+| New framework concepts | Session, held stages, slots, private caches, two shapes | None; the wrapper becomes a library for applications | None on the first rung; a placement policy and a memory index on the second |
 | Interactive use in the shared web UI | Remote sessions owned by the framework | A hosted process per user, owned by infrastructure | Works, slowly; on the second rung with no per-user process at all |
 | Disk volume | Low | Low | High; lower on the second rung |
 | Burden on workflow authors | Choose the stage inputs | None beyond the callable | Split at every tunable boundary |
@@ -228,4 +228,4 @@ As a judgment.
   The three numbers separate the cost of process start, of the disk read, and of the computation, and the phase 3 decision needs all three; if the cheap-stage rerun is under a few seconds for the techniques that matter, the third model's first rung is enough for some of them.
 - Keep the recomputability invariant where it now is, in the core (D2, D15), with live-stream reduction outside the scope it holds for; it is what keeps both the keyed warm pool and the fold additive rather than a redesign.
 - Measure the chained combine (D15) on a four-dimensional partial, one read and one write of a multi-gigabyte contribution per arrival, since that number decides when a series needs the fold.
-- Keep `warm.py` and the session launcher as an experiment, outside the core's tests and documents, so that nothing is lost if the session model wins.
+- Keep `stages.py` and the session launcher as an experiment, outside the core's tests and documents, so that nothing is lost if the session model wins.

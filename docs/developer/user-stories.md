@@ -81,7 +81,7 @@ Actor: user in a notebook.
 
 Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
-Outcome: gap, closed in the sketch. The binding names the parameters the warm stage takes per call (D8) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
+Outcome: gap, closed in the sketch. The session takes the stage inputs from what a person changes (D8) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
 
 ### B2. Add a run to a sum, then remove one
 
@@ -129,7 +129,7 @@ Actor: user in a notebook.
 
 Checks: what survives, what is recomputed, and how long that takes; nothing the user did is lost except time.
 
-Outcome: gap, closed in the sketch. Records survive (D5) and the warm workflow is a cache (D2), but the sketch does not say where the local record store lives, that a restarted kernel reopens it, or how the user finds their last records: the record store lists only two queries. Fix: a default per-user store location, and listing by proposal, time, batch, and slot.
+Outcome: gap, closed in the sketch. Records survive (D5) and the stages a session holds are recomputable (D2), but the sketch does not say where the local record store lives, that a restarted kernel reopens it, or how the user finds their last records: the record store lists only two queries. Fix: a default per-user store location, and listing by proposal, time, batch, and slot.
 
 ### B6. Find last week's result
 
@@ -197,7 +197,7 @@ Actor: instrument scientist in a notebook.
 
 Checks: two workflows chained in memory; the vanadium output is still recorded so batch can reuse it later.
 
-Outcome: fits. Two warm workflows chained in one session (Choice 1); the vanadium is a stage output with a record (D4).
+Outcome: fits. A stage of each workflow, chained in one session (Choice 1); the vanadium is a stage output with a record (D4).
 
 ## D. Batch
 
@@ -345,7 +345,7 @@ Outcome: fits. A published output is downloaded, not recomputed (D1); a forced r
 
 Actor: user in a notebook.
 
-1. Tunes a reduction in a warm session.
+1. Tunes a reduction in a session.
 2. Publishes the result they are looking at.
 
 Checks: what enters SciCat was computed in a way the record reproduces; a development binding of the workflow is refused or flagged.

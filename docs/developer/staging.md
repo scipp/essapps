@@ -55,9 +55,9 @@ A number means the phase where the part is first needed.
 | D7 | Real SciCat dataset source | Core | The sketch defers real SciCat; phase 1 cannot. |
 | D8 | One callable, entry points, inputs asked for as path or object | Core | |
 | D8 | Three validation layers | Core | The trigger loop's refusals need structured errors from day one. |
-| D8 | Warm reuse, stage inputs, warm-equals-cold helper | 3 only | |
+| D8 | Stages held by a session, the choice of stage inputs, the helper that checks a stage against its workflow | 3 only | |
 | D15 | Aggregation: member requests and a combine request over their outputs | Core | Phase 1's angle series is a combine spec that is not additive, recomputed over all members on each arrival. |
-| D15 | Contribute and combine specs from one pipeline, the accumulating parameter, chained combines, grouping helper | 2 | The first additive aggregation is a SANS or powder sum over runs. |
+| D15 | Contribute and combine specs from one pipeline, the `chain` declaration, chained combines, grouping helper | 2 | The first additive aggregation is a SANS or powder sum over runs. |
 | D15 | The fold: a runner that keeps the combine callable of one series | 3 only | Only when a series arrives faster than its partial can be read and written. |
 | D8 | In-process binding, no-shadowing rule | 3 only | Phases 1 and 2 bind through installed packages; developers install editable. |
 | D9 | The client interface is the API; validate separate from submit | Core | |
@@ -94,13 +94,13 @@ The same by component.
 | Templates | Version-controlled files, one version bound per rule | Plus saved from a request, derived by copy | Unchanged |
 | Views | Whole small outputs | Slicing, reduction, overlays, a read cache in the service | Volumes, served from session memory |
 | Web UI | The rule's table, which is the batch table, record list, plot | Forms with live validation, hand-typed members and overrides, template editor | Per-technique applications |
-| Sessions, warm workflows, slots | Absent | Absent | The whole of the addition |
+| Sessions, held stages, slots | Absent | Absent | The whole of the addition |
 
 ## Phase 1 in detail
 
 **What it needs from the sketch.**
 Records, references in both forms, templates from files, the record store, the backend without groups, the subprocess launcher, the cold runner, the disk tier with its registry, the dataset source, the trigger loop, the publisher, trivial views, and all of failure handling.
-That is the sketch with Choice 1 reduced to its first sentence, Choice 3 without its warm half, and Choice 4 without slots.
+That is the sketch with Choice 1 reduced to its first sentence, Choice 3 without stages, and Choice 4 without slots.
 
 **What it needs that the sketch defers or underweights.**
 This list matters more than the previous one, because it is the critical path.
@@ -121,7 +121,7 @@ This list matters more than the previous one, because it is the critical path.
 - A quota alarm, because retention is not designed yet and a beamtime of automatic reduction fills disks.
 
 **What phase 1 can do without and should not build.**
-Sessions, warm workflows, the private cache, the second execution shape, slots, local files, in-process binding, the batch form, user-saved templates, run-number resolution, recompute, the HTTP transport.
+Sessions, held stages, the private cache, the second execution shape, slots, local files, in-process binding, the batch form, user-saved templates, run-number resolution, recompute, the HTTP transport.
 
 **Two simplifications available in phase 1 that the sketch does not mention.**
 
@@ -161,7 +161,7 @@ A "manual" reduction from the web page in phase 2 is a batch of one; a rerun wit
 The direct answer to "is there anything phases 1 and 2 would not require but phase 3 would":
 
 - Sessions, and the two invariants that keep them safe: no session identity in a record, and everything in a session recomputable from records.
-- The warm workflow, the sciline wrapper with its frontier computation and stage inputs, the warm-equals-cold test helper, and nothing for growing lists: a series is a chained combine (D15) in every phase, and only the fold that holds the partial in memory is phase 3.
+- The stages a session holds, the adapter's `stage` with its frontier, the choice of stage inputs, the test helper that checks a stage against its workflow, and nothing for growing lists: a series is a chained combine (D15) in every phase, and only the fold that holds the partial in memory is phase 3.
 - The `reused` flag on the record, and the rule that a reused result is recomputed cold before publication.
 - Private memory caches, the rule that the registry knows disk copies only, the memory lifetime, and the cache-coherence argument for keeping caches private.
 - Two execution shapes, placement as a launcher decision, `needs_disk_inputs`, write-out on demand, and the rule that a group runs in one shape.
@@ -241,9 +241,9 @@ Recommended reordering of the next steps, as a judgment:
 
 The document would be easier to review against the phases if it were two layers rather than one.
 
-- A **core** that is complete in itself: D1, D5, D6 marked optional, D7, D8 without its warm half, D9, D10 without slots, D11 without the cold-recompute rule, D12, D13, D15 without the fold, and failure handling without session loss.
+- A **core** that is complete in itself: D1, D5, D6 marked optional, D7, D8 without stages, D9, D10 without slots, D11 without the cold-recompute rule, D12, D13, D15 without the fold, and failure handling without session loss.
   This is the design of phases 1 and 2, and a reader can check that it closes with no forward reference to a session.
-- An **interactive extension** that adds sessions, warm workflows, slots, private caches, the second execution shape, and local files as datasets, each stated as an addition to a named part of the core.
+- An **interactive extension** that adds sessions, held stages, slots, private caches, the second execution shape, and local files as datasets, each stated as an addition to a named part of the core.
   It should open with the decision that [stateless.md](stateless.md) puts on the table, because the extension is one of three ways to do phase 3 and not obviously the right one.
 
 The user stories can be tagged the same way; A1, B1 to B5, C5, F3, G2, G3, and G4 are the extension's stories, and every other story runs against the core alone.

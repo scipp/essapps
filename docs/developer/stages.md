@@ -3,6 +3,7 @@
 Companion to [architecture.md](architecture.md).
 It answers one question: how do the workflow spec of scipp/ess#690 and the run record of this framework relate to sciline's `Stage` and `Aggregation` (scipp/sciline#245, ADR 0003)?
 The answer changed D8, D13, D14, and D15 of the sketch in its fourteenth review pass, and this note gives the reasoning in one place.
+A fifteenth pass asked who holds a stage in a session, and changed D8 and D15 again; see "Stages in a session".
 
 ## The sciline objects
 
@@ -78,13 +79,13 @@ An aggregation over runs is D4's cut with an accumulator at the boundary.
 | sciline, in one process, values in memory | Framework, across processes, values are outputs of records |
 |---|---|
 | `Pipeline` with parameters set, `compute(targets)` | one spec, one request, one record |
-| `Stage` whose inputs are parameters, kept between calls | the same spec; a session runner keeps the callable (a warm callable) |
+| `Stage` whose inputs are parameters, kept between calls | the same spec; the session holds the stage and routes matching requests to it |
 | `Stage` whose input is an intermediate result | a second spec, with a data parameter that takes an output of the first (D4) |
 | `Aggregation.contribute_stage` | the **contribute spec**: contribute parameters in, contribution out |
 | accumulators and `finalize_stage` | the **combine spec**: a collection of contributions and the finalize parameters in, combined contribution and results out |
 | member table | the batch table that `apply` takes (D14) |
 | `Aggregation.compute(table)` | an **aggregation**: a group of one member request per row and one combine request that references their contributions (D6) |
-| accumulators held by a loop | the combine callable kept between calls (the fold) |
+| accumulators held by a loop | the previous combined contribution, an output the session holds or the store keeps, passed back into the next combine (chaining) |
 
 An aggregation appears in one of two places, never half in each.
 
@@ -98,31 +99,70 @@ An aggregation appears in one of two places, never half in each.
 `WorkflowSpec` in scipp/ess#690 needs no field for any of this.
 Its ADR 0001 already says that a workflow whose parameter set depends on what is computed is several workflows with several specs.
 
-## Warm callables
+## Stages in a session
 
-A runner makes the callable from its factory.
-A throwaway runner calls it once.
-A session runner keeps it, one per spec version, and calls it for every run of that spec.
-A kept callable may hold values from earlier calls, and is then **warm**.
-What it holds must be a cache: a warm call returns what a fresh callable returns for the same parameters.
-The warm-equals-cold test helper checks this.
-The framework keeps a callable or it does not; it knows nothing about what the callable holds.
+A workflow is a stateless callable: parameters and inputs in, outputs out, and no call affects a later one.
+The spec is its signature.
+State between runs exists only in a session, and the session holds all of it: the outputs of its records, and stages.
 
-For a sciline pipeline the held values are a stage's frontier.
-The adapter (see "The adapter") names some parameters as **stage inputs**, sets all others on the pipeline, and builds a stage from the stage inputs to the targets.
-A call that changes only stage inputs is one call of the stage.
-A call that changes another parameter builds a new stage.
-A warm sciline callable is therefore the same function as the pipeline, with the part that the stage inputs cannot affect computed once.
-Which parameters are stage inputs is the adapter's choice.
-It is not on the spec, because nothing in the framework reads it and correctness does not depend on it.
+Until the fifteenth pass the sketch said otherwise.
+A session runner kept the callable, and a kept callable "may hold values from earlier calls, and is then warm".
+What it held was called a cache, and a test helper compared warm with cold.
+That definition let three kinds of session state sit inside workflow code, where the session could not see them:
 
-"Workflow lifetime" is the lifetime of the callable, and the runner sets it.
-`Stage` is how a sciline callable makes use of being kept.
+- a stage, with the rule for when to rebuild it;
+- accumulators for a series, keyed by the references last combined, with their own rule for when they are stale;
+- a dictionary of contributions, keyed by parameter values and shared between the callables of three specs.
+
+It contradicted the sentence above that the framework is the caller that composes stages and accumulators: in a session, a second composer sat inside the callable.
+It also put the choice of stage inputs with the adapter's author, who cannot make it.
+A `Stage` recomputes everything downstream of all its inputs on every call.
+The Amor binding named the sample run, the number of Q bins, and a scale factor as stage inputs, so a change of the Q bins loaded the run again.
+No fixed choice serves both "tune one parameter" and "the same settings over many runs"; which one it is depends on what the person does, and only the session sees that.
+
+**A workflow may offer a stage.**
+Beside the callable, a workflow may offer `stage(params, stage_inputs, inputs)`.
+`stage_inputs` is a set of parameter field names.
+The result is a callable with the signature of the workflow.
+It accepts every request that equals `params` in all fields outside `stage_inputs`, and for those it returns what the workflow returns.
+It may hold whatever the stage inputs cannot affect.
+The interface is in field names, so the framework does not import sciline.
+A plain function offers no stage, and the session calls it directly.
+The sciline adapter implements `stage` with `sciline.Stage`: it sets the other parameters on a copy of the pipeline and builds a stage from the keys of the stage inputs to the targets.
+
+**The session holds the stages.**
+A held stage is addressed by what it holds: the spec, its stage inputs, the values of all other fields, and the checksums of the datasets among them.
+The values are compared as plain data, so a reference compares as a reference and nothing is loaded for the comparison.
+The checksums keep a file that changed on disk from finding the stage built from its earlier bytes.
+
+- A request is routed to a held stage of its spec whose other fields equal the request's. If several match, the one with the fewest stage inputs is used, because it recomputes least.
+- If none matches, the session builds one. Its stage inputs are the fields in which the request differs from its **predecessor**: the request it supersedes (D14), or, for a new member of a batch, the latest request under its label.
+  A slider therefore names its own stage input, a batch over runs names the columns of its table, and a correction to one member names the corrected field.
+- A request without a predecessor has nothing to differ from. The adapter may name default stage inputs for it. If it names none, the session calls the workflow and holds nothing.
+  The default is a first guess that saves one full computation per series, and nothing depends on it.
+- The session holds a bounded number of stages and drops the least recently used. Dropping a stage is always safe.
+
+A stage belongs to no label.
+Two labels that move the same parameter on the same data are routed to one stage, so their loaded data is held once.
+The label is used only to find the predecessor.
+
+The cost of this rule is one full computation when a person starts to move a parameter that was not a stage input: the stage for it must be built.
+The design before this pass had the same cost on every change to a parameter the author had not named, and no way to avoid it.
+A person who moves two parameters in turn pays it on every switch, unless both changed in one request, which builds a stage with both as inputs.
+Holding the values between two consecutive stages, so that a switch is cheap as well, needs the network of stages that scipp/sciline#245 deferred.
+
+Every call through a stage is a complete request and writes a complete record, as before.
+The record says whether a held stage served it (`reused`), which publication reads (D11); the session now knows this itself and does not ask the callable.
+The test helper states the contract: for a sequence of requests, the results through held stages equal the results of the workflow.
+
+"Workflow lifetime" is no longer a concept.
+A throwaway runner calls the workflow once; a session holds stages and says how long.
 
 ## An aggregation across records
 
 A workflow package that wants its pipeline summed over runs publishes two specs cut from one pipeline.
 It may also publish the pipeline's own spec, for one run.
+That spec is served by the plain adapter over the same pipeline and is no part of the aggregation; the skeleton uses it as the oracle that a series of one member must equal.
 The example assumes a contribution that holds events, so that the Q bins are read after the sum.
 esssans today histograms in Q before its accumulation keys, which makes `q_bins` a contribute parameter there.
 
@@ -139,12 +179,11 @@ class Reduce(Contribute, Finalize):   # the whole pipeline, for one run
     pass
 
 class Combine(Finalize):
-    contributions: Annotated[
-        list[OutputRef], DataField(format=SCIPP), Accumulates(into='contribution')
-    ]
+    contributions: Annotated[list[OutputRef], DataField(format=SCIPP)]
 
 CONTRIBUTE = WorkflowSpec('loki-iofq-contribute', params=Contribute, outputs=Contribution)
-COMBINE    = WorkflowSpec('loki-iofq-combine',    params=Combine,    outputs=CombinedIofQ)
+COMBINE    = WorkflowSpec('loki-iofq-combine',    params=Combine,    outputs=CombinedIofQ,
+                          chain={'contributions': 'contribution'})
 REDUCE     = WorkflowSpec('loki-iofq',            params=Reduce,     outputs=IofQ)
 ```
 
@@ -157,32 +196,37 @@ All three are plain specs.
 A contribute request and a combine request are validated, shown in a form, saved as templates, recorded, and recomputed like any other request.
 The combine request references the members' contributions through an ordinary collection parameter, so holding it until the members complete is D6 and nothing else.
 
-**The accumulating mark.**
-`Accumulates(into='contribution')` is the one declaration that remains.
-The mark says that the output `contribution` of this spec may be passed as an element of this parameter.
-The author may set the mark only if the combination does not depend on how the elements are grouped or ordered.
+**The chain declaration.**
+`chain={'contributions': 'contribution'}` is the one declaration that remains.
+It says that the output `contribution` of a run of this spec may be passed as an element of the parameter `contributions` of a later run, and that it then stands for all the elements it was combined from.
+In symbols, `combine([combine([a, b]), c])` gives the same result as `combine([a, b, c])`.
+The author may declare this only if the combination does not depend on how the elements are grouped or ordered.
 The framework cannot check that property; a generic test helper does.
-The spec validates on its own that the mark names one of its outputs and that the types match.
-It has two readers, and neither can import workflow code:
+The spec validates on its own that the parameter is a collection of references, that the output exists, and that their formats match.
 
-- `apply` and the trigger loop, which chain: a combine request references the previous combine's contribution and the new members, instead of all members.
-- A runner that keeps the combine callable for a series (the fold).
+It is a field of the spec and not an annotation of the parameter, because it states a property of the callable that relates a parameter to an output.
 
-The mark is additive.
+It has one kind of reader, and that reader cannot import workflow code: whatever builds the combine request for a series, which is `apply` and the trigger loop.
+With the declaration, the request references the previous combine's contribution and the new members; without it, all members.
+
+The declaration is additive.
 A component that ignores it still validates, runs, records, and recomputes the spec correctly, and only loses an optimisation.
 The declarations it replaces were not additive: a component that ignored `stage` or `finalize_params` validated and ran the wrong thing.
 
-A combine that is not additive has the same shape without the mark.
+A combine that is not additive has the same shape without the declaration.
 Reflectometry's stitch is a spec with a collection parameter of per-angle curves, and a rule combines over all members on every arrival.
 A rule's combine clause therefore has one form for both: a combine template, and which member output feeds which collection parameter.
-A workflow with two member tables, sample runs and background runs, has two contribute specs and one combine spec with two accumulating parameters.
+A workflow with two member tables, sample runs and background runs, has two contribute specs and one combine spec that chains two parameters, each with its own combined output.
 
 **When chaining is valid.**
 The current members of a series are a query: the latest record per member key under the rule's label, leaving out failed, cancelled, and excluded ones.
 A chained combine references the previous combine's contribution and the contribution of every current member that the previous combine does not cover.
 A combine covers the member records it references, directly or through the combines it chains onto.
-`apply` finds them by following the accumulating parameter back.
-Chaining is valid only if every record the previous combine covers is still a current member.
+`apply` finds them by following the chained parameter back: an element is a previous combine if a run of the combine spec itself produced it, through the output that `chain` names, and a member otherwise.
+The declaration and the records are enough for this walk; no rule is needed.
+It reads one record per combine of the chain, so the k-th arrival of a series chained one at a time costs k reads of metadata, while the data read stays at two contributions.
+Chaining is valid only if the previous combine completed and every record it covers is still a current member.
+A failed or cancelled combine is never chained onto; otherwise one transient failure would end the series.
 The comparison is between records, not member keys: a corrected member has a new record, so the previous combine covers a record that is no longer current.
 If a member was corrected, excluded, or reprocessed under a new rule version, the check fails, and `apply` submits a combine over all current members instead.
 The first combine of a series has no previous combine and references its one member.
@@ -197,6 +241,7 @@ It did not follow chains, and it would refuse a parameter that a lookup legitima
 Which parameters may differ between members is exactly sciline's member keys, and only the adapter knows them.
 (architecture.md calls them member parameters, because a member key there is the label of a batch member.)
 The adapter therefore writes the values of all other contribute parameters into the contribution, and combine refuses contributions that disagree.
+In the skeleton they are one reserved entry of the data group, `shared`, holding the canonical JSON of a model of exactly those fields as a scipp string, which scipp HDF5 can write; the comparison is string equality, and the finalize stage gets typed values back from it.
 The combined contribution carries the same values, so the check holds along a chain without walking it.
 The refusal happens when the combine runs, not at validation: the run fails after loading the contributions and before computing anything.
 
@@ -209,11 +254,11 @@ The combine spec does not expose it, so it cannot be set differently from the me
 
 The missing component is not a second kind of spec.
 It is the code that lays stages over a pipeline to serve plain specs.
-Per spec it holds: the mapping from parameter fields to sciline keys, the form each data reference is asked for (a path or an object), the mapping from output fields to target keys, and the stage inputs.
+Per spec it holds: the mapping from parameter fields to sciline keys, the form each data reference is asked for (a path or an object), the mapping from output fields to target keys, and optional default stage inputs.
 For an aggregation it also holds the accumulation keys, an accumulator per key, and the member keys.
-It returns one callable per spec.
+It returns one workflow per spec: a stateless callable that offers `stage`.
 
-The skeleton has this as `WarmPipeline` and `AggregatePipeline` inside essapps, the second with three entry points.
+The skeleton has this as `PipelineAdapter` and `AggregatePipeline` inside essapps.
 It imports sciline and the workflow's key types, so it is code and not spec.
 It belongs in ess.reduce, next to the spec module, because every workflow package needs it and essapps must not import sciline.
 
@@ -226,17 +271,23 @@ When it is built, the adapter checks its specs against the graph:
 
 A wrong spec is then an error when the adapter is built, not a wrong result.
 
-In a session, the callables cut from one pipeline share one adapter object.
-The one-run callable is implemented as contribute followed by finalize, and the adapter object keeps each contribution in a dictionary keyed by the contribute parameter values that produced it.
-A run that was reduced on its own is then not loaded again when it becomes a member of a sum.
-The factories of the three specs return callables of one shared object; the framework is not involved.
+**In a session** an aggregation needs nothing of its own.
 
-The warm contribute callable is sciline's contribute stage.
-Its stage inputs are the member keys, so what the members share, a reduced reference or a direct beam, is computed once per session.
-The warm combine callable holds the finalize stage and the accumulators, keyed by the references it last combined.
-A request whose contributions extend the previous list pushes only the new ones.
-A request that changes only a finalize parameter calls only the finalize stage.
-Its stage inputs are the accumulation keys and the finalize parameters, which `Aggregation` does not offer today (see "Points for the sciline proposal").
+- The contributions are outputs, and the session holds outputs in memory.
+  A chained combine therefore gets the previous combined contribution and the new member as objects, and combines two values.
+  With sciline's `Reduced` accumulator, a push into a held accumulator is that same function call on those same two values, so a session that held accumulators would save nothing.
+  The superseded combined contributions stay in the session's store until they are evicted, and D3 evicts outputs of superseded records first.
+- A contribute request whose parameters differ from the previous one only in the run is routed to a stage whose stage input is the run, by the rule of "Stages in a session".
+  What the members share, a reduced reference or a direct beam, is then computed once.
+- A combine request that changes only a finalize parameter is routed to a stage of the combine spec with the contributions fixed.
+  The adapter builds it by combining the contributions once, setting the combined values at the accumulation keys, and building a `sciline.Stage` with the finalize parameter as input.
+- Successive combines of a growing series differ only in their contributions, so the session asks for a stage with the contributions as stage input.
+  The adapter then makes the accumulation keys the inputs of the `sciline.Stage`, which holds what the contributions cannot affect.
+  The combine workflow is a second adapter class beside the one for a plain pipeline, because it combines before it computes and returns an output, the combined contribution, that is not a target of the pipeline.
+
+The design before the fifteenth pass had a combine callable that held accumulators "keyed by the references it last combined", and an adapter object that kept every contribution in a dictionary so that a run reduced on its own was not loaded again as a member of a sum.
+Both are removed.
+A person who expects to add runs to a result reduces the first run as a series of one, a contribute request and a combine request, and the contribution is then a record that the next combine references.
 
 ## Alternatives considered
 
@@ -261,12 +312,20 @@ Its benefit is that changing a finalize parameter does not write the combined co
 An author who needs that can publish a finalize-only spec as a further cut under D4.
 How many specs a pipeline is cut into is the author's choice, not the framework's.
 
-**No mark: always combine over all members.**
+**A callable that may hold state, kept by the session runner.**
+The design before the fifteenth pass, described under "Stages in a session".
+
+**No chain declaration: always combine over all members.**
 Correct, and simpler.
 A series of k members then reads k contributions per arrival instead of two.
 For event-mode contributions of gigabytes that is the cost D15 exists to avoid.
 
-**The mark on the rule instead of the spec.**
+**An annotation on the parameter, `Accumulates(into='contribution')`.**
+The form the fourteenth pass gave the declaration.
+It put a property of the callable on one of its fields, with the other end named by a string.
+The name described the direction of the data, which is the same for every combine, and not the property declared.
+
+**The chain declaration on the rule instead of the spec.**
 The person who writes a rule cannot know whether a combine is additive, and a wrong answer gives a wrong number without an error.
 
 ## Costs
@@ -278,6 +337,7 @@ The person who writes a rule cannot know whether a combine is additive, and a wr
 - Changing a finalize parameter on a combined result, outside a session, is a combine request over the one previous contribution, and writes that contribution again.
 - The shared-parameter check runs in the combine, not at validation.
 - The contribute and the combine spec are versioned together by convention of the adapter.
+- The contribution output mixes dimensions and types and carries the shared parameters, so its spec can declare its format but no `ArraySpec`.
 - A value at an accumulation key must be storable in a scipp data group.
   essreflectometry accumulates a list of ORSO file entries beside its events; the author converts it.
 
@@ -289,7 +349,7 @@ The person who writes a rule cannot know whether a combine is additive, and a wr
   A rule has one combine clause; the second level is a second rule whose candidates are the completed combine records of the first.
   This is untested.
 - **Roles.**
-  A rule that feeds sample runs into one accumulating parameter and background runs into another needs a role per dataset and a mapping from role to parameter.
+  A rule that feeds sample runs into one chained parameter and background runs into another needs a role per dataset and a mapping from role to parameter.
   D14 names "a series of fixed roles" without saying how.
 - **The feedback cycle** of the Amor probe, members to combine to members, is unchanged.
 - **Chaining between specs is checked by format only** (D13 finding of the Amor probe), so a contribution from the wrong spec passes validation and fails in combine.
@@ -301,20 +361,21 @@ With `Stage` the three hold the same objects and differ in placement: where the 
 
 | Model | The stage and what sits after it |
 |---|---|
-| Session | The session's runner keeps the callable; each rerun is a call with the stage inputs, recorded in a slot |
-| Checkpoint | The application keeps the stage; calls create no records; a kept result is a cold request |
+| Session | The session holds the stage; each rerun is a request routed to it, recorded in a slot |
+| Checkpoint | The application holds the stage; calls create no records; a kept result is a request to a throwaway runner |
 | Stateless with splits, first rung | Two specs with the value between them stored as a record; each rerun is a throwaway process calling the second |
-| Stateless with splits, second rung | The second callable kept by a warm runner, addressed by the reference it holds |
+| Stateless with splits, second rung | A kept runner that holds the output the second spec reads, addressed by that reference |
 
-The fold is the second rung for a combine spec: a runner that keeps the combine callable of one series.
+Session and checkpoint now differ only in who holds the stage and whether a call writes a record.
+The fold is the second rung for a combine spec: a kept runner that holds the latest combined contribution of one series, chains in memory, and writes a record every n arrivals.
 Phase 3 still does not need deciding now.
 Whichever model is chosen, the callables it keeps are built and tested in phases 1 and 2.
 
 ## What this does not solve
 
 - **Memory policy.**
-  A stage holds its frontier, an aggregation holds nothing, and the adapter holds contributions in a session.
-  All of it is a private cache under D3.
+  A stage holds its frontier, an aggregation holds nothing, and a session holds stages and outputs.
+  The session can count its stages and drops the least recently used; how that bound relates to the memory budget of D3 is open.
 - **Parallelism over members.**
   Across records the launcher runs one throwaway process per member.
   Inside one callable the adapter maps `contribute` over rows with threads, after warming all stages together.
@@ -329,24 +390,17 @@ Whichever model is chosen, the callables it keeps are built and tested in phases
 
 - **Section 6.7 of the design document** describes essapps as one spec with a declared contribution and three entry points, and says the spec declares which parameters finalize reads.
   After this pass it should say: essapps serves an aggregation as two plain specs, the adapter checks them against `contribute_stage.keys` and `finalize_stage.keys`, and nothing is declared on the spec except that the combined contribution may be fed back.
-- **Finalize inputs.**
+- **Finalize inputs** need no change to sciline.
   `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a finalize parameter cannot be given per call.
-  A `Stage` with the accumulation keys and that parameter as inputs takes both, and the adapter builds that stage itself.
-  An additive `finalize_inputs=` argument would remove the need.
-  Not yet applied on the sciline branch.
+  The adapter does not use that stage for a rerun: it sets the combined values at the accumulation keys on a copy of the pipeline and builds a plain `Stage` with the finalize parameter as input.
+  The `finalize_inputs=` argument this note asked for earlier is not needed.
 - **A parameter read by both stages** needs to reach the finalize stage with the value the contributions were made with.
   Within one process the snapshot guarantees it.
   Across processes the adapter carries it in the contribution.
   The design document could name this as the consumer's responsibility.
 - Applied on the branch on 2026-09-14: the condition for combining combined values on `Accumulator`, the lock on a stage's held part, and the stale evidence paragraph.
 
-## What changes in the skeleton
+## State of the skeleton
 
-Not yet done; the skeleton still implements the design before this pass.
-
-- Remove `WorkflowSpec.contribution`, `WorkflowSpec.finalize_params`, `finalize_model`, `RunRequest.stage`, `RunRequest.contributions`, the `CombiningWorkflow` protocol, the rule that other outputs are optional, `_check_stage`, `_check_contributions`, and every branch on `stage`.
-- Add the `Accumulates` field annotation and its spec-level validation.
-- `AggregatePipeline` returns two or three callables that share one object, writes the shared contribute parameters into the contribution, and refuses contributions that disagree.
-- A rule's `Series` names a combine template, the member output, and the collection parameter.
-  `apply` chains only when the previous combine's members are a subset of the current ones.
-- `examples.NORMALIZE` becomes two specs, and the grouping helper takes the two callables.
+The skeleton implements this note: `PipelineAdapter` and `Aggregation` in `ess.apps` are the adapter, `Stages` holds the stages of a session, the spec has the `chain` field, and no component of the framework branches on whether a spec is a contribute, a combine, or a plain one.
+The adapter stays in essapps until `ess.reduce.spec` of scipp/ess#690 has merged.
