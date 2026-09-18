@@ -76,7 +76,7 @@ class _SessionInputs:
 
 
 class SessionLauncher:
-    """Runs in this process with a warm workflow per spec; the session shape."""
+    """Runs in this process, the runner holding the stages; the session shape."""
 
     needs_disk_inputs = False
 
@@ -102,6 +102,7 @@ class SessionLauncher:
             _CacheOutputs(self._data),
             stage=record.request.stage,
             contributions=record.request.contributions,
+            label=record.request.label,
         )
         record = record.model_copy()
         record.apply(result)

@@ -3,8 +3,10 @@
 """
 The runner: call the workflow with its inputs, validate and store the outputs.
 
-One code path for both execution shapes. In a session the runner keeps the
-callable between runs (the warm workflow); in a throwaway process it is
+One code path for both execution shapes. The callable is stateless, so in a
+session the runner keeps it only to save building it again, and what survives
+between runs is what the session decided to hold: the stages of
+:class:`ess.apps.stages.Stages`. In a throwaway process the callable is
 constructed, called once, and the process exits after writing a completion
 marker. The runner never touches the record store and never sees a record: it
 gets a record ID and parameters and reports a :class:`RunResult`.
@@ -50,6 +52,7 @@ from .spec import (
     finalize_model,
     literal_model,
 )
+from .stages import Stages
 
 MARKER = 'done.json'
 JOB = 'job.json'
@@ -155,17 +158,22 @@ def _store_output(
 
 class Runner:
     """
-    Executes runs; with ``keep`` the callable survives between runs.
+    Executes runs; with ``keep`` it is a session and holds stages between runs.
 
-    Checksums survive with it: a file is hashed once per (path, size, mtime). A
-    session that reruns a workflow over the same hundreds of megabytes therefore
-    spends the sha256 once rather than on every rerun. A throwaway runner runs
-    once, so it hashes each file it reads once either way.
+    ``stages`` caps how many it holds at once. A runner without ``keep`` never
+    asks a workflow for a stage, so a throwaway process computes everything it
+    needs and holds nothing.
+
+    Checksums survive between runs as well: a file is hashed once per (path,
+    size, mtime). A session that reruns a workflow over the same hundreds of
+    megabytes therefore spends the sha256 once rather than on every rerun. A
+    throwaway runner runs once, so it hashes each file it reads once either way.
     """
 
-    def __init__(self, *, keep: bool) -> None:
+    def __init__(self, *, keep: bool, stages: int = 4) -> None:
         self._keep = keep
-        self._warm: dict[SpecId, Workflow] = {}
+        self._workflows: dict[SpecId, Workflow] = {}
+        self._stages = Stages(limit=stages) if keep else None
         self._digests: dict[tuple[Path, int, int], str] = {}
 
     def _checksum(self, path: Path) -> str:
@@ -192,16 +200,19 @@ class Runner:
                 checksums[str(ref)] = self._checksum(located)
         return checksums
 
-    def _callable(self, spec: WorkflowSpec, factory: Factory) -> tuple[Workflow, bool]:
-        if spec.id in self._warm:
-            return self._warm[spec.id], True
+    def _callable(self, spec: WorkflowSpec, factory: Factory) -> Workflow:
+        """The workflow; kept in a session only to save building it again."""
+        if spec.id in self._workflows:
+            return self._workflows[spec.id]
         workflow = factory()
         if self._keep:
-            self._warm[spec.id] = workflow
-        return workflow, False
+            self._workflows[spec.id] = workflow
+        return workflow
 
     def forget(self, spec_id: SpecId) -> None:
-        self._warm.pop(spec_id, None)
+        self._workflows.pop(spec_id, None)
+        if self._stages is not None:
+            self._stages.forget(spec_id)
 
     def run(
         self,
@@ -213,8 +224,14 @@ class Runner:
         *,
         stage: RunStage = 'run',
         contributions: Iterable[OutputRef] = (),
+        label: str | None = None,
     ) -> RunResult:
-        """Execute the request ``params`` of ``record_id`` and report what happened."""
+        """
+        Execute the request ``params`` of ``record_id`` and report what happened.
+
+        ``label`` is the request's slot (D14). A session reads it to tell which
+        parameters a person is moving, and nothing else here uses it.
+        """
         if binding.factory is None:
             raise ValueError(f'{binding.spec.id} has no workflow to run')
         spec = binding.spec
@@ -233,20 +250,22 @@ class Runner:
             validated = params_model.model_validate(params)
             result.resolved_params = _resolved(validated.model_dump(mode='json'))
             result.checksums = self._checksums(params, inputs)
-            workflow, kept = self._callable(spec, binding.factory)
+            workflow = self._callable(spec, binding.factory)
+            called = workflow
+            if self._stages is not None and stage == 'run':
+                # Only a whole run goes through a stage: contribute and combine
+                # are entry points of the workflow object itself.
+                called, result.reused = self._stages.workflow_for(
+                    spec.id, workflow, validated, inputs, label
+                )
             returned = self._call(
                 spec,
-                workflow,
+                called,
                 stage,
                 validated,
                 inputs,
                 [inputs.array(ref) for ref in contributions],
             )
-            # The flag means the result came out of held state, which is what
-            # D11 reads before publishing. A callable holding a frontier knows
-            # whether it reused it; one holding nothing but itself can say only
-            # that the runner kept it.
-            result.reused = getattr(workflow, 'reused', kept)
             self._store(record_id, result, spec, dict(returned), outputs)
             result.status = Status.COMPLETED
         except Exception as e:

@@ -19,10 +19,10 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel, Field
 
+from .adapter import PipelineAdapter
 from .aggregation import AggregatePipeline
 from .binding import Inputs, Registry
 from .spec import Array, ArraySpec, OpaqueFile, OutputRef, Quantity, WorkflowSpec
-from .warm import WarmPipeline
 
 
 class LoadParams(BaseModel):
@@ -232,7 +232,8 @@ def write_run(path: Path, values: list[float]) -> Path:
     return path
 
 
-# A sciline pipeline behind the contract: threshold is held, bins is a stage input.
+# A sciline pipeline behind the contract: filtering is the expensive part, and
+# the bin count is what a person moves.
 
 RawData = NewType('RawData', sc.DataArray)
 Threshold = NewType('Threshold', float)
@@ -263,14 +264,14 @@ class HistogramOutputs(BaseModel):
     histogram: Array(ArraySpec(dims=('x',), unit='counts'))
 
 
-def histogram_workflow() -> WarmPipeline:
+def histogram_workflow() -> PipelineAdapter:
     pipeline = sciline.Pipeline([filter_data, histogram])
-    return WarmPipeline(
+    return PipelineAdapter(
         pipeline,
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
         resolve={'data': 'array'},
         targets={'histogram': Histogram},
-        stage_inputs=['bins'],
+        default_stage_inputs=['bins'],
     )
 
 
@@ -278,7 +279,7 @@ HISTOGRAM = WorkflowSpec(
     name='histogram',
     version=1,
     title='Histogram',
-    description='Filter then histogram; a sciline pipeline kept warm in a session.',
+    description='Filter then histogram; a sciline pipeline a session stages.',
     params=HistogramParams,
     outputs=HistogramOutputs,
 )

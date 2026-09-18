@@ -21,6 +21,7 @@ from ess.apps import loki
 from ess.apps.client import Client, local
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
+from ess.apps.stages import Stages
 from ess.apps.testing import LocalInputs
 
 RUNS = {
@@ -106,11 +107,11 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert refs['background_run'] in [DatasetRef(**raw) for raw in provenance['raw']]
 
 
-def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> None:
+def test_moving_the_q_binning_comes_out_of_the_held_stage(cache: Path) -> None:
     """
-    ``WarmPipeline.reused`` is the signal that the held part was kept, and
-    it is what a record's ``reused`` flag reports: the run came out of the warm
-    stage rather than merely out of a kept callable.
+    The binding names ``q`` as the default stage input, so the first request
+    already stages the reduction over it and a rebinning is served from the
+    stage; a change to any other parameter is not.
     """
     paths = {name: next(cache.glob(f'{run}-*')) for name, run in RUNS.items()} | {
         'direct_beam': cache / DIRECT_BEAM
@@ -121,13 +122,16 @@ def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> No
         loki.BeamCenterParams(sample_run=refs['sample_run']), inputs
     )['center']
     workflow = loki.iofq_workflow()
+    stages = Stages()
 
-    def call(**overrides: Any) -> None:
-        workflow(loki.IofQParams(**iofq_params(refs, center, **overrides)), inputs)
+    def call(**overrides: Any) -> bool:
+        params = loki.IofQParams(**iofq_params(refs, center, **overrides))
+        called, reused = stages.workflow_for(
+            loki.IOFQ.id, workflow, params, inputs, 'iofq'
+        )
+        called(params, inputs)
+        return reused
 
-    call()
-    assert not workflow.reused
-    call(q=q_edges(50))
-    assert workflow.reused
-    call(wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100))
-    assert not workflow.reused
+    assert not call()
+    assert call(q=q_edges(50))
+    assert not call(wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100))

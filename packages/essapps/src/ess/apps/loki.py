@@ -6,8 +6,9 @@ LoKI at Larmor bound to the spec vocabulary: a beam centre and an I(Q) reduction
 The two specs are the instrument half of the notebook story in
 ``notebooks/loki-session.ipynb``: the beam centre is computed once from the
 sample run, its output feeds the I(Q) reduction as a reference, and the Q
-binning parameters are the inputs of the warm stage, so that a slider reruns
-only the part of the sciline graph that depends on them.
+binning parameters are what a slider moves, so that the session stages the
+reduction over them and a rerun costs only the part of the sciline graph that
+depends on them.
 
 The workflow is the one of the ``loki-iofq`` tutorial in esssans. Everything the
 tutorial sets that is not a parameter here -- the detector name, gravity
@@ -44,6 +45,7 @@ from ess.sans.types import (
 )
 from pydantic import BaseModel, Field
 
+from .adapter import PipelineAdapter
 from .binding import Inputs, Registry
 from .spec import (
     Array,
@@ -54,7 +56,6 @@ from .spec import (
     Quantity,
     WorkflowSpec,
 )
-from .warm import WarmPipeline
 
 DETECTOR = 'larmor_detector'
 
@@ -95,7 +96,7 @@ class BeamCenterOutputs(BaseModel):
 
 def beam_center_workflow() -> Any:
     """
-    A plain callable, not a :class:`WarmPipeline`.
+    A plain callable, not a :class:`PipelineAdapter`.
 
     ``beam_center_from_center_of_mass`` takes a pipeline and returns a vector; it
     is not a sciline provider, so there is no key to compute and nothing for a
@@ -159,11 +160,11 @@ class IofQOutputs(BaseModel):
     iofq: Array(ArraySpec(dims=('Q',), coords={'Q': '1/angstrom'}))
 
 
-def iofq_workflow() -> WarmPipeline:
+def iofq_workflow() -> PipelineAdapter:
     pipeline = _instrument_pipeline()
     for provider in (q_edges, wavelength_edges, beam_center_vector):
         pipeline.insert(provider)
-    return WarmPipeline(
+    return PipelineAdapter(
         pipeline,
         keys={
             'sample_run': Filename[SampleRun],
@@ -185,7 +186,7 @@ def iofq_workflow() -> WarmPipeline:
             'direct_beam': 'path',
         },
         targets={'iofq': BackgroundSubtractedIofQ},
-        stage_inputs=['q'],
+        default_stage_inputs=['q'],
     )
 
 

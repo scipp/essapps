@@ -19,7 +19,7 @@ are built once; the expensive work sits upstream of the accumulation keys, so
 nothing is gained by holding a finalize parameter on the pipeline.
 
 The wrapper maps between field names and sciline keys as
-:py:class:`ess.apps.warm.WarmPipeline` does, and carries the contribution as a
+:py:class:`ess.apps.adapter.PipelineAdapter` does, and carries the contribution as a
 scipp data group keyed by field name, so that it is stored and referenced like
 any other array output.
 
@@ -40,8 +40,8 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel
 
+from .adapter import Key
 from .binding import Form, Inputs, resolve
-from .warm import Key
 
 Contribution = sc.DataGroup
 """The contribution as the spec declares it: one field per accumulation key."""
@@ -54,7 +54,7 @@ class AggregatePipeline:
     ``keys`` maps parameter field names to sciline keys, ``targets`` output
     field names to the keys finalize computes, and ``resolve`` names the form
     each data-reference parameter takes, all as
-    :py:class:`ess.apps.warm.WarmPipeline` takes them. ``contribution`` is the
+    :py:class:`ess.apps.adapter.PipelineAdapter` takes them. ``contribution`` is the
     output field the spec marks, ``accumulation_keys`` maps the fields of that
     data group to the sciline keys at which contributions are combined, and
     ``finalize_params`` is the spec's declaration of which parameters finalize

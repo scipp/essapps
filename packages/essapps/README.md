@@ -1,6 +1,6 @@
 # essapps
 
-Framework for ESS data-reduction applications: run records and references, sessions with warm workflows, a small scheduler, and a data store, as sketched in [docs/developer/architecture.md](../../docs/developer/architecture.md).
+Framework for ESS data-reduction applications: run records and references, sessions that stage a workflow over the parameters a person moves, a small scheduler, and a data store, as sketched in [docs/developer/architecture.md](../../docs/developer/architecture.md).
 
 Local mode only: client, backend, launcher, session, and data store in one Python process, with a subprocess launcher as the throwaway execution shape.
 
@@ -37,8 +37,8 @@ assert run in [candidate.ref for candidate in client.pick()]
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
 
-# Interactive reruns of a sciline pipeline; the binding makes 'bins' an input of
-# the stage, so the second run comes out of the state the stage holds.
+# Interactive reruns of a sciline pipeline: the session stages it over 'bins',
+# so the second run comes out of the stage it is already holding.
 # Both carry the label 'hist', the slot the plot owns, so the second supersedes
 # the first.
 first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
@@ -68,7 +68,7 @@ The checksum of every dataset file a run reads is on its record, so a recompute 
 
 A spec may mark one output as its **contribution**, the value at the workflow's accumulation keys, and declare which parameters its finalize stage reads (D15). Such a workflow has three entry points instead of one callable, contribute, combine, and finalize, of which the callable is the first and the last composed. A request says which of them it runs: `stage='contribute'` is a member run of a series, whose only output is the contribution, and `stage='combine'` carries the finalize parameters and references the contributions to combine, which for a chained series are the previous combine's and the new member's. Contributions are references like any other, so they are in the private cache of a session and on disk in the throwaway shape, and the scheduler waits on them. The backend refuses a combine request that carries a contribute parameter, references a contribution of another spec, or references members that disagree on the parameters contribute reads.
 
-Workflow authors bind a spec to a factory returning the callable; `ess.apps.warm.WarmPipeline` wraps a sciline pipeline as a `sciline.Stage` whose inputs are the parameters the binding names as varying per call, resolving each data reference as the path or object the binding asks for, and `ess.apps.testing.assert_warm_equals_cold` is the one check on its reuse rules. `ess.apps.aggregation.AggregatePipeline` wraps a sciline pipeline as the three entry points, building a `sciline.Aggregation` from the accumulation keys and an accumulator per key, and refusing at bind time a declaration the graph disagrees with; `ess.apps.testing.assert_combine_is_associative` is the one check on a declared combine. Publication with a provenance snapshot is `client.publish`.
+Workflow authors bind a spec to a factory returning the callable; `ess.apps.adapter.PipelineAdapter` wraps a sciline pipeline as a stateless callable and as an offer of a `sciline.Stage` over any subset of its parameters, resolving each data reference as the path or object the binding asks for; which subset is the session's decision and lives in `ess.apps.stages.Stages`, and `ess.apps.testing.assert_stage_equals_workflow` is the one check that a stage returns what the workflow returns. `ess.apps.aggregation.AggregatePipeline` wraps a sciline pipeline as the three entry points, building a `sciline.Aggregation` from the accumulation keys and an accumulator per key, and refusing at bind time a declaration the graph disagrees with; `ess.apps.testing.assert_combine_is_associative` is the one check on a declared combine. Publication with a provenance snapshot is `client.publish`.
 
 Templates, lookups, and rules are the stored data in `ess.apps.rules`, and the operations over them are in `ess.apps.batch` (D14). A **template** is an immutable, versioned partial request; a **lookup** is an ordered table beside it whose entries match dataset fields by a value within a tolerance, a glob pattern, or an open-ended run-number range, and supply fills; a **rule** adds a selector with a lower bound, a retry policy, exclusions, and optionally a series. `apply` is the one operation that makes requests from any of them: it fills each member through the ladder template, lookup entry, typed values, and returns a group to preview and submit whole, never submitting on its own. It accepts a `DataFrame` with the member key as index and the typed values as columns, and `batch_table` gives the batch back in the same shape; pandas stays at the client. `backlog`, `reprocess`, and `rerun` are the same operation over a query: the datasets before a new rule's bound, the members made by an older rule version, and the members with no completed record.
 
@@ -76,7 +76,7 @@ A **batch** is the records under one label, and nothing else is stored: `client.
 
 ## A session on real data
 
-`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the warm stage reruns in a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
+`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the session stages the reduction over it and a rerun takes a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
 
 ## Tests
 

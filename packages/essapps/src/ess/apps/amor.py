@@ -54,9 +54,9 @@ from ess.reflectometry.types import (
 )
 from pydantic import BaseModel, Field, model_validator
 
+from .adapter import PipelineAdapter
 from .binding import Inputs, Registry, resolve
 from .spec import Array, ArraySpec, NexusFile, OutputRef, WorkflowSpec
-from .warm import WarmPipeline
 
 CURVE = ArraySpec(
     dims=('Q',),
@@ -231,17 +231,19 @@ class ReflectivityOutputs(BaseModel):
     reflectivity: Array(CURVE)
 
 
-def reflectivity_workflow() -> WarmPipeline:
+def reflectivity_workflow() -> PipelineAdapter:
     """
     One sample run against one reference run.
 
-    ``sample_run`` is a stage input rather than a held parameter, which is what
-    makes a series of rotations affordable: the reduced reference depends on the
-    reference run alone, so it sits at the stage's frontier and the 120 MB
-    supermirror measurement is reduced once per session no matter how many
-    sample runs follow. Held instead, it would be reduced again for every member,
-    because a stage holds one frontier and a change to any held parameter
-    discards it. Across processes it is reduced per run either way; making that
+    ``sample_run`` is the default stage input, which is what makes a series of
+    rotations affordable: the reduced reference depends on the reference run
+    alone, so a stage fed the sample run holds it at its frontier and the 120 MB
+    supermirror measurement is reduced once for the whole series rather than once
+    per member. This is a hint for a request the session has nothing better to go
+    on. A session that sees a person move the Q binning instead stages over that,
+    and then the reduced sample run is held as well.
+
+    Across processes the reference is reduced per run either way; making that
     reuse explicit would need a second spec whose output is the reduced
     reference, chained as LoKI's beam centre is.
     """
@@ -258,7 +260,7 @@ def reflectivity_workflow() -> WarmPipeline:
         reflectivity_curve,
     ):
         pipeline.insert(provider)
-    return WarmPipeline(
+    return PipelineAdapter(
         pipeline,
         keys={
             'sample_run': Filename[SampleRun],
@@ -275,7 +277,7 @@ def reflectivity_workflow() -> WarmPipeline:
         },
         resolve={'sample_run': 'path', 'reference_run': 'path'},
         targets={'reflectivity': ReflectivityCurve},
-        stage_inputs=['sample_run', 'q_num_bins', 'scale_factor'],
+        default_stage_inputs=['sample_run'],
     )
 
 
@@ -315,7 +317,7 @@ class CombineOutputs(BaseModel):
 
 def combine_workflow() -> Any:
     """
-    A plain callable, not a :class:`WarmPipeline` and not a declared combine.
+    A plain callable, not a :class:`PipelineAdapter` and not a declared combine.
 
     Nothing here is a sciline graph: the scale factors come from a fit over all
     curves at once, so there is no per-member stage to hold and nothing the

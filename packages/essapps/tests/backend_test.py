@@ -11,7 +11,16 @@ import scipp as sc
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
 from ess.apps.datastore import MissingCopyError
-from ess.apps.examples import EXPORT, FAIL, LOAD, REBIN, SUM, registry, write_run
+from ess.apps.examples import (
+    EXPORT,
+    FAIL,
+    HISTOGRAM,
+    LOAD,
+    REBIN,
+    SUM,
+    registry,
+    write_run,
+)
 from ess.apps.records import Status
 from ess.apps.sources import Dataset
 from ess.apps.spec import DatasetRef, Format, OutputRef, SpecId, as_ref, dataset_ref
@@ -143,11 +152,12 @@ def test_chaining_through_memory_and_literal_outputs(
     assert client.backend.records.referencing(loaded.id, 'data') == [rebinned.id]
 
 
-def test_warm_workflow_is_reused_within_a_session(
+def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    first = client.run(LOAD, {'run': run_ref}, label='tune')
-    second = client.run(LOAD, {'run': run_ref, 'scale': 3.0}, label='tune')
+    data = client.run(LOAD, {'run': run_ref}).ref('data')
+    first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='tune')
+    second = client.run(HISTOGRAM, {'data': data, 'bins': 3}, label='tune')
     assert not first.reused
     assert second.reused
     assert client.latest('tune').id == second.id

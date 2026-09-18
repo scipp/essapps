@@ -5,7 +5,7 @@
 import pytest
 
 from ess.apps.client import Client
-from ess.apps.examples import LOAD, REBIN
+from ess.apps.examples import HISTOGRAM, LOAD, REBIN
 from ess.apps.spec import DatasetRef
 from ess.apps.testing import FakePublisher
 
@@ -42,14 +42,15 @@ def test_publish_is_idempotent(client: Client, run_ref: DatasetRef) -> None:
 def test_publish_refuses_reused_and_in_process_records_by_default(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    client.run(LOAD, {'run': run_ref}, label='s')
-    second = client.run(LOAD, {'run': run_ref, 'scale': 2.0}, label='s')
+    data = client.run(LOAD, {'run': run_ref}).ref('data')
+    client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='s')
+    second = client.run(HISTOGRAM, {'data': data, 'bins': 3}, label='s')
     assert second.reused
     with pytest.raises(ValueError, match='reused'):
-        client.publish(second.ref('data'), FakePublisher())
+        client.publish(second.ref('histogram'), FakePublisher())
     first = client.records(label='s')[0]
     with pytest.raises(ValueError, match='in-process'):
-        client.publish(first.ref('data'), FakePublisher())
+        client.publish(first.ref('histogram'), FakePublisher())
 
 
 class CrashingPublisher:

@@ -20,6 +20,7 @@ from ess.apps.client import Client, local
 from ess.apps.records import RunRecord
 from ess.apps.sources import FolderSource
 from ess.apps.spec import dataset_ref
+from ess.apps.stages import Stages
 from ess.apps.testing import LocalInputs
 
 SAMPLE_RUNS = (608, 609, 610, 611)
@@ -93,8 +94,9 @@ def test_curves_of_four_rotations_stitch_into_one(client: Client) -> None:
     curves = members(client)
     for run, record in curves.items():
         assert client.output(record, 'reflectivity').sizes == {'Q': 200}, run
-    # The sample run is a stage input, so the reference is reduced once and
-    # every further rotation comes out of the warm stage.
+    # The binding names the sample run as the default stage input, so the
+    # reference is reduced once and every further rotation is served from that
+    # stage, even though each member runs under a label of its own.
     assert [r.reused for r in curves.values()] == [False, True, True, True]
 
     combined = client.run(
@@ -178,7 +180,9 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
         label='reflectivity-608',
     )
     assert rescaled.failure is None, rescaled.failure
-    assert rescaled.reused
+    # The members share a stage that fixes the scale factor, so moving it builds
+    # a stage of its own rather than being served from theirs.
+    assert not rescaled.reused
     assert rescaled.resolved_params['scale_factor'] == factor
     expected = client.output(combined, 'scaled', key='608')
     assert client.output(rescaled, 'reflectivity').sum().value == pytest.approx(
@@ -186,28 +190,36 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
     )
 
 
-def test_only_a_change_to_a_stage_input_reuses_the_warm_stage(cache: Path) -> None:
+def test_a_moved_binning_parameter_builds_a_stage_of_its_own(cache: Path) -> None:
+    """
+    The first request stages over the sample run, which is the binding's hint.
+    Moving the bin count fits no held stage, so the session stages over that
+    instead, and a further move is served from it.
+    """
     paths = {
         run: next(cache.glob(f'*{run}.hdf')) for run in (SAMPLE_RUNS[0], REFERENCE_RUN)
     }
     refs = {name: dataset_ref(path=path) for name, path in paths.items()}
     inputs = LocalInputs({ref: paths[name] for name, ref in refs.items()})
     workflow = amor.reflectivity_workflow()
+    stages = Stages()
 
-    def call(**overrides: Any) -> None:
-        workflow(
-            amor.ReflectivityParams(
-                sample_run=refs[SAMPLE_RUNS[0]],
-                reference_run=refs[REFERENCE_RUN],
-                q_num_bins=200,
+    def call(**overrides: Any) -> bool:
+        params = amor.ReflectivityParams(
+            **{
+                'sample_run': refs[SAMPLE_RUNS[0]],
+                'reference_run': refs[REFERENCE_RUN],
+                'q_num_bins': 200,
                 **overrides,
-            ),
-            inputs,
+            }
         )
+        called, reused = stages.workflow_for(
+            amor.REFLECTIVITY.id, workflow, params, inputs, 'reflectivity'
+        )
+        called(params, inputs)
+        return reused
 
-    call()
-    assert not workflow.reused
-    call(scale_factor=2.0)
-    assert workflow.reused
-    call(sample_size=5.0)
-    assert not workflow.reused
+    assert not call()
+    assert not call(q_num_bins=100)
+    assert call(q_num_bins=50)
+    assert call()

@@ -147,7 +147,11 @@ class RunResult(BaseModel):
     package_versions: dict[str, str] = Field(default_factory=dict)
     environment: str | None = None
     binding: Literal['entry_point', 'in_process'] | None = None
-    reused: bool = False
+    reused: bool = Field(
+        default=False,
+        description="Whether the result came out of a stage the session was "
+        "already holding, which is what D11 reads before publishing.",
+    )
     checksums: dict[str, str] = Field(default_factory=dict)
     failure: Failure | None = None
 
@@ -176,7 +180,11 @@ class RunRecord(BaseModel):
     package_versions: dict[str, str] = Field(default_factory=dict)
     environment: str | None = None
     binding: Literal['entry_point', 'in_process'] | None = None
-    reused: bool = False
+    reused: bool = Field(
+        default=False,
+        description="Whether the result came out of a stage the session was "
+        "already holding (D8).",
+    )
     checksums: dict[str, str] = Field(default_factory=dict)
     derives_from: Derivation | None = None
     supersedes: str | None = Field(

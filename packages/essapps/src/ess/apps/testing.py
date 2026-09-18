@@ -8,12 +8,32 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+import scipp as sc
 from pydantic import BaseModel
 
 from .binding import Factory, Inputs, combining
 from .sources import Dataset
-from .spec import DatasetRef, Ref
-from .warm import equal
+from .spec import DatasetRef, Ref, SpecId
+from .stages import Stages
+
+CHECKED = SpecId(name='checked', version=1)
+"""Stands in for the spec of the workflow under check; each check has its own store."""
+
+
+def equal(a: Any, b: Any) -> bool:
+    """Whether two workflow outputs are the same value, scipp objects included."""
+    if a is b:
+        return True
+    if isinstance(a, sc.Variable | sc.DataArray | sc.Dataset | sc.DataGroup):
+        return type(a) is type(b) and sc.identical(a, b)
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(equal(x, y) for x, y in zip(a, b, strict=True))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(equal(a[k], b[k]) for k in a)
+    try:
+        return bool(a == b)
+    except Exception:
+        return False
 
 
 class LocalInputs:
@@ -31,28 +51,34 @@ class LocalInputs:
         return self._locations[ref]
 
     def array(self, ref: Ref) -> Any:
-        import scipp as sc
-
         return sc.io.load_hdf5(self.path(ref))
 
 
-def assert_warm_equals_cold(
+def assert_stage_equals_workflow(
     factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
 ) -> None:
     """
-    Drive one callable through ``param_sets`` and compare each result with a
-    fresh callable's; the one check on a warm workflow's reuse rules.
+    The one check on a stage (D8): for every request a stage accepts it returns
+    what the workflow returns.
+
+    The requests are driven through the session's own stage store under one
+    label, so the stages are the ones a session would build and drop, and each
+    result is compared with a fresh call of the stateless callable.
     """
-    warm = factory()
+    workflow = factory()
+    stages = Stages()
     for i, params in enumerate(param_sets):
-        cold = dict(factory()(params, inputs))
-        got = dict(warm(params, inputs))
-        if cold.keys() != got.keys():
-            raise AssertionError(f'step {i}: outputs {sorted(got)} != {sorted(cold)}')
-        for name in cold:
-            if not equal(got[name], cold[name]):
+        expected = dict(workflow(params, inputs))
+        called, _ = stages.workflow_for(CHECKED, workflow, params, inputs, 'tuning')
+        got = dict(called(params, inputs))
+        if expected.keys() != got.keys():
+            raise AssertionError(
+                f'step {i}: outputs {sorted(got)} != {sorted(expected)}'
+            )
+        for name in expected:
+            if not equal(got[name], expected[name]):
                 raise AssertionError(
-                    f'step {i}: warm output {name!r} differs from cold'
+                    f"step {i}: the stage's output {name!r} differs from the workflow's"
                 )
 
 

@@ -31,8 +31,7 @@ from ess.apps.examples import (
 from ess.apps.records import Status
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
-from ess.apps.testing import LocalInputs, assert_combine_is_associative
-from ess.apps.warm import equal
+from ess.apps.testing import LocalInputs, assert_combine_is_associative, equal
 
 
 @pytest.fixture(params=[False, True], ids=['session', 'subprocess'])

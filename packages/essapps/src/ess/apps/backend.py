@@ -541,8 +541,8 @@ class Backend:
         """
         Publish an output: idempotent, from a disk copy, with a provenance snapshot.
 
-        A record whose workflow object was reused is refused unless allowed, so
-        that what is published was computed cold.
+        A record whose result came out of a held stage is refused unless allowed,
+        so that what is published was computed from the parameters alone.
         """
         record = self.records.get(ref.record)
         if ref.output in record.published:
@@ -550,7 +550,7 @@ class Backend:
         if record.status != Status.COMPLETED:
             raise ValueError(f'{record.id} is {record.status.value}')
         if record.reused and not allow_reused:
-            raise ValueError(f'{record.id} reused a warm workflow; recompute it first')
+            raise ValueError(f'{record.id} reused a held stage; recompute it first')
         if record.binding == 'in_process' and not allow_reused:
             raise ValueError(f'{record.id} was bound in-process; not reproducible')
         path = self.data.path(ref)

@@ -9,6 +9,10 @@ callable asks the runner's :class:`Inputs` for the form it wants, a local path o
 a scipp object, so which form each parameter takes is decided here, next to the
 sciline key it maps to, and never by the spec (D13). Where the bytes come from,
 a session's memory, the data store, or a work directory, is the runner's.
+The callable is stateless: no call affects a later one. It may offer a stage as
+well, a callable over a subset of its parameters that holds what those
+parameters cannot affect, which a session asks for and keeps; see
+:class:`StagedWorkflow`.
 A workflow whose spec declares a contribution exposes three entry points as well,
 contribute, combine, and finalize (D15), of which the callable is the first and
 the last composed. A factory makes the callable; a throwaway runner calls it
@@ -23,7 +27,8 @@ in-process, but may not shadow an installed one.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -67,6 +72,38 @@ Loader = Callable[[], Factory]
 SPEC_GROUP = 'ess.apps.specs'
 WORKFLOW_GROUP = 'ess.apps.workflows'
 How = Literal['entry_point', 'in_process']
+
+
+class StagedWorkflow(Protocol):
+    """
+    A workflow that also offers a stage over some of its parameters (D8).
+
+    ``stage`` returns a callable with the workflow's own signature. It is valid
+    for every request that equals ``params`` in all fields outside
+    ``stage_inputs``, and for those it returns what the workflow returns:
+    ``wf.stage(p0, s, inputs)(p, inputs) == wf(p, inputs)``. It may hold whatever
+    the stage inputs cannot affect, which makes what it holds a cache and
+    dropping it always safe. ``default_stage_inputs`` names the fields to feed
+    when the session has not yet seen which parameter moves.
+
+    The workflow itself stays stateless; only the session decides whether to ask
+    for a stage, and holds the ones it asked for. A plain function offers none.
+    """
+
+    default_stage_inputs: Collection[str]
+
+    def __call__(self, params: BaseModel, inputs: Inputs) -> Mapping[str, Any]: ...
+
+    def stage(
+        self, params: BaseModel, stage_inputs: AbstractSet[str], inputs: Inputs
+    ) -> Workflow: ...
+
+
+def staged(workflow: Workflow) -> StagedWorkflow | None:
+    """The workflow as a stage offer, or None if it offers no stage."""
+    if not callable(getattr(workflow, 'stage', None)):
+        return None
+    return workflow  # type: ignore[return-value]
 
 
 class CombiningWorkflow(Protocol):
