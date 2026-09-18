@@ -93,7 +93,7 @@ Actor: user in a notebook.
 
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
-Outcome: fits. Adding a run is a combine request over the session's previous combine and the new run's contribution, which the session holds in memory as it holds any output; removing one is a fresh combine over the remaining contributions; each state is a record (D15).
+Outcome: fits. Adding a run is a contribute request for it and a combine request over the session's previous combine and the new contribution, which the session holds in memory as it holds any output; removing one is a fresh combine over the remaining contributions; each state is a record (D15).
 
 ### B3. Compare two parameter sets side by side
 

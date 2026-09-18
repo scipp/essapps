@@ -113,10 +113,10 @@ Every technique's notebook today has such a cut, the point after loading and coo
 
 **Accumulation** is not a cost of this variant; D15 makes a series a chain of combine requests through disk, which is the variant's own shape, and the section below says what that leaves open.
 
-## Accumulation is a declared combine, not a session feature
+## Accumulation is an aggregation, not a session feature
 
 An earlier version of this note filed accumulation under the session model, which made it an argument for sessions when the case with the strongest claim on it, a series nobody declares complete, runs unattended with no session at all.
-D15 now answers it in the core: a workflow declares its accumulation keys, and a series is a chain of combine requests, each referencing the previous combine's contribution and the new member's.
+D15 now answers it in the core: a workflow package publishes a contribute spec and a combine spec, and a series is a chain of combine requests, each referencing the previous combine's contribution and the new member's.
 That is the variant's own shape, a throwaway process reading and writing through disk, so the variant loses nothing here and phases 1 and 2 need nothing beyond it.
 
 What the variant leaves open is only how often the running contribution is written.

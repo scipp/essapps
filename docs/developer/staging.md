@@ -56,9 +56,9 @@ A number means the phase where the part is first needed.
 | D8 | One callable, entry points, inputs asked for as path or object | Core | |
 | D8 | Three validation layers | Core | The trigger loop's refusals need structured errors from day one. |
 | D8 | Warm reuse, stage inputs, warm-equals-cold helper | 3 only | |
-| D15 | Combine requests over member outputs | Core | Phase 1's angle series is an opaque combine, recomputed on each arrival. |
-| D15 | Contribution output, contribute, combine, and finalize, chained combines, grouping helper | 2 | The first declared contribution is a SANS or powder sum over runs. |
-| D15 | The fold: a process holding the running contribution | 3 only | Only when a series arrives faster than its partial can be read and written. |
+| D15 | Aggregation: member requests and a combine request over their outputs | Core | Phase 1's angle series is a combine spec that is not additive, recomputed over all members on each arrival. |
+| D15 | Contribute and combine specs from one pipeline, the accumulating parameter, chained combines, grouping helper | 2 | The first additive aggregation is a SANS or powder sum over runs. |
+| D15 | The fold: a runner that keeps the combine callable of one series | 3 only | Only when a series arrives faster than its partial can be read and written. |
 | D8 | In-process binding, no-shadowing rule | 3 only | Phases 1 and 2 bind through installed packages; developers install editable. |
 | D9 | The client interface is the API; validate separate from submit | Core | |
 | D9 | Notebook as the first client | Reordered | The first clients are the trigger loop and a web page in the backend process. |
@@ -142,7 +142,7 @@ The batch form: members and per-member values typed by hand, over the same apply
   The first JavaScript frontend or the first notebook that submits to the shared service forces it.
   The stateless core makes the transport trivial: every object is plain data and no request needs to reach a particular process.
 - *Pending outputs.*
-  The first concrete need is a user submitting a stage and its consumers together, or a map-combine such as a temperature scan followed by a combine.
+  The first concrete need is a user submitting a stage and its consumers together, or an aggregation such as a temperature scan followed by a combine.
   Until a workflow asks for it, "submit the stage, wait, submit the batch" costs the user one wait and the framework nothing.
   When it is adopted, the skeleton already has it.
 - *Local uploads.*
