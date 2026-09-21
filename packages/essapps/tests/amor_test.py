@@ -82,7 +82,7 @@ def members(client: Client, **overrides: Any) -> dict[int, RunRecord]:
     One reduced sample run per rotation: one batch, as ``apply`` would submit it.
 
     All four share the label and are told apart by their member key, so each one
-    after the first has the previous member as its predecessor (D14).
+    after the first has the previous member as its predecessor.
     """
     records = {}
     for run in SAMPLE_RUNS:

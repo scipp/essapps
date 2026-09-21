@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""One pipeline as two plain specs: contribute and combine (D15)."""
+"""
+One pipeline as two plain specs: contribute and combine.
+
+See docs/developer/aggregation.md.
+"""
 
 from pathlib import Path
 from typing import Any, NewType
@@ -311,7 +315,8 @@ def test_members_that_disagree_on_a_shared_parameter_fail_the_combine(
 def test_a_contribution_of_another_spec_passes_validation_and_fails_the_combine(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    """Chaining between specs is checked by format only, an open point of D15."""
+    """Chaining between specs is checked by format only, an open point of the
+    declared combine."""
     loaded = client.wait([client.run(LOAD, {'run': runs[0]})])[0]
     assert client.validate(
         client.request(

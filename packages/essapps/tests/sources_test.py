@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A folder is the local application's dataset source (D7)."""
+"""
+A folder is the local application's dataset source.
+
+See docs/developer/rules.md.
+"""
 
 from pathlib import Path
 

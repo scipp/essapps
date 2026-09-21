@@ -3,9 +3,11 @@
 """
 Example workflows exercising the contract: a load-and-histogram stage, a
 per-run reduction, a combine step, and one pipeline cut into a contribute spec,
-a combine spec, and its own single-run spec (D15), so map-combine, chaining, and
+a combine spec, and its own single-run spec, so map-combine, chaining, and
 a combined series can be tried without instrument code. ``registry`` is
 importable by the subprocess launcher.
+
+See docs/developer/aggregation.md.
 """
 
 from __future__ import annotations
@@ -287,7 +289,7 @@ HISTOGRAM = WorkflowSpec(
 )
 
 
-# One pipeline, three specs (D15): two accumulation keys, normalisation after
+# One pipeline, three specs: two accumulation keys, normalisation after
 # them, and the run file as the only member parameter.
 
 RunFile = NewType('RunFile', Path)

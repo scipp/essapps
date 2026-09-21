@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Dataset sources: where data the framework did not compute comes from (D7).
+Dataset sources: where data the framework did not compute comes from.
 
 A source yields the datasets of a proposal and locates the bytes of a dataset
 reference. It persists nothing: which datasets a rule has already fired on is a
@@ -9,6 +9,8 @@ query over the records, and a dataset enters the store only as a reference in
 the requests that name it. SciCat is the implementation for a facility,
 :class:`FolderSource` the one for the local application, and
 :class:`ess.apps.testing.FakeDatasetSource` the fake for tests.
+
+See docs/developer/rules.md.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ class Dataset:
     @property
     def fields(self) -> dict[str, Any]:
         """
-        What a lookup entry or a selector may match on (D7, D14).
+        What a lookup entry or a selector may match on.
 
         The metadata the source declares for the instrument, plus the run
         number, which every source that knows one declares under ``run``.

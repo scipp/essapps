@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Templates, lookups, and rules: the stored data (D14)."""
+"""
+Templates, lookups, and rules: the stored data.
+
+See docs/developer/rules.md.
+"""
 
 from pathlib import Path
 

@@ -103,7 +103,7 @@ def _elements(value: Any) -> list[Any]:
 
 
 def _check_array(name: str, value: Any, spec: ArraySpec) -> None:
-    """An array output against the structure its spec declares (D13)."""
+    """An array output against the structure its spec declares."""
     for element in _elements(value):
         dims = tuple(getattr(element, 'dims', ()))
         coords = getattr(element, 'coords', {})
@@ -222,7 +222,7 @@ class Runner:
         Execute the request ``params`` of ``record_id`` and report what happened.
 
         ``label`` and ``member_key`` say where the request sits in a label's
-        history (D14). A session reads them to find the request's predecessor and
+        history. A session reads them to find the request's predecessor and
         with it the parameters a person is moving; nothing else here uses them.
         """
         if binding.factory is None:

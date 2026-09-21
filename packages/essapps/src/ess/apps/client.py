@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The client interface: the backend's Python interface, which is the API (D9)."""
+"""
+The client interface: the backend's Python interface, which is the API.
+
+See docs/developer/operations.md.
+"""
 
 from __future__ import annotations
 
@@ -109,7 +113,7 @@ class Client:
         """
         Every dataset the sources know for this proposal, by identity.
 
-        Arrival may be repeated and out of order (D7), so the first dataset of
+        Arrival may be repeated and out of order, so the first dataset of
         each identity wins; nothing is stored to make the list.
         """
         seen: dict[DatasetRef, Dataset] = {}
@@ -159,7 +163,7 @@ class Client:
         return self.backend.records.list(proposal=self.proposal, **filters)
 
     def latest(self, label: str, member_key: str | None = None) -> RunRecord | None:
-        """The record that supersedes the others under a label (a slot, D10)."""
+        """The record that supersedes the others under a label (a slot)."""
         return self.backend.records.latest(label, self.proposal, member_key=member_key)
 
     def batch(self, label: str) -> list[RunRecord]:

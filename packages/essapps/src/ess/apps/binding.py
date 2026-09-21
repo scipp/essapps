@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Binding specs to code (D8).
+Binding specs to code.
 
 A workflow is one callable from the validated params model to its outputs by
 field name. The params model holds references where the request does; the
 callable asks the runner's :class:`Inputs` for the form it wants, a local path or
 a scipp object, so which form each parameter takes is decided here, next to the
-sciline key it maps to, and never by the spec (D13). Where the bytes come from,
+sciline key it maps to, and never by the spec. Where the bytes come from,
 a session's memory, the data store, or a work directory, is the runner's.
 The callable is stateless: no call affects a later one. It may offer a stage as
 well, a callable over a subset of its parameters that holds what those
@@ -20,6 +20,8 @@ entry-point group ``ess.apps.specs`` and factories through
 entry-point name, so a backend can load every spec without importing any
 workflow code; only a runner asks for a factory. A notebook may bind a spec
 in-process, but may not shadow an installed one.
+
+See docs/developer/workflow-contract.md.
 """
 
 from __future__ import annotations
@@ -74,7 +76,7 @@ How = Literal['entry_point', 'in_process']
 
 class StagedWorkflow(Protocol):
     """
-    A workflow that also offers a stage over some of its parameters (D8).
+    A workflow that also offers a stage over some of its parameters.
 
     ``stage`` returns a callable with the workflow's own signature. It is valid
     for every request that equals ``params`` in all fields outside

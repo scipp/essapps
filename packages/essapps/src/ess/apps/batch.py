@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Batch: making requests from rules and templates (D14).
+Batch: making requests from rules and templates.
 
 Batch and automatic reduction are one mechanism seen twice. :func:`apply` is
 the one operation: it makes a batch from a rule, or from a template and its
@@ -14,6 +14,8 @@ values it would carry forward though their fill has since changed.
 Nothing here stores a batch: a batch is the records under one label, and
 :func:`batch_table` is that query, the latest record per member key, as a
 :class:`pandas.DataFrame`.
+
+See docs/developer/rules.md.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ def apply(
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
     member's request is followed by a combine request over the series it belongs
-    to (D15).
+    to.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -124,7 +126,7 @@ def _combine(
     previous_name: str | None,
 ) -> RunRequest:
     """
-    The combine request one arrival of a series submits (D15).
+    The combine request one arrival of a series submits.
 
     It references the contribution of every current member of the series. If the
     combine spec declares that its combined output may come back as an element of
@@ -423,8 +425,8 @@ def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatu
     dataset lies after the rule's bound, it is not excluded, and no record
     exists under the rule's label with it as member key, unless the retry policy
     names the failure of the records that do. A facility adds one clause here,
-    that the dataset's catalogue entry does not carry our provenance snapshot
-    (D11), which the local application has no catalogue for.
+    that the dataset's catalogue entry does not carry our provenance snapshot,
+    which the local application has no catalogue for.
     """
     member = str(dataset.ref)
     if not rule.active:

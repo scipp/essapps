@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The workflow spec of scipp/ess#690, plus what the architecture sketch adds.
+The workflow spec of scipp/ess#690, plus what this framework adds.
 
 Everything a spec author sees comes from :mod:`ess.reduce.spec` and is
-re-exported here. The additions are the identity a dataset reference carries
-(D1), the declared additive combine (D15), and the derived models the runner and
-the backend validate against. This module imports neither scipp nor sciline.
+re-exported here. The additions are the identity a dataset reference carries,
+the declared additive combine, and the derived models the runner and the
+backend validate against. This module imports neither scipp nor sciline.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def dataset_ref(
     path: Path | str | None = None,
 ) -> DatasetRef:
     """
-    A dataset reference from the one identity given (D1).
+    A dataset reference from the one identity given.
 
     The spec keeps a dataset's identity as one string whose meaning is the
     framework's; this is where the framework gives it one. The PID of a
@@ -81,7 +81,7 @@ def dataset_ref(
     file carries, which is what a PID is minted from, ``run:<instrument>/<run>``;
     or its path when it carries neither, the one case where a path is an
     identity, ``path:<path>``. Identity is not location: where the bytes are is
-    asked of a dataset source at dispatch (D7).
+    asked of a dataset source at dispatch.
     """
     given = {
         'pid': pid is not None,
@@ -128,14 +128,14 @@ def _is_collection(annotation: Any) -> bool:
 
 
 class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
-    """The plain-data form of scipp/ess#690 with the D15 declaration."""
+    """The plain-data form of scipp/ess#690 with the declared additive combine."""
 
     chain: Mapping[str, str] = {}
 
 
 class WorkflowSpec(_WorkflowSpec, frozen=True):
     """
-    The spec of scipp/ess#690 with the declared additive combine (D15).
+    The spec of scipp/ess#690 with the declared additive combine.
 
     A spec is the signature of one callable and a record one call of it, so an
     aggregation over runs is two specs, a contribute spec and a combine spec,
@@ -148,7 +148,7 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
     chain: Mapping[str, str] = Field(
         default_factory=dict,
         description="Collection parameter -> output whose value may be passed as "
-        "one of its elements and then stands for everything it combined (D15).",
+        "one of its elements and then stands for everything it combined.",
     )
 
     @model_validator(mode='after')

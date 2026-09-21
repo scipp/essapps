@@ -12,8 +12,8 @@ second combine without the first being read whole.
 
 *A combine that is not additive.* Reflectivity curves measured at different
 angles do not add: the scale factors come from a fit over the whole set, and the
-stitch is a variance-weighted mean on a common Q grid. The sketch says such a
-combine stays an ordinary workflow over member outputs (D15), and that is what
+stitch is a variance-weighted mean on a common Q grid. The design says such a
+combine stays an ordinary workflow over member outputs, and that is what
 ``amor-combine`` is: a plain callable with a collection-valued parameter, no
 contribution, and no ``contribute``/``combine``/``finalize``.
 
@@ -322,7 +322,7 @@ def combine_workflow() -> Any:
     Nothing here is a sciline graph: the scale factors come from a fit over all
     curves at once, so there is no per-member stage to hold and nothing the
     framework could chain or fold. Every curve is read on every call, which is
-    what the sketch means by recomputing an opaque combine on every arrival.
+    what the design means by recomputing an opaque combine on every arrival.
     """
 
     def run(params: CombineParams, inputs: Inputs) -> dict[str, Any]:

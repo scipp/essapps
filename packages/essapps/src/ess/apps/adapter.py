@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A sciline pipeline as a workflow, and as a stage over some of its parameters (D8).
+A sciline pipeline as a workflow, and as a stage over some of its parameters.
 
 The callable is stateless: it sets every parameter on a copy of the pipeline and
 computes the targets, so no call can affect a later one.
@@ -19,6 +19,8 @@ a request the session has nothing better to go on.
 
 References in the fixed fields are resolved once, when the stage is built;
 references in the stage inputs are resolved on every call.
+
+See docs/developer/workflow-contract.md.
 """
 
 from __future__ import annotations

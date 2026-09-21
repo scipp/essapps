@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The stages a session holds (D8).
+The stages a session holds.
 
 A workflow is a stateless callable, so nothing carries over from one run to the
 next unless the session decides it should. What it decides is which parameters it
@@ -11,7 +11,7 @@ workflow for a stage over those fields, holds it, and serves later requests that
 differ only in them from it.
 
 A request's predecessor is the request it supersedes, which under one label and
-member key is the previous request the session saw (D14), or, for a new member of
+member key is the previous request the session saw, or, for a new member of
 a batch, the latest earlier request under the label. A request without a label
 has no predecessor and nothing to differ from, and the workflow's
 ``default_stage_inputs`` is the author's hint for that case.
@@ -26,6 +26,8 @@ file that changed on disk from finding the stage built from its earlier bytes.
 
 What a stage holds is a cache, so dropping one is always safe: the store is
 bounded and the least recently used goes first.
+
+See docs/developer/stages.md.
 """
 
 from __future__ import annotations

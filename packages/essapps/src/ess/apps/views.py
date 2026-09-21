@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Views: a small piece of an output for display, never the volume (D10).
+Views: a small piece of an output for display, never the volume.
 
 A view is a pure function of a value and a view spec, returning plain arrays, so
 it can be served by whichever process holds a copy and later by a view worker.
 Event data is never viewed.
+
+See docs/developer/stages.md.
 """
 
 from __future__ import annotations

@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""What a session holds between runs, and what it saves (D8)."""
+"""
+What a session holds between runs, and what it saves.
+
+See docs/developer/stages.md.
+"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -346,7 +350,7 @@ def test_the_expensive_part_runs_per_stage_build_and_not_per_move(
 def test_session_reruns_record_reuse_of_the_stage_not_of_the_callable(
     client: Client, run_ref: OutputRef
 ) -> None:
-    """``reused`` is what D11 reads: the result came out of a held stage."""
+    """``reused`` is what publication reads: the result came out of a held stage."""
     loaded = client.run(LOAD, {'run': run_ref})
     data = loaded.ref('data')
     first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')

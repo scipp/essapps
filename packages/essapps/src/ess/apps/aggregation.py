@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Two plain specs cut from one sciline pipeline: contribute and combine (D15).
+Two plain specs cut from one sciline pipeline: contribute and combine.
 
 A spec is the signature of one callable and a record one call of it, so an
 aggregation over runs is not one spec with three entry points but two specs
@@ -33,6 +33,8 @@ in ``contribute_stage.keys``, those of the combine spec are the parameters in
 ``finalize_stage.keys`` that are not contribute's plus the collection the
 declaration names, and an accumulation key that does not depend on the members
 is not part of a contribution at all.
+
+See docs/developer/aggregation.md.
 """
 
 from __future__ import annotations

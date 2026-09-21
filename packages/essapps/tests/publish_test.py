@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Only finalized data enters the catalogue (D11)."""
+"""
+Only finalized data enters the catalogue.
+
+See docs/developer/workflow-contract.md.
+"""
 
 import pytest
 

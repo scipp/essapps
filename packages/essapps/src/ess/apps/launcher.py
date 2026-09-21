@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Launchers: where a run executes (D3).
+Launchers: where a run executes.
 
 Two execution shapes. A session launcher runs in this process, inputs from the
 private cache and outputs staying there, nothing written. A subprocess launcher
 is the throwaway shape: outputs go to disk with a completion marker before the
 process exits, and the backend reconciles from the marker. Which shape a
 launcher is shows in its interface as ``needs_disk_inputs``.
+
+See docs/developer/records.md.
 """
 
 from __future__ import annotations

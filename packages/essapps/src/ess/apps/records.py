@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Run requests and run records: the one way the framework names data (D1)."""
+"""
+Run requests and run records: the one way the framework names data.
+
+See docs/developer/records.md.
+"""
 
 from __future__ import annotations
 
@@ -30,7 +34,7 @@ class Status(StrEnum):
 
 class Submission(BaseModel, frozen=True):
     """
-    How a request was made (D14): explanation, not provenance.
+    How a request was made: explanation, not provenance.
 
     The resolved request alone reproduces the run; this says which template
     version, rule version and lookup entry filled it, and which values the
@@ -66,7 +70,7 @@ class RunRequest(BaseModel, frozen=True):
     submitter: str = Field(min_length=1)
     label: str | None = Field(
         default=None,
-        description="Records under one label supersede each other (D14, D10).",
+        description="Records under one label supersede each other.",
     )
     member_key: str | None = Field(
         default=None,
@@ -75,7 +79,7 @@ class RunRequest(BaseModel, frozen=True):
     submission: Submission = Field(
         default_factory=Submission,
         description="How the request was made: template, rule, lookup entry, "
-        "and the values the submitter typed (D14).",
+        "and the values the submitter typed.",
     )
 
     def refs(self) -> list[OutputRef]:
@@ -115,7 +119,7 @@ class RunResult(BaseModel):
     reused: bool = Field(
         default=False,
         description="Whether the result came out of a stage the session was "
-        "already holding, which is what D11 reads before publishing.",
+        "already holding, which publication reads before publishing.",
     )
     checksums: dict[str, str] = Field(default_factory=dict)
     failure: Failure | None = None
@@ -148,7 +152,7 @@ class RunRecord(BaseModel):
     reused: bool = Field(
         default=False,
         description="Whether the result came out of a stage the session was "
-        "already holding (D8).",
+        "already holding.",
     )
     checksums: dict[str, str] = Field(default_factory=dict)
     derives_from: Derivation | None = None

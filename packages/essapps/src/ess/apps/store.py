@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The record store: SQLite, one writer, schema-versioned (D5).
+The record store: SQLite, one writer, schema-versioned.
 
 Holds run records, the reference edges between them, and the registry of disk
 copies (the part of the data store that knows where bytes are), keyed by
 reference in either form. Records are never deleted one at a time.
+
+See docs/developer/records.md.
 """
 
 from __future__ import annotations
@@ -202,7 +204,7 @@ class RecordStore:
         record supersedes; it does not depend on a clock, which matters once
         several writers, a rule, a retry, and a person's correction submit under
         one label from different hosts. Without ``member_key`` this is the chain
-        whose member key is NULL, the slot form (D10).
+        whose member key is NULL, the slot form.
         """
         row = self._db.execute(
             'SELECT doc FROM records AS r '  # noqa: S608

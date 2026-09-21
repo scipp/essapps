@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Rules: the stored data requests are made from (D14).
+Rules: the stored data requests are made from.
 
 A rule is to a batch what a template is to a request. A template is a stored,
 immutable, versioned partial request; a lookup is an ordered table beside it
@@ -12,6 +12,8 @@ All of it is versioned by copy, and the records say which version made them.
 The exceptions are a rule's exclusions and its active flag, which are mutable
 state because they change over a beamtime. Nothing here holds a client; the
 operations that make requests from this data are in :mod:`ess.apps.batch`.
+
+See docs/developer/rules.md.
 """
 
 from __future__ import annotations
@@ -179,8 +181,8 @@ class Lookup(BaseModel, frozen=True):
     """
     Stored, versioned data beside a template: fills per dataset.
 
-    An ordered list of entries matching the fields the dataset source declares
-    (D7). A dataset matching more than one entry is a validation error, not a
+    An ordered list of entries matching the fields the dataset source declares.
+    A dataset matching more than one entry is a validation error, not a
     choice, and at most one entry is the wildcard.
     """
 
@@ -275,7 +277,7 @@ class RetryPolicy(BaseModel, frozen=True):
 
 class Series(BaseModel, frozen=True):
     """
-    How a rule combines its members (D15).
+    How a rule combines its members.
 
     ``key`` is the dataset field whose value keys datasets into a series and is
     the member key of the series' combines. ``template`` is the combine

@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The data store: a registry of disk copies, a disk tier, and a private cache (D3).
+The data store: a registry of disk copies, a disk tier, and a private cache.
 
 The registry (in the record store) knows disk copies only. Every process that
 holds data has a private in-memory cache that nothing else can see. A workflow
 asks for a path or an object and gets it from whichever tier has it; only the
 session shape serves objects from memory, and nothing in a spec or a binding
 can tell.
+
+See docs/developer/records.md.
 """
 
 from __future__ import annotations

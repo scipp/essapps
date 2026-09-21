@@ -5,10 +5,10 @@ The backend: validates requests, keeps the records, schedules, and owns the data
 
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
-and is cancelled if any is cancelled (D6). Recompute is explicit (D1). The
-contributions a combine request combines are an ordinary collection parameter of
-data references, so they are scheduled, resolved, and checked like any other
-input, and nothing here reads what a spec means by them (D15).
+and is cancelled if any is cancelled. Recompute is explicit. The contributions a
+combine request combines are an ordinary collection parameter of data
+references, so they are scheduled, resolved, and checked like any other input,
+and nothing here reads what a spec means by them.
 """
 
 from __future__ import annotations
@@ -458,7 +458,7 @@ class Backend:
     def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
         return view(self.data.array(ref), spec)
 
-    # Publication (D11)
+    # Publication
 
     def provenance(self, record_id: str) -> dict[str, Any]:
         """A self-contained snapshot: raw origins, resolved params, spec, versions."""

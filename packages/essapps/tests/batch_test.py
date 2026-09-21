@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Apply, the deliberate operations, the trigger loop, and the batch table (D14)."""
+"""
+Apply, the deliberate operations, the trigger loop, and the batch table.
+
+See docs/developer/rules.md.
+"""
 
 from pathlib import Path
 

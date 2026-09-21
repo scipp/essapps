@@ -67,10 +67,10 @@ def _instrument_pipeline() -> sciline.Pipeline:
     The pixel masks are applied here because ``with_pixel_mask_filenames``
     rewrites the ``DetectorMasks`` node into a mapped-and-reduced subgraph rather
     than setting a value: the number of masks changes the graph, so a mask cannot
-    be a parameter that the runner assigns. The sketch wants the masks on the
+    be a parameter that the runner assigns. The design wants the masks on the
     record, since they change the result; expressing that needs a way for a
     binding to rebuild the graph from a collection-valued parameter, which the
-    callable contract (D8) does not have.
+    callable contract does not have.
     """
     pipeline = loki.LokiAtLarmorWorkflow()
     pipeline = sans.with_pixel_mask_filenames(

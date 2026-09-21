@@ -58,7 +58,7 @@ def assert_stage_equals_workflow(
     factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
 ) -> None:
     """
-    The one check on a stage (D8): for every request a stage accepts it returns
+    The one check on a stage: for every request a stage accepts it returns
     what the workflow returns.
 
     The requests are driven through the session's own stage store under one
@@ -110,7 +110,7 @@ def assert_combine_is_associative(
     inputs: Inputs,
 ) -> None:
     """
-    The one check on a declared combine (D15): grouping and order do not matter.
+    The one check on a declared combine: grouping and order do not matter.
 
     ``spec`` is the combine spec, whose ``chain`` names the collection parameter
     the contributions fill and the output that may come back as one of its
