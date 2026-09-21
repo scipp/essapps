@@ -397,4 +397,4 @@ What binding the two real workflows found, the open questions, and the deferred 
 
 [roadmap.md](roadmap.md) maps the design onto the three delivery phases: automatic reduction, batch reduction, and interactive applications.
 [user-stories.md](user-stories.md) holds the user stories that the design is checked against.
-Studies that read an earlier edition of the design against Snakemake, AiiDA, Mantid's ISIS interfaces, and git are in `prior-art/`. They are not maintained.
+Studies that read an earlier edition of the design against Snakemake, AiiDA, Mantid's ISIS interfaces, and git are in `prior-art/`, with a later one on ewoks. They are not maintained.

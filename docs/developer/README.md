@@ -78,3 +78,4 @@ client.provenance(iofq)                                  # back to the dataset r
 
 [user-stories.md](user-stories.md) holds the user stories that the design is checked against.
 Unmaintained studies that read an earlier edition of the design against [Snakemake](prior-art/snakemake.md), [AiiDA](prior-art/aiida.md), [Mantid](prior-art/mantid.md), and [git](prior-art/git.md) are in `prior-art/`.
+A later study reads the design against [ewoks](prior-art/ewoks.md), the ESRF workflow system, and asks whether to build on it.
