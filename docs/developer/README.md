@@ -72,7 +72,9 @@ client.provenance(iofq)                                  # back to the dataset r
 | | [rules.md](rules.md) | templates, lookups, rules, `apply`, the trigger loop |
 | | [operations.md](operations.md) | client interface, publication, deployment, failure handling |
 | | [open-issues.md](open-issues.md) | open questions, findings from binding real workflows, deferred work |
+| | [roadmap.md](roadmap.md) | the three delivery phases, what each needs, and what the skeleton lacks for the first |
 | | [glossary.md](glossary.md) | terms, and where esslivedata uses a word differently |
 | hands-on | [`packages/essapps`](../../packages/essapps/README.md) | the walking skeleton: a guided tour, tests, and a LoKI session notebook |
 
-Background studies: [user-stories.md](user-stories.md), [staging.md](staging.md) on delivery phases, and the design read against [Snakemake](snakemake.md), [AiiDA](aiida.md), [Mantid](mantid.md), and [git](git.md).
+[user-stories.md](user-stories.md) holds the user stories that the design is checked against.
+Unmaintained studies that read an earlier edition of the design against [Snakemake](prior-art/snakemake.md), [AiiDA](prior-art/aiida.md), [Mantid](prior-art/mantid.md), and [git](prior-art/git.md) are in `prior-art/`.

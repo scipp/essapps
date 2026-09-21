@@ -395,5 +395,6 @@ LoKI SANS and Amor reflectometry are bound to it.
 Not in it: a SciCat dataset source, HTTP, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
 What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).
 
-Earlier studies read the design against other systems and against the delivery plan: [snakemake.md](snakemake.md), [aiida.md](aiida.md), [mantid.md](mantid.md), [git.md](git.md), [staging.md](staging.md), and [user-stories.md](user-stories.md).
-They predate this edition of the document and still refer to decisions by number (D1 to D15).
+[roadmap.md](roadmap.md) maps the design onto the three delivery phases: automatic reduction, batch reduction, and interactive applications.
+[user-stories.md](user-stories.md) holds the user stories that the design is checked against.
+Studies that read an earlier edition of the design against Snakemake, AiiDA, Mantid's ISIS interfaces, and git are in `prior-art/`. They are not maintained.

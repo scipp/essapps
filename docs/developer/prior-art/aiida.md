@@ -1,5 +1,9 @@
 # What AiiDA's history says about the sketch
 
+> Unmaintained study, written against the edition of the design at commit `cc4ad3a`.
+> Decision numbers (D1 to D15) and links to `architecture.md`, `staging.md`, and `stateless.md` refer to that edition.
+> The lessons taken from it are in the [current documents](../README.md).
+
 Companion to [architecture.md](architecture.md) and [snakemake.md](snakemake.md), which does the same for Snakemake.
 AiiDA is the engine closest to the sketch in what it stores and furthest in how it executes, so its history bears mostly on the record model and on unattended operation.
 Facts were checked against aiida-core's documentation source and changelog on GitHub on 2026-09-09; the sources are listed at the end.

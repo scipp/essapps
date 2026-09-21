@@ -1,5 +1,9 @@
 # What git says about the sketch
 
+> Unmaintained study, written against the edition of the design at commit `cc4ad3a`.
+> Decision numbers (D1 to D15) and links to `architecture.md`, `staging.md`, and `stateless.md` refer to that edition.
+> The lessons taken from it are in the [current documents](../README.md).
+
 Companion to [architecture.md](architecture.md) and [mantid.md](mantid.md).
 Git is not a reduction tool, and the parts of the sketch that came from Mantid and FIA, the lookup, the rule, the label, the batch table, and the reprocess, have no counterpart in it.
 It is read here because it is the best-known system built on the same two ideas the sketch rests on: immutable objects linked by references, and a small set of named pointers that move; and because twenty years of users have recorded what that model costs when it reaches a person.

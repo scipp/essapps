@@ -33,7 +33,7 @@ The recommendation in brackets is mine.
   [Separate stores now. A local socket form of the HTTP transport later, which also serves the local application.]
 - **SciCat push mechanism for new datasets**, if the deployment offers one, and how far ingestion lags the file.
   ISIS's interfaces discover runs from the archive because the catalogue lagged or failed, and their outputs are consequently unknown to it.
-  [Measure the lag before phase 1. A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so such a source can only get ahead of the catalogue and wait, never replace it.]
+  [Measure the lag before [phase 1](roadmap.md#the-three-phases). A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so such a source can only get ahead of the catalogue and wait, never replace it.]
 - **The name of the backend component.**
   It clashes with esslivedata's "backend services", which are Kafka worker processes.
   [Keep it unless the two projects are documented together.]

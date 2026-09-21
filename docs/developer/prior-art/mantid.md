@@ -1,5 +1,9 @@
 # What Mantid's ISIS batch interfaces say about the sketch
 
+> Unmaintained study, written against the edition of the design at commit `cc4ad3a`.
+> Decision numbers (D1 to D15) and links to `architecture.md`, `staging.md`, and `stateless.md` refer to that edition.
+> The lessons taken from it are in the [current documents](../README.md).
+
 Companion to [architecture.md](architecture.md), [snakemake.md](snakemake.md), and [aiida.md](aiida.md).
 Snakemake and AiiDA are engines; Mantid is the nearest thing to what this project builds: batch and automatic reduction interfaces used daily at a neutron facility, with fifteen years of release notes recording what was tried and removed.
 The ISIS Reflectometry interface is the heaviest user and the main subject here; the ISIS SANS interface, the ISIS Powder scripts, and FIA, ISIS's current automatic-reduction service, are read for the same questions.

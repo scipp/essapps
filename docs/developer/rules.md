@@ -38,7 +38,7 @@ A batch rerun under the copy is a new batch whose records link to the old ones.
 It is an ordered list of entries, each matching dataset metadata by a value within a tolerance (`Near`), a glob pattern (`Like`), or a run-number range open at either end (`Between`).
 At most one entry is the wildcard, which applies to what nothing else matched, and a dataset matching more than one entry is a validation error rather than a choice.
 An entry may match only on the fields the dataset source declares for the instrument, an angle, a sample name, or a run's role.
-Every ISIS batch interface converged on this table under a different name, and [mantid.md](mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
+Every ISIS batch interface converged on this table under a different name, and [mantid.md](prior-art/mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
 
 **An as-of fill is resolved against the member, not against the clock.**
 A fill is either a literal or an `AsOf`, which holds criteria on dataset metadata and resolves to the nearest dataset before the member that matches them.
@@ -142,7 +142,7 @@ The ladder would therefore keep, silently, a Q range a user typed for one member
 `shadowed` is the three-way compare the ladder does not make: per member and field it reports the typed value, the fill under the old versions, and the fill under the new ones, and the person decides whether the typed value stands.
 
 **The backend never skips a request because an equal one completed earlier.**
-A run that silently did not happen is a decision the user cannot see, and [snakemake.md](snakemake.md) records what that cost elsewhere.
+A run that silently did not happen is a decision the user cannot see, and [snakemake.md](prior-art/snakemake.md) records what that cost elsewhere.
 
 ## Series
 

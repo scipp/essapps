@@ -1,5 +1,9 @@
 # What Snakemake's history says about the sketch
 
+> Unmaintained study, written against the edition of the design at commit `cc4ad3a`.
+> Decision numbers (D1 to D15) and links to `architecture.md`, `staging.md`, and `stateless.md` refer to that edition.
+> The lessons taken from it are in the [current documents](../README.md).
+
 Companion to [architecture.md](architecture.md), [staging.md](staging.md), and [stateless.md](stateless.md).
 The sketch rejects workflow engines, Snakemake among them, because none gives the stateless request the design rests on.
 This note asks a different question: Snakemake has run scientific pipelines for over a decade, with a public issue tracker and a changelog that records every reversal, so what did it learn that applies here, and what did it get right that we should copy?
