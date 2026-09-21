@@ -12,9 +12,16 @@ The recommendation in brackets is mine.
   A workflow cut into two specs gives two templates that share most of their parameters, and so does a rule with a series.
   Facilities that tried template inheritance moved to version-controlled read-only templates with per-dataset substitution.
   [No inheritance. A template may be derived from another by copy, and the record keeps the origin.]
-- **Remote sessions.**
-  Where a session runs once interactive work moves to the shared web UI: on the backend host, in the user's own application, or as an interactive cluster job with queue latency at session start.
-  [Decide once local sessions exist.]
+- **The model for remote interactive work.**
+  [stages.md](stages.md#sessions-are-one-of-three-models) compares three models: sessions owned by the framework, a checkpoint model in which the application holds the state and only kept results become records, and throwaway processes over stored intermediates, with kept runners as an addition.
+  The skeleton implements sessions in local mode.
+  For the shared web UI the choice is open, and with sessions it includes where a session runs: on the backend host, in the user's own application, or as an interactive cluster job with queue latency at session start.
+  [Decide when remote interactive work is designed, from the measurements below. The checkpoint model is the one to beat, because it meets the interactive user stories without a framework-owned process per user. Batch and automatic reduction do not depend on the answer.]
+- **Measurements the decision needs.**
+  The feedback loop of a throwaway process in three configurations: cold, with a pool of idle runners that have their imports done, and with a runner that already holds the intermediate in memory.
+  The three numbers separate the cost of process start, of the disk read, and of the computation.
+  Also one read and one write of a 4D contribution of several gigabytes per arrival, which decides when a series needs the [fold](aggregation.md#the-fold).
+  [Measure before remote interactive work is designed.]
 - **Retention policy for disk copies in shared mode.**
   How long each kind of run's outputs is kept, and the analysis window after which a proposal's records are dropped together.
   [One order: outputs of superseded records first, then outputs the spec marks as cheap to recompute from their inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show that they get it right.]
@@ -103,7 +110,7 @@ See [rules.md](rules.md).
   Nothing coordinates the two.
 - **Static work across processes.**
   A contribute request in a throwaway process computes the part shared by all members again, once per member.
-  This is the cost that a kept runner would remove, and [stateless.md](stateless.md) measures it.
+  A [kept runner](stages.md#kept-runners) would remove this cost.
 - **Live streams.**
   A streaming workflow has members that cannot be recomputed from records, which breaks the invariant the session rests on.
   That is esslivedata's problem and stays out of scope.

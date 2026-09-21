@@ -233,7 +233,7 @@ A long-lived runner holds the latest combined contribution of one series, chains
 Between records, what it holds is recomputable from the last record and the members since, so held state remains a cache.
 A fold's records carry the `reused` flag, so publication recomputes them along the chain.
 The fold needs a runner that is addressed by its series, which does not exist yet, and nothing requires it before such a series appears.
-[stateless.md](stateless.md) discusses kept runners.
+[stages.md](stages.md#kept-runners) discusses kept runners.
 
 ## How this maps onto sciline
 

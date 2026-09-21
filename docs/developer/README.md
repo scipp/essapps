@@ -75,4 +75,4 @@ client.provenance(iofq)                                  # back to the dataset r
 | | [glossary.md](glossary.md) | terms, and where esslivedata uses a word differently |
 | hands-on | [`packages/essapps`](../../packages/essapps/README.md) | the walking skeleton: a guided tour, tests, and a LoKI session notebook |
 
-Background studies: [user-stories.md](user-stories.md), [staging.md](staging.md) on delivery phases, [stateless.md](stateless.md) on designs without sessions, and the design read against [Snakemake](snakemake.md), [AiiDA](aiida.md), [Mantid](mantid.md), and [git](git.md).
+Background studies: [user-stories.md](user-stories.md), [staging.md](staging.md) on delivery phases, and the design read against [Snakemake](snakemake.md), [AiiDA](aiida.md), [Mantid](mantid.md), and [git](git.md).

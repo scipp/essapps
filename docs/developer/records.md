@@ -169,7 +169,7 @@ Every process that holds data also keeps a private in-memory cache of outputs.
 **Memory caches are private.**
 A cache is never registered and is invisible to every other process, and nothing is pulled out of a session by anyone but the session's own client.
 A registry over processes the backend does not own would need every eviction, close, and crash reported, which is a cache-coherence protocol, and it would block backend requests on user processes that may be busy or gone.
-An index over a pool of runners the backend does own, addressed by the reference they hold, is a different case and stays open as an additive option ([stateless.md](stateless.md)).
+An index over a pool of runners the backend does own, addressed by the reference they hold, is a different case and stays open as an additive option ([kept runners](stages.md#kept-runners)).
 
 A runner asks `DataStore` for an input and hands it an output.
 The store serves from the cache of its process when it can, and otherwise reads or writes disk, which the runner cannot tell apart.

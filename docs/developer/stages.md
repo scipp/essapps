@@ -231,7 +231,113 @@ Later it may run on the backend host, or in a client process on the user's machi
 Remote sessions need a session launcher, an idle timeout, and a cap on sessions, and are deferred for that reason.
 Until they exist, the shared web UI has no interactive loop.
 
+## Sessions are one of three models
+
+Sessions are not the only way to give a person fast reruns.
+Two other models meet the same requirement, and all three share the records, the spec vocabulary, the client interface, and the callables.
+They differ in where the interactive state lives.
+
+**The session model** is what this document describes.
+State lives in a session that the framework knows about.
+Every rerun is a complete record in a slot.
+The stage contract and its test helper guarantee that a result through a stage equals the direct one, and publication recomputes without a stage.
+Interactive work in the shared web UI needs remote sessions, which the framework must launch, route requests to, time out, and cap.
+
+**The checkpoint model** keeps the state in the application's process, and the framework does not know about it.
+The application holds the stage, reruns it in memory as a notebook does, and plots with plopp or with the view function called in-process.
+None of that creates records.
+When the user keeps a result, the application submits the complete parameter set as an ordinary request.
+The request runs in a throwaway process and yields a record that cannot be told from a batch member.
+The application may compare that output with what was on screen and warn if they differ.
+Shared interactive use is a hosting question, a process per user as JupyterHub provides, and the framework never sees a session.
+
+**The stateless model with splits** has no state between runs.
+The workflow author cuts the workflow where the expensive part ends, so that its result is a stored output of a record.
+On the first rung, every rerun is a throwaway process that reads that output and runs the cheap part.
+On the second rung, runners stay alive and keep their outputs, and the launcher routes a request to the runner that already holds its input.
+A routing miss falls back to the first rung, so the second rung is an addition to the first.
+
+| | Session | Checkpoint | Stateless with splits |
+|---|---|---|---|
+| Feedback on a post-processing parameter | under a second | under a second | seconds; under a second on the second rung |
+| Records created while exploring | one per change, grouped by slots | none | one per change |
+| Provenance of a kept result | complete | complete | complete |
+| What the user saw equals the record | by the stage contract and its test helper | checked once, when the result is kept | by construction |
+| Framework concepts added | session, held stages, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
+| Interactive use in the shared web UI | remote sessions owned by the framework | a hosted process per user, owned by infrastructure | works, slowly; on the second rung without a process per user |
+| Disk volume | low | low | high; lower on the second rung |
+| Burden on workflow authors | none beyond the adapter | none beyond the adapter | a cut at every boundary a person tunes across |
+| Losing the process | lose time; every step was recorded | lose the exploration since the last kept result | lose nothing |
+| Exploring a large volume | views from session memory | views from the application's memory | needs a chunked layout on disk |
+| Keeping a result | already a record; recomputed before publication | one full computation per kept result | already a record |
+
+On the first rung of the stateless model, two [user stories](user-stories.md) fail: tuning a SANS reduction with feedback within a second or two, and tuning vanadium and sample together, where each change to the vanadium runs both parts again.
+
+How a growing series is combined does not depend on the model.
+It is a chained combine in all three ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+
+### What a rerun costs without held state
+
+Orders of magnitude, not yet measured:
+
+| Step | Session | Throwaway process |
+|---|---|---|
+| Process start and imports of scipp, sciline, and the instrument package | none | 2 to 5 s |
+| Reading a large binned intermediate from scipp HDF5 | none, in memory | 1 to 10 s |
+| The expensive part, such as loading and converting a SANS run | none, held at the frontier | 10 s to minutes |
+| The cheap part, such as histogramming in Q | under 1 s | under 1 s |
+
+With a cut after the expensive part, a rerun in a throwaway process pays the first two rows.
+That is "change and press run", not a slider.
+A pool of idle runners with imports done removes the first row.
+It is a launcher detail, because state still crosses processes only through disk.
+
+### Kept runners
+
+Removing the second row needs runners that keep their outputs, and a launcher that routes a request to the runner holding its input.
+A kept runner is addressed by the reference it holds and the code version it runs, not owned by one client.
+The session invariants survive, because the address is derived from the request and no process identity enters a record.
+A request that reaches a runner without the input in memory reads disk or recomputes, which is the path without kept runners.
+Two people tuning from the same intermediate share one copy, and no process per user has to be launched, timed out, or capped.
+
+The cost is placement, not transfer:
+
+- Something must know which runner holds which output.
+  The [data store](records.md#the-data-store) refuses to track memory in processes the backend does not own.
+  Over a pool that the backend owns, the index is soft state that a restart discards.
+- The placement that maximises reuse destroys fan-out.
+  Five hundred batch runs that reference one processed vanadium either queue on the one runner that holds it, or each load it again.
+  Deciding when to replicate a small artefact and when to pin a large one is a scheduler feature, and most of the work of this option is there.
+- Eviction affects all clients, so the pool needs a byte budget.
+  Every eviction makes a routing prediction wrong, so a rerun under a second becomes the typical case and not a guarantee.
+- The address includes the code version, so an upgrade fragments the pool.
+
+The [fold](aggregation.md#the-fold) is a kept runner addressed by a series, so both problems would be solved by one mechanism.
+
+### What keeps the choice open
+
+The skeleton implements the session model in local mode.
+The model for remote interactive work is not decided ([open-issues.md](open-issues.md#open-questions)).
+Three properties of the core keep all three models possible:
+
+- **The callable may ask for an object, not only a file** ([workflow-contract.md](workflow-contract.md#inputs-a-path-or-an-object)).
+  A checkpoint application and a session both call workflow code in-process with scipp objects.
+- **A client that can reach the disk tier may turn a reference into an object in its own process.**
+  An application can then hold its own state without the framework knowing.
+- **Nothing in the core requires a request to reach a particular process.**
+  A launcher may accept a placement hint, and a scheduler may ignore it.
+  This also keeps the HTTP transport, load balancing, and a restart simple.
+
+### What sessions cost in concepts
+
+Without sessions the design loses the session itself, held stages and the stage offer, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
+In the skeleton that is about one seventh of the source.
+Records, references, the spec vocabulary, the scheduler, rules, the trigger loop, validation, completion markers, publication, and proposal scoping are unaffected.
+Batch and automatic reduction use none of the session concepts.
+
 ## Alternatives considered
+
+These concern how stages are chosen and held, given the session model.
 
 **Stage inputs named by the workflow author.**
 The author fixes which parameters a stage takes.
@@ -246,13 +352,6 @@ Each workflow author reimplements invalidation, and the framework cannot tell wh
 **The framework caches sciline intermediates itself.**
 The framework would have to import sciline.
 Caching every intermediate is not affordable with event data, and the graph does not know compute cost or which parameters will vary.
-
-**Splitting the workflow instead of holding state.**
-The expensive part becomes a spec of its own, and each rerun is a throwaway process that reads its stored output.
-This works without sessions, and it is the only option on a fire-and-forget remote runner, but every rerun pays a disk read and a process start.
-[stateless.md](stateless.md) compares this model, a checkpoint model in which the application holds the stage and calls create no records, and sessions.
-With `Stage`, all three hold the same objects.
-They differ in who holds the stage and whether a call writes a record, so the choice for remote interactive work can wait, and the callables are built and tested either way.
 
 ## Costs
 
