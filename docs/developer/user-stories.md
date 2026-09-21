@@ -1,14 +1,14 @@
 # User stories
 
-Companion to [architecture.md](architecture.md).
 Each story is told from the user's side and says nothing about mechanism.
-They exist to be run against the proposal: trace the story through the sketch, name the decisions it touches, and record whether the proposal determines what happens.
-An outcome is one of *fits*, *gap* (the proposal does not say, or says something wrong), or *question* (a choice the team must make).
-A gap becomes an open question or a change in the sketch; a story is not changed to fit the proposal.
+They exist to be run against the design: trace the story through the design documents and record whether the design determines what happens.
+An outcome is one of *fits*, *gap* (the design does not say, or says something wrong), or *question* (a choice the team must make).
+A story is never changed to fit the design.
+Every gap and every question is also listed in [open-issues.md](open-issues.md).
+[roadmap.md](roadmap.md) says which stories belong to which delivery phase.
 
-Stories are grouped by the part of the proposal they exercise.
-Each has the actor, the story, and the checks the run-through must answer.
-The outcome line is filled in when the story is run.
+Stories are grouped by the part of the design they exercise.
+Each has the actor, the story, the checks the run-through must answer, and the outcome.
 
 ## A. Getting data in
 
@@ -22,7 +22,8 @@ Actor: user with a local application or notebook.
 
 Checks: listing creates nothing but records; a local file and a catalogue file are named the same way in a request; nothing is copied or downloaded before it is needed.
 
-Outcome: gap, closed in the sketch. Listing, naming, and lazy copying all fit (D1). Step 3 does not: a view (D10) is defined over a declared array output, and a raw NeXus file is readable only by a workflow (D8), so the sketch does not say how a raw file is plotted before any workflow ran. Fix: state that raw files are viewable only through a workflow, and provide a per-instrument preview spec.
+Outcome: fits.
+A raw file is viewable only through a workflow, and a quick look at a run just measured goes through a per-instrument preview spec ([stages.md](stages.md#views)).
 
 ### A2. Run number instead of file
 
@@ -33,7 +34,8 @@ Actor: user at the instrument.
 
 Checks: the run number resolves to one catalogue dataset at submission; the record names the dataset, not the number.
 
-Outcome: fits. Stand-ins resolve at submission (D1); the record names the dataset. Minor: run-number resolution is said to be per instrument in D1 and within a proposal in D12; say which disambiguates.
+Outcome: fits.
+Stand-ins resolve at submission, and a run number is unique within an instrument and proposal ([records.md](records.md#datasets)).
 
 ### A3. Work without the facility mount
 
@@ -44,7 +46,8 @@ Actor: user on a laptop away from the facility.
 
 Checks: the file is fetched once, kept as a location, and the record's identity is still the PID.
 
-Outcome: fits. The fetch creates a location, the PID stays the identity (D1, D3). Retention of the fetched copy in local mode is unstated but harmless: local mode has no retention.
+Outcome: fits.
+The fetch makes a location and the PID stays the identity ([records.md](records.md#datasets)).
 
 ### A4. Mistaken copy into the shared service
 
@@ -55,7 +58,9 @@ Actor: user of the shared web UI.
 
 Checks: the bytes can be dropped; the record and the runs that used it remain honest about what happened; nothing else breaks.
 
-Outcome: question, now in open questions. The bytes can be dropped and dependents lose recomputability (Choice 1, Lifetimes). The local path remains on the submission until the proposal is dropped. Decide whether a local path is sensitive enough to need redaction.
+Outcome: question.
+The bytes can be dropped, and the dependent records stay and lose recomputability.
+Whether the local path on the record's submission is sensitive enough to redact is undecided ([open-issues.md](open-issues.md#open-questions)).
 
 ### A5. Metadata corrected after the fact
 
@@ -67,7 +72,8 @@ Actor: instrument scientist.
 
 Checks: the UI shows what SciCat says now; the record is unchanged; nothing in our store had to be updated.
 
-Outcome: fits. Nothing is stored per dataset, and the UI asks SciCat (The record store is not a catalogue, D11).
+Outcome: fits.
+Nothing is stored per dataset, so the UI asks SciCat ([operations.md](operations.md#the-record-store-is-not-a-catalogue)).
 
 ## B. Manual and interactive reduction
 
@@ -81,7 +87,8 @@ Actor: user in a notebook.
 
 Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
-Outcome: gap, closed in the sketch. The session takes the stage inputs from what a person changes (D8) and a template comes from saving a request (D1), but the sketch does not say which fields are blanked when a request becomes a template. Fix: saving a request makes a template with data-reference fields blank and everything else literal, editable by the user.
+Outcome: fits.
+The session takes the stage inputs from the fields a person changes ([stages.md](stages.md#who-chooses-the-stage-inputs)), and saving a request as a template blanks the data-reference fields and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
 
 ### B2. Add a run to a sum, then remove one
 
@@ -93,7 +100,8 @@ Actor: user in a notebook.
 
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
-Outcome: fits. Adding a run is a contribute request for it and a combine request over the session's previous combine and the new contribution, which the session holds in memory as it holds any output; removing one is a fresh combine over the remaining contributions; each state is a record (D15).
+Outcome: fits.
+Adding a run is a member request plus a combine over the previous combined contribution and the new member, and removing one is a combine over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -105,7 +113,8 @@ Actor: user in a notebook or the web UI.
 
 Checks: two variants can coexist without confusing the interactive series; "discard" means something concrete.
 
-Outcome: gap, closed in the sketch. Two variants are two labels (D10), but the sketch does not say who assigns the second label when a user forks, and 'discard' has no meaning: records stay and eviction is automatic. Fix: forking is a client operation that assigns a new label; discard is dropping the label from the UI, nothing more.
+Outcome: fits.
+Two variants are two slots, the second assigned when the user forks, and discarding one drops its label from the UI and changes nothing else ([stages.md](stages.md#slots)).
 
 ### B4. Explore a 4D volume
 
@@ -117,7 +126,8 @@ Actor: spectroscopy user in the web UI.
 
 Checks: the frontend never receives the volume; dragging creates no records; the chosen cut becomes an input of the next workflow with exact provenance.
 
-Outcome: fits in a session, where the volume lives in the process serving the views (D10). In shared mode the partial-read layout that makes this responsive is explicitly deferred.
+Outcome: fits.
+A view returns a small array from the process that holds the output and creates no record, and the slice a user settles on becomes a parameter of the next request ([stages.md](stages.md#views)).
 
 ### B5. Notebook kernel dies mid-session
 
@@ -129,7 +139,8 @@ Actor: user in a notebook.
 
 Checks: what survives, what is recomputed, and how long that takes; nothing the user did is lost except time.
 
-Outcome: gap, closed in the sketch. Records survive (D5) and the stages a session holds are recomputable (D2), but the sketch does not say where the local record store lives, that a restarted kernel reopens it, or how the user finds their last records: the record store lists only two queries. Fix: a default per-user store location, and listing by proposal, time, batch, and slot.
+Outcome: fits.
+Every notebook is its own backend with a record store at a per-user default location that the restarted kernel reopens, and what the session held is recomputable from the records ([records.md](records.md#the-record-store)).
 
 ### B6. Find last week's result
 
@@ -140,7 +151,8 @@ Actor: user returning after a week.
 
 Checks: records can be listed by proposal and time; a record shows its resolved parameters.
 
-Outcome: fits. The record store lists by proposal and time (Components), and a record holds its resolved values (D1).
+Outcome: fits.
+A record carries its proposal, its timestamps, and the parameter values the run resolved to ([records.md](records.md#requests-and-records)).
 
 ## C. Chaining and stage outputs
 
@@ -153,7 +165,8 @@ Actor: user in the local or web application.
 
 Checks: the output is addressable as an input without export or import; the batch form can take it; provenance of the reduction reaches the run the beam centre came from.
 
-Outcome: fits. The literal-or-reference union (D13) and references as inputs (D1) cover it; batch forms take a reference like any field.
+Outcome: fits.
+A value that other requests reference is an output of a record of its own, and a field may hold a literal or a reference ([records.md](records.md#reuse-means-a-workflow-boundary)).
 
 ### C2. Vanadium from the catalogue
 
@@ -163,7 +176,8 @@ Actor: user configuring single, batch, or automatic reduction.
 
 Checks: a published stage output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
-Outcome: gap, closed in the sketch. A published stage output is an ordinary input (D1, D11), but the duplicate-PID check is stated only for the dataset source; a user typing our own published PID at submission may create a dataset reference instead of a reference to the run record. Fix: stand-in resolution checks PIDs against records too.
+Outcome: fits.
+A PID typed at submission resolves to the run record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
 
 ### C3. Per-bank diffraction results
 
@@ -175,7 +189,8 @@ Actor: DREAM user.
 
 Checks: one output with several members; a member is addressable as an input; the UI can show one member without loading all.
 
-Outcome: gap, closed in the sketch. Collection outputs and element references are defined (D13, D1), but the sketch does not say whether one element can be stored and loaded without the rest. Fix: elements of a collection output are stored and served individually.
+Outcome: fits.
+Elements of a collection output are stored and served individually, and a reference may name one of them by key ([workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690)).
 
 ### C4. Reflectometry angle series
 
@@ -187,7 +202,8 @@ Actor: reflectometry user.
 
 Checks: the combine that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
-Outcome: fits. This is the worked example under D6; the stitch is not additive, so it is an opaque combine over the per-angle outputs, recomputed on every arrival (D15); per-angle metadata and the ORSO file are the workflow's serializer (D8).
+Outcome: fits.
+The stitch is a combine spec without `chain`, recomputed over all members on each arrival ([aggregation.md](aggregation.md#combines-that-are-not-additive)).
 
 ### C5. Vanadium and sample tuned together
 
@@ -197,7 +213,8 @@ Actor: instrument scientist in a notebook.
 
 Checks: two workflows chained in memory; the vanadium output is still recorded so batch can reuse it later.
 
-Outcome: fits. A stage of each workflow, chained in one session (Choice 1); the vanadium is a stage output with a record (D4).
+Outcome: fits.
+Each workflow contributes a stage, and the first one's output is a record's output that the session holds in memory ([stages.md](stages.md#more-than-one-workflow)).
 
 ## D. Batch
 
@@ -211,7 +228,8 @@ Actor: instrument scientist.
 
 Checks: picking "the run at 250 K" without knowing record IDs; one corrupt file does not affect the other 199 and its failure is visible.
 
-Outcome: gap, closed in the sketch. Member keys exist (D1) and failures are isolated (D6), but nothing lets a user find a member by key: the record store has no query for it. Fix: listing and lookup by label and member key.
+Outcome: fits.
+The batch table is a query over the records, the latest one per member key, and the members are independent ([rules.md](rules.md#labels-batches-and-slots)).
 
 ### D2. Overnight cluster batch
 
@@ -223,7 +241,8 @@ Actor: NMX user in the web UI.
 
 Checks: results that finished while the backend was restarted are not lost; a rerun is traceable to the failed run.
 
-Outcome: gap, closed in the sketch. Completion markers and reconciliation cover the restart (Failure handling), and a rerun links to the failed record (D1), but the run record has no failure-reason field although failure surfacing is in scope. Fix: add a structured failure reason to the record.
+Outcome: fits.
+Completion markers reconcile a restart, and a failed record carries a structured reason that the rerun's record links back to ([operations.md](operations.md#failure-handling)).
 
 ### D3. Cancel and resubmit
 
@@ -235,7 +254,8 @@ Actor: user in the web UI.
 
 Checks: cancellation reaches running and queued members; the new batch is not blocked by the old; the old records stay as history.
 
-Outcome: gap, closed in the sketch. The new batch is independent and old records stay, but cancel exists per request and per slot only; batch members are independent, so nothing cancels a batch. Fix: cancel by label, which a slot and a batch share.
+Outcome: fits.
+A batch is cancelled whole by its label, queued and running members alike, and the cancelled records stay ([operations.md](operations.md#failure-handling)).
 
 ### D4. Typo caught before 500 failures
 
@@ -246,7 +266,8 @@ Actor: user in the web UI.
 
 Checks: feedback arrives before the user leaves the form; no records are created for a request that cannot run.
 
-Outcome: question, decided. Validate before leaving the form is D9 verbatim. A batch is now validated whole before any record is created; members are independent only at execution (D6).
+Outcome: fits.
+A UI calls validate on every change, and a group is validated whole before any record is created ([operations.md](operations.md#the-client-interface)).
 
 ### D5. Understand why a run failed
 
@@ -258,7 +279,8 @@ Actor: user in the web UI.
 
 Checks: a structured reason on the record; the rerun links to the failed run.
 
-Outcome: fits. A failed record carries a structured reason (D1, Failure handling), and a retry is a new record linked to the old one. What the reason holds for an exception inside workflow code is a runner detail.
+Outcome: fits.
+A failed record carries a structured failure reason, and a retry is a new record that links to the failed one ([operations.md](operations.md#failure-handling)).
 
 ### D6. Rerun last year's batch with a new workflow version
 
@@ -269,7 +291,8 @@ Actor: instrument scientist.
 
 Checks: old records stay valid under their version; the template moves to the new version deliberately; a mismatched parameter set fails loudly.
 
-Outcome: fits. Records are immutable and name their spec version; a template moves by copy and the rerun is a new batch linked to the old (D1); a mismatch fails loudly (D5). A recompute would refuse, since it is same-environment only, which is the right answer here.
+Outcome: fits.
+A template moves to a new spec version by copy, the records say which version filled them, and a stored parameter set that no longer matches its spec version fails loudly ([rules.md](rules.md#templates-and-lookups)).
 
 ## E. Automatic reduction
 
@@ -277,12 +300,14 @@ Outcome: fits. Records are immutable and name their spec version; a template mov
 
 Actor: reflectometry user during a beamtime.
 
-1. An angle series is measured one run at a time, plus a reference; nobody can say in advance how many angles there will be.
-2. After each run the stitched curve in the web UI grows by one angle, within minutes of the run.
+1. An angle series is measured one run at a time, plus a reference.
+2. Nobody can say in advance how many angles there will be.
+3. After each run the stitched curve in the web UI grows by one angle, within minutes of the run.
 
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combine; the UI shows one curve per sample, not one per arrival.
 
-Outcome: fits. A rule keys runs into a series by metadata and on each arrival submits the member and a combine request, over all per-angle outputs because the stitch is not additive (D15); successive combines supersede under the series key (D14). Waiting was a scoping requirement until 2026-09-09; mantid.md records why it was dropped.
+Outcome: fits.
+A rule with a series key submits a member request and a combine request on every arrival, and successive combines supersede each other under the series value as member key ([rules.md](rules.md#series)).
 
 ### E2. Automatic reduction goes quiet
 
@@ -293,18 +318,20 @@ Actor: instrument operator.
 
 Checks: where the operator sees that the loop is refusing to fire, and why; nothing silently continues with a superseded workflow.
 
-Outcome: fits. Fail loudly on a spec mismatch (D5) and the trigger loop's visible status (Components). Visibility is pull-only, so a UI must surface it.
+Outcome: fits.
+`trigger_status` answers for one dataset why the rule did not fire, and a spec-version mismatch fails loudly rather than defaulting ([rules.md](rules.md#the-trigger-loop)).
 
 ### E3. Reduction of our own output
 
-Actor: nobody; a failure mode.
+Actor: none. The story is a failure mode.
 
 1. An automatic-reduction result is published to SciCat.
 2. The dataset source sees the new dataset.
 
 Checks: the rule does not fire on the published output; the published dataset is not listed as a raw dataset.
 
-Outcome: fits. A rule never fires on records made from its own template, and the dataset source skips PIDs in publishing or published state (D11).
+Outcome: fits.
+A rule fires on no dataset whose SciCat entry carries our provenance snapshot, and on no record made from its own template ([rules.md](rules.md#the-trigger-loop)).
 
 ### E4. Template improved during a beamtime
 
@@ -315,7 +342,8 @@ Actor: instrument scientist.
 
 Checks: the rule moves to the new version deliberately; every record names the template version that made it.
 
-Outcome: fits. Templates are immutable and versioned (D1); a rule names one template version and is moved by copy, and reprocessing what the old version made is the reprocess operation, offered and previewed, never automatic (D14); records carry the template version.
+Outcome: fits.
+A rule names one template version and moves by copy, and what the old version made is reprocessed only when a person asks for it ([rules.md](rules.md#backlog-reprocess-and-rerun)).
 
 ## F. Publication and provenance
 
@@ -328,7 +356,8 @@ Actor: user, then a colleague.
 
 Checks: the answer does not depend on any of our services still running; the provenance reaches raw data.
 
-Outcome: gap, closed in the sketch. The publisher writes the output 'together with its provenance' but the sketch never says what that payload is, and the truth table still names our record as the truth for a published record. Fix: the SciCat entry carries a self-contained provenance snapshot (raw PIDs, resolved parameters, package versions, environment, spec identity), so no service of ours is needed to read it.
+Outcome: fits.
+The SciCat entry carries a provenance snapshot of the raw PIDs, the resolved parameters, the spec identity, the package versions, and the environment, readable without any service of ours ([operations.md](operations.md#publication)).
 
 ### F2. Reproduce after two upgrades
 
@@ -339,7 +368,8 @@ Actor: user.
 
 Checks: the user learns that the exact result is not reproducible in the current environment before anything runs; a recompute in the current environment is a new, honestly labelled record.
 
-Outcome: fits. A published output is downloaded, not recomputed (D1); a forced recompute in another environment is refused unless overridden and yields a new linked record.
+Outcome: fits.
+A published output is downloaded rather than recomputed, and a recompute outside the record's environment is refused unless the client overrides ([records.md](records.md#datasets)).
 
 ### F3. Publish what was tuned interactively
 
@@ -350,7 +380,8 @@ Actor: user in a notebook.
 
 Checks: what enters SciCat was computed in a way the record reproduces; a development binding of the workflow is refused or flagged.
 
-Outcome: fits. A reused workflow object is recomputed cold before publication, and an in-process binding is refused unless overridden (D11).
+Outcome: fits.
+A result that a held stage served is recomputed in a throwaway process before publication, and a record bound to workflow code in process is refused unless the client overrides ([operations.md](operations.md#publication)).
 
 ### F4. Publish a corrected version
 
@@ -361,7 +392,8 @@ Actor: user.
 
 Checks: the old entry cannot be removed; the new entry says what it supersedes; automatic reduction fires on neither.
 
-Outcome: fits. A publication may name the PID it supersedes and the snapshot records it (D11); SciCat entries are never removed; the dataset source skips both PIDs.
+Outcome: fits.
+A publication may name the PID it supersedes, an entry in SciCat is never removed, and the trigger loop skips both entries ([operations.md](operations.md#publication)).
 
 ## G. Roles and deployment
 
@@ -375,7 +407,8 @@ Actor: instrument scientist, then external users.
 
 Checks: artefacts from a long-lived proposal are readable across proposals on the instrument; everything else is scoped; the artefacts do not expire under the users' feet.
 
-Outcome: gap, closed in the sketch. Instrument-shared artefacts cover vanadium and beam centre (D12) but templates are said to operate within a proposal, so an instrument default template made under commissioning is not shared by any rule. Fix: templates can be instrument-shared like artefacts.
+Outcome: fits.
+Artefacts, templates, and lookups from a commissioning proposal are marked instrument-shared, and their disk copies are exempt from retention ([operations.md](operations.md#scope-instrument-plus-proposal)).
 
 ### G2. Developer iterates on a workflow
 
@@ -387,7 +420,8 @@ Actor: workflow developer.
 
 Checks: a workflow can be bound without an installed package; such records are marked; they cannot masquerade as the installed spec.
 
-Outcome: fits. In-process binding, the binding recorded on the record, and the no-shadowing rule (D8).
+Outcome: fits.
+A notebook binds a spec in process unless an installed package provides that name and version, and the record says which binding ran ([workflow-contract.md](workflow-contract.md#spec-and-binding)).
 
 ### G3. Local application, remote compute
 
@@ -398,7 +432,9 @@ Actor: user with a desktop application.
 
 Checks: a session can live in the user's process with the backend elsewhere; the stage output crosses once; views never leave the laptop.
 
-Outcome: deferred by design. The sketch names this topology and lists client-hosted sessions under deferred and the remote-sessions open question; nothing in the model forecloses it.
+Outcome: question.
+Nothing in the model forecloses this topology, and no request needs to reach a particular process.
+Whether interactive work uses sessions at all, and where a session then runs, is undecided ([open-issues.md](open-issues.md#open-questions)).
 
 ### G4. Two notebooks on one machine
 
@@ -409,7 +445,8 @@ Actor: user with two notebooks open.
 
 Checks: what the second notebook is, a second backend or a client of the first; whether records made in one are visible in the other.
 
-Outcome: question, now in open questions. D5 says the second notebook is a client of the first, but local mode has no transport and HTTP is deferred, so the mechanism is unstated. Decide: per-notebook stores by default and cross-notebook references deferred, or a local transport now.
+Outcome: question.
+Each notebook is its own backend with its own record store, so a reference from one to the other needs a local transport that does not exist ([open-issues.md](open-issues.md#open-questions)).
 
 ### G5. Reference across proposals refused
 
@@ -419,7 +456,8 @@ Actor: external user.
 
 Checks: refused at validation with a clear reason; no record is created.
 
-Outcome: fits. The runnability layer requires every reference to resolve to a record the user may read (D8), submit refuses on any error (D9), and access is checked on every reference (Failure handling).
+Outcome: fits.
+Runnability requires every reference to resolve to a record the submitter may read, and submit refuses a request with any error ([workflow-contract.md](workflow-contract.md#validation)).
 
 ## H. Operations
 
@@ -432,7 +470,9 @@ Actor: operator.
 
 Checks: retention says what is droppable and what is exempt; dropping loses bytes only, never provenance.
 
-Outcome: question. Dropping loses bytes only and records stay (Choice 1, Lifetimes); store copies of local files and instrument-shared outputs are exempt, and a finished proposal can be dropped whole. The policy itself, and what the operator sees, is the open question on retention.
+Outcome: question.
+Dropping loses bytes only, the records stay, and store copies of local files and instrument-shared outputs are exempt.
+The retention policy itself, and what the operator is shown when the quota is reached, is undecided ([open-issues.md](open-issues.md#open-questions)).
 
 ### H2. Backend upgrade with runs in flight
 
@@ -442,7 +482,9 @@ Actor: operator.
 
 Checks: records survive; dispatched runs are reconciled; queued ones are re-dispatched; a schema change is handled.
 
-Outcome: fits, with one silence. Restart handling covers dispatched and queued runs (Failure handling) and the store carries a schema version (D5), but the sketch does not say how a schema migration is applied. Minor.
+Outcome: gap.
+Restart handling covers dispatched and queued runs, and the record store carries a schema version.
+How an existing store is migrated to a new schema is not stated ([open-issues.md](open-issues.md#what-the-design-does-not-solve)).
 
 ### H3. Proposal ends
 
@@ -454,4 +496,50 @@ Actor: operator.
 
 Checks: records and copies go together; nothing dangles; the published entry answers the question on its own.
 
-Outcome: fits. Records and copies are dropped by proposal after an export (Choice 1, Lifetimes); references do not cross proposals except into long-lived commissioning ones; the SciCat entry carries the provenance snapshot (D11). The window itself is the open question on retention.
+Outcome: fits.
+A proposal's records and disk copies are dropped together after an export, references do not cross proposals except into long-lived commissioning ones, and the SciCat entry carries its own provenance ([records.md](records.md#lifetimes)).
+
+## Summary
+
+Of the 38 stories, 33 fit, four raise a question, and one is a gap.
+
+| Story | Title | Outcome |
+|---|---|---|
+| A1 | Browse a local folder next to a catalogue reference | fits |
+| A2 | Run number instead of file | fits |
+| A3 | Work without the facility mount | fits |
+| A4 | Mistaken copy into the shared service | question |
+| A5 | Metadata corrected after the fact | fits |
+| B1 | Tune a SANS reduction in a notebook | fits |
+| B2 | Add a run to a sum, then remove one | fits |
+| B3 | Compare two parameter sets side by side | fits |
+| B4 | Explore a 4D volume | fits |
+| B5 | Notebook kernel dies mid-session | fits |
+| B6 | Find last week's result | fits |
+| C1 | Beam centre feeds a sample reduction | fits |
+| C2 | Vanadium from the catalogue | fits |
+| C3 | Per-bank diffraction results | fits |
+| C4 | Reflectometry angle series | fits |
+| C5 | Vanadium and sample tuned together | fits |
+| D1 | Temperature scan | fits |
+| D2 | Overnight cluster batch | fits |
+| D3 | Cancel and resubmit | fits |
+| D4 | Typo caught before 500 failures | fits |
+| D5 | Understand why a run failed | fits |
+| D6 | Rerun last year's batch with a new workflow version | fits |
+| E1 | Series grows, reduction follows | fits |
+| E2 | Automatic reduction goes quiet | fits |
+| E3 | Reduction of our own output | fits |
+| E4 | Template improved during a beamtime | fits |
+| F1 | Publish, then trace six months later | fits |
+| F2 | Reproduce after two upgrades | fits |
+| F3 | Publish what was tuned interactively | fits |
+| F4 | Publish a corrected version | fits |
+| G1 | Instrument scientist prepares a beamtime | fits |
+| G2 | Developer iterates on a workflow | fits |
+| G3 | Local application, remote compute | question |
+| G4 | Two notebooks on one machine | question |
+| G5 | Reference across proposals refused | fits |
+| H1 | Disk fills up | question |
+| H2 | Backend upgrade with runs in flight | gap |
+| H3 | Proposal ends | fits |

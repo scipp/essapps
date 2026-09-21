@@ -213,6 +213,14 @@ The **record store** is ours: SQLite on local disk, Postgres if a backend ever n
 It holds the records, the reference edges between them, and the registry of disk copies, and contains nothing sciline-specific.
 The store carries a schema version, and a stored parameter set that no longer matches its spec version must fail loudly and never be silently defaulted, because schema versioning was left unresolved in esslivedata and needed hand-run migrations (scipp/esslivedata#915).
 
+Besides create, read, and update of status, the store answers a fixed set of queries:
+
+- records by proposal, time, template version, or rule version;
+- the records under a label, and the latest per label and member key, which is the record that no other supersedes ([rules.md](rules.md#labels-batches-and-slots));
+- the records that reference output X of record Y, or dataset D.
+
+Batch tables, trigger decisions, the current members of a series, and provenance are built from these.
+
 **The backend is the single writer.**
 Exactly one backend process serves one record store, enforced by a lock that a live backend renews and a dead one loses (`RecordStore` raises `StoreLockedError`).
 Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs (scipp/esslivedata#1285, #714).

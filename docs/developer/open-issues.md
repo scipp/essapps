@@ -108,6 +108,8 @@ See [rules.md](rules.md).
 - **Memory policy.**
   A stage holds its frontier, an aggregation holds nothing between calls, and a session holds stages and outputs.
   The session counts its stages and drops the least recently used, but how that bound relates to the memory the session's outputs occupy is open.
+- **Migration of the record store to a new schema.**
+  The store carries a schema version and a stored parameter set that no longer matches its spec version fails loudly, but nothing says how an existing store is brought to a new schema during a backend upgrade.
 - **Parallelism over members.**
   Across records, the launcher runs one throwaway process per member.
   Inside one callable, the adapter maps the contribute stage over the rows with threads.
