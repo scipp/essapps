@@ -13,7 +13,8 @@ values it would carry forward though their fill has since changed.
 
 Nothing here stores a batch: a batch is the records under one label, and
 :func:`batch_table` is that query, the latest record per member key, as a
-:class:`pandas.DataFrame`.
+:class:`pandas.DataFrame`. :func:`dataset_table` is the frame to join it with to
+read a rule's member keys as samples.
 
 See docs/developer/rules.md.
 """
@@ -492,16 +493,24 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     The table of what was reduced with which values: the batch under a label.
 
     A query over the records, latest per member key, never a stored table: one
-    row per member, the member key as index, and each record's rule version,
-    lookup entry, and typed values as columns, a typed reference as the
-    reference rather than its stored form. A rule's exclusions are rows without
-    a record.
+    row per member, the member key as index, and each record's rule version and
+    lookup entry as columns. The value columns are the fields that differ per
+    member, which are the blanks of the rule's template and every field a member
+    typed. Each shows the value the request was made with, whoever supplied it,
+    a reference as the reference rather than its stored form, and ``typed`` names
+    the fields of the row a person typed. A rule's exclusions are rows without a
+    record.
     """
     rule = batch if isinstance(batch, Rule) else None
     label = rule.name if rule is not None else batch
+    records = client.batch(str(label))
+    fields = dict.fromkeys(rule.template.blanks if rule is not None else ())
+    for record in records:
+        fields |= dict.fromkeys(record.request.submission.typed)
     rows: dict[str, dict[str, Any]] = {}
-    for record in client.batch(str(label)):
+    for record in records:
         submission = record.request.submission
+        params = record.request.params
         rows[str(record.request.member_key)] = {
             'record': record.id,
             'status': record.status.value,
@@ -509,8 +518,23 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
             'template': submission.template,
             'rule': submission.rule,
             'entry': submission.entry,
-            **{k: as_ref(v) or v for k, v in submission.typed.items()},
+            'typed': ', '.join(submission.typed),
+            **{f: as_ref(params[f]) or params[f] for f in fields if f in params},
         }
     for member, reason in (rule.exclusions if rule is not None else {}).items():
         rows.setdefault(member, {'status': 'excluded', 'reason': reason})
     return pd.DataFrame.from_dict(rows, orient='index').rename_axis('member')
+
+
+def dataset_table(client: Client) -> pd.DataFrame:
+    """
+    The datasets the sources know, with the fields a rule may match on.
+
+    The index is the dataset identity, which is the member key of a rule's
+    batch, so ``batch_table(client, rule).join(dataset_table(client))`` says
+    which sample each member is. The batch table does not make that join itself:
+    it is a query over the records alone, and a batch typed by hand is keyed by
+    names that are no dataset.
+    """
+    rows = {str(dataset.ref): dataset.fields for dataset in client.datasets()}
+    return pd.DataFrame.from_dict(rows, orient='index').rename_axis('dataset')

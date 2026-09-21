@@ -17,6 +17,7 @@ from ess.apps.batch import (
     apply,
     backlog,
     batch_table,
+    dataset_table,
     reprocess,
     rerun,
     shadowed,
@@ -621,8 +622,21 @@ def test_the_batch_table_is_a_query_over_the_records(
         'vanadium',
         'completed',
     ]
-    assert table.loc['pid:pid/2', 'scale'] == 5.0
     assert table.loc['pid:pid/9', 'reason'] == 'chopper was off'
+
+
+def test_the_batch_table_shows_the_values_that_differ_per_member(
+    client: Client, rule: Rule
+) -> None:
+    client.submit_group(
+        apply(client, rule, client.datasets()[-2:], {'pid:pid/2': {'scale': 5.0}})
+    )
+    table = batch_table(client, rule)
+    # The template's blank, which the rule filled and nobody typed.
+    assert list(table['run']) == [dataset_ref(pid='pid/1'), dataset_ref(pid='pid/2')]
+    # A typed field shows the template's value for the members that did not type it.
+    assert list(table['scale']) == [2.0, 5.0]
+    assert list(table['typed']) == ['', 'scale']
 
 
 def test_the_batch_table_of_a_label_needs_no_rule(
@@ -640,6 +654,19 @@ def test_the_batch_table_of_a_label_needs_no_rule(
     assert list(table.index) == ['300K', '310K']
     assert set(table['template']) == {'load-defaults/v1'}
     assert table.loc['300K', 'run'] == scan['300K']
+
+
+def test_the_dataset_table_joins_onto_a_rules_batch_table(
+    client: Client, rule: Rule
+) -> None:
+    client.submit_group(apply(client, rule, client.datasets()[-2:]))
+    datasets = dataset_table(client)
+    assert datasets.index.name == 'dataset'
+    table = batch_table(client, rule).join(datasets['sample'])
+    assert table.index.name == 'member'
+    assert list(table['sample']) == [
+        d.fields['sample'] for d in client.datasets()[-2:]
+    ]
 
 
 # An as-of fill

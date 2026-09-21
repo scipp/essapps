@@ -23,7 +23,10 @@ batch_table(client, 'scan')
 ```
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
-`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template and rule version, the lookup entry that applied, and the typed values as columns.
+`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template and rule version, and the lookup entry that applied.
+The value columns are the fields that differ per member, which are the template's blanks and every field a member typed.
+Each shows the value the request was made with, whoever supplied it, and the `typed` column names the fields of the row a person typed.
+A rule's member keys are dataset identities; `dataset_table` is the frame of the datasets and their fields under the same key, and joining it onto the batch table says which sample each member is.
 That table is a query over the records, not a stored object.
 Automatic reduction is this scan plus a lookup, a selector, and a loop that calls `apply` when a dataset arrives.
 
@@ -190,7 +193,7 @@ The batch table is a frame, and the pieces above are how it is built:
 | As-of fill | `merge_asof` of each member against the datasets matching the criteria, direction backward |
 | Precedence ladder | `typed.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
 | Typed values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
-| Selector | a boolean mask over the dataset metadata frame |
+| Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
 | Chained combine | a cumulative reduction within the group; the superseded partials are its intermediate values |
 | Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
