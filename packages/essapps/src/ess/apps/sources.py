@@ -16,7 +16,7 @@ See docs/developer/rules.md.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +92,11 @@ class FolderSource:
     ``instrument`` the instrument, which ``instrument`` supplies for names that
     do not carry one. A stem the expression does not match is identified by its
     path.
+
+    A file carries no sample name or run role that a rule could match on, so
+    ``journal`` is what the facility's run journal or catalogue declares about
+    each run: metadata fields by run number. A run the journal does not list
+    has no metadata.
     """
 
     def __init__(
@@ -101,11 +106,13 @@ class FolderSource:
         *,
         identity: str | re.Pattern[str] = _RUN_IDENTITY,
         instrument: str | None = None,
+        journal: Mapping[int, Mapping[str, Any]] | None = None,
     ) -> None:
         self.path = Path(path)
         self.pattern = pattern
         self.identity = re.compile(identity)
         self.instrument = instrument
+        self.journal = journal or {}
 
     def new_datasets(self, proposal: str) -> list[Dataset]:
         return self._scan()
@@ -130,11 +137,13 @@ class FolderSource:
                 f'{path.name} carries a run number but no instrument; give the '
                 'source an instrument name'
             )
+        run = int(match['run'])
         return Dataset(
             path=path,
             instrument=instrument.lower(),
-            run=int(match['run']),
+            run=run,
             created=self._created(path),
+            metadata=dict(self.journal.get(run, {})),
         )
 
     @staticmethod

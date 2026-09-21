@@ -493,8 +493,9 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
 
     A query over the records, latest per member key, never a stored table: one
     row per member, the member key as index, and each record's rule version,
-    lookup entry, and typed values as columns. A rule's exclusions are rows
-    without a record.
+    lookup entry, and typed values as columns, a typed reference as the
+    reference rather than its stored form. A rule's exclusions are rows without
+    a record.
     """
     rule = batch if isinstance(batch, Rule) else None
     label = rule.name if rule is not None else batch
@@ -508,7 +509,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
             'template': submission.template,
             'rule': submission.rule,
             'entry': submission.entry,
-            **submission.typed,
+            **{k: as_ref(v) or v for k, v in submission.typed.items()},
         }
     for member, reason in (rule.exclusions if rule is not None else {}).items():
         rows.setdefault(member, {'status': 'excluded', 'reason': reason})

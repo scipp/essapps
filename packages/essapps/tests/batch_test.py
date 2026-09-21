@@ -639,6 +639,7 @@ def test_the_batch_table_of_a_label_needs_no_rule(
     table = batch_table(client, 'scan1')
     assert list(table.index) == ['300K', '310K']
     assert set(table['template']) == {'load-defaults/v1'}
+    assert table.loc['300K', 'run'] == scan['300K']
 
 
 # An as-of fill

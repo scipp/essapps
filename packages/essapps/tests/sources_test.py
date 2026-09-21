@@ -81,3 +81,12 @@ def test_a_run_number_without_an_instrument_is_refused(tmp_path: Path) -> None:
     source = FolderSource(tmp_path, '*.nxs', identity=r'(?P<run>\d+)-.*')
     with pytest.raises(ValueError, match='no instrument'):
         source.new_datasets('p1')
+
+
+def test_the_journal_declares_the_metadata_of_a_run(tmp_path: Path) -> None:
+    write(tmp_path, 'dream_1.nxs')
+    write(tmp_path, 'dream_2.nxs')
+    source = FolderSource(tmp_path, journal={1: {'sample': 'vanadium'}})
+    first, second = source.new_datasets('p1')
+    assert first.fields == {'run': 1, 'sample': 'vanadium'}
+    assert second.fields == {'run': 2}

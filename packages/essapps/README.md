@@ -87,7 +87,9 @@ The checksum of every dataset file a run reads is on its record, so a recompute 
 
 ## A session on real data
 
-`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the session stages the reduction over it and a rerun takes a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
+`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the session stages the reduction over it and a rerun takes a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. `notebooks/loki-batch.ipynb` reduces four samples from the same files as a batch: first from a template and a typed pandas frame, as an ISIS batch file would, then by a rule that selects sample runs by a journal's run role, fills each one's transmission run as the nearest before it, and fires as runs arrive. It shows the backlog, a correction of one member, and a reprocess under a new template version, with `shadowed` reporting the typed value the reprocess keeps.
+
+The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
 
 ## Tests
 
