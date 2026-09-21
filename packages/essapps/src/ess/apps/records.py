@@ -11,11 +11,26 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+from pydantic_core import to_jsonable_python
 
 from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
+
+
+def _plain(value: Any) -> Any:
+    return to_jsonable_python(value)
+
+
+Plain = Annotated[Any, AfterValidator(_plain)]
+"""
+A parameter value in its plain JSON form, the one form stored data has.
+
+A model or a reference given as a Python object is dumped when the holder is
+validated, so that a value compares and displays alike whether it was just made
+or read back from the record store.
+"""
 
 
 class Status(StrEnum):
@@ -47,7 +62,7 @@ class Submission(BaseModel, frozen=True):
     entry: str | None = Field(
         default=None, description="Name of the lookup entry that matched."
     )
-    typed: dict[str, Any] = Field(
+    typed: dict[str, Plain] = Field(
         default_factory=dict,
         description="Values the submitter supplied beyond template and lookup.",
     )
@@ -64,7 +79,7 @@ class RunRequest(BaseModel, frozen=True):
     """
 
     spec: SpecId
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Plain] = Field(default_factory=dict)
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)

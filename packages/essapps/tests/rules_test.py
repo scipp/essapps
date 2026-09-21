@@ -9,10 +9,12 @@ See docs/developer/rules.md.
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from ess.apps.examples import LOAD
-from ess.apps.rules import Between, Like, Lookup, LookupEntry, Near, Template
+from ess.apps.rules import AsOf, Between, Like, Lookup, LookupEntry, Near, Template
 from ess.apps.sources import Dataset
+from ess.apps.spec import dataset_ref
 
 # Templates
 
@@ -32,6 +34,26 @@ def test_revising_makes_a_new_version_by_copy(template: Template) -> None:
     assert revised.params == {'scale': 3.0}
 
 
+class Window(BaseModel):
+    low: float
+    high: float
+
+
+def test_a_template_holds_plain_values_and_reads_back_equal() -> None:
+    template = Template(
+        name='windowed',
+        spec=LOAD.id,
+        params={'window': Window(low=1.0, high=2.0), 'can': dataset_ref(pid='pid/1')},
+    )
+    assert template.params == {
+        'window': {'low': 1.0, 'high': 2.0},
+        'can': {'dataset': 'pid:pid/1'},
+    }
+    assert Template.model_validate_json(template.model_dump_json()) == template
+    revised = template.revise(window=Window(low=0.0, high=2.0))
+    assert revised.params['window'] == {'low': 0.0, 'high': 2.0}
+
+
 def test_a_template_with_two_blanks_names_the_field_a_dataset_fills() -> None:
     two = Template(name='two', spec=LOAD.id, blanks=('run', 'other'))
     with pytest.raises(ValueError, match='name the one a dataset fills'):
@@ -44,6 +66,15 @@ def test_a_template_with_two_blanks_names_the_field_a_dataset_fills() -> None:
 
 def dataset(**metadata: object) -> Dataset:
     return Dataset(path=Path('x.h5'), pid='pid/x', metadata=dict(metadata))
+
+
+def test_a_lookup_entry_holds_plain_fills_and_keeps_an_as_of_fill() -> None:
+    as_of = AsOf(match={'role': Like(pattern='can')})
+    entry = LookupEntry(
+        name='cans', fills={'can': as_of, 'window': Window(low=1.0, high=2.0)}
+    )
+    assert entry.fills == {'can': as_of, 'window': {'low': 1.0, 'high': 2.0}}
+    assert LookupEntry.model_validate_json(entry.model_dump_json()) == entry
 
 
 def test_lookup_matches_a_value_within_a_tolerance() -> None:

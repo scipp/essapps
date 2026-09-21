@@ -27,6 +27,14 @@ from ess.apps.spec import DatasetRef, Format, OutputRef, SpecId, as_ref, dataset
 from ess.apps.testing import FakeDatasetSource
 
 
+def test_a_request_holds_plain_params_and_reads_back_equal(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    request = client.request(LOAD, {'run': run_ref})
+    assert request.params == {'run': {'dataset': 'run:dream/1'}}
+    assert client.record(client.submit(request).id).request == request
+
+
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     client: Client, run_ref: DatasetRef, run_file: Path
 ) -> None:

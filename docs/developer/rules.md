@@ -32,6 +32,7 @@ Automatic reduction is this scan plus a lookup, a selector, and a loop that call
 **A template is a stored, immutable, versioned partial request.**
 It comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and keeps every other field literal.
 A template moves to a new version, or to a new spec version, by copy through `Template.revise`, and the records say which version filled them.
+Its parameters, like a lookup's fills and the typed values on a record, are held in the plain JSON form a request's parameters have, whatever objects the author passed, so that stored data compares and displays alike whether it was just made or read back.
 A batch rerun under the copy is a new batch whose records link to the old ones.
 
 **A lookup is stored, versioned data beside a template that supplies fills per dataset.**

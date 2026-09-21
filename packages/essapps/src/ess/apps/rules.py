@@ -25,7 +25,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .records import RunRequest
+from .records import Plain, RunRequest
 from .sources import Dataset
 from .spec import SpecId, WorkflowSpec, data_fields
 
@@ -88,15 +88,18 @@ class Template(BaseModel, frozen=True):
     """
     A stored, immutable, versioned partial request.
 
-    ``blanks`` are the fields a use must supply; ``dataset_field`` is the one a
-    dataset fills when a rule or :func:`ess.apps.batch.apply` supplies one, which
-    is the sole blank unless a template has several.
+    ``params`` holds the plain JSON form a request's params have, whatever
+    objects the author passed, so a template read back from storage equals the
+    one that was stored. ``blanks`` are the fields a use must supply;
+    ``dataset_field`` is the one a dataset fills when a rule or
+    :func:`ess.apps.batch.apply` supplies one, which is the sole blank unless a
+    template has several.
     """
 
     name: str
     version: int = 1
     spec: SpecId
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Plain] = Field(default_factory=dict)
     blanks: tuple[str, ...] = ()
     dataset_field: str | None = None
     derived_from: str | None = None
@@ -120,8 +123,9 @@ class Template(BaseModel, frozen=True):
 
     def revise(self, **changes: Any) -> Template:
         """A new version by copy; the old one stays."""
-        return self.model_copy(
-            update={
+        return Template(
+            **dict(self)
+            | {
                 'version': self.version + 1,
                 'params': self.params | changes,
                 'derived_from': self.id,
@@ -170,7 +174,7 @@ class LookupEntry(BaseModel, frozen=True):
 
     name: str
     match: Criteria = Field(default_factory=dict)
-    fills: dict[str, AsOf | Any] = Field(default_factory=dict)
+    fills: dict[str, AsOf | Plain] = Field(default_factory=dict)
 
     @property
     def wildcard(self) -> bool:

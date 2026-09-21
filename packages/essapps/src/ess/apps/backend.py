@@ -540,8 +540,6 @@ def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
 
 def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
     """Point ``@name`` references at the IDs the group's members were given."""
-    if isinstance(value, OutputRef):
-        value = value.model_dump()
     if isinstance(value, dict):
         ref = as_ref(value)
         if isinstance(ref, OutputRef):

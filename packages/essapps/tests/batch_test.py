@@ -125,7 +125,7 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert typed.typed == {'scale': 4.0}
     assert typed.entry == 'rest'
     assert typed.template == 'load-defaults/v1'
-    assert group['pid:pid/1'].params['run'] == dataset_ref(pid='pid/1')
+    assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
 
 
 def test_apply_without_datasets_is_the_batch_form(
