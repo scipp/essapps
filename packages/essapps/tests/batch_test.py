@@ -670,7 +670,10 @@ def windowed(client: Client, samples: FakeDatasetSource) -> Rule:
     rule = Rule(
         name='windowed',
         template=Template(
-            name='windowed', spec=WINDOWED.id, params={'window': Window()}, blanks=('run',)
+            name='windowed',
+            spec=WINDOWED.id,
+            params={'window': Window()},
+            blanks=('run',),
         ),
         selector=Selector(match={'sample': Like(pattern='*')}),
     )
@@ -692,7 +695,9 @@ def test_the_batch_table_shows_a_model_as_one_column_per_leaf(
 def test_shadowed_names_the_leaves_of_a_typed_model_whose_fill_changed(
     client: Client, windowed: Rule
 ) -> None:
-    revised = windowed.revise(template=windowed.template.revise(window=Window(high=2.0)))
+    revised = windowed.revise(
+        template=windowed.template.revise(window=Window(high=2.0))
+    )
     frame = shadowed(client, revised, windowed)
     assert list(frame.index) == ['pid:pid/2']
     assert list(frame.iloc[0]) == ['window.high', 1.0, 1.0, 2.0]
@@ -723,9 +728,7 @@ def test_the_dataset_table_joins_onto_a_rules_batch_table(
     assert datasets.index.name == 'dataset'
     table = batch_table(client, rule).join(datasets['sample'])
     assert table.index.name == 'member'
-    assert list(table['sample']) == [
-        d.fields['sample'] for d in client.datasets()[-2:]
-    ]
+    assert list(table['sample']) == [d.fields['sample'] for d in client.datasets()[-2:]]
 
 
 # An as-of fill
