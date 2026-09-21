@@ -1,1015 +1,399 @@
-# Architecture sketch for ESS data-reduction applications
-
-Living document.
-Records the choices made so far, the alternatives that were on the table, why each choice was made, and what it costs.
-Companion to [scoping.md](scoping.md), which states goals and scope.
-A walking skeleton of it exists under `packages/essapps`; see "Next step".
-Technology choices at the end are proposals.
-A reading edition with diagrams is [architecture.html](architecture.html); its wording follows this file.
-Three review notes read this document against the delivery order and the execution model: [staging.md](staging.md), on what each phase needs, [stateless.md](stateless.md), on what a design without sessions would remove and cost, and [stages.md](stages.md), on how specs and records relate to the stages and aggregations that scipp/sciline#245 proposes in place of map/reduce.
-Four more, [snakemake.md](snakemake.md), [aiida.md](aiida.md), [mantid.md](mantid.md), and [git.md](git.md), read it against the histories of Snakemake, AiiDA, Mantid's ISIS batch interfaces, and git: what each got right, what it learned the hard way, and what was taken from it here.
-
-## How to read this
-
-The design rests on one modelling idea and four choices.
-The idea comes first, under "Records and references".
-The four choices follow, each with the options that were rejected, so that the team can disagree with a choice rather than only with its consequences.
-Everything after that is consequence: the rules that fall out, how runs are aggregated, how requests are made from data, the changes the workflow spec needs, the components, and how failures are handled.
-Decisions carry stable identifiers D1 to D15 so discussion can point at them; they are indexed at the end, next to the glossary.
-Terms are introduced where they are first needed.
-Three are used before they are defined: the **vocabulary** is the set of types the workflow spec allows for parameters and outputs, the **registry** is the part of the data store that knows which stored copies of an output exist, and a **contribution** is what one run adds to a sum over runs (D15).
-
-## The picture in one paragraph
-
-A user, a script, or an automatic trigger submits a *run request*: which workflow to run, with which parameters, on which input data.
-The *backend* checks the request, writes it down as a *run record*, and asks a *launcher* to start a *runner* somewhere: in the same process, in a subprocess, or on the cluster.
-The runner fetches the inputs, calls the scientific workflow code, and stores the results.
-Any output of a record, whether a single number or a large array, can be an input of the next request, named as *output X of record Y*.
-Raw files from the catalogue and files on a user's disk are named by their identity, as *datasets*.
-Interactive work happens in a *session*: a process that keeps the workflow and its data in memory between runs, while the records look the same as for any other run.
-Everything the backend knows is in the records, so any result can be traced back to raw data and parameters, and any result can be recomputed if its data was thrown away.
-Batch reduction is many requests made from one *template*, applied to a set of datasets at once.
-Automatic reduction is a *rule*, a template with a lookup and a selector, which the *trigger loop* applies to each new dataset as it arrives and which aggregates a series of runs again whenever a run joins it; a rule is to a batch what a template is to a request.
-Publishing a result to the data catalogue is a separate, deliberate step.
-
-## Records and references
-
-The framework has one way to name a piece of data: *output X of record Y*.
-This section is what follows from taking that seriously (D1).
-
-A **run request** is everything needed to execute a workflow once: which spec, the parameter values, and the instrument, proposal, and submitter.
-A **spec** is a workflow's declared interface: name, version, parameters, outputs.
-It is independent of how the workflow is implemented or where it runs, and is defined in scipp/ess#690.
-A request is complete: sufficient to reproduce the outputs from scratch.
-It is plain, JSON-serializable data, even when it never leaves a process.
-
-A **run record** is the request plus what happened to it: run ID, status, timestamps, output values, the resolved parameter values including defaults, the package versions and the environment of the runner, how the spec was bound to code, whether the result was computed from state held from an earlier run, and the runner's console output, kept beside it.
-A request may carry a **label** and a **member key**, under which records supersede each other (D14); the record names the record it superseded, the latest under its label and member key when the backend accepted the request, so that which record is latest is a link and never a clock.
-The record also carries a **submission**, which says how the request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup, so that a later reprocess can carry them forward.
-The submission is explanation, not provenance, because the resolved request alone reproduces the run.
-Optionally it carries one link to the record it derives from, with the reason: retry, recompute, or copy.
-That link says why the request was made; the supersedes link says where the record sits under its label, and a retry carries both, to the same record.
-The run ID is a UUID, so that records can move between stores without renumbering.
-A failed run carries a structured failure reason, so that a user sees why without reading logs.
-Resolved values and package versions are what make "recompute from the record" true; without them a changed default or a package upgrade silently changes what a record means.
-The environment is recorded as an opaque name and revision, at ESS a conda environment, so that a recompute can be checked against it; the framework does no more with it than record and compare.
-A record is immutable once the run completes, except for status, and is never deleted on its own.
-Beside it live **annotations**: labels and notes a user attaches after inspection, such as "use this vanadium" or "superseded"; they are outside provenance, may change at any time, and nothing in the framework reads them.
-Small output values are stored in the record; large ones are held by the data store, and the record says only that they exist.
-Which of the two applies is decided by type and is invisible to clients.
-
-A **reference** is a value that a parameter field of matching type may hold instead of a literal, and it has two forms: "output X of record Y", optionally one element of a collection output, "output X of record Y, key k"; or a dataset, below.
-It is the only way a request names data.
-A reference names data by identity, never by where its bytes are; the data store's internal keys never appear in a request.
-A reference may name a **pending output**, one whose record has not completed yet; the backend holds the request until it does.
-The record keeps references in reference form, so **provenance**, the chain from any result back to raw data, parameters, and software, is the graph you get by following them.
-
-**Datasets are the leaves.**
-A **dataset** is data the framework did not compute: a SciCat dataset, or a file on a user's disk.
-A reference names it by its **dataset identity**: the PID for a catalogue dataset; for a local file, the instrument and run number it carries in its name or header, which is what a PID is minted from, or its path when it carries neither, the one case where a path is an identity.
-Identity is not location: where the bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable, or is the user's path for a local file, or a copy in the data store.
-Nothing is stored per dataset: its proposal is checked against the request's at submission, when the PID's SciCat entry is read anyway, and the data store registers a copy of its bytes only when it makes one.
-In the local application a folder is a dataset source (D7), read when asked; the checksum of a local file is recorded on the record of the run that read it, so that a recompute can tell whether it read the same bytes, and the path the submitter typed stays on the submission.
-A dataset is not a record: it has no request, no status, and nothing to recompute.
-A parameter of data-reference kind accepts either form, a dataset reference is never pending, and the trigger loop's two kinds of candidate are a new dataset and a completed record (D14).
-Making every dataset a record of a built-in `file` spec, so that a reference has one form, was the sketch's first answer and was dropped in the tenth pass: it bought a UUID over an identity SciCat already keeps, a spec with no workflow, and a rule to stop the store from becoming a catalogue, and gave nothing the two forms do not, since "which records used this dataset" is the same index over references either way, and a raw file is not viewable in either, a quick look being a preview run (D10).
-
-**Stand-ins resolve at submission.**
-Users submit a local path, a PID, or a run number, which is unique within an instrument and proposal.
-The backend turns each into a reference before persisting anything, because provenance must not depend on a search that could give a different answer later: a run number is looked up in SciCat; a PID whose entry carries our provenance snapshot resolves to the run record named there while the store still has it, and any other PID to a dataset reference, once its proposal is checked against the request's.
-A path under the facility filesystem resolves to the PID of the dataset that owns it; any other path becomes a local dataset, identified as above.
-Nothing is downloaded or copied at submission, and SciCat is not needed again once a reference exists.
-
-**Whether an output is usable is two questions**: the record's status, and whether the data store holds a copy.
-A missing copy is reported as such, never silently recomputed.
-Getting it back is an explicit operation, **recompute**, which submits the record's request again and yields a new record linked to the old one; published outputs and catalogue files are instead downloaded again.
-Recompute is exact only in the environment the record names, and refuses to run elsewhere unless the client overrides.
-
-| Data | Where the truth lives | On a missing copy | Copies evictable |
-|---|---|---|---|
-| An output of a run record | The record: parameters, references, versions | Recompute, explicitly | Yes |
-| A catalogue dataset | The PID; SciCat says where the bytes are | Download again | Yes |
-| A local file | Its identity and the user's path | Nothing to recover from, unless a store copy was made | A store copy, only by an explicit drop |
-| A published run record | The PID, whose entry carries the provenance snapshot | Download rather than recompute | Yes |
-
-Two kinds of stored data make requests without a person filling a form, and are defined under "Rules: how requests are made from data" (D14): a **template** is a partial run request, and a **rule** is a template with a lookup and a selector, applied to datasets.
-A **batch** is the records made under one label, whether a person or a rule made them; none of the three is a copy of the records.
-
-**Why this is the foundation.**
-Two forms of reference, a record's output and a dataset, serve inputs, views, publication, and provenance; only the first can be pending, so the scheduler has one kind of dependency.
-There is no "which record produced this" query, because the reference names the record.
-A handle with its own origin and lifecycle would be three special cases of this: the origin is the producing record, and the lifecycle is record status plus copy availability.
-Records are never deleted one at a time, because every field that can hold a record ID would otherwise be an edge in a garbage collector, and a row per run costs nothing; a proposal's records are dropped together, under "Lifetimes" in choice 1.
-
-**Cost.**
-The record store could become a second catalogue by accretion: a row per dataset discovered, metadata copied for display, paths that go stale.
-The rules that stop it are under "The record store is not a catalogue".
-
-## The four choices
-
-Each choice states the question, the options that were on the table, the option taken, why, and what it costs or forecloses.
-Rejected options are described from this project's point of view and are short; they may be unfair to the tools in general.
-
-### Choice 1: Where state lives (D2, D3, D4)
-
-**The question.**
-Batch and automatic reduction need runs that can be made without a human present, and provenance needs runs that fully describe their result.
-Interactive work needs the opposite: sub-second reruns over multi-gigabyte intermediates, as in SANS, kept in memory between reruns.
-Where does that state live, and what does a record know about it?
-
-**Options.**
-
-- *Stateful jobs.*
-  A running workflow object is the unit; clients address it by identity, and a record is whatever it reports.
-  This is esslivedata's model, and interactive work is natural in it.
-  Provenance and batch then have to be reconstructed from a job's history, and everything else must compensate for identities that vanish with the process (scipp/esslivedata#1042, ADR 0008).
-- *Stateless everywhere.*
-  Every run is a fresh process, and every input and output passes through disk.
-  Simple and remote-friendly, and an earlier version of this document said exactly this.
-  It makes interactive loops disk-bound and rebuilds the workflow on every rerun, so the feedback loop never gets below seconds.
-- *Shared memory across processes.*
-  A distributed object store, such as Dask's or Ray's, or a layer of our own, so that any process can reach any array.
-  scipp objects are not chunk-aware, so such a layer would work badly and cost a lot to build and operate.
-- *Stateless records, stateful sessions.*
-  The record is stateless and complete.
-  Execution may happen in a **session**: a process belonging to one client, which keeps the workflow object and the outputs of earlier runs in memory.
-  Memory never crosses a process; anything that must reach another process goes through disk.
-
-**Choice.**
-The last option, with two invariants that keep it safe (D2).
-Session identity never appears in a record.
-Everything a session holds can be recomputed from records, so a session is a cache, and losing one costs only time.
-The invariant is not about sessions: every value this system holds in memory, including a partial sum over a growing series, is recomputable from records, because every input to it is a dataset or an output that has one.
-Held state is therefore always an optimisation with a recompute fallback, never the only copy of a fact, which is what lets a growing series be aggregated on disk or in memory interchangeably (D15).
-It holds because reduction here consumes datasets; it would not hold for reduction of a live stream, where the inputs are pulses with no records, which is why that is esslivedata's problem and not in this project's scope.
-This is esslivedata's lesson applied the other way round: ephemeral identities are dangerous when other things depend on them, so nothing depends on this one.
-
-A session is defined by its owner, not by where it runs.
-Initially it exists only in **local mode**, where client, backend, launcher, session, and data store are one Python process: a notebook, or a local application.
-Later it may live on the backend host, or in a client process on the user's machine with the backend elsewhere; the second form is how a local application inspects data interactively while the expensive stages run on a cluster.
-In **shared mode** the backend runs as a service used by many people.
-Batch and automatic reduction run there without sessions, and the shared web UI submits and inspects.
-
-A workflow holds nothing between runs; a session does.
-Beside the outputs of its records, a session holds **stages**: parts of a workflow with everything computed that the parameters a person is changing cannot affect, so a rerun recomputes only what a changed parameter affects (choice 3).
-Tuning two workflows together, such as vanadium processing and the sample reduction that takes its result, uses a stage of each, chained through the session's memory.
-From the framework's side there is one kind of rerun: a new, complete request.
-Changing a threshold and adding one more run to a sum look the same, a full parameter set that differs from the previous one in one field, and the record of each rerun stands on its own.
-A changed threshold is a new request of the same spec; one more run is a request for its contribution and a combine request over the contributions so far (D15); the framework does not distinguish either from any other request.
-A list of references is resent whole on every rerun; it holds references, not data, so at the few thousand entries expected it stays under a megabyte.
-
-**The data store follows from the choice (D3).**
-It is one component owned by the backend: a registry and a disk tier.
-Every process that holds data, a session or the shared service, also keeps a private in-memory cache of outputs.
-The registry knows disk copies only, keyed by reference in either form: outputs written to the disk tier, and copies of datasets the store made, a catalogue file downloaded or a local file uploaded.
-A memory cache is invisible to every other process, is never registered, and nothing is ever pulled out of a session by anyone but the session's own client.
-A runner asks the store for an input and hands it an output; the store serves from the cache of that process when it can and otherwise reads or writes disk.
-The runner never knows about caches, and the launcher decides only where a run executes.
-A run executes where every input has a reachable location; when an input has none there, the client first makes one, copying a local file into the data store or fetching a catalogue file onto a machine without the mount, which are one action in opposite directions.
-
-There are two execution shapes, and a group of requests submitted together runs in one of them, never mixed:
-
-- **In the session holding its inputs.** Inputs come from that cache and outputs stay there; nothing is written.
-  A chain of dependent requests runs in one session.
-  An output leaves the session only when the client asks for it to be written out, which publication and chaining to a request placed elsewhere do on the client's behalf.
-- **In a throwaway process.** A subprocess or a cluster job, sharing one code path.
-  Outputs go to disk before the run reports completion.
-  This is every run in shared mode.
-  The shared service loads an output into its cache on first access: written once, loaded once, every further view served from memory.
-
-**Lifetimes.**
-There are three, and none is set by the framework.
-Memory lives as long as a session: a process with an operating-system limit, owned by its client; its cache of outputs has no budget of its own, and its stages are bounded in number (choice 3).
-The shared service's cache has a byte budget and evicts least recently used first, with outputs of superseded records (D14) before anything else.
-Records live as long as their proposal plus an analysis window set by the facility: long enough to find last week's result and to chain to yesterday's vanadium, and no longer, because what is worth keeping longer was published, and a published entry carries its own provenance (D11).
-A proposal's records and disk copies are dropped together, exported as one JSON bundle first; nothing is deleted one record at a time.
-This is safe because references never cross proposals except into instrument-shared artefacts, whose commissioning proposals are long-lived, so no reference can point into a dropped proposal.
-Within a proposal, disk copies have a retention policy per kind of run, an open question; when it expires the bytes are dropped and the record stays.
-A dropped copy is a missing copy, under the rule in "Records and references".
-Store copies of local files are exempt from that policy: the framework cannot bring them back, so such a copy is dropped only by an explicit operation on the copy or with its proposal, after which every record that reaches it through references is no longer recomputable.
-They count against a per-proposal quota.
-A login, a batch, or an application start is not a lifetime: what a user comes back for outlives all three, and automatic reduction has none of them.
-
-**A rule that follows: reuse across requests is a workflow boundary (D4).**
-A value that other requests reference must be an output of a run of its own, with its own record.
-Workflow authors therefore cut a workflow into separate specs exactly where such a value arises, and nowhere else.
-Two reasons produce a cut.
-Reuse: one artefact feeds many runs, such as processed vanadium, a beam centre, or a direct beam, which sample reductions, batch, and automatic reduction all take as an input.
-Iteration without a session: an expensive stage whose result is tuned from a throwaway runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
-Inside a session the second reason disappears: one unsplit spec is enough, because a stage recomputes only what changed, and the loaded data stays a value the stage holds: no record, so no reference, and it dies with the session.
-The first reason holds in a session too, because the artefact needs a record of its own before batch can reuse it.
-Splitting is the only strategy that works on a fire-and-forget remote runner, and it lets the UI tell which stage is cheap, because it is a separate workflow.
-An output that another spec takes as input is called a stage output in this document; the word names a role, not a kind.
-A third reason is aggregation: a sum over runs is cut where the members' contributions are added, so that each member has a record of its own (D15).
-
-**Why.**
-Batch, automatic reduction, and provenance are properties of the record, not of the process that executes it, so pinning "stateless" at the record level costs them nothing.
-A stage output can be huge, and writing one to disk is wasted work when its only consumer is in the same process; recompute is often cheaper than storage.
-Keeping memory caches private is what keeps the design free of a cache-coherence protocol: a registry that tracked copies in processes it does not own would need every eviction, close, and crash reported, and would block backend requests on user processes that may be busy or gone.
-The argument is about processes the backend does not own, and does not rule out an index over a pool of kept runners the backend does own, addressed by the reference they hold; that stays open as an additive option, and is discussed in [stateless.md](stateless.md).
-
-**Cost.**
-Two lifetimes for the workflow object in the runner: once per run, or once per session.
-Remote sessions need a session launcher, an idle timeout, and a cap on sessions; that is why they are deferred, and why the shared web UI initially has no interactive loop.
-Shared mode pays one disk write and one read per output and a process start per run.
-Placement is a launcher decision and must be explicit in its interface; whether a chained consumer exists is only known for requests submitted together as a group (choice 2).
-The author chooses where to cut a workflow, and the cut is not always clean: processed vanadium in diffraction is rebinned onto the sample's edges without interpolation, so a stored dense vanadium is usable only for compatible binning, and the alternative is to keep it as events.
-Both stages of a split workflow typically share parameters; see the open question on templates.
-Every rerun in a session is a complete record, so a series of N slider moves is N records; slots (choice 4) keep that from being what a person sees.
-
-### Choice 2: Own the records and the scheduling, or adopt an engine (D5, D6, D7)
-
-**The question.**
-Something must keep the records, hold a request until the outputs it references exist, propagate failure and cancellation along a chain, and notice new datasets.
-Do we build that, or take it from a workflow engine or a message broker?
-
-**Options.**
-
-- *A workflow engine* such as AiiDA, Snakemake, Nextflow, or Prefect.
-  Each bakes the dependency graph into code rather than records and keeps provenance in its own model.
-  None gives a stateless request that a notebook, a trigger loop, and a batch UI can all emit.
-- *A message broker, with Kafka for dataset events.*
-  Facilities that built their own scheduler for the remote case eventually added a broker (ISIS, SNS, Diamond, ESRF), so a cluster deployment may end here.
-  Kafka for dataset discovery would couple the backend to the streaming infrastructure and reduce data that is not yet catalogued.
-  Reliable command delivery over Kafka was a long struggle in esslivedata (scipp/esslivedata#856); it concluded that a request row in a database is the durable desired state that was missing.
-- *Our own record store and a small scheduler.*
-
-**Choice.**
-Our own record store, with the backend as its single writer (D5).
-The **record store** is SQLite on local disk, Postgres if a backend ever needs it.
-Records contain nothing sciline-specific.
-The store carries a schema version, and a stored parameter set that no longer matches its spec version must fail loudly, never be silently defaulted; schema versioning was left unresolved in esslivedata and needed hand-run migrations (scipp/esslivedata#915).
-
-**The backend is the single writer.**
-Exactly one backend process per record store, enforced by a lock that a live backend renews and a dead one loses.
-In local mode every notebook is its own backend with its own store, at a location the client chooses with a per-user default; a second notebook must use another location, and referencing records across notebooks waits for a local transport (open questions).
-The runner reaches storage for data and the backend's API for everything else, and never touches the record store; there are no database credentials on compute nodes.
-The backend resolves references to locations at dispatch: a dataset's path, asked of SciCat for a catalogue dataset or the user's own for a local file, is handed to the runner as is, anything else the runner fetches from the data store.
-
-**One scheduling primitive: pending outputs as inputs (D6).**
-A group of requests is submitted atomically and gets its IDs back; inside the group, requests refer to each other's outputs before they exist.
-The backend holds a request until every record it references has completed, fails it if any of them fails, and cancels it if any is cancelled.
-A request whose reference names a collection element that the completed producer does not have fails with a missing-key status; the producer is unaffected.
-Groups must be acyclic; a waiting request has no timeout, because every record it waits on reaches a terminal state through its own failure handling.
-An **aggregation** is one use of this: one member request per row of a table, plus one combine request with a collection parameter that references an output of each member (D15).
-The combine spec is an ordinary spec.
-Reflectometry's is a stitch that scales overlapping angle curves against each other and returns the scaled curves as a collection keyed by member; SANS's adds numerators and denominators and normalises.
-Batch members are independent: no ordering between them, and rerunning a member is a new record under the same label and member key; anything else is chaining.
-A group is validated whole before any record is created, and a batch is cancelled whole by its label, queued and running members alike.
-
-**The dataset source is abstracted (D7).**
-Its interface: for a proposal, yield new datasets as PID plus the metadata fields it declares for the instrument; those fields, an angle, a sample name, a run's role, are the only ones a lookup or a rule may match on, and they are declared here because the source is what knows what the acquisition writes into the catalogue.
-It persists nothing: a dataset enters the store only as a reference in the requests a rule submits, like any other stand-in; which datasets a rule has already decided on is a query over the records, not memory in the source or the loop, and which series a member belongs to is asked of the source when a combine is submitted.
-A SciCat implementation, polling or push as the deployment allows, a folder for the local application, and an in-memory fake.
-Arrival may be out of order and repeated; the interface does not promise a monotonic cursor.
-
-**Why.**
-No engine gives the stateless request the whole design rests on.
-Single writer avoids the multi-client ownership problems that produced most of esslivedata's hard bugs (scipp/esslivedata#1285, #714, ADR 0007), and one runner gives one code path for execution.
-Pending outputs as inputs is the smallest addition that covers a vanadium stage feeding a sample reduction submitted together, temperature scans, angle series, and automatic reduction over a series of runs.
-Two dataset-source implementations from day one keep tests off SciCat.
-
-**Cost.**
-We own dependency handling, failure propagation, and cancellation: a small scheduler.
-"No broker" is a local-mode decision to be re-examined when the cluster launcher is built.
-
-### Choice 3: The contract with workflow code (D8)
-
-**The question.**
-How does the framework call scientific code, how do inputs get in and outputs out, and what does a rerun in a session reuse?
-
-**Options.**
-
-- *The framework knows sciline.*
-  It builds the pipeline, computes the requested nodes, and caches intermediates itself.
-  That ties the framework to one engine, and caching every intermediate is not affordable with event data while the graph does not know compute cost.
-- *A file-based contract.*
-  The workflow reads input files and writes output files.
-  Simple and remote-friendly, and what an earlier version of this document had; it forces every chain through disk, which contradicts choice 1.
-- *Two protocols*, one for one-shot execution and one for incremental reruns.
-  Two execution paths to test and keep consistent.
-- *One callable from parameters to outputs*, kept between runs in a session.
-
-**Choice.**
-One callable (D8).
-Spec identity is bound to an implementation via Python entry points; in local mode a notebook may also bind a spec in-process, provided it does not claim the name and version of a spec an installed package provides.
-The record says which binding was used, so publication can tell a reproducible record from a development one, and a spec may carry a code revision, a git commit or package version, so that a record made from a development branch is honest about what ran.
-The entry point returns a callable that takes the validated parameter model, references and all, together with the run's **inputs**, and returns the outputs by field name.
-A spec is the signature of that callable and nothing else, and a record is one call of it.
-There is no request that runs part of a spec, and no spec that stands for several callables; a workflow that is run in parts is published as one spec per part (D4, D15).
-The framework never imports sciline.
-
-The callable is stateless: no call affects a later one.
-A throwaway runner makes it from its factory, calls it once, and exits.
-A session runner makes it once per spec version.
-What a session keeps between runs, it keeps itself (below); the workflow does not.
-A session holds the code it imported, so a change to workflow code takes effect in a new session, never in a running one.
-
-The inputs are how the callable gets at the bytes a reference names, in the form it asks for: a local path, or the scipp object a scipp-format reference names.
-Which form each parameter takes is the callable's choice, which a sciline adapter makes where the parameter is set on the pipeline: a raw NeXus file is asked for as a path, because loading NeXus is workflow-specific, which detector banks, which monitors, and no single loaded object exists; an opaque file, CIF or ORSO, as a path, because the framework cannot read it; a processed array as an object, or as a path when the workflow has its own loader.
-Where the bytes come from is the runner's: a session serves an object from memory when it holds a copy and from scipp HDF5 otherwise, a throwaway runner from the work directory the backend filled at dispatch.
-Neither the spec nor the callable can tell the two apart, which is what lets an in-memory chain be added to a session without touching a workflow.
-The spec says only what the bytes are, its format, so that the backend can check a reference against the field it fills and the picker can list candidates (D13).
-
-Outputs are returned as objects by field name; an output field may be absent when the workflow's mode does not produce it.
-The callable never writes files.
-The runner validates literal outputs against the output model and stores them through the backend, checks array outputs against their declared structure, and hands them to the data store, which serializes scipp objects to scipp HDF5 when they must reach disk and requires other types, such as CIF, ORSO, or NeXus products, to come with their own serializer, declared with the output.
-Chunk-wise processing of one large file, as the NMX workflow does, happens inside the callable and is invisible to the framework; that the NMX product is then held in memory before it is written is a cost accepted here.
-
-**A workflow may offer a stage, and the session holds it.**
-Beside the callable, a workflow may offer `stage(params, stage_inputs, inputs)`, where the **stage inputs** are a set of parameter field names.
-The result is a callable with the signature of the workflow.
-It accepts every request that equals `params` in all fields outside the stage inputs, and for those it returns what the workflow returns.
-It may hold whatever the stage inputs cannot affect.
-A plain function offers no stage, and the session calls it directly.
-
-The session addresses a held stage by what it holds: the spec, its stage inputs, the values of all other fields, and the checksums of the datasets among them (D1), so that a file that changed on disk does not find the stage built from its earlier bytes.
-The values are compared as plain data, so a reference compares as a reference and nothing is loaded for the comparison.
-A request is routed to a held stage of its spec whose other fields equal the request's, the one with the fewest stage inputs if several match.
-If none matches, the session builds one, and its stage inputs are the fields in which the request differs from its **predecessor**: the request it supersedes (D14), or, for a new member of a batch, the latest request under its label.
-A slider therefore names its own stage input, a batch over runs names the columns of its table, and a correction to one member names the corrected field.
-A request without a predecessor, the first under its label or one without a label, has nothing to differ from; the adapter may name default stage inputs for it, and if it names none, the session calls the workflow and holds nothing.
-The default is a first guess that saves one full computation per series, and nothing depends on it.
-A stage belongs to no label: two labels that move the same parameter on the same data are routed to one stage, and the label only finds the predecessor.
-The session holds a bounded number of stages and drops the least recently used; dropping one is always safe.
-A stage resolves the references among its fixed fields when it is built and holds the objects, which count towards the session's memory and stay valid when the session's cache drops its own copy.
-The first move of a parameter that is not yet a stage input costs one full computation, because its stage must be built.
-
-**A sciline workflow offers stages through an adapter.**
-sciline's `Stage` (scipp/sciline#245) is the part of a pipeline from named input keys to named output keys.
-It computes once everything the inputs cannot affect, holds those values at its **frontier**, and on each call computes only what lies downstream of the inputs.
-An **adapter** turns a pipeline into a workflow: it maps parameter fields to sciline keys, asks the inputs for the form of each data reference, sets the parameters, and computes the targets that the output fields name.
-For `stage` it sets all parameters outside the stage inputs on a copy of the pipeline and builds a `Stage` from the keys of the stage inputs to the targets.
-A stage input that the targets do not need, which sciline's `Stage` refuses, is held and ignored: it cannot change the result, and the session's choice of stage inputs must not decide whether a run succeeds.
-That is how every notebook already works: the parameters people move interactively, Q bins, d-spacing bins, cut axes, a beam centre, enter after the expensive load and coordinate conversion.
-Which parameters are stage inputs is not part of the spec and not the author's choice.
-Correctness does not depend on it, and its cost depends on what a person is changing, which only the session sees: a `Stage` recomputes everything downstream of all its inputs, so a stage whose inputs are the run and the Q bins loads the run again when the Q bins change.
-The adapter imports sciline and belongs with the workflow packages, in ess.reduce; the framework does not import it.
-A `Stage` is one implementation of a spec's callable, and a sciline `Aggregation` is a composition of two such callables, which is why an aggregation over runs is two specs (D15); [stages.md](stages.md) sets out the correspondence.
-The framework provides a test helper that drives a workflow through a sequence of requests, once through held stages and once directly, and asserts equal outputs; that is the check on the contract of `stage`, and every workflow that offers one runs it.
-A second helper recomputes a completed record and compares the outputs, so that a workflow package can keep records from production as regression tests.
-
-**Validation** has three layers.
-Shape: JSON Schema, in the backend, always.
-Parameters: the pydantic model, which catches cross-field rules the schema cannot express.
-A parameter the spec does not declare is refused: a pydantic model ignores unknown fields unless its author forbids them, and a reduction parameter dropped in silence gives a wrong number without an error.
-scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the top-level fields itself; requiring a closed parameter model in the spec would be the better place.
-The backend runs it too, by importing the spec module alone, which esslivedata keeps separate from the workflow factory precisely so that specs can be validated without importing workflow code; scipp/ess#690 must keep that separation, and the backend never imports a factory.
-Runnability: every reference resolves to a record the user may read and, for a collection element, to a key the producer declares; files exist where the launcher would look; the launcher's environment has the spec.
-Anything past that, such as a file that opens but lacks a monitor, is a run that fails fast, not validation.
-The runner remains authoritative for parameters (ADR 0001 in scipp/ess#690); a disagreement with the backend's check is a deployment bug, and the backend refuses a spec it cannot import unless the request opts out.
-
-**Why.**
-The callable asking for a path or an object is what lets a chain in a session stay in memory while workflow code looks the same in every mode, and what keeps the choice between the two out of the spec, where it would presume an execution location.
-An earlier form of D8 typed a data field as a union of the reference and the value the callable receives, a path or a scipp object, and had the runner materialize by a kind declared on the spec; that made the parameter model wrong in both phases, needed a validator that accepted anything not plain data, and put a materialization instruction into an interface meant to be pure.
-One callable rather than a separate incremental protocol keeps one execution path: the only difference between runners is whether the callable is kept, and a combine request (D15) is a call of its own spec's callable like any other.
-Reuse inside the adapter is correct by construction from the sciline graph for any choice of stage inputs; the choice cannot be derived, because caching every intermediate is not affordable and the graph does not know which parameters will vary, so the adapter's author makes it.
-Serialization of outputs must be pluggable because the outputs that get published are often not scipp objects.
-
-**Cost.**
-Two validation points, with the runner's being the authoritative one.
-The runner loads scipp arrays whole.
-Reuse is exact only if providers are pure; the test helper is the check, and the record's reused flag, which says that a held stage served the request, is what lets publication insist on a result computed without one (D11).
-A sum over a growing list of runs is not a case for a stage but an aggregation (D15).
-DREAM and imaging masks are Python callables today; each such workflow needs a range vocabulary and a conversion before its requests are plain data.
-
-### Choice 4: How clients reach the system (D9, D10)
-
-**The question.**
-A notebook, a local application, a shared web UI, and eventually agents all need to submit, inspect, and plot.
-What is the API, and what may a UI touch?
-
-**Options.**
-
-- *The UI reaches into backend internals.*
-  Fastest to start, and the source of esslivedata's cross-session races (scipp/esslivedata#1046, #1098, ADR 0007).
-- *A Qt desktop application.*
-  A third UI with its own testing story, and no path to shared use.
-- *An HTTP API and a TypeScript frontend from day one.*
-  API-first, but it front-loads a transport and a second language before there is a backend to serve, and needs a plotting stack other than plopp.
-- *The backend's Python interface is the API.*
-
-**Choice.**
-The Python client interface is the API (D9).
-Every UI, notebook, or service reaches the backend only through it; HTTP is a later transport for the same interface, not a second API.
-Requests, records, templates, and references are plain data even in local mode.
-The interface has a validate operation, separate from submit, that returns structured errors per field and says which of the three layers ran; submit refuses on any error, and a UI calls validate on every change so that feedback arrives before the user leaves the form.
-Clients observe change by pulling with a version counter, never by callbacks carrying data.
-No standalone local application initially: a notebook on the library is the local application.
-When one is wanted, it is the same web UI hosted in the local process against the in-process interface; the shared deployment is the same UI over the HTTP transport.
-UIs for batch and interactive work will grow more complicated than anticipated, so the workflow contract and the view interface are the two contracts that must not foreclose UI options; everything else in a UI is replaceable.
-The UI framework is chosen after the backend skeleton exists; a Python-driven web framework satisfies API-first if it only uses the client interface, and Tiled, if adopted for the data path, nudges toward a JavaScript frontend with plopp as the notebook path.
-Qt is out.
-
-**Views are not runs (D10).**
-A view is a request for a small piece of an output's data for display: label-based slicing, reduction over dimensions such as sum or mean, and downsampling to a display resolution.
-Views are part of the client interface, so there is one endpoint in every mode, and a view result is small by construction: plain arrays with coordinates, units, and masks, not a scipp object, so that any plotting stack can consume it, plopp in a notebook being one.
-A view is a pure function of a reference and a view specification, served by the process that holds a copy: a session serves views on its own outputs, the shared service serves views on disk copies it has loaded, and dedicated view workers can take that role later if one instrument's volumes outgrow one process.
-Views are not recorded and are never inputs to a run.
-When a user wants to compute further from a slice they found interactively, the slice specification becomes a parameter of the next workflow.
-Overlaying several runs in one plot is several views; anything beyond slicing, reduction, and downsampling, including the difference of two runs, is a workflow.
-Event data is never viewed, and neither is a raw file: a quick look at a run just measured goes through a per-instrument preview spec that loads the file and produces the dense outputs a quick look needs.
-Four of six workflow families end in binned events, so the array spec marks an output as binned, a workflow that ends in events also declares the histogrammed output people look at, and the UI offers to plot only dense outputs.
-In local mode a client may also turn a reference into a scipp object directly, so plopp and the full scipp API work in a notebook.
-
-**Interactive reruns live in slots (also D10).**
-Interactive tools bind to parameters of shared vocabulary types: range, rectangle, polygon.
-Each change submits a new complete request into the plot's slot.
-A **slot** is a label an interactive tool owns.
-A **label** is a field on a request, and the latest record under a label, and its member key when it has one, supersedes the earlier ones; a slider moving a threshold, a selection being dragged, or a series of runs growing by one are one label with no member key.
-The client interface supplies the label whenever a request reruns a spec in a session, so a notebook user gets a slot without asking for one; comparing two variants side by side is two labels, the second assigned when the user forks, and discarding a variant drops its label from the UI and nothing else.
-The backend offers one query, the latest record per label and member key, and treats outputs of superseded records as the first to evict; the same field and the same query serve a batch and a rule's records (D14).
-The latest record is the one no record supersedes: the backend writes on each record under a label the record that was latest when it accepted the request, and the single writer (D5) serializes two requests under one label and member key, so the order under a label holds when a rule, a retry, and a person's correction submit from hosts whose clocks disagree.
-Ordering by creation time, which the skeleton first did, would let a correction lose to a retry stamped a second earlier.
-Cancelling a slot's queued predecessors is one client call.
-Tools list, replay, and inspect by slot; inspection shows the latest record with its diff against the record it superseded, which is "one more contribution" for a series (D15) and "one value changed" for a slider.
-Slot runs execute in the submitter's session, which until remote sessions exist means local mode.
-
-**Why.**
-One API keeps the UI out of backend internals.
-Exploring a 4D volume by dragging through 2D slices must not create records, and the frontend must never receive the volume; the slice-becomes-parameter rule keeps provenance exact without making views part of it.
-The slot is the one interactive concept in the framework, and it adds nothing to the record: the label is the stable identity that a plot, a record browser, and a replay tool all need across superseded runs, the same split between a stable data key and a per-result key that esslivedata needed (scipp/esslivedata#1062).
-Without it a session's reruns are hundreds of complete, near-identical records, which is the right model for provenance and the wrong thing to show a person.
-
-**Cost.**
-A local application in one process shares the interpreter between UI and runs, so a long run blocks the UI unless the session moves to a subprocess, which needs the remote-session machinery.
-A view vocabulary in the client interface, and a chunking decision at write time for dense data so that views on data larger than a cache can read partially from disk.
-Through the client interface a user explores declared outputs only; a notebook can compute any node of a sciline workflow.
-Interactive feedback is restricted to sessions, and initially to local mode.
-Every workflow that ends in events carries a dense twin, one histogram call in the callable.
-
-## Aggregation: how contributions become a result (D15)
-
-**The question.**
-Reduction is combination: counts from many pulses, angles, banks, and runs are added up into a curve or a volume, and that sum is then normalised, stitched, or fitted.
-Techniques differ in four ways.
-What is added: a one-dimensional curve for SANS and diffraction, a four-dimensional volume for spectroscopy.
-How it is added: dense histograms by summation, binned events by concatenation.
-What is added over: runs in a series, angle groups inside one run, or chunks of one file.
-And when the non-additive step comes.
-What the workflows do, read from the source:
-
-- ess.sans merges runs at two nodes, the numerator and the denominator of I(Q), events by concatenation and the dense denominator by summation, and normalises once after the merge.
-  One function dispatches on the value: concatenate if binned, sum if dense.
-  The one-dimensional and two-dimensional outputs share the path.
-  Sample runs and background runs are merged separately and meet in the final step.
-- ess.reflectometry concatenates events for runs at the same angle, which is additive, and combines angles by a global fit of scale factors over all curves, written back per angle and followed by a variance-weighted mean.
-  That is not additive; it needs the whole set, and it is affordable because the curves are one-dimensional.
-- ess.powder has no multi-run sum yet, and normalises by proton charge and by vanadium per run, upstream of where a sum would go.
-- ess.bifrost combines angles inside one run: events are grouped by rotation and concatenated into the volume.
-  A series across runs is unwritten.
-
-Every additive case has one shape: a per-member stage produces an intermediate at one or more **accumulation keys**, the intermediates are added, and a finalize stage turns the sum into the outputs.
-Normalisation sits in the finalize stage, which is why the intermediate usually has two parts, a numerator and a denominator.
-Dimensionality and event mode do not change the shape: a four-dimensional volume adds like a curve, and concatenation is addition for binned data.
-sciline's `Aggregation` (scipp/sciline#245) is this shape as an object with three parts.
-The contribute stage computes the values at the accumulation keys from the **member parameters**, the parameters that differ from member to member.
-sciline calls these member keys; this document does not, because a member key here is the label of a batch member (D14).
-One accumulator per accumulation key adds the values of the members.
-The finalize stage computes the outputs from the accumulation keys.
-A member's **contribution** is its values at the accumulation keys.
-The aggregation holds nothing between calls, so whoever loops over the members holds their contributions.
-
-The question is how that shape meets specs and records.
-A sum over runs must be more than one record: each member needs a record so that members run in parallel, a series can grow by one member without reducing the others again, and a member can be removed.
-
-**Options.**
-
-- *Framework-owned.*
-  The framework sums scipp arrays itself.
-  It then imports scipp semantics it has otherwise avoided, decides between summation and concatenation, and still cannot place normalisation.
-- *One spec, three entry points.*
-  A spec marks one output as its contribution and lists the parameters finalize reads, the binding supplies contribute, combine, and finalize, and a request says which of them it runs.
-  This was the sketch's answer until its fourteenth pass.
-  One spec then stands for three callables with three signatures, two of them derived.
-  Validation, forms, templates, the runner, and rules each branch on the kind of request.
-  A combine request carries its contributions beside its parameters, against D13.
-  Every output but the contribution must be optional, because a member run does not produce it.
-  A workflow with two member tables, which ess.sans has, cannot be declared.
-- *A spec for the pipeline and a second declaration for the operation on top.*
-  A stored object beside the spec mirrors the constructor of `Aggregation`: member parameters, accumulation outputs, final outputs.
-  The declaration of which parameters finalize reads does not go away, because field names cannot give a property of the graph.
-  Every component that reads a record's identity gets a three-part address: workflow, operation, entry point.
-  ADR 0001 of scipp/ess#690 already decided the opposite: a slice of a pipeline with its own parameter set is a workflow with its own spec.
-- *One spec per stage.*
-  The cut of D4, with an accumulator at the boundary.
-
-**Choice.**
-One spec per stage.
-A spec stays the signature of one callable and a record one call of it (D8).
-An `Aggregation` is not a callable but a composition of two, so it has no spec; it appears either inside one callable or across records, and never half in each.
-
-*Inside one callable*, the callable runs `Aggregation.compute` itself and the framework sees an ordinary spec.
-This is for members the framework has no records for: angle groups in a Bifrost run, chunks of an NMX file.
-
-*Across records*, a workflow package publishes two specs cut from one pipeline:
-
-- The **contribute spec** takes the parameters the contribute stage reads and has one output, the **contribution**: a scipp data group with one entry per accumulation key.
-  It is one output so that one reference names a member's whole contribution.
-  What it holds, a numerator and a denominator, monitor spectra, proton charge, is the author's.
-- The **combine spec** takes a collection parameter of references to contributions and the parameters only the finalize stage reads.
-  Its outputs are the combined contribution and the results.
-  Its callable pushes the referenced contributions into fresh accumulators and calls the finalize stage on their values.
-
-Both are plain specs.
-A contribute request and a combine request are validated, shown in a form, saved as templates, recorded, and recomputed like any other request, and the combine request waits for its members by D6 alone.
-The framework's **aggregation** is the group of requests: one member request per row of the **member table**, and one combine request that references their contributions.
-The package may also publish the pipeline's own spec for a single run, whose parameter model is the union of the two.
-Whether the intermediate is events or a histogram is the author's choice at the accumulation key: events keep the binning a parameter of the combine spec and cost memory and disk; a histogram fixes the bins in the contribute spec and is small.
-The framework does not see the difference.
-scipp/ess#690 needs no field for any of this.
-
-**The one declaration: `chain`.**
-The combine spec may declare `chain`, a mapping from a collection parameter to one of its own outputs.
-It says that this output of one run may be passed as an element of this parameter of a later run, and that it then stands for all the elements it was combined from; the author may declare it only if the combination does not depend on how the elements are grouped or ordered.
-The spec validates on its own that the parameter is a collection of references, that the output exists, and that their formats match.
-It has one kind of reader, which cannot import workflow code: whatever builds the combine request of a series, `apply` and the trigger loop (below).
-It is additive: a component that ignores it still validates, runs, records, and recomputes the spec correctly, and only loses an optimisation.
-
-A combine that is not additive is the same shape without the declaration.
-Reflectometry's stitch and a tomographic reconstruction are combine specs over a collection of member outputs, recomputed over all members on every arrival.
-A workflow with two member tables, sample runs and background runs, has two contribute specs and one combine spec that chains two parameters, each with its own output.
-
-**The adapter serves the two specs from one pipeline.**
-The adapter of D8 takes the accumulation keys, an accumulator per key, and the member parameters, builds sciline's `Aggregation`, and returns one callable per spec.
-The accumulator is sciline's `Buffered` over the package's combine function, or a running total where a sum over large dense arrays should hold one array rather than one per member.
-When it is built, the adapter checks the specs against the graph: the parameters of the contribute spec are those the contribute stage reads, the literal parameters of the combine spec are those only the finalize stage reads, and an accumulation key that does not depend on the members is an error.
-A wrong spec is then an error when the adapter is built, not a wrong result.
-
-Members of one sum must share every contribute parameter that is not a member parameter: the same masks, the same direct beam, the same wavelength bins.
-Only the adapter knows which parameters are member parameters.
-It therefore writes the values of all other contribute parameters into the contribution, as one reserved entry beside the accumulation keys, and the combine callable refuses contributions that disagree.
-The combined contribution carries the same values, so the check holds along a chain.
-The refusal happens when the combine runs, after loading the contributions and before computing anything.
-A parameter that both stages read, such as the uncertainty broadcast mode in ess.sans, reaches the finalize stage the same way: it is a field of the contribute spec only, and the combine spec cannot set it differently from the members.
-
-In a session an aggregation needs nothing of its own (D8).
-Contribute requests that differ only in the run are routed to a stage whose stage input is the run, so what the members share, a reduced reference or a direct beam, is computed once.
-A combine request that changes only a finalize parameter is routed to a stage of the combine spec with the contributions fixed; the adapter combines them once and builds a `Stage` from the finalize parameter.
-A run reduced through the single-run spec leaves no contribution, so a person who expects to add runs reduces the first one as a series of one.
-
-**Which contributions a combine request references decides its cost.**
-The **current members** of a series are a query: the latest record per member key under the label, leaving out failed, cancelled, and excluded ones.
-A combine over the contributions of all current members is always correct.
-For a parameter the spec declares in `chain`, `apply` may instead **chain**: the combine request references the previous combine's contribution, and the contribution of every current member that the previous combine does not cover.
-That is one read and one write of the partial per arrival, in a throwaway process.
-A chained element is recognised without a rule: it is an output of a run of the combine spec itself, through the output that `chain` names.
-A combine covers the member records it references, directly or through the combines it chains onto; `apply` finds them by following the chained parameter back.
-Chaining is valid only if the previous combine completed and every record it covers is still a current member.
-Finding what it covers reads one record per combine of the chain, metadata only.
-The comparison is between records, not member keys: a member that was corrected has a new record, so the previous combine covers a record that is no longer current.
-When the check fails, because a member was corrected, excluded, or reprocessed under a new rule version, `apply` submits a combine over all current members, from their stored contributions.
-If their disk copies were evicted, the contribute requests run again.
-Removing a member is therefore never a subtraction.
-The first combine of a series has no previous combine and references its one member.
-Two arrivals close together cannot lose a member: the later combine references every current member the previous combine does not cover, not only the one that just arrived.
-A chained combine is complete in D1's sense, because its references resolve to records that name the files, and a recompute walks the chain back to the members.
-A superseded combine's partial is needed only by the combine that superseded it, which has already run, so evicting it first (D10) costs nothing until a recompute walks the chain.
-Chaining through disk is enough for phases 1 and 2: even a four-dimensional partial of a few gigabytes is read and written once per arrival, and arrivals are minutes apart.
-
-In a session the same requests serve the growing list of user story B2.
-The session holds every contribution in memory as it holds any output, and each addition is a contribute request and a chained combine request in the slot.
-The chained combine gets the previous combined contribution and the new member as objects and combines two values, which is what a push into a held accumulator would compute, so the session holds no accumulators.
-
-The **fold** is an addition to chaining for a series that arrives faster than its partial can be read and written: a long-lived runner holds the latest combined contribution of one series, chains in memory, and writes a combine record every n arrivals or when the series goes quiet.
-Between records what it holds is recomputable from the last record and the members since, so D2's invariant holds; this is the kept runner addressed by what it holds, discussed in [stateless.md](stateless.md).
-A fold's records carry the reused flag, so publication recomputes them cold along the chain (D11); a rule that publishes its combine therefore chains.
-
-**Why.**
-Every component of the framework still treats a spec as the signature of one callable, so the aggregation adds no kind of request, no second protocol, and nothing to scipp/ess#690.
-The framework's composition mirrors sciline's: sciline composes stages and accumulators in one process with values in memory, and the framework composes specs across processes with values as outputs of records.
-One structure serves adding a run in a notebook, a rule's growing series, a batch summed at once, a parallel reduction of five hundred runs, and whatever phase 3 holds in memory; they differ in where the contributions come from and how often the partial is written as a record.
-The additive and the non-additive combine are one shape, so a rule has one combine clause (D14).
-The framework stays ignorant of scipp: it never sums, never chooses between summation and concatenation, and never places normalisation.
-Held state stays a cache: the invariant of D2, that every value in memory is recomputable from records, is what lets the fold be an addition rather than a design.
-
-**Cost.**
-Up to three specs per pipeline, versioned together by convention of the adapter, and a rule with a series holds two templates.
-A UI that lists workflows shows the two building blocks beside the whole reduction.
-Authors must place normalisation after the accumulation key; ess.sans does, ess.powder does not yet.
-Contributions are stage outputs on disk in shared mode, often large, and a chained series of k arrivals writes k partials; the superseded ones are evicted first (D10).
-Changing a finalize parameter on a combined result, outside a session, is a combine request over the one previous contribution and writes that contribution again; an author who minds publishes a finalize-only spec as a further cut (D4).
-The check that members share their parameters runs in the combine, not at validation.
-A value at an accumulation key must be storable in a scipp data group.
-The framework cannot check that a combination is independent of grouping and order; a test helper runs the contribute and the combine callable over a list of members in two groupings and one permutation, pushes a combined value in again, and compares the results, and every combine spec that declares `chain` runs it.
-The fold needs a long-lived runner addressed by its series, which phases 1 and 2 do not have; it is not needed before a series arrives faster than a partial can be read and written.
-
-## Rules: how requests are made from data (D14)
-
-Batch and automatic reduction make requests without a person filling a form.
-They are one mechanism seen twice: a rule is to a batch what a template is to a request.
-This section says what is stored, what is a query, and what is deliberately not stored.
-
-A **template** is a stored, immutable, versioned partial run request, from a version-controlled file such as instrument defaults, or from a user saving a request.
-Saving a request makes a template with its data-reference fields blank and every other field literal; the user may blank more.
-A template moves to a new spec version by copy, and a batch rerun under the copy is a new batch whose records link to the old ones.
-
-A **lookup** is stored, versioned data beside a template: an ordered list of entries, each matching dataset metadata by a value within a tolerance, a pattern, or a run-number range that may be open-ended, and supplying template fills, with at most one wildcard entry for what nothing else matches.
-It matches on the fields the dataset source declares for the instrument (D7), and a dataset matching more than one entry is a validation error, not a choice.
-A fill is a literal or an **as-of**: criteria on dataset metadata, resolved when the rule is applied to the nearest earlier dataset that matches them, such as the last can, dark frame, or empty-beam run measured before this sample.
-The record holds the dataset reference it resolved to, and a member with no such dataset before it is refused, visibly, in the trigger status.
-It is resolved against the member, not against the clock, so the backlog and a reprocess give a sample the same can the live loop gave it; a reference to whatever is newest at submission would give every backlogged sample the latest can, which is wrong.
-FIA does this by walking back through the journal by title, and every ISIS interface pairs a scatter with its transmission the same way.
-Every ISIS batch interface converged on this table under a different name, and [mantid.md](mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
-
-A **rule** is stored, versioned data that makes requests from datasets.
-It holds a selector, metadata criteria that pick the datasets it applies to, with a lower bound on the run number or the dataset's creation time, set at creation to the newest dataset the source knows; the template and lookup version it fills; a retry policy, the declared failure reasons on which a failed record is resubmitted as a retry record, up to a limit; and exclusions, datasets it must not fire on, each with a reason.
-Optionally it holds a series key, a metadata field whose value keys selected datasets into a **series**, and a combine clause: the template of a combine spec, the member output that is the contribution, and the collection parameter of the combine spec that takes it (D15).
-The clause has one form whether the combine is additive or not; whether a series is chained is read off the combine spec.
-Exclusions and whether the rule is active are mutable state on the rule, not a version, because they change over a beamtime; everything else changes by copy, and records say which version made them.
-A paused rule fires on nothing; when it is resumed, datasets that arrived meanwhile are fired on like any other, because the rule's promise is that every matching dataset after its bound is reduced, and a user who wants a gap left alone excludes it or moves the bound.
-The trigger loop runs rules, and nothing else does.
-
-**A batch is the records under one label.**
-A request may carry a **label** and a **member key**, and the latest record under a label and member key supersedes the earlier ones: one field on the request, one query in the record store, and the outputs of superseded records are the first to evict.
-A person submitting a temperature scan picks the label and keys the members by temperature or run number; a rule's records carry the rule's name as their label, stable across the rule's versions, and the dataset as their member key; an interactive tool's slot (D10) is a label with no member key.
-A **batch** is the records under one label, and nothing else.
-It is not stored, because the set of members is nothing but those records: the table of what was reduced with which values is the query, latest per member key under the label, with each record's rule version, lookup entry, and typed values as columns and the rule's exclusions as rows without a record, and the ISIS batch file is a rendering of that table.
-Cancelling a batch is cancelling the queued and running records under its label; the batch semantics are under D6.
-A rule's label is reserved: the backend refuses a request under it that the rule did not fill, so that a batch a person happens to name after a rule cannot land in its table.
-A run the selector missed is added by applying the rule to it by hand, and it appears in the same table; a member a person corrects is applied again with typed values, a new record under the same label and member key that supersedes the rule's.
-
-**One operation makes both: apply.**
-Apply takes a rule, or a template with its lookup, a set of datasets, and per-member typed values; it fills the template through the lookup for each dataset and returns a group to preview through validate and submit whole (D6).
-A person at a batch form calls it with datasets they typed.
-The trigger loop calls it with one dataset at a time, as datasets arrive.
-Three deliberate operations call it with a query: the **backlog**, the datasets before a new rule's bound that its selector matches, offered when the rule is created; the **reprocess**, the datasets whose latest record under the rule's label came from an older rule version, offered when the rule moves to a new template or lookup version; and the **rerun**, the members under a label that have no completed record.
-Each shows through validate what would change for every member before anything is created, and nothing reruns on its own.
-The reprocess is a rebase of the typed values onto the new template and lookup, and it flags the members where a typed value shadows a field whose fill changed between the versions, because the ladder would otherwise keep a Q range a user typed for one member over the Q range the instrument scientist corrected for its angle, silently; the person decides whether the typed value stands.
-The backend never skips a request because an equal one completed earlier; a run that silently did not happen is a decision the user cannot see, and [snakemake.md](snakemake.md) records what that cost elsewhere.
-
-**The trigger loop keeps no memory.**
-It fires a rule on a candidate, a new dataset or a completed record, when the selector matches, the candidate lies after the rule's bound, no record exists under the rule's label with the candidate as member key, the candidate is not excluded, and its SciCat entry does not carry our snapshot (D11).
-Every clause is a query, so the loop has no state to lose at a restart: what arrived while the backend was down is fired on when it comes back, and the trigger status, the reason any dataset of the proposal fired or did not, is the same query answered for one dataset.
-A retry is the same query once more: a failed record under the label whose reason the retry policy names is resubmitted while the records under that member key number fewer than the limit.
-
-**Two kinds of batching.**
-Batching for convenience is many independent requests from one template with per-member differences, made by a person or by a rule without a series key.
-Batching for merging is an aggregation (D15): member requests, and a combine request whose collection parameter references their contributions; the set is on the combine record, so the manual case needs nothing new.
-Under a rule the set is derived: the selector and series key place each dataset in a series, and each arrival submits the member's request and a combine request, chained to the previous combine when the combine spec declares `chain` and every record the previous combine covers is still current, and over all current members otherwise (D15).
-Successive combines of one series supersede each other under the rule's label, the series value being their member key, so the UI shows one curve per sample that grows; a series of k runs costs k-1 combines, and the superseded ones are the first evicted.
-The rule never waits for a series to be complete, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
-A series of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.
-The rule says whether its combine is published (D11); by default it is not.
-Series membership is not stored: the members are the records under the rule's label, and which series each belongs to is asked of the source when a combine is submitted, so a metadata correction at the instrument moves a run between series, the next combine reflects it, and earlier records are untouched because they hold resolved references; an exclusion added after a member's record exists drops it from the next combine the same way.
-
-**Precedence is one ladder.**
-Template, then lookup entry, then the values the submitter typed, and a blank at any rung falls through to the next.
-The record stores the resolved result, and its submission names the entry that applied and the typed values, kept apart, so that a reprocess under a new template or lookup version carries what was typed and recomputes what was filled.
-
-**In pandas terms.**
-The batch table is a frame, and the pieces above are how it is built:
-
-| Here | In pandas terms |
+# Architecture of the ESS data-reduction framework
+
+This document explains the design in about thirty minutes.
+[README.md](README.md) is the five-minute version, and [scoping.md](scoping.md) states the goals.
+Each section here ends with a pointer to a topic document, which holds the details, the rejected alternatives, and the costs.
+A walking skeleton under `packages/essapps` implements the design in a single process.
+Code examples in this document use the skeleton's API, and the [components table](#components) names the module for each part.
+Terms are defined in the [glossary](glossary.md).
+
+## The picture
+
+```mermaid
+flowchart LR
+    client["Client<br/>notebook, UI, trigger loop"] -- request --> backend[Backend]
+    source["Dataset source<br/>SciCat, folder"] -.-> client
+    backend -- record --> records[(Record store)]
+    backend --> launcher[Launcher]
+    launcher --> session["Session<br/>runner + memory"]
+    launcher --> throwaway["Throwaway runner<br/>subprocess, cluster job"]
+    session --> workflow[Workflow code]
+    throwaway --> workflow
+    throwaway --> data[(Data store)]
+    data -.-> publisher[Publisher] -.-> scicat[(SciCat)]
+```
+
+A client submits a **run request**: which workflow, which parameter values, which input data.
+The **backend** validates the request, writes it down as a **run record**, and asks a **launcher** to start a **runner**.
+The runner calls the scientific workflow code and stores the outputs.
+An output of one record can be an input of the next request.
+Interactive work happens in a **session**, a process that keeps data in memory between runs.
+Batch and automatic reduction make many requests from one stored **template**.
+Publishing a result to SciCat is a separate, deliberate step.
+
+## Requests, records, references
+
+Two runs from a notebook, the second taking an output of the first:
+
+```python
+run = dataset_ref(instrument='dream', run=1)            # a dataset, named by identity
+loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
+hist = client.run(HISTOGRAM, {'data': loaded.ref('data'), 'bins': 8})
+```
+
+The record of the second run, abridged:
+
+```json
+{
+  "id": "3f9a1c0b77e2",
+  "request": {
+    "spec": {"name": "histogram", "version": 1},
+    "params": {"data": {"record": "b41c22d90a61", "output": "data"}, "bins": 8},
+    "instrument": "dream", "proposal": "p1", "submitter": "me"
+  },
+  "status": "completed",
+  "resolved_params": {"data": {"record": "b41c22d90a61", "output": "data"}, "threshold": 0.0, "bins": 8},
+  "package_versions": {"scipp": "26.8.0", "essdiffraction": "26.9.0"},
+  "environment": "dream-2026-09",
+  "stored_outputs": [{"record": "3f9a1c0b77e2", "output": "histogram"}]
+}
+```
+
+A **run request** is everything needed to execute a workflow once.
+It is plain JSON-serializable data, even when it never leaves a process.
+It never names a session, a process, or a storage location.
+
+A **run record** is the request plus what happened to it: status, timestamps, outputs, the parameter values after defaults were applied, package versions, and the environment.
+The last three make "recompute this record" meaningful after a default changes or a package is upgraded.
+A record is immutable once the run completes.
+
+A **reference** is the only way a request names data. It has two forms:
+
+| Form | Names | Example |
+|---|---|---|
+| Output reference | output X of record Y, optionally one element of a collection output | `{"record": "b41c…", "output": "data"}` |
+| Dataset reference | data the framework did not compute: a SciCat dataset or a local file | `{"dataset": "pid:20.500.12269/abc"}`, `{"dataset": "run:dream/1"}` |
+
+A reference names data by identity, never by where the bytes are.
+Where a dataset's bytes are is asked of SciCat, or of the user's folder, when the run is dispatched.
+Records keep references in reference form.
+**Provenance** is therefore the graph obtained by following references from a result back to datasets, parameters, and software versions.
+No separate provenance model exists.
+
+Three rules complete the model:
+
+- **Stand-ins resolve at submission.**
+  A user may type a run number, a PID, or a path.
+  The backend turns it into a reference before it writes the record, because provenance must not depend on a search that could give a different answer later.
+- **A missing copy is reported, never silently recomputed.**
+  Whether an output is usable is two questions: the record's status, and whether the data store holds a copy.
+  Getting a dropped output back is an explicit `recompute`, which makes a new record linked to the old one.
+- **Records are not deleted one at a time.**
+  A proposal's records and stored outputs are dropped together after an analysis window.
+  Stored bytes may be dropped earlier; the record stays.
+
+Details: [records.md](records.md).
+
+## Workflow code behind a spec
+
+A **spec** declares a workflow's interface: name, version, a parameter model, an output model.
+It is defined in scipp/ess#690, with the extensions listed in [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
+The workflow itself is one stateless callable:
+
+```python
+class HistogramParams(BaseModel):
+    data: Array(ArraySpec(dims=('x',), unit='counts'))   # holds a reference
+    threshold: float = 0.0
+    bins: int = Field(default=4, ge=1)
+
+class HistogramOutputs(BaseModel):
+    histogram: Array(ArraySpec(dims=('x',), unit='counts'))
+
+HISTOGRAM = WorkflowSpec(name='histogram', version=1,
+                         params=HistogramParams, outputs=HistogramOutputs)
+
+def histogram(params: HistogramParams, inputs: Inputs) -> dict[str, Any]:
+    data = inputs.array(params.data)       # or inputs.path(ref) for a NeXus file
+    kept = drop_below(data, params.threshold)
+    return {'histogram': kept.hist(x=params.bins)}
+```
+
+- **A spec is the signature of one callable, and a record is one call of it.**
+  No request runs part of a spec, and no spec stands for several callables.
+  A workflow that is run in parts is published as one spec per part.
+- **Inputs are parameters.**
+  A parameter that holds a reference is what this document calls an input.
+  Outputs are declared in the same type vocabulary, so checking that an output may feed a parameter is a type check between two fields.
+- **The callable asks for the form it wants**, a local path or a scipp object.
+  Where the bytes come from is the runner's business: a session's memory, the data store, or a work directory.
+  The callable cannot tell, so the same workflow code runs in a notebook session and in a cluster job.
+- **The callable never writes files.**
+  It returns objects by field name, and the runner validates and stores them.
+- **The framework never imports sciline.**
+  An adapter, which belongs in ess.reduce, turns a sciline pipeline into such a callable:
+
+```python
+PipelineAdapter(
+    sciline.Pipeline([filter_data, histogram]),
+    keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},   # field -> sciline key
+    resolve={'data': 'array'},                                      # form of each reference
+    targets={'histogram': Histogram},                               # output field -> key
+)
+```
+
+Installed packages provide specs and workflow factories through two entry-point groups.
+The backend loads specs only, so it validates requests without importing workflow code.
+Validation has three layers: JSON Schema, the pydantic parameter model, and runnability (references resolve, the submitter may read them, a launcher has the spec).
+
+Details: [workflow-contract.md](workflow-contract.md).
+
+## Where a run executes
+
+Batch reduction, automatic reduction, and provenance need runs that describe their result completely and need no human present.
+Interactive work needs the opposite: reruns in under a second over intermediates of several gigabytes, as in SANS.
+The design pins "stateless" on the record and allows state in the process that executes it.
+
+A run executes in one of two shapes:
+
+| | In a session | In a throwaway process |
+|---|---|---|
+| Process | lives as long as its client wants | one run, then exit; subprocess or cluster job |
+| Inputs | from the session's memory when it holds them | fetched from disk |
+| Outputs | stay in memory; written only when asked | written to disk before completion is reported |
+| Used for | interactive work | batch, automatic reduction, everything in shared mode |
+
+A **session** belongs to one client and holds the outputs of its runs and the stages of its workflows (next section).
+Two invariants keep it safe:
+
+1. Session identity never appears in a record.
+2. Everything a session holds can be recomputed from records.
+
+A session is therefore a cache.
+Losing one costs time and nothing else.
+The second invariant holds for every value the system keeps in memory, which is what later lets a growing sum over runs be kept on disk or in memory interchangeably.
+It holds because reduction here consumes datasets.
+It would not hold for a live stream, which is esslivedata's problem and out of scope.
+
+The **data store** is a registry of disk copies plus a disk tier, addressed by reference.
+Each process also has a private memory cache.
+The registry never learns about memory caches, so no cache-coherence protocol exists, and the backend never waits on a user's process.
+
+The framework runs in two modes.
+In **local mode**, client, backend, launcher, session, and data store are one Python process: a notebook.
+In **shared mode**, the backend is a service for one instrument, every run is a throwaway process, and sessions come later.
+The skeleton implements local mode, with a subprocess launcher as the throwaway shape.
+
+Details: [records.md](records.md#where-runs-execute-and-where-data-lives).
+
+## Interactive work
+
+A person tuning a reduction moves one parameter at a time, and expects a plot to follow.
+Each move is a new, complete request with its own record.
+Three mechanisms make that fast and presentable.
+
+**Stages make reruns cheap.**
+A workflow may offer `stage(params, stage_inputs, inputs)`: a callable with the workflow's signature that accepts requests differing from `params` only in the fields named by `stage_inputs`.
+It may hold everything those fields cannot affect, such as the loaded and coordinate-converted data.
+The sciline adapter implements this with `sciline.Stage` (scipp/sciline#245).
+The session holds the stages, not the workflow, and the session chooses the stage inputs: they are the fields in which a request differs from the previous request under its label.
+A slider therefore names its own stage input, without any declaration by the workflow author.
+
+```python
+first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
+second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')   # differs in 'bins'
+third = client.run(HISTOGRAM, {'data': data, 'bins': 16}, label='hist')   # served by the held stage
+assert third.reused and client.latest('hist').id == third.id
+```
+
+**Labels keep hundreds of reruns from being what a person sees.**
+A request may carry a **label**.
+The latest record under a label supersedes the earlier ones, and each record links to the one it superseded.
+An interactive tool owns a label, called its **slot**; comparing two variants side by side is two labels.
+The same field serves batches and rules below.
+
+**Views serve plots.**
+A **view** is a small piece of an output for display: slicing, reduction over dimensions, downsampling.
+It returns plain arrays, is served by the process that holds a copy, is not recorded, and is never an input of a run.
+Dragging through slices of a 4D volume creates no records and never sends the volume to the frontend.
+When a user wants to compute from a slice they found, the slice specification becomes a parameter of the next request.
+
+Details: [stages.md](stages.md).
+
+## Chaining
+
+Requests submitted together may reference each other's outputs before those exist:
+
+```python
+group = client.submit_group({
+    'a': client.request(LOAD, {'run': run_a}),
+    'b': client.request(LOAD, {'run': run_b}),
+    'sum': client.request(SUM, {'runs': [OutputRef(record='@a', output='data'),
+                                         OutputRef(record='@b', output='data')]}),
+})
+```
+
+The backend validates the group whole, creates all records, and holds each request until every record it references has completed.
+A request fails if a record it references fails, and is cancelled if one is cancelled.
+This **pending output as input** is the only scheduling primitive.
+Vanadium feeding a sample reduction, a temperature scan, an angle series, and a sum over runs all use it.
+
+One rule for workflow authors follows: **a value that other requests reference must be an output of a record of its own.**
+Authors therefore cut a workflow into separate specs where such a value arises, and nowhere else.
+Processed vanadium, a beam centre, and a direct beam are such values.
+Inside a session no further cuts are needed for speed, because a stage already avoids the recomputation.
+
+Details: [records.md](records.md#scheduling-pending-outputs-as-inputs).
+
+## Aggregation over runs
+
+Many reductions add up counts from several runs and normalise afterwards.
+Each run needs a record of its own, so that runs reduce in parallel, a series can grow by one run, and a run can be removed.
+A sum over runs is therefore two plain specs cut from one pipeline, at the keys where the per-run values are added:
+
+```python
+CONTRIBUTE = WorkflowSpec(name='normalize-contribute',
+                          params=ContributeParams,     # run, floor
+                          outputs=ContributeOutputs)   # contribution
+COMBINE = WorkflowSpec(name='normalize-combine',
+                       params=CombineParams,           # contributions: list of references, scale
+                       outputs=CombineOutputs,         # contribution, normalized
+                       chain={'contributions': 'contribution'})
+```
+
+The **contribute spec** reduces one run to its **contribution**, for example a numerator and a denominator.
+The **combine spec** takes a list of references to contributions, adds them, and normalises the sum.
+Both are ordinary specs with ordinary validation, records, templates, and recompute.
+The combine request waits for its members as pending outputs, like any other request.
+The framework never adds arrays and knows nothing about scipp.
+
+`chain` is the one declaration an aggregation needs.
+It says that the combined contribution of one run may be passed back as an element of `contributions` in a later run, where it stands for everything it was combined from.
+A series of k runs then reads two contributions per arrival instead of k.
+A combine that is not additive, such as reflectometry's stitch over angles, is the same shape without the declaration, and is recomputed over all members on each arrival.
+
+Details: [aggregation.md](aggregation.md).
+
+## Batch and automatic reduction
+
+Both make requests without a person filling a form, and they are one mechanism.
+Three kinds of stored, versioned data drive it:
+
+| Stored data | What it is |
 |---|---|
-| Batch table | A frame: one row per member, the member key as index, parameters as columns |
-| Template | Column defaults, one row broadcast over the frame |
-| Lookup | An as-of or interval join with tolerance against the dataset metadata, the wildcard as fallback; two matches are an error, not the nearest |
-| As-of fill | `merge_asof` of each member against the datasets matching the criteria, direction backward |
-| Precedence ladder | `typed.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
-| Typed values beside resolved values | Keeping the source frames next to the result frame, instead of writing the result back into the cells |
-| Selector | A boolean mask over the dataset metadata frame |
-| Series key | `groupby(series_key)` |
-| Chained combine | A cumulative reduction within the group; the superseded partials are its intermediate values |
-| Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
+| **Template** | a partial request: every field filled except, typically, the data references |
+| **Lookup** | a table beside a template: entries match dataset metadata and supply fills, e.g. a Q range per angle |
+| **Rule** | a template, a lookup, and a selector that picks datasets; optionally a series key and a combine clause |
 
-The picture is exact for the view and wrong for the store: a frame is a stored, mutable table, and Mantid's runs table was one, which is where staleness by reset and the write-back into cells came from; here the records are the append-only log and the frame is a query over them.
-In a notebook the client interface speaks the picture anyway: the batch table comes back as a DataFrame, and apply accepts one, member key as index and typed values as columns; the ISIS batch CSV is that frame on disk.
-That frame is also the member table of D15, each row labelled by its member key, so an aggregation and a batch of independent runs are one table used two ways: apply with a combine clause adds the combine request to the group.
-pandas stays at the client.
-Which parameters vary across the members, and so make up the table's columns, follows from the request at hand rather than from a declaration on the spec: what the form filled per member, or the data references of a session's growing list.
-Two words clash and should be read with care: a series here is a groupby group, not a pandas Series, and apply here is a merge and fill, not `DataFrame.apply`.
+```python
+rule = Rule(
+    name='subtract',
+    template=Template(name='subtract-defaults', spec=SUBTRACT.id,
+                      blanks=('sample', 'can'), dataset_field='sample'),
+    lookup=Lookup(name='cans', entries=(
+        LookupEntry(name='can', fills={'can': AsOf(match={'role': Like(pattern='can')})}),
+    )),
+    selector=Selector(match={'role': Like(pattern='sample')}),
+)
+group = apply(client, rule, datasets)      # preview through validate, then submit whole
+```
 
-**Why.**
-The template, the lookup, and the rule are what a person edits and what a UI shows; the records are what happened.
-Keeping the two apart is the lesson of ISIS's autoreduction, where the rule and the record were one row and correcting the rule rewrote history, and of the third review pass here, which removed every second copy of the records.
-Treating batch and automatic reduction as one mechanism is the lesson of Mantid's reflectometry interface, where a batch tab is exactly this rule, settings, lookup table, autoprocessing search, exclusions, and one runs table, and autoprocessing is the mode of the batch that appends rows; the skeleton's trigger loop had tagged its records as a batch before the text said so.
-One label field serves a batch, a rule, and a slot, so one query lists, supersedes, cancels, and evicts for all three, and the status page of automatic reduction is the batch table of the form.
-One rule shape covers both kinds of batching in their automatic form, and the only state it keeps beyond its definition is the exclusions and whether it is active.
+- **`apply` is the one operation that makes requests.**
+  It fills the template for each dataset and returns a group to preview and submit.
+  Values come from one ladder: template, then lookup entry, then what the submitter typed.
+  A person at a batch form calls it with a list of datasets, and the trigger loop calls it with each new dataset.
+  Backlog, reprocess, and rerun call it with a query.
+- **A batch is the records under one label**, each with a **member key**.
+  Nothing else is stored.
+  The batch table is a query: the latest record per member key.
+  A rule's records carry the rule's name as label and the dataset as member key, so the status page of automatic reduction is the same table.
+- **The trigger loop keeps no memory.**
+  It fires a rule on a dataset when the selector matches and no record exists under the rule's label for that dataset.
+  Every condition is a query over records, so a restart neither loses nor repeats work.
+- **A rule with a series key never waits for a series to be complete**, because nobody at the instrument can say when it is.
+  Each arrival submits the member's request and a new combine request.
 
-**Cost.**
-Reprocessing after a template change is a client operation over a query, not a stored diff.
-A rule's bound is one more thing to get right at creation; the default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
-An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused until a person fills them by hand; the trigger status says so.
-The acquisition must write the fields a lookup or a selector matches on into the catalogue; that is a requirement on the instrument, to be stated to the instrument teams early.
-A series a person defines by hand, "these runs, and keep combining as more arrive", has no place here; it would be a rule with typed members instead of a selector, and is left out until someone asks for it.
+A rule is to a batch what a template is to a request.
 
-## Ownership, publication, and deployment
+Details: [rules.md](rules.md).
 
-**The record store is not a catalogue (also D11).**
-Our store answers what was computed; SciCat answers what was measured and what was finalized.
-A record holds nothing from SciCat that it did not need to make a decision, so a UI that wants a sample name or the list of a proposal's runs asks SciCat, and a batch member key such as a temperature is supplied by the submitter, not looked up.
-SciCat is needed at two moments, resolving a stand-in and publishing; a resolved reference never needs it again, so work on data already referenced continues when the catalogue is slow.
-Local mode has no catalogue: a folder is its dataset source, read when asked, and the store holds nothing about the files in it.
+## Publication, scope, deployment
 
-**Only finalized data enters SciCat (D11).**
-Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
-Publication is an explicit, idempotent operation on an output, triggered by a user after inspection or by an automatic-reduction rule.
-The SciCat entry carries a self-contained provenance snapshot: the raw PIDs the output derives from, the resolved parameters, the spec identity, the package versions and environment; it can be read without any service of ours, and our record is then a copy of it.
-A publication may name the PID it supersedes, which the snapshot records, since an entry in SciCat is never removed.
-It reads a disk copy: an output that exists only in a session is first written out, and a record whose result was computed from state held from an earlier run is first recomputed in a throwaway process, so that what enters SciCat was computed cold and the record describes it exactly.
-The backend records the intent to publish before writing to SciCat and the PID after; the output then has a second durable copy, so a miss on it becomes a download rather than a recompute.
-The trigger loop recognizes a published output by the snapshot in its SciCat entry, not by a table of ours, and never fires on it or on records made from its own template; otherwise automatic reduction would reprocess its own output.
-A record bound in-process from a notebook is refused for publication unless the client overrides.
+- **Only finalized data enters SciCat**, because data in SciCat cannot be removed.
+  Publication is an explicit, idempotent operation on one output.
+  The SciCat entry carries a provenance snapshot that can be read without any service of ours.
+  A result that a held stage served is recomputed in a throwaway process first.
+- **The record store is not a catalogue.**
+  It answers what was computed; SciCat answers what was measured and what was published.
+  Nothing is stored per dataset.
+- **Instrument plus proposal scopes everything**: both are mandatory on every record, and access follows SciCat proposal membership.
+  Artefacts from commissioning proposals, such as a direct beam, can be marked instrument-shared.
+- **One backend per instrument**, each with its own record store and data store.
+- **The Python client interface is the API.**
+  Every UI reaches the backend through it.
+  HTTP is a later transport for the same interface.
 
-**Instrument plus proposal scopes everything (D12).**
-Both are mandatory on every record.
-Run-number resolution, UI navigation, templates, and authorization by SciCat membership operate within a **proposal**, the experiment allocation that owns data and defines who may access it.
-Instrument scientists and commissioning use long-lived proposals.
-Artefacts produced there and consumed by every user proposal (direct beam, beam centre, processed vanadium, masks, lookup tables) are marked instrument-shared and readable from any proposal on that instrument; without that, every external user would need membership in the commissioning proposal.
-Their disk copies are exempt from retention, because a recompute would run under a user who cannot read the commissioning inputs.
-Templates and lookups from such a proposal, the instrument defaults, are marked instrument-shared the same way; a rule is bound to the proposal whose datasets it selects.
-A deployment is one backend per instrument, with its own record store and data store; several share a host while load is low.
-With one or two users per instrument, of whom at most one works with large volumes, a single backend process serves views comfortably.
-Nothing in the model needs cross-instrument state, and a facility-wide entry point, if ever wanted, is a thin front that routes to the instrument backend.
+Details: [operations.md](operations.md).
 
-## Changes needed in the workflow spec
+## When things fail
 
-The spec in scipp/ess#690 is assumed merged as-is, with these extensions; until it merges, the skeleton depends on the PR branch and adds the extensions in one module.
-They are small in the vocabulary and change the shape of the output side while the PR is open.
+- A retry is a new record that links to the failed one. A status is never reset.
+- A failed record carries a structured reason, so a user sees why without reading logs.
+- A throwaway runner writes a completion marker after its outputs. A backend that was down reconciles from markers when it returns.
+- A runner that cannot reach storage pauses its run. A slow filesystem does not cost a retry per run.
+- Losing a session fails the runs in flight there, and nothing else.
 
-**Inputs are parameters of data-reference type (D13).**
-The spec has one parameter model and no separate input section.
-The parameter vocabulary gains a **data reference** type: a field whose value is a reference, annotated with the **format** of the bytes it names (raw NeXus file, scipp object, opaque file) and, for scipp data, by the same `ArraySpec` that outputs declare.
-A parameter of this type is what we call an **input**.
-The field holds the reference in the request, in the record, and in the callable alike; the format says what the bytes are and nothing about how a workflow gets at them, which is the callable contract's concern (D8).
-A dataset reference's format is not checked at submission: a dataset that is not what the field declares fails when the workflow reads it.
-A UI choosing a value for such a field asks the **picker**, a client query that returns candidates of matching format as rows of one shape, a reference, its format, and display fields: outputs from the record store, and datasets from every dataset source the client has, SciCat for a proposal or a folder in the local application.
-Nothing is stored to make that list, and a further place to pick from is another dataset-source implementation, not a change to the picker.
-A field may be a union of a literal and a reference, for values such as a beam centre that a user may type in or take from a previous run.
-Every difference between an input and a parameter, in this framework, is behaviour selected by the field's type: resolution of run numbers and PIDs, provenance edges, validation timing, and which widget a UI shows.
-esslivedata separates the two because its inputs are streams routed at runtime; here every input is a value known at submission.
-
-**Collections on both sides (also D13).**
-The vocabulary gains a **collection**: a list or a dict of values of one declared type, usable as a parameter and as an output.
-A reference may name a whole output or one element of it by key.
-This gives every mapping between outputs and inputs with one mechanism.
-Many-to-one is a collection-typed parameter of references, such as the contributions a combine spec takes (D15).
-One-to-many is a collection output, per detector bank or per angle, consumed whole or element by element.
-Many-to-many is a group whose members each reference one element of a pending output by key.
-Keys are declared on the spec where the author can, such as bank names, and free otherwise.
-Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
-No current workflow needs fan-out whose keys are known only after reading the data: Bifrost groups by rotation inside its pipeline, and imaging has no tomography grouping.
-If one arises, it is a rule on the completed producer, one template instantiation per key, and not a scheduler feature; Snakemake put it in the scheduler, as checkpoints, and it became the most confusing part of the tool.
-
-**Outputs are a typed model in the same vocabulary (also D13).**
-A spec declares its outputs as a model class, mirroring parameters, with a JSON Schema in the serialized form.
-An array output is a data-reference field constrained by `ArraySpec`, which gains a `binned` flag; a beam centre is a vector with unit, a fit result a float with unit, a CIF file a reference of format "opaque file".
-Output fields may be optional.
-Title and description are field metadata.
-A downstream parameter may take a reference to any output field whose type matches, so chaining is a type check between two fields of the same vocabulary.
-The spec as proposed allows non-array outputs but gives them no type, which breaks "outputs can be inputs" for exactly the values, such as beam centres and direct beams, that most often feed the next workflow.
-Storage placement, inline or in the data store, stops being a spec concept.
-
-**An optional code revision and declared failure reasons (also D13).**
-A spec may carry a code revision; it is read by the framework and by UIs and means nothing to a throwaway run.
-Which parameters are the stage inputs of a held stage is the session's choice (D8) and not part of the interface.
-A spec may also declare named failure reasons, each with a message; a workflow that fails for a declared reason returns it, the record carries its name, and a UI can explain it and a rule's retry policy can match it.
-
-**A chain declaration (also D13, D15).**
-A spec may declare `chain`, a mapping from a collection parameter of data references to one of the spec's own outputs: that output may then be passed as an element of the parameter and stands for the elements it was combined from, which is what lets a series be chained.
-The spec validates that the parameter is a collection of references, that the output exists, and that their formats match.
-That the combination does not depend on grouping and order is the author's promise, which the framework cannot check and a test helper does (D15).
-This is the only declaration an aggregation needs, and it is an extension in this framework, not a field of scipp/ess#690.
-The contribution and the finalize parameters are not declared anywhere: the contribution is the output of the contribute spec, and the finalize parameters are the literal parameters of the combine spec.
-A declaration belongs on a spec only if it has a reader that cannot import workflow code; this one has `apply` and the trigger loop.
-
-**Cost.**
-The backend must walk the request's values to find references and the spec's JSON Schema, including nested models, to check them.
-Structural validation of an array output against its `ArraySpec` happens in the runner at completion, since pydantic cannot check a scipp object.
+Details: [operations.md](operations.md#failure-handling).
 
 ## Components
 
-- **Backend**: validates a request in three layers, finds the references by walking the request's values, checks each against the type of the output it names, resolves stand-ins to references, creates the record, linking it to the record it supersedes under its label, and hands the request to a launcher.
-  Single writer to the record store; exactly one backend process per record store.
-- **Client interface**: the backend's Python interface, including validate, apply, views, and the picker (D13).
-  This *is* the API.
-- **Launcher**: pluggable: session, subprocess, cluster.
-  Its interface and the data store's are the two seams where implementations are swapped; both are kept narrow and stable from the first implementation, because retrofitting an interface under existing implementations cost Snakemake a major version.
-  Two execution shapes; placement is relative to the session holding a run's inputs, and a group runs in one shape.
-  Publishes which specs its environment can run, so the backend can reject unrunnable requests at submission.
-- **Runner**: validates parameters with the real parameter class, calls the workflow with the run's inputs, stores outputs, writes a completion marker to the disk tier, reports to the backend.
-  In a session it holds stages between runs (D8).
-  Never touches the record store.
-- **Session**: a runner plus a private memory cache, belonging to one client.
-  Created and closed by the client; closing drops its cache.
-  In local mode it is the client's own process.
-- **Data store**: a registry of disk copies and a disk tier, addressed by reference: record plus output name plus optional key, or a dataset identity for a copy of a dataset.
-  Serves runners from the cache of their process when it can, and views from a cache or by partial reads from disk.
-  A catalogue file's location comes from SciCat at dispatch and a local file's is its path; a store copy of a local file is kept until dropped explicitly or with its proposal.
-- **Record store**: create, read, update status, and queries: records by proposal, time, template version, or rule version; the records under a label and the latest per label and member key, the record no other supersedes; records that reference output X of record Y, or dataset D.
-  Holds the runners' logs beside the records.
-  Carries a schema version; drops a proposal's records together, never one.
-- **Dataset source**: yields new datasets for a proposal as PID plus the metadata fields it declares for the instrument, and persists nothing.
-  SciCat, a folder for the local application, and a fake for tests; the picker lists from every source the client has.
-- **Trigger loop**: runs the active rules (D14): applies a rule to each candidate, a new dataset or a completed record, that its selector matches after its bound and that has no record under its label; apply fills the template through the lookup and submits, and for a rule with a combine clause also submits a combine request over the series, chained when that is valid (D15); never on a candidate the rule excludes or whose SciCat entry carries our snapshot.
-  Resubmits a failed record as a retry record when the rule's retry policy names its failure reason, up to the rule's limit.
-  Keeps no state: every decision is a query over the records, so a restart changes nothing.
-  Reserves each rule's label with the backend, so that only apply makes records under it.
-  Has its own visible status: last fire, last refusal with its structured errors, and for any dataset of the proposal the reason it fired or did not, an exclusion included.
-- **Publisher**: writes an output to SciCat together with its provenance snapshot.
-  Idempotent: the resulting PID is recorded on the output, and publishing it again returns the PID.
-
-## Failure handling
-
-Kept together so it can be read as one piece.
-
-- **Status state machine.** submitted, waiting (pending inputs), dispatched (launcher job ID recorded), running, paused (transient infrastructure failure), completed, failed, cancelled.
-  Retry is a new record pointing at the old one, never a status reset.
-  A failed record says which of three things happened: the workflow reported a declared failure reason, the workflow code raised, or the framework could not run it; a person, a UI, and a retry rule read the three differently.
-- **Completion does not depend on the backend being up.** A throwaway runner writes a completion marker with its outputs to the disk tier before exit; the report through the backend's API is the fast path.
-  The marker is written after every output is flushed, and it is the only signal reconciliation trusts: the presence of an output file proves nothing, because a file written by a cluster job becomes visible on other hosts after a delay.
-  On restart the backend reconciles dispatched runs against the launcher and the markers, so "finished while the backend was down" is completed, not failed.
-- **Runner liveness.** A throwaway runner sends periodic signals; the backend marks a silent run failed after a timeout unless a completion marker exists, and rejects a report that arrives after that.
-  This is the lesson of esslivedata's stuck "active" jobs (scipp/esslivedata#823) and of ADR 0008: observe, do not trust acknowledgements.
-  Session runs have no liveness timeout; session loss is their failure event.
-- **Backend restart.** Records are durable; queued requests are re-dispatched, running ones reconciled as above, paused ones stay paused.
-- **External cancellation** (cluster preemption) is detected by the same reconciliation.
-- **Cancel of a running request** asks the launcher to stop it; dependents are cancelled.
-- **Session loss.** A closed or crashed session drops its cache and its stages.
-  Runs in flight there fail; in local mode the session is the client, so there is nothing to resubmit until the user starts again.
-- **Logs outlive outputs.** A throwaway runner's stdout and stderr are kept in the record store beside the record; a session run logs to its client's process.
-  The structured failure reason covers the failures that were foreseen, and the log is for the ones that were not, such as a process killed for memory.
-  Logs are small and live as long as the record; retention applies to the data store only.
-- **Failure surfacing** is in scope from the start: a failed record carries a structured reason, so a user sees why a run failed without reading logs, and a trigger loop that is refused at submission is as visible as a run that failed.
-  Facilities that built automatic reduction report that the monitoring UI was most of the value.
-- **Transient infrastructure failure pauses the run.** A runner that cannot reach an input location or the data store retries at increasing intervals, then reports paused with the cause and exits; the backend also pauses a run at dispatch when a location it resolves is unreachable.
-  The record keeps its status and its place in the chain: dependents stay waiting, and the liveness timeout does not apply.
-  Resume is the backend dispatching the same record again, when an operator asks or when a reachability probe finds the location back; it is not a retry and makes no new record.
-  A paused run is not a failed run: a shared filesystem that is slow for an hour must not cost a retry record per run.
-- **Multi-tenancy.** The backend checks proposal access on every reference it resolves or serves, not only at submission.
-  Cluster jobs run under the submitting user's account.
-
-## Execution modes mapped onto the model
-
-- **Manual**: submit one request, inspect outputs, resubmit with changed parameters.
-- **Interactive**: manual inside a session (D2), which holds stages (D8); each series of reruns, whether from a slider, a plot selection, or a growing list of runs, is a slot (D10).
-- **Batch**: apply over datasets a person typed or a query returned; the records under one label (D6, D14).
-- **Automatic**: the trigger loop applying a rule to each dataset as it arrives (D7, D14).
-- **Chaining and aggregation**: pending outputs as inputs (D6).
-- **Aggregating a series**: contribute requests and combine requests (D15); chained through disk in shared mode, through memory in a session.
-- **Publication**: explicit publish of an output (D11).
-
-## Explicitly deferred
-
-HTTP transport, real SciCat integration, cluster launcher with its download tokens, view workers and the chunked on-disk layout for dense data, UI framework, UI state in the record store, metrics, agent-facing API.
-Remote sessions, on the backend host or in a client process on the user's machine: a session launcher, an idle timeout, and a cap on sessions.
-Upload of records from a private local record store to a shared backend, carrying everything a chosen record reaches through its references and nothing downstream of it.
-Provisional outputs of a running run, for progress display during chunk-wise processing.
-A versioned collection record, appended to by the client and referenced by version, if lists of runs to accumulate grow well beyond a few thousand entries and resending them whole becomes a cost.
-Resource hints on the spec for the cluster launcher, such as memory as a function of input size and of the attempt number, which a retry record knows from its link to the record it retries.
-
-## Technology proposals
-
-- pydantic for all data models (the spec already requires it).
-- Standard-library sqlite3 for the record store; Postgres later.
-- scipp HDF5 for stored scipp data; pluggable serializers for other output types.
-- scitacean for SciCat access.
-- FastAPI for the HTTP transport when it comes.
-- Tiled (bluesky) is a candidate for the disk tier, the HTTP data transport, and per-node access control, behind the data-store interface.
-  It has a catalog with search, remote slicing over chunked storage, a policy plugin for access, and a Python client, on SQLite or Postgres.
-  It has no scipp semantics, so units, variances, bin edges, masks, and binned data would be a convention we own; it has no server-side reductions, so views stay ours; and it knows nothing of memory caches.
-  Decide after the D3 spike, and ask the Tiled developers about a scipp structure family and about reductions.
-- No workflow engine, no Dask, no message broker in local mode.
-
-## Open questions
-
-Decisions the team needs to make; my recommendation in brackets.
-
-- **Template sharing.** Both stages of a split workflow share most parameters.
-  Facilities that tried template inheritance moved to version-controlled read-only templates with per-dataset substitution.
-  [No inheritance. A template may be derived from another by copy, and the record keeps the origin.]
-- **Remote sessions.** Where a session runs when interactive use moves to the shared web UI: on the backend host, in the user's own application, or as an interactive cluster job with queue latency at session start.
-  [Decide once local sessions exist.]
-- **Name of the backend component.** It clashes with esslivedata's "backend services".
-  [Keep it unless the two projects are documented together.]
-- **Retention policy** for disk copies in shared mode: how long each kind of run's outputs is kept, with superseded slot runs the shortest and automatic-reduction outputs the longest, and the analysis window after which a proposal's records are dropped.
-  [One order: outputs of superseded records first, then an intermediate flag the spec puts on an output, meaning cheap to recompute from its inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show they get it right.]
-- **Local paths after a drop.** A local file's path stays on the submission after its bytes are dropped, until the proposal is dropped.
-  [Keep it: a path is not data, and provenance needs it.]
-- **Two notebooks on one machine.** The sketch gives each its own store; referencing a result across notebooks needs a local transport.
-  [Separate stores now; a local socket form of the HTTP transport later, which also serves the local application.]
-- **SciCat push mechanism** for new datasets, if the deployment offers one, and how far ingestion lags the file.
-  ISIS's interfaces discover runs from the archive because the catalogue lagged or failed, and their outputs are consequently unknown to it.
-  [Measure the lag before phase 1. A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so it can only get ahead of the catalogue and wait, never replace it.]
-
-## Next step
-
-Review this document with the team before implementing.
-Then a spike on the two decisions with the most hidden risk, D3 and D6: a data store with private caches and a disk-only registry, an atomic group submit with pending outputs, and a launcher that runs a chain in one session but a batch in throwaway processes, exercised by a fake workflow with two accumulation keys (D15), published as a contribute spec, a combine spec, and a single-run spec, and run one-shot, as a batch with one combine, and as a chained series, with the grouping helper checking that the three agree.
-Once the fake holds, a Tiled-backed disk tier as a second implementation of the same interface, checking that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
-The two designated testing seams are the fake dataset source and the session launcher; no browser tests in the skeleton.
-The full walking skeleton, all components in local mode with no HTTP and no UI, follows if the spike holds.
-The skeleton exists as the package `essapps` under `packages/`, import `ess.apps`, laid out for the scipp/ess monorepo: both execution shapes, the group submit with pending outputs, the sciline adapter with stages built on sciline's `Stage` and held by the session, labels and member keys with the supersedes link and the latest-per-label query, dataset references with a folder source and the picker, an aggregation as a contribute spec and a combine spec over sciline's `Aggregation`, the `chain` declaration, and chained combine requests that check what the previous combine covers, the lookup with the as-of fill, the rule with its reserved label, `apply`, the reprocess with its check for shadowed typed values, the memoryless trigger loop, publication, and a LoKI session notebook on the real esssans workflow bound in-process. Not in it: the Tiled-backed disk tier, a SciCat dataset source, a rule whose combine is not additive, a combine spec that chains two parameters, the fold, HTTP, and a store for templates and rules.
-The skeleton implements D15 as it stood before the fourteenth pass: one spec with a contribution output and a list of finalize parameters, a stage field and a list of contributions on the request, and a binding with three entry points. [stages.md](stages.md) lists what changes.
-
-**What binding real workflows found.**
-Two workflow families are bound, LoKI SANS and Amor reflectometry, and each found something the sketch does not answer; they are listed here, by decision, until the decision is changed or the finding is dismissed.
-A combine that is not additive has no check that its members were reduced consistently, so a stitch over curves reduced with different detector limits passes; for an additive combine the adapter carries the shared parameters in the contribution and refuses a mismatch, and a stitch has no such carrier (D15).
-Collection keys are the submitter's invention: nothing ties a key to the record it came from, and a reference into a pending collection output is not checked for its key, so a transposed dictionary is accepted (D13, D8).
-Chaining compares formats only, so a declared `ArraySpec` is never read by anyone; the runner checks dims and coordinate names on an output but not units or `binned` (D13).
-A stage input is also how a session shares work across the members of a series, since the reduced reference survives a change of sample run only if the sample run is a stage input; for a contribute spec the stage inputs are the member parameters, and for a single-run spec the adapter's author has to name the run as a stage input (D8, D15).
-Every scalar parameter costs a `NewType` and a provider in the adapter's setup whose only job is to turn plain data into a scipp object; a conversion named beside the key, as the form of a data reference is, would remove them (D8).
-An output the framework cannot serialize, an ORSO file, has no place to declare its serializer, though the sketch says it must come with one (D8).
-The parameter vocabulary lacks a pixel-index range, an angle range, and a Q range, and an edges model whose range the data derives, which is what a workflow whose binning follows the geometry needs (D13).
-Pixel masks are a graph rewrite in the LoKI workflow, so they are fixed in the callable's factory and not on the record, and the request is not complete; the same rewrite, a list of filenames rebuilding the graph, is what stops the additive half of reflectometry, same-angle runs, from being bound, and a contribute and a combine spec are the way out for both (D8, D15).
-Summing same-angle runs and then stitching angles is an aggregation whose members are aggregations; both levels are expressible as specs, but a rule has one combine clause, so the second level would be a second rule whose candidates are the completed combine records of the first, which is untested (D14).
-A rule that feeds sample runs into one chained parameter and background runs into another needs a role per dataset and a mapping from role to parameter, which "a series of fixed roles" names and does not define (D14).
-The beam-centre finder takes a pipeline rather than a key, so it is a plain callable and its expensive part is not shared with the reduction that consumes its result (D8).
-Fitting scale factors over all members and re-reducing each member with its factor is a cycle, members to combine to members, which three requests express but no rule can, since a rule only ever runs members then a combine (D14).
-
-## Glossary
-
-Where esslivedata uses a word differently, the clash is noted.
-
-- **Accumulation key**: a node of a workflow at which the members' intermediates are added. Usually two, a numerator and a denominator, so that normalisation comes after the sum. One accumulator sits at each. sciline's term.
-- **Accumulator**: sciline's object that takes values by `push` and holds their combination as its value, one per accumulation key. `Buffered` makes one from a combine function; a running total holds one array instead of one per member.
-- **Adapter**: the code, in ess.reduce, that turns a sciline pipeline into the callables of one or more specs: field-to-key mapping, the form of each data reference, optional default stage inputs, and for an aggregation the accumulation keys, accumulators, and member keys. Checks its specs against the graph when built.
-- **Aggregation**: in the framework, a group of one member request per row of a member table and one combine request that references the members' contributions. In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process; it is a composition of two callables, not a callable, so it has no spec.
-- **Annotations**: labels and notes attached to a record after the fact; mutable, outside provenance, read by nothing in the framework.
-- **Backend**: the one component that accepts requests, keeps the records, and owns the stored results. In esslivedata "backend services" are the Kafka worker processes; unrelated.
-- **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole. Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations. In a notebook it accepts a DataFrame, member key as index and typed values as columns.
-- **Batch**: the records under one label, made by a person from a template or by a rule; not a stored unit. In esslivedata a batch is a bundle of messages; unrelated.
-- **Client interface**: the backend's Python interface, including validate, apply, views, and the picker. The API.
-- **Collection**: a list or dict of values of one declared type, as a parameter or an output. A reference may name one element of a collection output by key.
-- **Combine spec**: a spec with a collection parameter of references to contributions, plus the parameters only the finalize stage reads; its outputs are the results and, when the spec declares `chain`, the combined contribution. A **combine request** is a request of such a spec, and is **chained** when it references the previous combine's contribution and the new members instead of all members. **`chain`** is the spec's declaration that one of its outputs may be passed as an element of one of its collection parameters and then stands for the elements it was combined from.
-- **Contribute spec**: the spec of the part of a pipeline from the contribute parameters to the accumulation keys. Its one output is the **contribution**: a scipp data group with one entry per accumulation key, opaque to the framework, and also carrying the contribute parameters that all members must share.
-- **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal. Easy to confuse with *reference*, which is the value such a field holds.
-- **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend. Each process that holds data also has a private memory cache, which the store serves from but never registers.
-- **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path. The second form of reference. Not a record: no request, no status.
-- **Dataset source**: where datasets are discovered and listed; persists nothing. SciCat for a proposal, a folder in the local application.
-- **Group**: several requests submitted atomically that may reference each other's outputs before they exist.
-- **Input**: a parameter of data-reference type. In esslivedata inputs are data streams and genuinely differ from parameters; here they do not.
-- **Label**: a field on a request, with an optional member key; each record under a label names the record it superseded, and the latest is the one nothing supersedes. A rule's name for the records it makes, a name the submitter picks for a batch, a slot for an interactive tool.
-- **Launcher**: decides where a run executes and starts it there.
-- **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, literal or **as-of**, the nearest earlier dataset matching criteria, with at most one wildcard. What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
-- **Local mode**: client, backend, launcher, session, and data store in one Python process. **Shared mode**: the backend as a service used by many people; the **shared service** is that backend's process, which also holds a memory cache.
-- **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.
-- **Pending output**: an output of a record that has not completed yet, usable as input to another request.
-- **Proposal**: the experiment allocation that owns data and defines who may access it.
-- **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
-- **Recompute**: an explicit operation that runs a record's request again and yields a new record linked to the old one.
-- **Record store**: the database of records. Records are never deleted one at a time; a proposal's records are dropped together.
-- **Reference**: a value, "output X of record Y", optionally with an element key, usable as any parameter whose type matches. The only way a request names data.
-- **Retention**: how long a disk copy is kept within its proposal's lifetime; it applies to bytes, never to single records.
-- **Rule**: stored, versioned data that makes requests from datasets: a selector with a lower bound, a template and lookup, a retry policy, exclusions, an active state, and optionally a series key and a combine clause. Applied by the trigger loop to each arrival and by a person to a set at once; a rule is to a batch what a template is to a request, and its label is reserved for it.
-- **Run record**: a run request plus what happened to it. Called "run", never "job", except for the launcher's own job IDs: in esslivedata a job is a running streaming workflow.
-- **Run request**: everything needed to execute a workflow once.
-- **Runner**: the process that executes runs: one run and exit, or many in a session.
-- **SciCat**: the facility's data catalogue. **PID**: SciCat's persistent identifier for a dataset.
-- **Series**: the datasets a rule keys together by a metadata value, aggregated again whenever one joins.
-- **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its runs and stages of its workflows in memory. A cache over records.
-- **Slot**: a label an interactive tool owns, with no member key. The unit of interactive work, and what tools list and replay.
-- **Spec**: the declared interface of a workflow: name, version, parameters, outputs. The signature of one callable; a record is one call of it. Defined in scipp/ess#690.
-- **Stage**: a callable with the signature of a workflow that accepts the requests equal to a given one outside its **stage inputs**, a set of parameter fields, returns what the workflow returns, and may hold whatever the stage inputs cannot affect. A workflow may offer stages; a session builds, holds, and drops them, and chooses the stage inputs from what a person changes. The sciline adapter implements one with sciline's `Stage`, the part of a pipeline from named inputs to named outputs with everything else computed once and held at its frontier. A **stage output**, an output one spec produces and another takes (D4), is the value at such a boundary kept as a record.
-- **Submission**: the field on a run record that says how its request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup. Explanation, not provenance.
-- **Template**: a saved, versioned run request with some fields left blank.
-- **Throwaway process**: a subprocess or cluster job that runs one request and exits; the execution shape of shared mode.
-- **Trigger loop**: applies the active rules to new datasets and completed records. Keeps no state: every decision is a query over the records.
-- **View**: a small piece of an output's data for display, computed by the process holding a copy. Not a run.
-- **Vocabulary**: the set of types the workflow spec allows for parameters and outputs.
-- **Member**: one row of a member table: one request of an aggregation, whose output the combine request references. Its **member key** labels it under the batch's label (D14). sciline's *member keys* are something else, the parameters that differ between members, called **member parameters** here; only the adapter deals with them.
-- **Workflow**: the scientific code that turns inputs into results: a stateless callable whose signature is a spec. Typically a sciline pipeline behind an adapter; the framework does not care.
-- Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).
-
-## Index of decisions
-
-Numbering follows reading order. It is provisional until the wider review and stable after it; then add at the end.
-
-| | Decision | Where |
+| Component | Responsibility | Skeleton module (`ess.apps`) |
 |---|---|---|
-| D1 | Every value is an output of a record or a dataset; stand-ins resolve at submission; records are dropped by proposal, never singly; recompute is explicit | Records and references |
-| D2 | Requests are stateless; execution may be stateful inside a session, which is a private cache | Choice 1 |
-| D3 | The data store registers disk copies only; memory caches are private; two execution shapes; three lifetimes: session, proposal, catalogue | Choice 1 |
-| D4 | Reuse across requests means a workflow boundary | Choice 1 |
-| D5 | The record store is ours, small, and implementation-agnostic; the backend is its single writer | Choice 2 |
-| D6 | One scheduling primitive: pending outputs as inputs; an aggregation is one use of it | Choice 2 |
-| D7 | The dataset source is abstracted, declares the matchable metadata fields, and persists nothing; not Kafka | Choice 2 |
-| D8 | Framework-to-workflow contract: a spec is the signature of one callable and a record one call of it; the callable is stateless, takes parameters and inputs, and asks for a path or an object; a workflow may offer stages, which a session holds and addresses by what they hold; a sciline adapter implements them with sciline's `Stage`; three validation layers | Choice 3 |
-| D9 | The client interface is the API; validate is separate from submit; HTTP later; notebook first | Choice 4 |
-| D10 | Interactive plotting: views are not runs and return plain arrays; event data is never viewed; reruns live in slots, which are labels; superseding is a link on the record, not a clock order | Choice 4 |
-| D11 | Only finalized data enters SciCat; publication reads a cold disk copy; the record store is not a catalogue | Ownership, publication, and deployment |
-| D12 | Instrument plus proposal scopes everything; one backend per instrument | Ownership, publication, and deployment |
-| D13 | One type vocabulary: inputs are data-reference parameters, outputs a typed model, collections on both sides; a spec may declare `chain` | Spec changes |
-| D14 | Templates, lookups, and rules are the stored data requests are made from; a rule is to a batch what a template is to a request; a batch is the records under one label, not a stored unit; one apply operation serves the form, the loop, and reprocessing, and the reprocess flags shadowed typed values; the loop keeps no memory; a rule keys datasets into series and never waits; a rule's label is reserved; a lookup fill may be as-of | Rules |
-| D15 | An aggregation over runs is two plain specs cut from one pipeline, contribute and combine, and a group of requests; the one declaration is `chain`, which lets a series be chained through disk, a session's memory, or a kept runner; the partial is always recomputable | Aggregation |
+| Client interface | the API: request, validate, submit, run, view, pick, publish | `client` |
+| Backend | validates, resolves stand-ins, writes records, schedules, dispatches; single writer of the record store | `backend` |
+| Record store | records and queries over them; SQLite | `records`, `store` |
+| Data store | registry of disk copies, disk tier, private memory cache | `datastore` |
+| Launcher | decides where a run executes: session or throwaway process | `launcher` |
+| Runner | calls the workflow, validates and stores outputs | `runner` |
+| Session stages | holds stages and routes requests to them | `stages` |
+| Spec and binding | spec extensions, entry points, `Inputs`, the stage offer | `spec`, `binding` |
+| Sciline adapter | pipeline to callable, stage, contribute and combine | `adapter`, `aggregation` |
+| Dataset source | lists datasets with metadata; persists nothing | `sources` |
+| Rules | templates, lookups, rules; `apply`; trigger loop | `rules`, `batch` |
+| Views | slices and reductions for display | `views` |
+| Test helpers | stage equals workflow; combine is independent of grouping | `testing` |
+| Example workflows | toy specs; LoKI SANS and Amor reflectometry on real workflows | `examples`, `loki`, `amor` |
 
-## Review log
+`packages/essapps/README.md` is a guided tour, and `notebooks/loki-session.ipynb` runs one interactive LoKI session on the esssans tutorial data.
 
-Reviewed before being shown to the team by independent AI reviewers from distinct angles: architectural consistency, fit with the real ess workflows read from source, operations and failure modes, prior art at other facilities, plain-language readability, lessons from esslivedata, a fresh reader, a maintainer's view of long-term pain, minimality, and adversarial scenarios.
-The first pass shaped the failure-handling section, the record fields for resolved values and package versions, the serializer rule, instrument-shared artefacts, slots, and the open questions.
-The second pass removed the mechanisms that created a second copy of truth or an implicit action: a registry that tracked copies in memory, recompute triggered by reads, identical-request reuse, record deletion by reachability, memory budgets in sessions, and slots as a backend object.
-It also corrected the description of what a warm workflow reuses against the workflow source, and added the binned flag, optional map-combine, the completion marker, and intent-to-publish.
-The third pass removed what would have made the record store a second catalogue: file records created by discovery with copied metadata and stored mount paths, and records kept forever; file records are now created on reference and hold identity only, catalogue locations are asked of SciCat, and records live as long as their proposal.
-A fourth pass read the sketch against Snakemake's history, in [snakemake.md](snakemake.md); it added the runner's log to the record, completion by marker alone, batch rerun as a client operation with a request-equality query, data-dependent fan-out as a trigger rule, the record-replay test helper, the deferred resource hints, and a recommendation on the retention question.
-A fifth pass read it against AiiDA's history, in [aiida.md](aiida.md); it added UUID run IDs, annotations beside the record, the group ID, three kinds of failure with reasons declared on the spec, the paused status for transient infrastructure failure, retry by reason in the trigger loop, the session-restart rule for code changes, and the export rule for the deferred upload.
-A sixth pass read it against Mantid's ISIS batch interfaces and FIA, in [mantid.md](mantid.md); it added the lookup as versioned data used by batch and the trigger loop, the lookup entry on the record, rules as data, exclusions as annotations on file records, the explicit reprocess operation when a loop moves to a new version, the slot as a label usable by the trigger loop, and three open-question entries: not waiting for a series, batch definitions, and catalogue lag.
-A seventh pass read the three prior-art passes together for incremental creep and consolidated what they had added: template, lookup, and rule are one section with one decision, D14; a batch is a tag rather than a stored unit, because the set of members is a query over records; the rule replaces the batch definition and holds the exclusions, so annotations are notes again; the record gets one submission field in place of a group ID, a template version, and a lookup entry; the group ID, the request-equality query, and the trigger loop's use of slots were dropped; logs moved to the record store; paused runs got a mechanism; and the open questions on waiting for a series and on batch definitions closed.
-An eighth pass asked whether accumulation could be deferred at all, read how ess.sans, ess.reflectometry, ess.powder, ess.bifrost, and the streaming module combine runs, and found the sketch had three answers that did not meet; it added D15, the declared additive combine with its three stages, removed the accumulation special case from the warm workflow, and made a series combine a chained request rather than a recombination of member outputs.
-A ninth pass asked whether batch and automatic reduction were more unified than the sketch had set out to make them, and found that a rule is to a batch what a template is to a request, which is what Mantid's reflectometry batch tab already is; it merged the slot and the batch ID into one label with an optional member key, made a rule's records a batch under the rule's name, named the one apply operation behind the form, the trigger loop, and the backlog, reprocess, and rerun operations, made the trigger loop stateless by putting a lower bound on the rule's selector, gave the rule an active state, put the typed values on the submission so that a reprocess carries them, and moved labels and apply from phase 2 into phase 1.
-A tenth pass, prompted by the team review's confusion over "no filenames" and file records, asked what a file record served and found nothing that a dataset identity does not: the PID is the identity, the checksum and the split of identity from location do the work against stale paths, a raw file is viewable only through a preview run, and the trigger loop already took datasets and records as two kinds of candidate; it replaced file records with the dataset as a second form of reference, stores nothing per dataset, since the proposal check happens at submission and the data store registers only the copies it makes, keyed by reference in either form, took a local file's identity from the run identity it carries rather than a hash at submission, made a folder a dataset source for the local application, and named the picker, the query behind an input field, so that listing what can be picked is a query over the record store and the dataset sources rather than a table of ours.
-An eleventh pass read the sketch against scipp/sciline#245, the proposal to replace map/reduce with stages and aggregations composed outside the graph, in [stages.md](stages.md); it renamed accumulation point to accumulation key, sciline's word for the same thing, named the stage, the accumulator, and the aggregation behind the warm workflow and the declared combine, made the split between contribute's and finalize's parameters a declaration the binding checks against the graph, and required the members of one combine to agree on the parameters contribute reads.
-A twelfth pass, prompted by unease over how scipp/ess#690 had grown to carry materialization, asked where the choice between a path and an in-memory object belongs; it found that typing a data field as a union of the reference and the materialized value made the parameter model wrong in both phases and put an execution decision into the spec, so it typed a data field as a reference with a format, moved materialization into the callable contract as the inputs a callable asks for a path or an object, and made the sciline wrappers name the form per parameter next to the key it maps to, so that an in-memory chain in a session changes no spec and no binding.
-A thirteenth pass read the sketch against git, in [git.md](git.md), asking what the batch and rule machinery taken from Mantid and FIA could take from the best-known system built on immutable objects and moving names; it found that ordering a label's history by creation time, as the skeleton did, is the mistake git's parent pointers exist to avoid, and made superseding a link the backend writes at submission; it made the reprocess flag the members where a typed value shadows a fill that changed, the conflict check of a rebase; it reserved a rule's label; and, prompted by cans and dark frames measured many times per experiment, it replaced a proposed label-as-stand-in, whose latest-at-submission semantics are wrong for a backlog, with the as-of fill in the lookup, which resolves against the member.
-A fourteenth pass asked whether a spec corresponds to one record or may describe what sciline's `Stage` and `Aggregation` build on top of a pipeline, in [stages.md](stages.md); it found that D15 had let one spec stand for three callables, which is where the contribution output, the list of finalize parameters, the stage field and the contributions on the request, the optional outputs, and the binding's second protocol all came from, and that a member-consistency check in the backend was vacuous for chains and wrong for per-member lookup fills; it made a spec the signature of one callable without exception, an aggregation over runs two plain specs and a group of requests, the accumulating parameter the one remaining declaration, the adapter in ess.reduce the component that serves plain specs from one pipeline and carries the shared parameters in the contribution, the rule's combine clause one form for additive and non-additive combines, and chaining conditional on the previous combine's members still being current; and it replaced "map and combine" and "warm workflow" with sciline's aggregation vocabulary and the warm callable.
-A fifteenth pass started from two stale items in ADR 0001 of scipp/ess#690 and asked what a "warm" callable adds over sciline's `Stage`; it found that the definition, a kept callable whose held values are a cache, let session state sit inside workflow code where the session could not see it, a stage with its rebuild rule, accumulators keyed by the references last combined, and a dictionary of contributions shared by three callables, and that a `Stage` recomputes everything downstream of all its inputs, so that the stage inputs the Amor binding's author had named loaded the run again when a bin count changed; it made a workflow stateless, let a workflow offer stages in field names, gave the session the stages, addressed by what they hold and shared between labels, and the choice of stage inputs, from what differs between consecutive requests under a label, removed the warm callable, the accumulators held in a session, and the shared dictionary, and replaced the accumulating annotation on a parameter by a `chain` field on the spec.
+## Decisions at a glance
+
+Each row names a decision, its main reason, and what was rejected.
+The linked document argues the case and lists the costs.
+
+| Decision | Because | Instead of |
+|---|---|---|
+| [Data is named by reference](records.md#references) | one mechanism serves inputs, provenance, scheduling, and publication | file paths in requests; a separate provenance model; opaque data handles |
+| [Stateless records, stateful sessions](records.md#where-runs-execute-and-where-data-lives) | batch and provenance need complete records; interactive work needs memory | stateful jobs as in esslivedata; disk-only runs; shared memory across processes |
+| [Memory caches are private](records.md#the-data-store) | a registry of other processes' memory needs a coherence protocol | a registry that tracks in-memory copies |
+| [Reuse means a workflow boundary](records.md#reuse-means-a-workflow-boundary) | a referenced value needs a record | references to intermediate results |
+| [Own record store, single writer](records.md#the-record-store) | no engine offers a stateless request that a notebook, a loop, and a UI can all emit | AiiDA, Snakemake, Prefect; a message broker |
+| [Pending outputs as inputs](records.md#scheduling-pending-outputs-as-inputs) | the smallest addition that covers chaining and aggregation | a general DAG scheduler |
+| [One stateless callable per spec](workflow-contract.md#the-callable) | one execution path for all runners | a file-based contract; a framework that knows sciline; a second protocol for reruns |
+| [The session holds the stages and chooses their inputs](stages.md#who-chooses-the-stage-inputs) | only the session sees which parameter a person moves | stage inputs declared by the workflow author; state kept inside workflow code |
+| [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
+| [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
+| [Aggregation is two plain specs plus `chain`](aggregation.md) | no new kind of request; the framework stays ignorant of scipp | summation in the framework; one spec with three entry points |
+| [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
+| [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
+| [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |
+| [The Python client interface is the API](operations.md#the-client-interface) | one API keeps UIs out of backend internals | HTTP and TypeScript from the start; a Qt application |
+
+## Status
+
+The skeleton covers both execution shapes, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, aggregation with `chain`, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, and publication.
+LoKI SANS and Amor reflectometry are bound to it.
+Not in it: a SciCat dataset source, HTTP, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
+What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).
+
+Earlier studies read the design against other systems and against the delivery plan: [snakemake.md](snakemake.md), [aiida.md](aiida.md), [mantid.md](mantid.md), [git.md](git.md), [staging.md](staging.md), [stateless.md](stateless.md), and [user-stories.md](user-stories.md).
+They predate this edition of the document and still refer to decisions by number (D1 to D15).
