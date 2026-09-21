@@ -34,6 +34,10 @@ The recommendation in brackets is mine.
 - **SciCat push mechanism for new datasets**, if the deployment offers one, and how far ingestion lags the file.
   ISIS's interfaces discover runs from the archive because the catalogue lagged or failed, and their outputs are consequently unknown to it.
   [Measure the lag before [phase 1](roadmap.md#the-three-phases). A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so such a source can only get ahead of the catalogue and wait, never replace it.]
+- **Where the callable contract lives once it is stable.**
+  `Inputs`, `Workflow`, `StagedWorkflow`, and `resolve` are in `ess.apps.binding`, and the sciline adapter is in `ess.apps.adapter`.
+  Workflow packages must not depend on the framework in order to publish a workflow.
+  [Move both to ess.reduce, beside `ess.reduce.spec`, once scipp/ess#690 has merged.]
 - **The name of the backend component.**
   It clashes with esslivedata's "backend services", which are Kafka worker processes.
   [Keep it unless the two projects are documented together.]
