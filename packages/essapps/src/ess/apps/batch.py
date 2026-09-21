@@ -90,6 +90,7 @@ def apply(
             submission=Submission(
                 template=template.id,
                 rule=of_rule.id if of_rule is not None else None,
+                lookup=None if lookup is None else lookup.id,
                 entry=None if entry is None else entry.name,
                 typed=dict(values.get(key, {})),
             ),
@@ -388,6 +389,10 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
     silently shadows a fill that ``rule``'s lookup now gives differently. This
     is the three-way compare a rebase does and the ladder does not, so that a
     person decides whether the typed value still stands.
+
+    A typed value replaces its field whole, so a model typed to move one of its
+    values shadows the others as well. The rows are therefore per leaf, named as
+    in :func:`batch_table`: the leaves of a typed field whose fill changed.
     """
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
     members = _selected_members(known, rule, _stale(client, rule))
@@ -396,17 +401,21 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
         dataset = known[str(record.request.member_key)]
         was = _without_typed(client, previous, dataset)
         now = _without_typed(client, rule, dataset)
-        rows += [
-            {
-                'member': record.request.member_key,
-                'field': field,
-                'typed': value,
-                'was': was.get(field),
-                'now': now.get(field),
-            }
-            for field, value in record.request.submission.typed.items()
-            if was.get(field) != now.get(field)
-        ]
+        for field, value in record.request.submission.typed.items():
+            typed = _leaves(field, value)
+            before = _leaves(field, was.get(field))
+            after = _leaves(field, now.get(field))
+            rows += [
+                {
+                    'member': record.request.member_key,
+                    'field': leaf,
+                    'typed': typed.get(leaf),
+                    'was': before.get(leaf),
+                    'now': after.get(leaf),
+                }
+                for leaf in typed | before | after
+                if before.get(leaf) != after.get(leaf)
+            ]
     frame = pd.DataFrame(rows, columns=['member', 'field', 'typed', 'was', 'now'])
     return frame.set_index('member')
 
@@ -497,9 +506,10 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     lookup entry as columns. The value columns are the fields that differ per
     member, which are the blanks of the rule's template and every field a member
     typed. Each shows the value the request was made with, whoever supplied it,
-    a reference as the reference rather than its stored form, and ``typed`` names
-    the fields of the row a person typed. A rule's exclusions are rows without a
-    record.
+    and ``typed`` names the fields of the row a person typed. A field holding a
+    model is one column per leaf, ``q.start`` and ``q.stop``, and a reference
+    is shown as the reference rather than in its stored form. A rule's
+    exclusions are rows without a record.
     """
     rule = batch if isinstance(batch, Rule) else None
     label = rule.name if rule is not None else batch
@@ -517,13 +527,28 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
             'spec': str(record.spec),
             'template': submission.template,
             'rule': submission.rule,
+            'lookup': submission.lookup,
             'entry': submission.entry,
             'typed': ', '.join(submission.typed),
-            **{f: as_ref(params[f]) or params[f] for f in fields if f in params},
         }
+        for field in fields:
+            if field in params:
+                rows[str(record.request.member_key)] |= _leaves(field, params[field])
     for member, reason in (rule.exclusions if rule is not None else {}).items():
         rows.setdefault(member, {'status': 'excluded', 'reason': reason})
     return pd.DataFrame.from_dict(rows, orient='index').rename_axis('member')
+
+
+def _leaves(name: str, value: Any) -> dict[str, Any]:
+    """The leaf values of a parameter by dotted name; a reference is a leaf."""
+    if (ref := as_ref(value)) is not None:
+        return {name: ref}
+    if isinstance(value, dict):
+        leaves: dict[str, Any] = {}
+        for key, inner in value.items():
+            leaves |= _leaves(f'{name}.{key}', inner)
+        return leaves
+    return {name: value}
 
 
 def dataset_table(client: Client) -> pd.DataFrame:

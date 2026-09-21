@@ -126,7 +126,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Stage output**: an output that one spec produces and another takes as input, kept as a record.
   The word names a role, not a kind.
   See [records.md](records.md#reuse-means-a-workflow-boundary).
-- **Submission**: the field on a run record that says how its request was made: the template version, the rule version and lookup entry when a rule filled it, and the values the submitter typed beyond template and lookup.
+- **Submission**: the field on a run record that says how its request was made: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values the submitter typed beyond template and lookup.
   Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
   See [rules.md](rules.md).

@@ -23,9 +23,10 @@ batch_table(client, 'scan')
 ```
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
-`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template and rule version, and the lookup entry that applied.
+`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member typed.
 Each shows the value the request was made with, whoever supplied it, and the `typed` column names the fields of the row a person typed.
+A field that holds a model is one column per leaf, `q.start` and `q.num_bins`, which is how a form would lay it out.
 A rule's member keys are dataset identities; `dataset_table` is the frame of the datasets and their fields under the same key, and joining it onto the batch table says which sample each member is.
 That table is a query over the records, not a stored object.
 Automatic reduction is this scan plus a lookup, a selector, and a loop that calls `apply` when a dataset arrives.
@@ -52,7 +53,7 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter typed.**
 A blank at any rung falls through to the next.
-The record stores the resolved result, and its `Submission` keeps apart from that result the template version, the rule version, the lookup entry that applied, and the typed values.
+The record stores the resolved result, and its `Submission` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the typed values.
 That is what lets a reprocess under a new template or lookup version carry forward what was typed and fill again what was filled.
 
 ## Labels, batches, and slots
@@ -144,6 +145,7 @@ Each returns a group that `validate` shows before anything is created, and none 
 It keeps what the submitter typed and fills again what the template and the lookup filled.
 The ladder would therefore keep, silently, a Q range a user typed for one member over the Q range the instrument scientist has since corrected for that member's angle.
 `shadowed` is the three-way compare the ladder does not make: per member and field it reports the typed value, the fill under the old versions, and the fill under the new ones, and the person decides whether the typed value stands.
+A typed value replaces its field whole, so a Q range typed to move its lower edge also pins the number of bins; `shadowed` therefore reports per leaf, under the names the batch table uses, and names `q.num_bins` when only that default changed.
 
 **The backend never skips a request because an equal one completed earlier.**
 A run that silently did not happen is a decision the user cannot see, and [snakemake.md](prior-art/snakemake.md) records what that cost elsewhere.

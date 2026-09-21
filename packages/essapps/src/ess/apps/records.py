@@ -52,15 +52,17 @@ class Submission(BaseModel, frozen=True):
     How a request was made: explanation, not provenance.
 
     The resolved request alone reproduces the run; this says which template
-    version, rule version and lookup entry filled it, and which values the
-    submitter typed beyond them, so that a reprocess under a new template or
-    lookup version carries what was typed and recomputes what was filled.
+    version, rule version, lookup version and lookup entry filled it, and which
+    values the submitter typed beyond them, so that a reprocess under a new
+    template or lookup version carries what was typed and recomputes what was
+    filled.
     """
 
     template: str | None = None
     rule: str | None = None
+    lookup: str | None = None
     entry: str | None = Field(
-        default=None, description="Name of the lookup entry that matched."
+        default=None, description="Name of the entry of ``lookup`` that matched."
     )
     typed: dict[str, Plain] = Field(
         default_factory=dict,

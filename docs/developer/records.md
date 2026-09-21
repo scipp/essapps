@@ -26,7 +26,7 @@ The only path it may name is the identity of a local file that carries no run id
 | `instrument`, `proposal` | the scope of the run, both mandatory |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
-| `submission` | template version, rule version, lookup entry, and what the submitter typed beyond them |
+| `submission` | template version, rule version, lookup version and entry, and what the submitter typed beyond them |
 
 The last two serve batches and rules ([rules.md](rules.md)).
 The submission is explanation and not provenance, because the resolved request alone reproduces the run.

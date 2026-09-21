@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from pydantic import BaseModel
 
 from ess.apps.backend import SubmitError
 from ess.apps.batch import (
@@ -30,6 +31,9 @@ from ess.apps.examples import (
     NORMALIZE_CONTRIBUTE,
     REBIN,
     SUBTRACT,
+    LoadOutputs,
+    LoadParams,
+    load_workflow,
     write_run,
 )
 from ess.apps.records import RunRecord, Status
@@ -47,7 +51,7 @@ from ess.apps.rules import (
     Template,
 )
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, OutputRef, as_ref, dataset_ref
+from ess.apps.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -617,8 +621,9 @@ def test_the_batch_table_is_a_query_over_the_records(
     table = batch_table(client, with_lookup)
     assert table.index.name == 'member'
     assert list(table.index) == ['pid:pid/1', 'pid:pid/2', 'pid:pid/9']
-    assert list(table.loc['pid:pid/1', ['rule', 'entry', 'status']]) == [
+    assert list(table.loc['pid:pid/1', ['rule', 'lookup', 'entry', 'status']]) == [
         'auto-load/v1',
+        'by-sample/v1',
         'vanadium',
         'completed',
     ]
@@ -637,6 +642,60 @@ def test_the_batch_table_shows_the_values_that_differ_per_member(
     # A typed field shows the template's value for the members that did not type it.
     assert list(table['scale']) == [2.0, 5.0]
     assert list(table['typed']) == ['', 'scale']
+
+
+class Window(BaseModel):
+    low: float = 0.0
+    high: float = 1.0
+
+
+class WindowedParams(LoadParams):
+    window: Window = Window()
+
+
+WINDOWED = WorkflowSpec(
+    name='windowed',
+    version=1,
+    title='Windowed load',
+    description='Load with a parameter that is a model.',
+    params=WindowedParams,
+    outputs=LoadOutputs,
+)
+
+
+@pytest.fixture
+def windowed(client: Client, samples: FakeDatasetSource) -> Rule:
+    """A rule whose template holds a model, applied with one member's typed."""
+    client.bind(WINDOWED, load_workflow)
+    rule = Rule(
+        name='windowed',
+        template=Template(
+            name='windowed', spec=WINDOWED.id, params={'window': Window()}, blanks=('run',)
+        ),
+        selector=Selector(match={'sample': Like(pattern='*')}),
+    )
+    typed = {'pid:pid/2': {'window': Window(low=0.5)}}
+    client.submit_group(apply(client, rule, client.datasets()[-2:], typed))
+    return rule
+
+
+def test_the_batch_table_shows_a_model_as_one_column_per_leaf(
+    client: Client, windowed: Rule
+) -> None:
+    table = batch_table(client, windowed)
+    assert 'window' not in table
+    assert list(table['window.low']) == [0.0, 0.5]
+    assert list(table['window.high']) == [1.0, 1.0]
+    assert list(table['typed']) == ['', 'window']
+
+
+def test_shadowed_names_the_leaves_of_a_typed_model_whose_fill_changed(
+    client: Client, windowed: Rule
+) -> None:
+    revised = windowed.revise(template=windowed.template.revise(window=Window(high=2.0)))
+    frame = shadowed(client, revised, windowed)
+    assert list(frame.index) == ['pid:pid/2']
+    assert list(frame.iloc[0]) == ['window.high', 1.0, 1.0, 2.0]
 
 
 def test_the_batch_table_of_a_label_needs_no_rule(
