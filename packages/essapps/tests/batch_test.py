@@ -83,7 +83,7 @@ def samples(client: Client, tmp_path: Path) -> FakeDatasetSource:
             metadata={'sample': 'sio2', 'angle': 1.2},
         ),
     )
-    client.sources.append(source)
+    client.backend.sources.append(source)
     return source
 
 
@@ -309,7 +309,7 @@ def test_shadowed_is_empty_when_nothing_is_stale(
 def test_retry_offers_the_members_whose_latest_record_failed(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(
             Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
         )
@@ -392,7 +392,7 @@ def test_a_refusal_is_visible_and_fires_no_record(
     client: Client, tmp_path: Path
 ) -> None:
     bad = Template(name='bad', spec=REBIN.id, params={'bins': 0}, blanks=('data',))
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(Dataset(path=write_run(tmp_path / 'r1.h5', [1.0])))
     )
     loop = TriggerLoop(client, Rule(name='bad', template=bad))
@@ -403,7 +403,7 @@ def test_a_refusal_is_visible_and_fires_no_record(
 def test_a_failure_the_policy_names_is_retried_up_to_the_limit(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(
             Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
         )
@@ -425,7 +425,7 @@ def test_a_failure_the_policy_names_is_retried_up_to_the_limit(
 def test_a_failure_the_policy_does_not_name_is_not_retried(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(
             Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
         )
@@ -517,7 +517,7 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     client: Client, tmp_path: Path
 ) -> None:
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
-    client.sources.append(source)
+    client.backend.sources.append(source)
     rule = series_rule()
     loop = TriggerLoop(client, rule)
     first = loop.run_once()
@@ -558,7 +558,7 @@ def test_a_corrected_member_is_not_counted_twice(
     """
     first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')
     source = FakeDatasetSource(first)
-    client.sources.append(source)
+    client.backend.sources.append(source)
     rule = series_rule()
     loop = TriggerLoop(client, rule)
     client.wait(loop.run_once())
@@ -587,7 +587,7 @@ def test_a_series_recovers_from_a_member_that_failed(
     client: Client, tmp_path: Path
 ) -> None:
     """A failed member is not a current member, so the next combine leaves it out."""
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(
             Dataset(
                 path=tmp_path / 'gone.h5', pid='pid/1', metadata={'sample': 'sio2'}
@@ -601,7 +601,7 @@ def test_a_series_recovers_from_a_member_that_failed(
     assert member.failure.kind == 'missing-dataset'
     assert combine.status == Status.FAILED
 
-    client.sources.append(
+    client.backend.sources.append(
         FakeDatasetSource(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2'))
     )
     next_member, next_combine = client.wait(loop.run_once())
@@ -680,7 +680,7 @@ WINDOWED = WorkflowSpec(
 @pytest.fixture
 def windowed(client: Client, samples: FakeDatasetSource) -> Rule:
     """A rule whose template holds a model, applied with one member's pinned values."""
-    client.bind(WINDOWED, load_workflow)
+    client.backend.registry.bind(WINDOWED, load_workflow)
     rule = Rule(
         name='windowed',
         template=Template(
@@ -771,7 +771,7 @@ def cans_and_samples(client: Client, tmp_path: Path) -> FakeDatasetSource:
         dataset('sample3', 7, 'sample'),
         dataset('sample4', 8, 'sample'),
     )
-    client.sources.append(source)
+    client.backend.sources.append(source)
     return source
 
 

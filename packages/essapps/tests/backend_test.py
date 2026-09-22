@@ -157,7 +157,7 @@ def test_chaining_through_memory_and_literal_outputs(
     }
     assert rebinned.resolved_params['offset'] == {'value': 36.0, 'unit': 'counts'}
     assert client.output(rebinned).sizes == {'x': 2}
-    assert client.backend.records.referencing(loaded.id, 'data') == [rebinned.id]
+    assert client.backend.record_store.referencing(loaded.id, 'data') == [rebinned.id]
 
 
 def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(

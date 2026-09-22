@@ -11,6 +11,7 @@ backend validate against. This module imports neither scipp nor sciline.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from types import UnionType
@@ -59,7 +60,9 @@ __all__ = [
     'dataset_refs',
     'field_of',
     'literal_model',
+    'parse_ref',
     'ref_fields',
+    'schema_data_fields',
     'submodel',
     'walk_refs',
 ]
@@ -109,12 +112,43 @@ def dataset_path(ref: DatasetRef) -> Path | None:
     return Path(ref.dataset[len(prefix) :]) if ref.dataset.startswith(prefix) else None
 
 
+_OUTPUT_REF = re.compile(
+    r'(?P<record>[^.]+)\.(?P<output>[^.\[]+)(\[(?P<key>[^\]]+)\])?'
+)
+
+
+def parse_ref(text: str) -> Ref:
+    """
+    The reference ``text`` denotes, the inverse of ``str(ref)``.
+
+    This is how a reference is written on a command line or in a URL: a
+    dataset by its identity, ``pid:...``, ``run:.../...``, or ``path:...``;
+    an output of a record, ``<record>.<output>``, or one element of a
+    collection output, ``<record>.<output>[<key>]``.
+    """
+    if text.startswith(('pid:', 'run:', 'path:')):
+        return DatasetRef(dataset=text)
+    if (match := _OUTPUT_REF.fullmatch(text)) is not None:
+        return OutputRef(
+            record=match['record'], output=match['output'], key=match['key']
+        )
+    raise ValueError(f'not a reference: {text!r}')
+
+
 class SpecId(BaseModel, frozen=True):
     name: str = Field(min_length=1)
     version: int = Field(ge=1)
 
     def __str__(self) -> str:
         return f'{self.name}/v{self.version}'
+
+    @classmethod
+    def parse(cls, text: str) -> SpecId:
+        """The spec id ``text`` denotes, the inverse of ``str(spec_id)``."""
+        name, sep, version = text.rpartition('/v')
+        if not sep or not name or not version.isdigit():
+            raise ValueError(f'not a spec id: {text!r}')
+        return cls(name=name, version=int(version))
 
 
 def _is_collection(annotation: Any) -> bool:
@@ -131,6 +165,10 @@ class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
     """The plain-data form of scipp/ess#690 with the declared additive combine."""
 
     carry: Mapping[str, str] = {}
+
+    @property
+    def id(self) -> SpecId:
+        return SpecId(name=self.name, version=self.version)
 
 
 class WorkflowSpec(_WorkflowSpec, frozen=True):
@@ -216,6 +254,28 @@ def literal_model(model: type[BaseModel]) -> type[BaseModel]:
 def field_of(path: str) -> str:
     """The parameter field a reference path belongs to: ``banks.a`` is ``banks``."""
     return path.split('.')[0].split('[')[0]
+
+
+def schema_data_fields(schema: dict[str, Any]) -> dict[str, DataField]:
+    """
+    The data fields of a serialized params or outputs schema, by name.
+
+    Reads the ``dataField`` key ess.reduce writes into a property's JSON
+    schema: on the property itself for a plain field, or on ``items`` or
+    ``additionalProperties`` for a list or dict of one declared type.
+    """
+    fields = {}
+    for name, prop in schema.get('properties', {}).items():
+        nested = prop.get('items', prop.get('additionalProperties', {}))
+        found = prop.get('dataField') or (
+            nested.get('dataField') if isinstance(nested, dict) else None
+        )
+        if found is not None:
+            fields[name] = DataField(
+                format=Format(found['format']),
+                array=ArraySpec(**found['array']) if 'array' in found else None,
+            )
+    return fields
 
 
 def dataset_refs(params: Any) -> list[DatasetRef]:

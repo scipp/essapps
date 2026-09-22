@@ -3,6 +3,13 @@
 """
 The backend: validates requests, keeps the records, schedules, and owns the data.
 
+``Backend`` is the transport boundary: the closed surface a client may call.
+Every argument and return value on it is plain data, except ``output``, which
+returns the value itself. ``LocalBackend`` implements it directly, holding the
+record store, data store, registry, and launcher in this process; a remote
+backend (``remote.py``) implements the same protocol by forwarding every call
+to a server that holds a ``LocalBackend``.
+
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
 and is cancelled if any is cancelled. Recompute is explicit. The contributions a
@@ -25,13 +32,15 @@ from .binding import Registry
 from .datastore import DataStore
 from .launcher import Launcher
 from .records import Derivation, Failure, RunRecord, RunRequest, Status
-from .sources import DatasetSource
+from .sources import Dataset, DatasetSource
 from .spec import (
     DataField,
     DatasetRef,
     Format,
     OutputRef,
     Ref,
+    SerializedWorkflowSpec,
+    SpecId,
     as_ref,
     data_fields,
     dataset_path,
@@ -66,24 +75,142 @@ class SubmitError(ValueError):
         super().__init__('Refused:\n  ' + '\n  '.join(lines))
 
 
-class Backend:
+class Backend(Protocol):
+    """
+    The closed surface a client may ask of a backend: the transport boundary.
+
+    Every argument and return value here is plain data -- pydantic models,
+    dataclasses, str, Path, dict -- except ``output``, which returns the value
+    itself, held in memory or read from disk. ``LocalBackend`` does the work in
+    this process; a remote backend forwards each call to a server that holds
+    one.
+    """
+
+    def close(self) -> None:
+        """Release what the backend holds open, such as the record store."""
+        ...
+
+    def reserve(self, label: str, rule: str) -> None:
+        """Hold a label for a rule, so a person cannot land in its batch by hand."""
+        ...
+
+    def spec(self, spec_id: SpecId) -> SerializedWorkflowSpec:
+        """The serialized spec this backend knows by id."""
+        ...
+
+    def specs(self) -> list[SerializedWorkflowSpec]:
+        """Every spec this backend knows, serialized."""
+        ...
+
+    def datasets(self, proposal: str) -> list[Dataset]:
+        """Every dataset the backend's sources know for this proposal, by identity."""
+        ...
+
+    def validate(
+        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
+    ) -> ValidationReport:
+        """Whether a request would be accepted, without submitting it."""
+        ...
+
+    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+        """Submit requests atomically; ``@name`` refs point at members of the group."""
+        ...
+
+    def record(self, record_id: str) -> RunRecord:
+        """A record by id."""
+        ...
+
+    def records(
+        self,
+        *,
+        proposal: str | None = None,
+        spec: SpecId | None = None,
+        status: Status | None = None,
+        label: str | None = None,
+        member_key: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[RunRecord]:
+        """Records matching every given filter, oldest first."""
+        ...
+
+    def latest(
+        self, label: str, proposal: str, member_key: str | None = None
+    ) -> RunRecord | None:
+        """The record that supersedes the others under a label (a slot)."""
+        ...
+
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+        """The batch table under a label: the latest record per member key."""
+        ...
+
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+        """The failed or cancelled latest record of each member that never completed."""
+        ...
+
+    def wait(self, record_ids: list[str], *, timeout: float = 60.0) -> list[RunRecord]:
+        """Block until every record is terminal, or raise past the timeout."""
+        ...
+
+    def cancel(self, record_id: str) -> None:
+        """Cancel a record; a no-op once it is terminal."""
+        ...
+
+    def recompute(self, record_id: str) -> RunRecord:
+        """Run a record's request again as a new record linked to the old one."""
+        ...
+
+    def retry(self, record_id: str) -> RunRecord:
+        """Like ``recompute``, marked as a retry rather than a deliberate rerun."""
+        ...
+
+    def output(self, ref: OutputRef) -> Any:
+        """The value of an output: inline from the record, or from the data store."""
+        ...
+
+    def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
+        """A plain-data view of an output, shaped by ``spec``."""
+        ...
+
+    def write_out(self, ref: OutputRef) -> Path:
+        """Write an in-memory output to disk and return its path."""
+        ...
+
+    def drop(self, ref: OutputRef) -> None:
+        """Evict an output's disk copy; the record and its value elsewhere stay."""
+        ...
+
+    def publish(
+        self, ref: OutputRef, publisher: str, *, allow_reused: bool = False
+    ) -> str:
+        """Publish an output through the named publisher; returns its PID."""
+        ...
+
+    def provenance(self, record_id: str) -> dict[str, Any]:
+        """A self-contained snapshot: raw origins, resolved params, spec, versions."""
+        ...
+
+
+class LocalBackend:
     def __init__(
         self,
-        records: RecordStore,
+        record_store: RecordStore,
         data: DataStore,
         registry: Registry,
         launcher: Launcher,
         sources: Iterable[DatasetSource] = (),
+        publishers: Mapping[str, Publisher] = {},
     ) -> None:
-        self.records = records
+        self.record_store = record_store
         self.data = data
         self.registry = registry
         self.launcher = launcher
         self.sources = list(sources)
+        self.publishers = dict(publishers)
         self._reserved: dict[str, str] = {}
 
     def close(self) -> None:
-        self.records.close()
+        self.record_store.close()
 
     def reserve(self, label: str, rule: str) -> None:
         """
@@ -93,6 +220,25 @@ class Backend:
         runs a trigger loop reserves nothing.
         """
         self._reserved[label] = rule
+
+    def spec(self, spec_id: SpecId) -> SerializedWorkflowSpec:
+        return self.registry.spec(spec_id).serialize()
+
+    def specs(self) -> list[SerializedWorkflowSpec]:
+        return [s.serialize() for s in self.registry.specs()]
+
+    def datasets(self, proposal: str) -> list[Dataset]:
+        """
+        Every dataset the sources know for this proposal, by identity.
+
+        Arrival may be repeated and out of order, so the first dataset of
+        each identity wins; nothing is stored to make the list.
+        """
+        seen: dict[DatasetRef, Dataset] = {}
+        for source in self.sources:
+            for dataset in source.new_datasets(proposal):
+                seen.setdefault(dataset.ref, dataset)
+        return list(seen.values())
 
     def locate(self, ref: DatasetRef) -> Path | None:
         """
@@ -176,9 +322,9 @@ class Backend:
                 return [f'{ref}: no group member named {name!r}']
             producer_spec, producer_proposal = group[name].spec, group[name].proposal
         else:
-            if ref.record not in self.records:
+            if ref.record not in self.record_store:
                 return [f'{ref}: no such record']
-            producer = self.records.get(ref.record)
+            producer = self.record_store.get(ref.record)
             producer_spec, producer_proposal = producer.spec, producer.request.proposal
         if producer_proposal != request.proposal:
             return [f'{ref}: belongs to proposal {producer_proposal}']
@@ -242,9 +388,9 @@ class Backend:
             records[name] = record
             if req.label is not None:
                 latest[(req.label, req.member_key)] = record.id
-        self.records.add(*records.values())
+        self.record_store.add(*records.values())
         self._pump()
-        return {name: self.records.get(r.id) for name, r in records.items()}
+        return {name: self.record_store.get(r.id) for name, r in records.items()}
 
     def _supersedes(
         self, request: RunRequest, latest: Mapping[tuple[str, str | None], str]
@@ -262,13 +408,10 @@ class Backend:
         key = (request.label, request.member_key)
         if key in latest:
             return latest[key]
-        record = self.records.latest(
+        record = self.record_store.latest(
             request.label, request.proposal, member_key=request.member_key
         )
         return None if record is None else record.id
-
-    def submit_one(self, request: RunRequest) -> RunRecord:
-        return self.submit({'request': request})['request']
 
     def recompute(self, record_id: str) -> RunRecord:
         """Run a record's request again as a new record linked to the old one."""
@@ -278,7 +421,7 @@ class Backend:
         return self._derive(record_id, 'retry')
 
     def _derive(self, record_id: str, reason: Any) -> RunRecord:
-        old = self.records.get(record_id)
+        old = self.record_store.get(record_id)
         report = self.validate(old.request)
         if not report.ok:
             raise SubmitError({record_id: report})
@@ -287,12 +430,47 @@ class Backend:
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
         )
-        self.records.add(new)
+        self.record_store.add(new)
         self._pump()
-        return self.records.get(new.id)
+        return self.record_store.get(new.id)
+
+    def record(self, record_id: str) -> RunRecord:
+        return self.record_store.get(record_id)
+
+    def records(
+        self,
+        *,
+        proposal: str | None = None,
+        spec: SpecId | None = None,
+        status: Status | None = None,
+        label: str | None = None,
+        member_key: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[RunRecord]:
+        return self.record_store.list(
+            proposal=proposal,
+            spec=spec,
+            status=status,
+            label=label,
+            member_key=member_key,
+            since=since,
+            limit=limit,
+        )
+
+    def latest(
+        self, label: str, proposal: str, member_key: str | None = None
+    ) -> RunRecord | None:
+        return self.record_store.latest(label, proposal, member_key=member_key)
+
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+        return self.record_store.batch(label, proposal)
+
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+        return self.record_store.members_to_retry(label, proposal)
 
     def cancel(self, record_id: str) -> None:
-        record = self.records.get(record_id)
+        record = self.record_store.get(record_id)
         if record.status.terminal:
             return
         self.launcher.cancel(record)
@@ -303,10 +481,12 @@ class Backend:
 
     def poll(self) -> None:
         """Reconcile dispatched runs with the launcher, then dispatch what can run."""
-        for record in list(self.records.by_status(Status.DISPATCHED, Status.RUNNING)):
+        for record in list(
+            self.record_store.by_status(Status.DISPATCHED, Status.RUNNING)
+        ):
             updated = self.launcher.poll(record)
             if updated.status != record.status:
-                self.records.update(updated)
+                self.record_store.update(updated)
                 if updated.status.terminal:
                     self._propagate(updated)
         self._pump()
@@ -317,7 +497,7 @@ class Backend:
         deadline = time.monotonic() + timeout
         while True:
             self.poll()
-            records = [self.records.get(i) for i in record_ids]
+            records = [self.record_store.get(i) for i in record_ids]
             if all(r.status.terminal for r in records):
                 return records
             if time.monotonic() > deadline:
@@ -330,11 +510,15 @@ class Backend:
         progressed = True
         while progressed:
             progressed = False
-            for stale in list(self.records.by_status(Status.SUBMITTED, Status.WAITING)):
-                record = self.records.get(stale.id)
+            for stale in list(
+                self.record_store.by_status(Status.SUBMITTED, Status.WAITING)
+            ):
+                record = self.record_store.get(stale.id)
                 if record.status.terminal:
                     continue
-                producers = [self.records.get(r.record) for r in record.request.refs()]
+                producers = [
+                    self.record_store.get(r.record) for r in record.request.refs()
+                ]
                 if all(p.status == Status.COMPLETED for p in producers):
                     self._dispatch(record)
                     progressed = True
@@ -345,14 +529,14 @@ class Backend:
                     progressed = True
                 elif record.status == Status.SUBMITTED:
                     record.status = Status.WAITING
-                    self.records.update(record)
+                    self.record_store.update(record)
 
     def _propagate(self, record: RunRecord) -> None:
         """Failure and cancellation flow to every record waiting on this one."""
         if record.status == Status.COMPLETED:
             return
-        for dependent_id in self.records.referencing(record.id):
-            dependent = self.records.get(dependent_id)
+        for dependent_id in self.record_store.referencing(record.id):
+            dependent = self.record_store.get(dependent_id)
             if not dependent.status.terminal:
                 self._inherit(dependent, record)
 
@@ -374,7 +558,7 @@ class Backend:
         record.status = status
         record.failure = failure
         record.finished = datetime.now(UTC)
-        self.records.update(record)
+        self.record_store.update(record)
 
     def _dispatch(self, record: RunRecord) -> None:
         data = data_fields(self.registry.spec(record.spec).params)
@@ -394,7 +578,7 @@ class Backend:
                 return
         params = _inline(record.request.params, literals)
         done = self.launcher.start(record, params, locations)
-        self.records.update(done)
+        self.record_store.update(done)
         if done.status.terminal:
             self._propagate(done)
 
@@ -420,7 +604,7 @@ class Backend:
                 )
             locations[ref] = located
             return None
-        producer = self.records.get(ref.record)
+        producer = self.record_store.get(ref.record)
         if ref.key is not None and ref.key not in (
             producer.output_keys(ref.output) or set()
         ):
@@ -441,7 +625,7 @@ class Backend:
 
     def output(self, ref: OutputRef) -> Any:
         """The value of an output: inline from the record, or from the data store."""
-        record = self.records.get(ref.record)
+        record = self.record_store.get(ref.record)
         if ref.output in record.outputs:
             value = record.outputs[ref.output]
             return value[ref.key] if ref.key is not None else value
@@ -458,11 +642,17 @@ class Backend:
     def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
         return view(self.data.array(ref), spec)
 
+    def write_out(self, ref: OutputRef) -> Path:
+        return self.data.write_out(ref)
+
+    def drop(self, ref: OutputRef) -> None:
+        self.data.drop(ref)
+
     # Publication
 
     def provenance(self, record_id: str) -> dict[str, Any]:
         """A self-contained snapshot: raw origins, resolved params, spec, versions."""
-        record = self.records.get(record_id)
+        record = self.record_store.get(record_id)
         return {
             'record': record.id,
             'spec': str(record.spec),
@@ -479,15 +669,24 @@ class Backend:
         }
 
     def publish(
-        self, ref: OutputRef, publisher: Publisher, *, allow_reused: bool = False
+        self, ref: OutputRef, publisher: str, *, allow_reused: bool = False
     ) -> str:
         """
-        Publish an output: idempotent, from a disk copy, with a provenance snapshot.
+        Publish an output through the named publisher.
 
-        A record whose result came out of a held stage is refused unless allowed,
-        so that what is published was computed from the parameters alone.
+        A publisher is server-side code; a client names it rather than passing
+        it, so that publishing works the same over a remote backend. Idempotent,
+        from a disk copy, with a provenance snapshot. A record whose result came
+        out of a held stage is refused unless allowed, so that what is published
+        was computed from the parameters alone.
         """
-        record = self.records.get(ref.record)
+        try:
+            target = self.publishers[publisher]
+        except KeyError:
+            raise KeyError(
+                f'no publisher {publisher!r}; known: {sorted(self.publishers)}'
+            ) from None
+        record = self.record_store.get(ref.record)
         if ref.output in record.published:
             return record.published[ref.output]
         if record.status != Status.COMPLETED:
@@ -499,11 +698,11 @@ class Backend:
         path = self.data.path(ref)
         if ref.output not in record.publishing:
             record.publishing.append(ref.output)
-            self.records.update(record)
-        pid = publisher.publish(path, self.provenance(record.id))
+            self.record_store.update(record)
+        pid = target.publish(path, self.provenance(record.id))
         record.publishing.remove(ref.output)
         record.published[ref.output] = pid
-        self.records.update(record)
+        self.record_store.update(record)
         return pid
 
 

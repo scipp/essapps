@@ -19,6 +19,7 @@ from ess.apps.spec import (
     data_fields,
     dataset_path,
     dataset_ref,
+    parse_ref,
     ref_fields,
     walk_refs,
 )
@@ -185,3 +186,21 @@ def test_serialized_spec_carries_the_chain_declaration() -> None:
     )
     assert serialized.carry == {'contributions': 'contribution'}
     assert 'scale' in serialized.params_schema['properties']
+
+
+def test_serialized_spec_id_matches_the_workflow_specs() -> None:
+    assert spec().serialize().id == spec().id
+
+
+def test_parse_ref_round_trips_a_dataset_and_an_output() -> None:
+    dataset = dataset_ref(instrument='dream', run=4711)
+    assert parse_ref(str(dataset)) == dataset
+    ref = OutputRef(record='r1', output='data')
+    assert parse_ref(str(ref)) == ref
+    keyed = OutputRef(record='r1', output='banks', key='a')
+    assert parse_ref(str(keyed)) == keyed
+
+
+def test_parse_ref_rejects_text_that_is_neither() -> None:
+    with pytest.raises(ValueError, match='not a reference'):
+        parse_ref('not-a-ref-or-path-dict')

@@ -14,20 +14,20 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .backend import Backend, Publisher, ValidationReport
+from .backend import Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
 from .records import Origin, RunRecord, RunRequest, Status
 from .sources import Dataset, DatasetSource
 from .spec import (
-    DatasetRef,
     Format,
     OutputRef,
     Ref,
+    SerializedWorkflowSpec,
     SpecId,
     WorkflowSpec,
-    data_fields,
+    schema_data_fields,
 )
 from .store import RecordStore
 from .views import ViewSpec
@@ -57,13 +57,11 @@ class Client:
     def close(self) -> None:
         self.backend.close()
 
-    @property
-    def registry(self) -> Registry:
-        return self.backend.registry
+    def spec(self, spec_id: SpecId) -> SerializedWorkflowSpec:
+        return self.backend.spec(spec_id)
 
-    def bind(self, spec: WorkflowSpec, factory: Any) -> None:
-        """Bind a spec to code in this process (local mode)."""
-        self.registry.bind(spec, factory)
+    def specs(self) -> list[SerializedWorkflowSpec]:
+        return self.backend.specs()
 
     def request(
         self,
@@ -93,7 +91,7 @@ class Client:
         return self.backend.validate(request)
 
     def submit(self, request: RunRequest) -> RunRecord:
-        return self.backend.submit_one(request)
+        return self.backend.submit({'request': request})['request']
 
     def submit_group(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
         """Submit together; ``@name`` in a reference names a member of the group."""
@@ -104,23 +102,9 @@ class Client:
     ) -> RunRecord:
         return self.submit(self.request(spec, params, **kwargs))
 
-    @property
-    def sources(self) -> list[DatasetSource]:
-        """Where datasets come from; the picker lists from every one of them."""
-        return self.backend.sources
-
     def datasets(self) -> list[Dataset]:
-        """
-        Every dataset the sources know for this proposal, by identity.
-
-        Arrival may be repeated and out of order, so the first dataset of
-        each identity wins; nothing is stored to make the list.
-        """
-        seen: dict[DatasetRef, Dataset] = {}
-        for source in self.sources:
-            for dataset in source.new_datasets(self.proposal):
-                seen.setdefault(dataset.ref, dataset)
-        return list(seen.values())
+        """Every dataset the backend's sources know for this proposal, by identity."""
+        return self.backend.datasets(self.proposal)
 
     def pick(self, format: Format | None = None) -> list[Candidate]:
         """
@@ -135,9 +119,11 @@ class Client:
 
     def _picked_outputs(self) -> Iterator[Candidate]:
         for record in self.records(status=Status.COMPLETED):
-            if record.spec not in self.registry:
+            try:
+                spec = self.spec(record.spec)
+            except KeyError:
                 continue
-            outputs = data_fields(self.registry.spec(record.spec).outputs)
+            outputs = schema_data_fields(spec.outputs_schema)
             for ref in record.stored_outputs:
                 if (data := outputs.get(ref.output)) is not None:
                     yield Candidate(
@@ -157,22 +143,22 @@ class Client:
             )
 
     def record(self, record_id: str) -> RunRecord:
-        return self.backend.records.get(record_id)
+        return self.backend.record(record_id)
 
     def records(self, **filters: Any) -> list[RunRecord]:
-        return self.backend.records.list(proposal=self.proposal, **filters)
+        return self.backend.records(proposal=self.proposal, **filters)
 
     def latest(self, label: str, member_key: str | None = None) -> RunRecord | None:
         """The record that supersedes the others under a label (a slot)."""
-        return self.backend.records.latest(label, self.proposal, member_key=member_key)
+        return self.backend.latest(label, self.proposal, member_key=member_key)
 
     def batch(self, label: str) -> list[RunRecord]:
         """The batch table under a label: the latest record per member key."""
-        return self.backend.records.batch(label, self.proposal)
+        return self.backend.batch(label, self.proposal)
 
     def members_to_retry(self, label: str) -> list[RunRecord]:
         """The failed or cancelled latest record of each member that never completed."""
-        return self.backend.records.members_to_retry(label, self.proposal)
+        return self.backend.members_to_retry(label, self.proposal)
 
     def wait(
         self, records: Iterable[RunRecord | str], timeout: float = 60.0
@@ -200,30 +186,28 @@ class Client:
         return self.backend.view(ref, ViewSpec(**spec))
 
     def write_out(self, ref: OutputRef) -> Path:
-        return self.backend.data.write_out(ref)
+        return self.backend.write_out(ref)
 
     def drop(self, ref: OutputRef) -> None:
-        self.backend.data.drop(ref)
+        self.backend.drop(ref)
 
-    def publish(self, ref: OutputRef, publisher: Publisher, **kwargs: Any) -> str:
+    def publish(self, ref: OutputRef, publisher: str, **kwargs: Any) -> str:
         return self.backend.publish(ref, publisher, **kwargs)
 
     def provenance(self, record: RunRecord | str) -> dict[str, Any]:
         return self.backend.provenance(record if isinstance(record, str) else record.id)
 
 
-def local(
+def local_backend(
     root: Path | str,
     *,
-    instrument: str,
-    proposal: str,
-    submitter: str,
     registry: Registry | str | None = None,
     sources: Iterable[DatasetSource] = (),
     throwaway: bool = False,
-) -> Client:
+    publishers: Mapping[str, Publisher] = {},
+) -> LocalBackend:
     """
-    Local mode: client, backend, launcher, session, and data store in this process.
+    Local mode: backend, launcher, and data store in this process.
 
     ``sources`` is where datasets come from, a folder in the local application.
     With ``throwaway`` every run is a subprocess (the shared-mode shape), and
@@ -245,7 +229,21 @@ def local(
             else (registry or Registry())
         )
         launcher = SessionLauncher(reg, data)
-    backend = Backend(records, data, reg, launcher, sources)
+    return LocalBackend(records, data, reg, launcher, sources, publishers)
+
+
+def local(
+    root: Path | str,
+    *,
+    instrument: str,
+    proposal: str,
+    submitter: str,
+    **backend_kwargs: Any,
+) -> Client:
+    """Local mode: client and backend in this process; see :func:`local_backend`."""
     return Client(
-        backend, instrument=instrument, proposal=proposal, submitter=submitter
+        local_backend(root, **backend_kwargs),
+        instrument=instrument,
+        proposal=proposal,
+        submitter=submitter,
     )

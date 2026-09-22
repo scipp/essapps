@@ -138,7 +138,7 @@ def _combine(
     combine covering a record that is no longer current, and then the combine is
     made over all current members, so that a correction is not counted twice.
     """
-    spec = client.registry.spec(series.template.spec)
+    spec = client.spec(series.template.spec)
     members = _current_members(client, rule, series, label, value)
     members |= {str(group[name].member_key): GROUP_PREFIX + name for name in arrived}
     contributions = [

@@ -80,7 +80,11 @@ class RecordStore:
         except BlockingIOError as e:
             self._lock.close()
             raise StoreLockedError(f'{self.path} is held by another backend') from e
-        self._db = sqlite3.connect(self.path, isolation_level=None)
+        # Single-writer by the flock; which thread writes is the backend's
+        # business, and the server serializes its calls with one lock.
+        self._db = sqlite3.connect(
+            self.path, isolation_level=None, check_same_thread=False
+        )
         self._db.execute('PRAGMA journal_mode=WAL')
         self._db.executescript(_SCHEMA)
         row = self._db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()

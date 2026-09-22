@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from ess.apps.client import Client, local
 from ess.apps.examples import LOAD, registry, write_run
 from ess.apps.rules import Template
-from ess.apps.sources import FolderSource
+from ess.apps.sources import DatasetSource, FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
 
 
@@ -19,16 +21,28 @@ def datasets(tmp_path: Path) -> Path:
     return folder
 
 
-@pytest.fixture
-def client(tmp_path: Path, datasets: Path):
-    client = local(
-        tmp_path / 'store',
+def make_client(
+    root: Path,
+    datasets_folder: Path,
+    *,
+    sources: Iterable[DatasetSource] = (),
+    **kwargs: Any,
+) -> Client:
+    """A client over a fresh store, with the folder source every test needs."""
+    return local(
+        root,
         instrument='dream',
         proposal='p1',
         submitter='simon',
         registry=registry(),
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets_folder, '*.h5'), *sources],
+        **kwargs,
     )
+
+
+@pytest.fixture
+def client(tmp_path: Path, datasets: Path):
+    client = make_client(tmp_path / 'store', datasets)
     yield client
     client.close()
 
