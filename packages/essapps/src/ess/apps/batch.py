@@ -277,12 +277,24 @@ def _as_of(client: Client, dataset: Dataset, field: str, as_of: AsOf) -> Dataset
 def _typed(
     typed: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None,
 ) -> dict[str, dict[str, Any]]:
-    """Per-member typed values; a frame is indexed by the member key."""
+    """
+    Per-member typed values; a frame is indexed by the member key.
+
+    A blank cell of a frame, ``None`` or NaN, is not a typed value: it falls
+    through the ladder like a blank in a batch file.
+    """
     if typed is None:
         return {}
     if isinstance(typed, pd.DataFrame):
         typed = typed.to_dict('index')
-    return {str(key): dict(row) for key, row in typed.items()}
+    return {
+        str(key): {field: value for field, value in row.items() if not _blank(value)}
+        for key, row in typed.items()
+    }
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and value != value)
 
 
 def backlog(client: Client, rule: Rule) -> dict[str, RunRequest]:

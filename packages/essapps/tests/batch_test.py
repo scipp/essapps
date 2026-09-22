@@ -161,6 +161,20 @@ def test_apply_accepts_a_frame_indexed_by_member_key(
     assert client.submit_group(group)['310K'].outputs['total']['value'] == 35.0
 
 
+def test_a_blank_cell_of_a_typed_frame_falls_through_to_the_template(
+    client: Client, template: Template, scan: dict[str, DatasetRef]
+) -> None:
+    frame = pd.DataFrame(
+        {'run': list(scan.values()), 'scale': [None, 5.0]}, index=list(scan)
+    )
+    group = apply(client, template, typed=frame, label='scan1')
+    assert [r.params['scale'] for r in group.values()] == [2.0, 5.0]
+    assert [list(r.submission.typed) for r in group.values()] == [
+        ['run'],
+        ['run', 'scale'],
+    ]
+
+
 def test_a_corrected_member_supersedes_the_batch_record(
     client: Client, template: Template, scan: dict[str, DatasetRef]
 ) -> None:
