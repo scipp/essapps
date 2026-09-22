@@ -37,7 +37,7 @@ What the transport cost, in lines:
 |---|---|---|
 | `server` | 263 | one route per protocol method, the lock, the poller |
 | `remote` | 268 | `RemoteBackend`, `remote()` |
-| `cli` | 225 | `essapps serve`, `submit`, `wait`, `output` |
+| `cli` | 234 | `essapps serve`, `specs`, `submit`, `wait`, `output` |
 
 Closing the backend surface into the protocol changed no behaviour.
 The poller thread is the one structural addition: in local mode `wait` drives `poll`, and in the server nothing else would.

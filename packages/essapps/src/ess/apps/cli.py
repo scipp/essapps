@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The ``essapps`` command: serve a backend, submit a run, wait for it, read an
-output.
+The ``essapps`` command: serve a backend, list its specs, submit a run, wait
+for it, read an output.
 
 Records are the only state kept between invocations, which is what these
-three commands are meant to show: the shape a service needs on top of the
-client interface is small.
+commands are meant to show: the shape a service needs on top of the client
+interface is small.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import click
 from .backend import SubmitError
 from .client import Client, local_backend
 from .records import Status
-from .remote import remote
+from .remote import RemoteBackend, remote
 from .server import serve as serve_backend
 from .sources import FolderSource
 from .spec import OutputRef, SpecId, parse_ref
@@ -90,6 +90,15 @@ def serve(
         sources=[FolderSource(datasets, pattern)],
     )
     serve_backend(backend, host=host, port=port)
+
+
+@main.command()
+@click.pass_obj
+def specs(env: Env) -> None:
+    """List the backend's specs, one per line: id, title, description."""
+    with closing(RemoteBackend(env.url)) as backend:
+        for spec in backend.specs():
+            click.echo(f'{spec.id}\t{spec.title}\t{spec.description}')
 
 
 def _unwrap_optional(schema: dict[str, Any]) -> dict[str, Any]:

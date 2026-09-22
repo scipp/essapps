@@ -90,6 +90,7 @@ client = remote('http://127.0.0.1:8000', instrument='dream', proposal='p1', subm
 The `essapps` command does the same from a shell, with the flags of `submit` generated from the spec's parameter schema (`essapps submit load/v1 --help` lists them):
 
 ```sh
+essapps specs                                          # id, title, description per line
 export ESSAPPS_INSTRUMENT=dream ESSAPPS_PROPOSAL=p1
 essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id
 essapps wait <record>

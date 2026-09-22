@@ -44,6 +44,14 @@ def test_submit_wait_output_round_trip(
     assert '72.0' in result.output
 
 
+def test_specs_lists_id_title_and_description_without_a_proposal(
+    runner: CliRunner, server_url: str
+) -> None:
+    result = runner.invoke(main, ['specs'], env={'ESSAPPS_URL': server_url})
+    assert result.exit_code == 0, result.output
+    assert 'load/v1\tLoad\tLoad a run from a scipp HDF5 file' in result.output
+
+
 def test_submit_help_lists_the_generated_flags(
     runner: CliRunner, env: Mapping[str, str]
 ) -> None:
