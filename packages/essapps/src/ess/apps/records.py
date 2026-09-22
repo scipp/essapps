@@ -53,8 +53,8 @@ class Submission(BaseModel, frozen=True):
 
     The resolved request alone reproduces the run; this says which template
     version, rule version, lookup version and lookup entry filled it, and which
-    values the submitter typed beyond them, so that a reprocess under a new
-    template or lookup version carries what was typed and recomputes what was
+    values the submitter pinned beyond them, so that a reprocess under a new
+    template or lookup version carries what was pinned and recomputes what was
     filled.
     """
 
@@ -64,7 +64,7 @@ class Submission(BaseModel, frozen=True):
     entry: str | None = Field(
         default=None, description="Name of the entry of ``lookup`` that matched."
     )
-    typed: dict[str, Plain] = Field(
+    pinned: dict[str, Plain] = Field(
         default_factory=dict,
         description="Values the submitter supplied beyond template and lookup.",
     )
@@ -96,7 +96,7 @@ class RunRequest(BaseModel, frozen=True):
     submission: Submission = Field(
         default_factory=Submission,
         description="How the request was made: template, rule, lookup entry, "
-        "and the values the submitter typed.",
+        "and the values the submitter pinned.",
     )
 
     def refs(self) -> list[OutputRef]:

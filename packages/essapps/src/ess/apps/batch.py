@@ -8,7 +8,7 @@ the one operation: it makes a batch from a rule, or from a template and its
 lookup. :func:`backlog`, :func:`reprocess`, and :func:`rerun` call it with a
 query. :class:`TriggerLoop` calls it with one dataset whenever the five clauses
 of :func:`trigger_status` hold, and keeps no memory of what it fired on.
-:func:`shadowed` is the check a reprocess itself does not make: which typed
+:func:`shadowed` is the check a reprocess itself does not make: which pinned
 values it would carry forward though their fill has since changed.
 
 Nothing here stores a batch: a batch is the records under one label, and
@@ -39,7 +39,7 @@ def apply(
     client: Client,
     rule: Rule | Template,
     datasets: Iterable[Dataset] = (),
-    typed: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None = None,
+    pinned: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None = None,
     *,
     lookup: Lookup | None = None,
     label: str | None = None,
@@ -48,11 +48,11 @@ def apply(
     Make requests from a rule, or from a template with its lookup.
 
     The members are the given datasets, keyed by dataset identity, or the keys
-    of ``typed`` when no dataset is given, which is the batch form. Each member
+    of ``pinned`` when no dataset is given, which is the batch form. Each member
     is filled through the precedence ladder, the template, then the lookup entry
-    that matched its dataset, then the values the submitter typed, over the
-    dataset itself, which fills the template's dataset field. ``typed`` may be a
-    frame with the member key as index and the typed values as columns.
+    that matched its dataset, then the values the submitter pinned, over the
+    dataset itself, which fills the template's dataset field. ``pinned`` may be a
+    frame with the member key as index and the pinned values as columns.
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
@@ -65,7 +65,7 @@ def apply(
     series = of_rule.series if of_rule is not None else None
     lookup = lookup or (of_rule.lookup if of_rule is not None else None)
     label = label or rule.name
-    values = _typed(typed)
+    values = _pinned(pinned)
     datasets = list(datasets)
     members: list[tuple[str, Dataset | None]] = (
         [(str(d.ref), d) for d in datasets]
@@ -92,7 +92,7 @@ def apply(
                 rule=of_rule.id if of_rule is not None else None,
                 lookup=None if lookup is None else lookup.id,
                 entry=None if entry is None else entry.name,
-                typed=dict(values.get(key, {})),
+                pinned=dict(values.get(key, {})),
             ),
         )
         if of_rule is not None and series is not None and dataset is not None:
@@ -274,22 +274,22 @@ def _as_of(client: Client, dataset: Dataset, field: str, as_of: AsOf) -> Dataset
     return best.ref
 
 
-def _typed(
-    typed: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None,
+def _pinned(
+    pinned: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None,
 ) -> dict[str, dict[str, Any]]:
     """
-    Per-member typed values; a frame is indexed by the member key.
+    Per-member pinned values; a frame is indexed by the member key.
 
-    A blank cell of a frame, ``None`` or NaN, is not a typed value: it falls
+    A blank cell of a frame, ``None`` or NaN, is not a pinned value: it falls
     through the ladder like a blank in a batch file.
     """
-    if typed is None:
+    if pinned is None:
         return {}
-    if isinstance(typed, pd.DataFrame):
-        typed = typed.to_dict('index')
+    if isinstance(pinned, pd.DataFrame):
+        pinned = pinned.to_dict('index')
     return {
         str(key): {field: value for field, value in row.items() if not _blank(value)}
-        for key, row in typed.items()
+        for key, row in pinned.items()
     }
 
 
@@ -330,7 +330,7 @@ def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
     The members whose latest record under the label came from an older rule version.
 
     Offered when a rule moves to a new template or lookup version. What the
-    submitter typed is carried forward and what the template and lookup filled
+    submitter pinned is carried forward and what the template and lookup filled
     is made again from the new versions.
     """
     return _again(client, rule, _stale(client, rule))
@@ -372,20 +372,20 @@ def _again(
     *,
     label: str | None = None,
 ) -> dict[str, RunRequest]:
-    """Apply again over the datasets of these records, carrying the typed values."""
+    """Apply again over the datasets of these records, carrying the pinned values."""
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
     members = _selected_members(known, rule, records)
     return apply(
         client,
         rule,
         [known[str(r.request.member_key)] for r in members],
-        {str(r.request.member_key): r.request.submission.typed for r in members},
+        {str(r.request.member_key): r.request.submission.pinned for r in members},
         label=label,
     )
 
 
-def _without_typed(client: Client, rule: Rule, dataset: Dataset) -> dict[str, Any]:
-    """The template and lookup fill for a dataset, before what a person typed."""
+def _without_pinned(client: Client, rule: Rule, dataset: Dataset) -> dict[str, Any]:
+    """The template and lookup fill for a dataset, before what a person pinned."""
     template = rule.template
     entry = rule.lookup.entry(dataset) if rule.lookup is not None else None
     return template.params | _member_fill(client, template, entry, dataset)
@@ -393,42 +393,42 @@ def _without_typed(client: Client, rule: Rule, dataset: Dataset) -> dict[str, An
 
 def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
     """
-    Typed values a reprocess would carry forward though their fill changed.
+    Pinned values a reprocess would carry forward though their fill changed.
 
-    A reprocess is a rebase of what was typed onto the new template and lookup:
-    it keeps the typed values and recomputes the rest. The precedence ladder
-    lets a typed value win over the lookup, so a value typed under ``previous``
+    A reprocess is a rebase of what was pinned onto the new template and lookup:
+    it keeps the pinned values and recomputes the rest. The precedence ladder
+    lets a pinned value win over the lookup, so a value pinned under ``previous``
     silently shadows a fill that ``rule``'s lookup now gives differently. This
     is the three-way compare a rebase does and the ladder does not, so that a
-    person decides whether the typed value still stands.
+    person decides whether the pinned value still stands.
 
-    A typed value replaces its field whole, so a model typed to move one of its
+    A pinned value replaces its field whole, so a model pinned to move one of its
     values shadows the others as well. The rows are therefore per leaf, named as
-    in :func:`batch_table`: the leaves of a typed field whose fill changed.
+    in :func:`batch_table`: the leaves of a pinned field whose fill changed.
     """
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
     members = _selected_members(known, rule, _stale(client, rule))
     rows: list[dict[str, Any]] = []
     for record in members:
         dataset = known[str(record.request.member_key)]
-        was = _without_typed(client, previous, dataset)
-        now = _without_typed(client, rule, dataset)
-        for field, value in record.request.submission.typed.items():
-            typed = _leaves(field, value)
+        was = _without_pinned(client, previous, dataset)
+        now = _without_pinned(client, rule, dataset)
+        for field, value in record.request.submission.pinned.items():
+            pinned = _leaves(field, value)
             before = _leaves(field, was.get(field))
             after = _leaves(field, now.get(field))
             rows += [
                 {
                     'member': record.request.member_key,
                     'field': leaf,
-                    'typed': typed.get(leaf),
+                    'pinned': pinned.get(leaf),
                     'was': before.get(leaf),
                     'now': after.get(leaf),
                 }
-                for leaf in typed | before | after
+                for leaf in pinned | before | after
                 if before.get(leaf) != after.get(leaf)
             ]
-    frame = pd.DataFrame(rows, columns=['member', 'field', 'typed', 'was', 'now'])
+    frame = pd.DataFrame(rows, columns=['member', 'field', 'pinned', 'was', 'now'])
     return frame.set_index('member')
 
 
@@ -517,8 +517,8 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     row per member, the member key as index, and each record's rule version and
     lookup entry as columns. The value columns are the fields that differ per
     member, which are the blanks of the rule's template and every field a member
-    typed. Each shows the value the request was made with, whoever supplied it,
-    and ``typed`` names the fields of the row a person typed. A field holding a
+    pinned. Each shows the value the request was made with, whoever supplied it,
+    and ``pinned`` names the fields of the row a person pinned. A field holding a
     model is one column per leaf, ``q.start`` and ``q.stop``, and a reference
     is shown as the reference rather than in its stored form. A rule's
     exclusions are rows without a record.
@@ -528,7 +528,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     records = client.batch(str(label))
     fields = dict.fromkeys(rule.template.blanks if rule is not None else ())
     for record in records:
-        fields |= dict.fromkeys(record.request.submission.typed)
+        fields |= dict.fromkeys(record.request.submission.pinned)
     rows: dict[str, dict[str, Any]] = {}
     for record in records:
         submission = record.request.submission
@@ -541,7 +541,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
             'rule': submission.rule,
             'lookup': submission.lookup,
             'entry': submission.entry,
-            'typed': ', '.join(submission.typed),
+            'pinned': ', '.join(submission.pinned),
         }
         for field in fields:
             if field in params:
@@ -570,7 +570,7 @@ def dataset_table(client: Client) -> pd.DataFrame:
     The index is the dataset identity, which is the member key of a rule's
     batch, so ``batch_table(client, rule).join(dataset_table(client))`` says
     which sample each member is. The batch table does not make that join itself:
-    it is a query over the records alone, and a batch typed by hand is keyed by
+    it is a query over the records alone, and a batch made by hand is keyed by
     names that are no dataset.
     """
     rows = {str(dataset.ref): dataset.fields for dataset in client.datasets()}

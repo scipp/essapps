@@ -299,7 +299,7 @@ group = apply(client, rule, datasets)      # preview through validate, then subm
 
 - **`apply` is the one operation that makes requests.**
   It fills the template for each dataset and returns a group to preview and submit.
-  Values come from one ladder: template, then lookup entry, then what the submitter typed.
+  Values come from one ladder: template, then lookup entry, then what the submitter pinned.
   A person at a batch form calls it with a list of datasets, and the trigger loop calls it with each new dataset.
   Backlog, reprocess, and rerun call it with a query.
 - **A batch is the records under one label**, each with a **member key**.

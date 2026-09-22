@@ -14,7 +14,7 @@ template = Template(name='load-defaults', spec=LOAD.id,
                     params={'scale': 2.0}, blanks=('run',))
 
 group = apply(client, template, label='scan',
-              typed={'300K': {'run': dataset_ref(instrument='dream', run=2)},
+              pinned={'300K': {'run': dataset_ref(instrument='dream', run=2)},
                      '310K': {'run': dataset_ref(instrument='dream', run=3)}})
 
 reports = {key: client.validate(request) for key, request in group.items()}
@@ -24,8 +24,8 @@ batch_table(client, 'scan')
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
 `batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
-The value columns are the fields that differ per member, which are the template's blanks and every field a member typed.
-Each shows the value the request was made with, whoever supplied it, and the `typed` column names the fields of the row a person typed.
+The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
+Each shows the value the request was made with, whoever supplied it, and the `pinned` column names the fields of the row a person pinned.
 A field that holds a model is one column per leaf, `q.start` and `q.num_bins`, which is how a form would lay it out.
 A rule's member keys are dataset identities; `dataset_table` is the frame of the datasets and their fields under the same key, and joining it onto the batch table says which sample each member is.
 That table is a query over the records, not a stored object.
@@ -36,7 +36,7 @@ Automatic reduction is this scan plus a lookup, a selector, and a loop that call
 **A template is a stored, immutable, versioned partial request.**
 It comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and keeps every other field literal.
 A template moves to a new version, or to a new spec version, by copy through `Template.revise`, and the records say which version filled them.
-Its parameters, like a lookup's fills and the typed values on a record, are held in the plain JSON form a request's parameters have, whatever objects the author passed, so that stored data compares and displays alike whether it was just made or read back.
+Its parameters, like a lookup's fills and the pinned values on a record, are held in the plain JSON form a request's parameters have, whatever objects the author passed, so that stored data compares and displays alike whether it was just made or read back.
 A batch rerun under the copy is a new batch whose records link to the old ones.
 
 **A lookup is stored, versioned data beside a template that supplies fills per dataset.**
@@ -51,10 +51,10 @@ This is how a sample gets the last can, dark frame, or empty-beam run measured b
 Because the fill is anchored to the member's own dataset, the backlog and a reprocess give a sample the same can the live loop gave it, as `test_backlog_and_reprocess_resolve_the_same_can_as_the_live_loop` checks, and the record holds the reference it resolved to.
 A member with no matching dataset before it is refused, visibly, in the trigger status.
 
-**Precedence is one ladder: template, then lookup entry, then the values the submitter typed.**
+**Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
-The record stores the resolved result, and its `Submission` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the typed values.
-That is what lets a reprocess under a new template or lookup version carry forward what was typed and fill again what was filled.
+The record stores the resolved result, and its `Submission` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
+That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
 ## Labels, batches, and slots
 
@@ -73,7 +73,7 @@ As the single writer it serializes two requests under one label and member key, 
 **A rule's label is reserved.**
 The trigger loop reserves it with the backend, which then refuses a request under it that the rule did not fill, so a batch a person happens to name after a rule cannot land in the rule's table.
 A run the selector missed is added by calling `apply` on the rule by hand, which sets the rule on the submission and so passes the reservation.
-A member a person corrects is applied again with typed values, which supersedes the rule's record under the same member key.
+A member a person corrects is applied again with pinned values, which supersedes the rule's record under the same member key.
 
 A **slot** is a label with no member key, owned by one interactive tool, so that hundreds of reruns of one plot are one thing a person sees.
 [stages.md](stages.md) describes slots.
@@ -141,11 +141,11 @@ Each returns a group that `validate` shows before anything is created, and none 
 - **`reprocess`**: the members whose latest record under the rule's label came from an older rule version, offered when the rule moves to a new template or lookup version.
 - **`rerun`**: the members under a label that have no completed record.
 
-**A reprocess is a rebase of the typed values onto the new template and lookup.**
-It keeps what the submitter typed and fills again what the template and the lookup filled.
-The ladder would therefore keep, silently, a Q range a user typed for one member over the Q range the instrument scientist has since corrected for that member's angle.
-`shadowed` is the three-way compare the ladder does not make: per member and field it reports the typed value, the fill under the old versions, and the fill under the new ones, and the person decides whether the typed value stands.
-A typed value replaces its field whole, so a Q range typed to move its lower edge also pins the number of bins; `shadowed` therefore reports per leaf, under the names the batch table uses, and names `q.num_bins` when only that default changed.
+**A reprocess is a rebase of the pinned values onto the new template and lookup.**
+It keeps what the submitter pinned and fills again what the template and the lookup filled.
+The ladder would therefore keep, silently, a Q range a user pinned for one member over the Q range the instrument scientist has since corrected for that member's angle.
+`shadowed` is the three-way compare the ladder does not make: per member and field it reports the pinned value, the fill under the old versions, and the fill under the new ones, and the person decides whether the pinned value stands.
+A pinned value replaces its field whole, so a Q range pinned to move its lower edge also pins the number of bins; `shadowed` therefore reports per leaf, under the names the batch table uses, and names `q.num_bins` when only that default changed.
 
 **The backend never skips a request because an equal one completed earlier.**
 A run that silently did not happen is a decision the user cannot see, and [snakemake.md](prior-art/snakemake.md) records what that cost elsewhere.
@@ -193,8 +193,8 @@ The batch table is a frame, and the pieces above are how it is built:
 | Template | column defaults, one row broadcast over the frame |
 | Lookup | a join against the dataset metadata on a value within a tolerance, a pattern, or an interval, the wildcard as fallback; two matches are an error, not the nearest |
 | As-of fill | `merge_asof` of each member against the datasets matching the criteria, direction backward |
-| Precedence ladder | `typed.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
-| Typed values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
+| Precedence ladder | `pinned.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
+| Pinned values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
 | Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
 | Chained combine | a cumulative reduction within the group; the superseded partials are its intermediate values |
@@ -204,7 +204,7 @@ The picture is exact for the view and wrong for the store.
 A frame is a stored, mutable table, and Mantid's runs table was one, which is where staleness by reset and the write-back into cells came from.
 Here the records are the append-only log and the frame is a query over them.
 
-The client interface speaks the picture anyway: `batch_table` returns a `DataFrame` and `apply` accepts one, with the member key as index and the typed values as columns, which is the ISIS batch CSV on disk.
+The client interface speaks the picture anyway: `batch_table` returns a `DataFrame` and `apply` accepts one, with the member key as index and the pinned values as columns, which is the ISIS batch CSV on disk.
 pandas stays at the client.
 Two words clash: a series here is a groupby group, not a `pandas.Series`, and `apply` here is a merge and a fill, not `DataFrame.apply`.
 
@@ -255,4 +255,4 @@ No current workflow needs it, and if one arises it is a rule on the completed pr
 - An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
 - The acquisition must write the fields a lookup or a selector matches on into the catalogue, which is a requirement on the instrument to be stated to the instrument teams early.
 - A series a person defines by hand, "these runs, and keep combining as more arrive", has no place here.
-  It would be a rule with typed members instead of a selector, and it is left out until someone asks for it.
+  It would be a rule with members a person lists instead of a selector, and it is left out until someone asks for it.

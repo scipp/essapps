@@ -26,8 +26,8 @@ For outputs the nearer prior art is a build system, Nix or Bazel, and nothing fr
 | Reflog | The records under a label, in order | Git keeps it per ref; here it is a query |
 | Notes | Annotations | Attached beside the object, never inside it, read by nothing |
 | Working tree, index, commit | Apply, validate, submit | Nothing exists until the last step |
-| Config layers with `--show-origin` | Template, lookup entry, typed values; the submission names which applied | The same ladder |
-| Rebase | Reprocess under a new template or lookup version | Typed values are the patch, the template and lookup are the base |
+| Config layers with `--show-origin` | Template, lookup entry, pinned values; the submission names which applied | The same ladder |
+| Rebase | Reprocess under a new template or lookup version | Pinned values are the patch, the template and lookup are the base |
 | Push and fetch of a reachable closure | The deferred upload of records from a local store | Refs stay local; objects travel |
 | Hooks | The trigger loop | Git's are unversioned scripts; the industry replaced them with CI configuration in the repository, which is the sketch's rule as versioned data |
 | LFS pointer | The record saying an output exists, the data store holding bytes | Hash and size in the pointer, bytes elsewhere |
@@ -46,10 +46,10 @@ A retry supersedes the failed record it derives from, and a chained combine supe
 Two links stay distinct, as in git: the supersedes link says where a record sits in a name's history, and the derivation link says why the request was made.
 
 **Reprocess is a rebase, and a rebase can conflict.**
-The precedence ladder (D14) makes typed values a patch over the template and lookup, and the reprocess replays the patch over a new base: `git rebase`.
+The precedence ladder (D14) makes pinned values a patch over the template and lookup, and the reprocess replays the patch over a new base: `git rebase`.
 Git's three-way merge flags the case where the base changed a line the patch also changed, instead of silently taking either side.
-The sketch's ladder always let the typed value win, so a Q range a user typed for one member silently shadowed a Q range the instrument scientist corrected in the lookup for that angle.
-The reprocess now flags the members where a typed value shadows a field whose fill changed between the versions, a three-way compare of old fill, new fill, and typed value over plain JSON, and the person decides.
+The sketch's ladder always let the pinned value win, so a Q range a user pinned for one member silently shadowed a Q range the instrument scientist corrected in the lookup for that angle.
+The reprocess now flags the members where a pinned value shadows a field whose fill changed between the versions, a three-way compare of old fill, new fill, and pinned value over plain JSON, and the person decides.
 
 **Names need a namespace.**
 Git keeps branches, tags, remote branches, and notes under separate prefixes, warns when a bare name is ambiguous, and still spent years on the mess of `refs/` before that settled.
@@ -112,7 +112,7 @@ For records a UUID serves, since a record is written once by one writer; for out
 | Lesson | Change to the sketch | Where |
 |---|---|---|
 | A name's history is a chain | The record names the record it supersedes, filled by the backend at submission; the latest is the record nothing supersedes; the slot diff is against it | Records; D10; Components; Glossary |
-| Rebase conflicts | The reprocess flags members where a typed value shadows a field whose fill changed | D14 |
+| Rebase conflicts | The reprocess flags members where a pinned value shadows a field whose fill changed | D14 |
 | Namespaces | A rule's label is reserved; a missed run or a corrected member goes through apply | D14; Components; Glossary |
 | A name as a stand-in, withdrawn | The as-of fill in the lookup, resolved against the member, for cans, dark frames, and empty-beam runs | D14; Glossary |
 

@@ -23,7 +23,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   Mutable, outside provenance, read by nothing in the framework.
 - **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole.
   Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations.
-  In a notebook it accepts a DataFrame, member key as index and typed values as columns.
+  In a notebook it accepts a DataFrame, member key as index and pinned values as columns.
   See [rules.md](rules.md).
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results.
   In esslivedata, "backend services" are the Kafka worker processes, which are unrelated.
@@ -80,6 +80,9 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   sciline calls these member keys, which this document does not, because a member key here is the label of a batch member.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.
+- **Pinned values**: the values of a request set for one member beyond the template and the lookup, the top rung of the precedence ladder.
+  The submission keeps them apart from the resolved parameters, so a reprocess under a new template or lookup version fills the rest again and leaves them alone.
+  See [rules.md](rules.md#templates-and-lookups).
 - **Predecessor**: the request a new request is compared with when the session chooses the stage inputs.
   It is the request the new one supersedes, or, for a new member of a batch, the latest request under the same label.
   A request without a predecessor has nothing to differ from.
@@ -126,7 +129,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Stage output**: an output that one spec produces and another takes as input, kept as a record.
   The word names a role, not a kind.
   See [records.md](records.md#reuse-means-a-workflow-boundary).
-- **Submission**: the field on a run record that says how its request was made: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values the submitter typed beyond template and lookup.
+- **Submission**: the field on a run record that says how its request was made: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values the submitter pinned beyond template and lookup.
   Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
   See [rules.md](rules.md).

@@ -124,12 +124,12 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     )
     scales = {key: request.params['scale'] for key, request in group.items()}
     assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
-    assert scales['pid:pid/2'] == 4.0  # what was typed over both
+    assert scales['pid:pid/2'] == 4.0  # what was pinned over both
     assert scales['run:dream/1'] == 2.0  # the template, matching no entry
-    typed = group['pid:pid/2'].submission
-    assert typed.typed == {'scale': 4.0}
-    assert typed.entry == 'rest'
-    assert typed.template == 'load-defaults/v1'
+    submission = group['pid:pid/2'].submission
+    assert submission.pinned == {'scale': 4.0}
+    assert submission.entry == 'rest'
+    assert submission.template == 'load-defaults/v1'
     assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
 
 
@@ -137,7 +137,7 @@ def test_apply_without_datasets_is_the_batch_form(
     client: Client, template: Template, scan: dict[str, DatasetRef]
 ) -> None:
     group = apply(
-        client, template, typed={k: {'run': v} for k, v in scan.items()}, label='scan1'
+        client, template, pinned={k: {'run': v} for k, v in scan.items()}, label='scan1'
     )
     records = client.submit_group(group)
     assert {k: r.status for k, r in records.items()} == dict.fromkeys(
@@ -156,7 +156,7 @@ def test_apply_accepts_a_frame_indexed_by_member_key(
     frame = pd.DataFrame(
         {'run': list(scan.values()), 'scale': [1.0, 5.0]}, index=list(scan)
     )
-    group = apply(client, template, typed=frame, label='scan1')
+    group = apply(client, template, pinned=frame, label='scan1')
     assert [r.params['scale'] for r in group.values()] == [1.0, 5.0]
     assert client.submit_group(group)['310K'].outputs['total']['value'] == 35.0
 
@@ -167,9 +167,9 @@ def test_a_blank_cell_of_a_typed_frame_falls_through_to_the_template(
     frame = pd.DataFrame(
         {'run': list(scan.values()), 'scale': [None, 5.0]}, index=list(scan)
     )
-    group = apply(client, template, typed=frame, label='scan1')
+    group = apply(client, template, pinned=frame, label='scan1')
     assert [r.params['scale'] for r in group.values()] == [2.0, 5.0]
-    assert [list(r.submission.typed) for r in group.values()] == [
+    assert [list(r.submission.pinned) for r in group.values()] == [
         ['run'],
         ['run', 'scale'],
     ]
@@ -182,7 +182,7 @@ def test_a_corrected_member_supersedes_the_batch_record(
         apply(
             client,
             template,
-            typed={k: {'run': v} for k, v in scan.items()},
+            pinned={k: {'run': v} for k, v in scan.items()},
             label='scan1',
         )
     )
@@ -197,12 +197,12 @@ def test_a_batch_is_refused_whole(
     client: Client, template: Template, run_ref: DatasetRef
 ) -> None:
     with pytest.raises(ValueError, match='needs'):
-        apply(client, template, typed={'a': {'run': run_ref}, 'b': {}}, label='scan2')
+        apply(client, template, pinned={'a': {'run': run_ref}, 'b': {}}, label='scan2')
     assert client.records(label='scan2') == []
     bad = template.revise(scale='not a number')
     with pytest.raises(SubmitError):
         client.submit_group(
-            apply(client, bad, typed={'a': {'run': run_ref}}, label='scan3')
+            apply(client, bad, pinned={'a': {'run': run_ref}}, label='scan3')
         )
     assert client.records(label='scan3') == []
 
@@ -243,7 +243,7 @@ def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) 
     )
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
-    assert group['pid:pid/1'].params['scale'] == 8.0  # typed, carried forward
+    assert group['pid:pid/1'].params['scale'] == 8.0  # pinned, carried forward
     assert group['pid:pid/2'].params['scale'] == 7.0  # filled again
 
 
@@ -292,7 +292,7 @@ def test_shadowed_reports_a_typed_value_whose_fill_changed(
     assert list(frame.index) == ['pid:pid/1']
     row = frame.loc['pid:pid/1']
     assert row['field'] == 'scale'
-    assert row['typed'] == 3.0
+    assert row['pinned'] == 3.0
     assert row['was'] == 3.0
     assert row['now'] == 9.0
 
@@ -302,7 +302,7 @@ def test_shadowed_is_empty_when_nothing_is_stale(
 ) -> None:
     TriggerLoop(client, rule).run_once()
     empty = shadowed(client, rule, rule)
-    assert list(empty.columns) == ['field', 'typed', 'was', 'now']
+    assert list(empty.columns) == ['field', 'pinned', 'was', 'now']
     assert empty.empty
 
 
@@ -651,11 +651,11 @@ def test_the_batch_table_shows_the_values_that_differ_per_member(
         apply(client, rule, client.datasets()[-2:], {'pid:pid/2': {'scale': 5.0}})
     )
     table = batch_table(client, rule)
-    # The template's blank, which the rule filled and nobody typed.
+    # The template's blank, which the rule filled and nobody pinned.
     assert list(table['run']) == [dataset_ref(pid='pid/1'), dataset_ref(pid='pid/2')]
-    # A typed field shows the template's value for the members that did not type it.
+    # A pinned field shows the template's value for the members that did not pin it.
     assert list(table['scale']) == [2.0, 5.0]
-    assert list(table['typed']) == ['', 'scale']
+    assert list(table['pinned']) == ['', 'scale']
 
 
 class Window(BaseModel):
@@ -679,7 +679,7 @@ WINDOWED = WorkflowSpec(
 
 @pytest.fixture
 def windowed(client: Client, samples: FakeDatasetSource) -> Rule:
-    """A rule whose template holds a model, applied with one member's typed."""
+    """A rule whose template holds a model, applied with one member's pinned values."""
     client.bind(WINDOWED, load_workflow)
     rule = Rule(
         name='windowed',
@@ -691,8 +691,8 @@ def windowed(client: Client, samples: FakeDatasetSource) -> Rule:
         ),
         selector=Selector(match={'sample': Like(pattern='*')}),
     )
-    typed = {'pid:pid/2': {'window': Window(low=0.5)}}
-    client.submit_group(apply(client, rule, client.datasets()[-2:], typed))
+    pinned = {'pid:pid/2': {'window': Window(low=0.5)}}
+    client.submit_group(apply(client, rule, client.datasets()[-2:], pinned))
     return rule
 
 
@@ -703,7 +703,7 @@ def test_the_batch_table_shows_a_model_as_one_column_per_leaf(
     assert 'window' not in table
     assert list(table['window.low']) == [0.0, 0.5]
     assert list(table['window.high']) == [1.0, 1.0]
-    assert list(table['typed']) == ['', 'window']
+    assert list(table['pinned']) == ['', 'window']
 
 
 def test_shadowed_names_the_leaves_of_a_typed_model_whose_fill_changed(
@@ -724,7 +724,7 @@ def test_the_batch_table_of_a_label_needs_no_rule(
         apply(
             client,
             template,
-            typed={k: {'run': v} for k, v in scan.items()},
+            pinned={k: {'run': v} for k, v in scan.items()},
             label='scan1',
         )
     )
