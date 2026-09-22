@@ -33,7 +33,7 @@ The skeleton was built in the opposite order, local mode and sessions first, bec
 | [Aggregation](aggregation.md) | member requests and a combine request over all members, for angle series | contribute and combine specs with `carry`, for sums over runs | the fold, only if a series arrives faster than its contribution can be read and written |
 | [Rules](rules.md) | templates from files, lookups, rules, `apply`, labels and member keys, the trigger loop, trigger status, cancel by label, real SciCat dataset source | the batch form, templates saved from requests | unchanged |
 | [Interactive work](stages.md) | views of whole small outputs, dense twins of event outputs | view vocabulary for slicing and overlays, a read cache in the service | sessions, held stages, slots, views from session memory |
-| [Client interface](operations.md#the-client-interface) | in-process, used by the trigger loop and a web page in the backend process | HTTP, once a client lives outside the backend process | direct scipp access in notebooks |
+| [Client interface](operations.md#the-client-interface) | in-process, used by the trigger loop and a web page in the backend process | over HTTP, for a client outside the backend process | direct scipp access in notebooks |
 | [Publication](operations.md#publication) | provenance snapshot, real SciCat publisher | unchanged | recompute before publishing a result that a stage served |
 | [Failure handling](operations.md#failure-handling) | all of it except session loss | unchanged | session loss |
 | Launcher | subprocess on the backend host | cluster, when one host is not enough | session, later remote session |
@@ -63,9 +63,6 @@ Two simplifications are available in phase 1:
 
 ## Decisions that fall due in phase 2
 
-- **HTTP transport.**
-  The first JavaScript frontend, or the first notebook that submits to the shared service, forces it.
-  Every object is plain data and no request needs to reach a particular process, so the transport is thin.
 - **Pending outputs.**
   The first need is a user who submits a vanadium reduction and its consumers together, or a temperature scan followed by a combine.
   Until then, "submit, wait, submit the batch" costs the user one wait. The skeleton already implements pending outputs.

@@ -16,9 +16,31 @@ if report.ok:
 ```
 
 **The Python client interface is the API.**
-Every UI, notebook, or service reaches the backend only through it, and HTTP is a later transport for the same interface rather than a second API.
-Requests, records, templates, and references are plain data even in local mode, so nothing about the interface changes when a transport is put under it.
+Every UI, notebook, or service reaches the backend only through it, and HTTP is a transport under the same interface rather than a second API.
+Requests, records, templates, and references are plain data even in local mode, so nothing about the interface changes with the transport.
 The reason is that a UI which reaches into backend internals owns state it does not control, which is where esslivedata's cross-session races came from (scipp/esslivedata#1046, #1098, ADR 0007).
+
+**HTTP is a transport under the interface.**
+`Backend` is a protocol, the closed surface a client may ask of a backend, with plain data in and out; it is the transport boundary.
+`LocalBackend` does the work, in the notebook's process or in the server's.
+`RemoteBackend` satisfies the same protocol and forwards each call as one HTTP request to a server that holds a `LocalBackend`, and `Client` does not know which of the two it holds.
+The server holds one lock and a poller thread, because the backend is single-threaded by design: every route body and the poll run under the lock, and the poll is where dispatched runs are reconciled and waiting ones dispatched.
+`wait` is a loop over `record` on the client side, so the server never blocks on a client.
+An output travels as the file the data store holds, its suffix naming the serializer; this is the data path Tiled would replace.
+`write_out` returns the server's path, which is meaningful on the shared filesystem of the deployment.
+A publisher is server-side code, so publishers are named when the server starts and a client publishes by name.
+Binding workflow code in-process is an affordance of `LocalBackend` and not on the protocol.
+
+What the transport cost, in lines:
+
+| Module | Lines | Holds |
+|---|---|---|
+| `server` | 263 | one route per protocol method, the lock, the poller |
+| `remote` | 268 | `RemoteBackend`, `remote()` |
+| `cli` | 225 | `essapps serve`, `submit`, `wait`, `output` |
+
+Closing the backend surface into the protocol changed no behaviour.
+The poller thread is the one structural addition: in local mode `wait` drives `poll`, and in the server nothing else would.
 
 **Validate is a separate operation from submit.**
 It returns structured errors per field and says which of the three validation layers ran (see [workflow-contract.md](workflow-contract.md)).
@@ -167,7 +189,7 @@ These are proposals, not decisions.
 - Standard-library `sqlite3` for the record store, Postgres later if a backend ever needs it.
 - scipp HDF5 for stored scipp data, with pluggable serializers for other output types.
 - scitacean for SciCat access.
-- FastAPI for the HTTP transport when it comes.
+- FastAPI and httpx for the HTTP transport, click for the CLI.
 - No workflow engine, no Dask, and no message broker in local mode.
 
 Tiled (bluesky) is a candidate for the disk tier, the HTTP data transport, and per-node access control, behind the data-store interface.
@@ -189,7 +211,7 @@ Rejected.
 
 **An HTTP API and a TypeScript frontend from day one.**
 API-first in the strict sense, but it front-loads a transport and a second language before there is a backend to serve, and it needs a plotting stack other than plopp.
-Rejected in favour of the same interface with HTTP added later as a transport.
+Rejected in favour of the same interface with HTTP as a transport under it.
 
 **Writing every output to the catalogue.**
 This would make publication automatic and remove one step for the user.

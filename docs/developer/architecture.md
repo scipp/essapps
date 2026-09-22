@@ -330,7 +330,7 @@ Details: [rules.md](rules.md).
 - **One backend per instrument**, each with its own record store and data store.
 - **The Python client interface is the API.**
   Every UI reaches the backend through it.
-  HTTP is a later transport for the same interface.
+  HTTP is a transport under it: a server holds the backend, and a remote backend forwards each call.
 
 Details: [operations.md](operations.md).
 
@@ -349,6 +349,8 @@ Details: [operations.md](operations.md#failure-handling).
 | Component | Responsibility | Skeleton module (`ess.apps`) |
 |---|---|---|
 | Client interface | the API: request, validate, submit, run, view, pick, publish | `client` |
+| Transport | the `Backend` protocol over HTTP: the server holds a `LocalBackend`, `RemoteBackend` forwards each call | `server`, `remote` |
+| CLI | serve a backend; submit, wait, and read an output from a shell | `cli` |
 | Backend | validates, resolves stand-ins, writes records, schedules, dispatches; single writer of the record store | `backend` |
 | Record store | records and queries over them; SQLite | `records`, `store` |
 | Data store | registry of disk copies, disk tier, private memory cache | `datastore` |
@@ -386,13 +388,13 @@ The linked document argues the case and lists the costs.
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |
-| [The Python client interface is the API](operations.md#the-client-interface) | one API keeps UIs out of backend internals | HTTP and TypeScript from the start; a Qt application |
+| [The Python client interface is the API](operations.md#the-client-interface) | one API keeps UIs out of backend internals; HTTP is a transport under it | HTTP and TypeScript from the start; a Qt application |
 
 ## Status
 
-The skeleton covers both execution shapes, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, aggregation with `carry`, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, and publication.
+The skeleton covers both execution shapes, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, aggregation with `carry`, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, publication, and the HTTP transport with a server and a CLI.
 LoKI SANS and Amor reflectometry are bound to it.
-Not in it: a SciCat dataset source, HTTP, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
+Not in it: a SciCat dataset source, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
 What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).
 
 [roadmap.md](roadmap.md) maps the design onto the three delivery phases: automatic reduction, batch reduction, and interactive applications.

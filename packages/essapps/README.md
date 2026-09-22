@@ -2,7 +2,8 @@
 
 Framework for ESS data-reduction applications: run records and references, sessions that stage a workflow over the parameters a person moves, a small scheduler, and a data store, as described in [docs/developer/architecture.md](../../docs/developer/architecture.md).
 
-Local mode only: client, backend, launcher, session, and data store in one Python process, with a subprocess launcher as the throwaway execution shape.
+Local mode: client, backend, launcher, session, and data store in one Python process, with a subprocess launcher as the throwaway execution shape.
+Over HTTP: the same client against a backend served from another process.
 
 ## Try it
 
@@ -70,11 +71,37 @@ Every run through `throwaway=True` instead executes in a subprocess that writes 
 
 The checksum of every dataset file a run reads is on its record, so a recompute can tell whether it read the same bytes.
 
+### Over HTTP
+
+The `service` extra brings in FastAPI, httpx, and uvicorn. Serve a backend from one shell:
+
+```sh
+essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs
+```
+
+Every run it takes executes in a throwaway process, so the registry is named, not passed. From another process, `remote` replaces `local` and returns a `Client` whose backend forwards each call:
+
+```python
+from ess.apps.remote import remote
+
+client = remote('http://127.0.0.1:8000', instrument='dream', proposal='p1', submitter='me')
+```
+
+The `essapps` command does the same from a shell, with the flags of `submit` generated from the spec's parameter schema (`essapps submit load/v1 --help` lists them):
+
+```sh
+export ESSAPPS_INSTRUMENT=dream ESSAPPS_PROPOSAL=p1
+essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id
+essapps wait <record>
+essapps output <record> total
+```
+
 ## Where things are
 
 | To see | Read | Design document |
 |---|---|---|
 | requests, records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
+| the transport boundary, the server, the CLI | `backend.py`, `server.py`, `remote.py`, `cli.py` | [operations.md](../../docs/developer/operations.md#the-client-interface) |
 | the callable, `Inputs`, the stage offer, entry points | `binding.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md) |
 | a sciline pipeline as a callable and as a stage | `adapter.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#the-sciline-adapter) |
 | how a session chooses and holds stages | `stages.py`, `tests/stages_test.py` | [stages.md](../../docs/developer/stages.md) |

@@ -1,16 +1,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from collections.abc import Iterable
+import threading
+import time
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+import uvicorn
 
-from ess.apps.client import Client, local
+from ess.apps.client import Client, local, local_backend
 from ess.apps.examples import LOAD, registry, write_run
+from ess.apps.remote import remote
 from ess.apps.rules import Template
+from ess.apps.server import create_app
 from ess.apps.sources import DatasetSource, FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
+from ess.apps.testing import FakePublisher
 
 
 @pytest.fixture
@@ -62,3 +68,34 @@ def run_ref(run_file: Path) -> DatasetRef:
 def template(client: Client, run_ref: DatasetRef) -> Template:
     request = client.request(LOAD, {'run': run_ref, 'scale': 2.0})
     return Template.from_request('load-defaults', request, LOAD)
+
+
+@pytest.fixture
+def server_url(tmp_path: Path, datasets: Path) -> Iterator[str]:
+    """A real server, in a background thread, listening on a free port."""
+    backend = local_backend(
+        tmp_path / 'server',
+        registry='ess.apps.examples:registry',
+        throwaway=True,
+        sources=[FolderSource(datasets, '*.h5')],
+        publishers={'fake': FakePublisher()},
+    )
+    app = create_app(backend, poll_interval=0.05)
+    config = uvicorn.Config(app, host='127.0.0.1', port=0, log_level='warning')
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    yield f'http://127.0.0.1:{port}'
+    server.should_exit = True
+    thread.join()
+    backend.close()
+
+
+@pytest.fixture
+def remote_client(server_url: str) -> Iterator[Client]:
+    client = remote(server_url, instrument='dream', proposal='p1', submitter='simon')
+    yield client
+    client.close()

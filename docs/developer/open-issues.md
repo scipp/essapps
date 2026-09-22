@@ -30,7 +30,7 @@ The recommendation in brackets is mine.
   [Keep it. A path is not data, and provenance needs it.]
 - **Two notebooks on one machine.**
   Each notebook is its own backend with its own record store, so referencing a result of one notebook from another needs a local transport.
-  [Separate stores now. A local socket form of the HTTP transport later, which also serves the local application.]
+  [Separate stores now. `essapps serve` on one of them and `remote()` from the other is the alternative, at the cost of every run of the served store executing in a throwaway process.]
 - **SciCat push mechanism for new datasets**, if the deployment offers one, and how far ingestion lags the file.
   ISIS's interfaces discover runs from the archive because the catalogue lagged or failed, and their outputs are consequently unknown to it.
   [Measure the lag before [phase 1](roadmap.md#the-three-phases). A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so such a source can only get ahead of the catalogue and wait, never replace it.]
@@ -145,11 +145,13 @@ It does not contain:
 - A field on `Rule` that says whether its combine is published.
 - Failure reasons declared on the spec, described in [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
 - The test helper that recomputes a completed record and compares the outputs, described in [workflow-contract.md](workflow-contract.md#test-helpers).
-- HTTP, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
+- The version counter that [operations.md](operations.md#the-client-interface) promises for observing change.
+  `RemoteBackend.wait` polls the records it was given by id, and nothing tells a client what else changed.
+- A cluster launcher, remote sessions, a UI, and a store for templates and rules.
 
 ## Explicitly deferred
 
-HTTP transport, real SciCat integration, a cluster launcher with its download tokens, view workers and the chunked on-disk layout for dense data, the UI framework, UI state in the record store, metrics, and an agent-facing API.
+Real SciCat integration, a cluster launcher with its download tokens, view workers and the chunked on-disk layout for dense data, the UI framework, UI state in the record store, metrics, and an agent-facing API.
 
 Remote sessions, whether on the backend host or in a client process on the user's machine, need a session launcher, an idle timeout, and a cap on the number of sessions.
 
