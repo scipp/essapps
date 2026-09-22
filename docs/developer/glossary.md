@@ -15,7 +15,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   It maps fields to keys, names the form of each data reference, and for an aggregation the accumulation keys, the accumulators, and the member parameters.
   It checks its specs against the graph when it is built.
   See [workflow-contract.md](workflow-contract.md#the-callable).
-- **Aggregation**: in the framework, a group of one member request per row of a member table plus one combine request that references the members' contributions.
+- **Aggregation**: in the framework, a group of one request per member plus one combine request that references the members' contributions.
   In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process.
   Being a composition of two callables rather than a callable, it has no spec.
   See [aggregation.md](aggregation.md).
@@ -30,8 +30,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Batch**: the records under one label, made by a person from a template or by a rule.
   Not a stored unit.
   In esslivedata a batch is a bundle of messages, which is unrelated.
-- **Chain**: a field of a combine spec mapping one of its collection parameters to one of its own outputs.
-  It says that this output may be passed back as an element of that parameter, where it stands for everything it was combined from.
+- **Carry**: a field of a combine spec mapping one of its collection parameters to one of its own outputs.
+  It says that this output may be carried back as an element of that parameter, where it stands for everything it was combined from.
   A **chained** combine request is one that uses this, referencing the previous combine's contribution instead of every member it covers.
   See [aggregation.md](aggregation.md).
 - **Client interface**: the backend's Python interface, including validate, apply, views, and the picker.
@@ -73,11 +73,11 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, literal or **as-of**, the nearest earlier dataset matching criteria, with at most one wildcard.
   What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
   See [rules.md](rules.md).
-- **Member**: one row of a member table: one request of an aggregation, whose output the combine request references.
-  Its **member key** labels it under the batch's label.
+- **Member**: one record under a label, identified by its **member key**: a name a person chose for a batch made by hand, the dataset identity for a rule's batch.
+  An aggregation's members are the records whose contributions its combine request references.
 - **Member parameters**: the parameters that differ from member to member of an aggregation, such as the run.
   Only the adapter deals with them.
-  sciline calls these member keys, which this document does not, because a member key here is the label of a batch member.
+  sciline calls these member keys, which this document does not, because a member key here identifies a member.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.
 - **Pinned values**: the values of a request set for one member beyond the template and the lookup, the top rung of the precedence ladder.

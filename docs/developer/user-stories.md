@@ -203,7 +203,7 @@ Actor: reflectometry user.
 Checks: the combine that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
 Outcome: fits.
-The stitch is a combine spec without `chain`, recomputed over all members on each arrival ([aggregation.md](aggregation.md#combines-that-are-not-additive)).
+The stitch is a combine spec without `carry`, recomputed over all members on each arrival ([aggregation.md](aggregation.md#combines-that-are-not-additive)).
 
 ### C5. Vanadium and sample tuned together
 

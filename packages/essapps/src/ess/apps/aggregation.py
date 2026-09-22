@@ -104,11 +104,11 @@ class Aggregation:
         }
         self._members = list(members)
         try:
-            ((self._collection, self._chained),) = combine.chain.items()
+            ((self._collection, self._chained),) = combine.carry.items()
         except ValueError:
             raise ValueError(
-                f'{combine.id} must chain exactly one collection parameter to the '
-                f'output that stands for it; it chains {dict(combine.chain)}'
+                f'{combine.id} must carry exactly one collection parameter through '
+                f'the output that stands for it; it carries {dict(combine.carry)}'
             ) from None
         if len(contribute.outputs.model_fields) != 1:
             raise ValueError(

@@ -114,7 +114,7 @@ def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() ->
 
 def test_a_combine_spec_must_chain_exactly_one_collection() -> None:
     with pytest.raises(ValueError, match='exactly one collection parameter'):
-        build(combine=NORMALIZE_COMBINE.model_copy(update={'chain': {}}))
+        build(combine=NORMALIZE_COMBINE.model_copy(update={'carry': {}}))
 
 
 # The two callables

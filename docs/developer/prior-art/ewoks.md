@@ -70,7 +70,7 @@ Most rows marked "absent" below follow from this difference, and it is a differe
 | Dataset source, template, lookup with as-of fill, rule, `apply` | `blissoda` processor classes with mutable parameters in Redis | Absent. A calibration is "the newest file matching a pattern" or live instrument state at trigger time, so reprocessing a backlog does not reproduce what the live run chose. About twenty beamlines each have a subclass. |
 | Trigger loop without memory | BLISS scan callbacks in the acquisition process, or the `blissoda` workflow server (`app/workflow_server`, 46 lines), which follows new scans in BLISS's Redis store and submits whatever job the scan's own metadata field `workflows` contains | Different, and bound to BLISS. The acquisition side chooses workflow and parameters and writes them into the scan; the listener only forwards. It starts from the newest scan at startup, so scans that arrive while it is down are not processed. Processing reads the file while the scan runs, which is esslivedata's territory here. |
 | Batch table as a query, reprocess | hand-written loops per beamline over a scan cache in memory; `ewoksreprocess` 0.2, a small Qt widget library used by the ID31 reprocessing application, lists submitted jobs with their state and can cancel them | Absent as a stored table. The `ewoksreprocess` list is a set of futures in the memory of the application, so it is lost when the window closes and cannot be asked which scans failed last week. |
-| Contribute and combine with `chain` | one task with a list input that re-reads all members on each call | The alternative that [aggregation.md](../aggregation.md) rejects. |
+| Contribute and combine with `carry` | one task with a list input that re-reads all members on each call | The alternative that [aggregation.md](../aggregation.md) rejects. |
 | Explicit publication to SciCat with a provenance snapshot | `upload_parameters` on `execute_graph`, which calls `pyicat_plus` when the run succeeds | Different policy, and ICAT only. A flag per processor uploads every processed scan. The source says re-uploading the same folder is allowed. The ICAT entry carries paths and a few metadata values. No SciCat code exists in any source read, although the slides show SciCat as the portal at DESY P08. |
 | Sciline adapter | none; sciline is not mentioned in any repository | Ours to write in either case. Wrapping a pipeline as one task took ten lines in the spike and has the shape of `PipelineAdapter`. |
 | Storing scipp outputs | both persistence schemes pickle the value | Does not work. A scipp `DataArray` cannot be pickled (scipp 26.8.0), so ewoks persistence fails on it. |
@@ -86,7 +86,7 @@ Nobody at ESRF uses ewoks at that granularity.
 **An ewoks graph as the run request, with `ewoksjob` and `ewoksserver` as the service.**
 A spec would become a one-node graph and a group a multi-node graph.
 We would get Celery dispatch, the Slurm pool, a graph editor, and documents that ESRF tools can read.
-We would still write the record store, references, pending outputs across submissions, sessions and stages, labels, views, rules and lookups, aggregation with `chain`, SciCat publication, and a persistence scheme for scipp.
+We would still write the record store, references, pending outputs across submissions, sessions and stages, labels, views, rules and lookups, aggregation with `carry`, SciCat publication, and a persistence scheme for scipp.
 That is every component of [architecture.md](../architecture.md#components) except the launcher and part of the runner.
 We would take on a broker service, Celery's result backend as a second source of truth beside our records, a server without authentication, and a dependency with about one breaking change per package per year.
 The gain is small and the cost is permanent.
@@ -124,7 +124,7 @@ Nothing needs it today, and it needs no change to the design, so it can wait for
   ESS already runs Grafana, so the display exists; what remains is for each backend to export these numbers in the format of the time-series store that feeds it.
 - **Evidence for decisions already taken.**
   The `WorkerPool` in `ewoksxrpd`, a process-global cache that a task author wrote and keyed by a hash of the configuration, is the "state kept inside workflow code" that [stages.md](../stages.md) argues against.
-  The list-input sum that re-reads every member is the cost `chain` removes.
+  The list-input sum that re-reads every member is the cost `carry` removes.
   The newest-file calibration is the case for as-of fills anchored to the dataset.
 - **`pyslurmutils`**, as a candidate when the cluster launcher is built.
 

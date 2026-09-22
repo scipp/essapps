@@ -198,13 +198,13 @@ class RecordStore:
         self, label: str, proposal: str, *, member_key: str | None = None
     ) -> RunRecord | None:
         """
-        The head of this label and member key's chain, whatever its status.
+        The latest record under this label and member key, whatever its status.
 
-        The head is the record under (proposal, label, member_key) that no other
+        The latest is the record under (proposal, label, member_key) that no other
         record supersedes; it does not depend on a clock, which matters once
         several writers, a rule, a retry, and a person's correction submit under
-        one label from different hosts. Without ``member_key`` this is the chain
-        whose member key is NULL, the slot form.
+        one label from different hosts. Without ``member_key`` this is the
+        record whose member key is NULL, the slot form.
         """
         row = self._db.execute(
             'SELECT doc FROM records AS r '  # noqa: S608
@@ -215,7 +215,7 @@ class RecordStore:
         return None if row is None else RunRecord.model_validate_json(row[0])
 
     def batch(self, label: str, proposal: str) -> list[RunRecord]:
-        """The records under this label: the head per member key, by member key."""
+        """The records under this label: the latest per member key, by member key."""
         rows = self._db.execute(
             'SELECT doc FROM records AS r '  # noqa: S608
             f'WHERE proposal=? AND label=? AND {self._HEAD} '

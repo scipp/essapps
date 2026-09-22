@@ -112,16 +112,16 @@ def assert_combine_is_associative(
     """
     The one check on a declared combine: grouping and order do not matter.
 
-    ``spec`` is the combine spec, whose ``chain`` names the collection parameter
+    ``spec`` is the combine spec, whose ``carry`` names the collection parameter
     the contributions fill and the output that may come back as one of its
     elements; ``params`` are the combine's other parameters. The contributions of
     the members are combined in one group, in two groups, one at a time, and in
     reverse order, and each result is compared with the first. Combining in
     groups and one at a time pushes combined values back in, which is what a
     chained series and a fold rely on. Nothing here is specific to a workflow, so
-    every spec that declares a chain runs it.
+    every spec that declares a carry runs it.
     """
-    ((collection, output),) = spec.chain.items()
+    ((collection, output),) = spec.carry.items()
     members = list(member_params)
     if len(members) < 3:
         raise ValueError('an associativity check needs at least three members')

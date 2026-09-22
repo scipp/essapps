@@ -175,8 +175,8 @@ class RunRecord(BaseModel):
     derives_from: Derivation | None = None
     supersedes: str | None = Field(
         default=None,
-        description="The head under this label and member key when this record "
-        "was submitted: the record nothing supersedes. The order under a label "
+        description="The latest record under this label and member key when this "
+        "record was submitted: the record nothing supersedes. The order under a label "
         "never depends on a clock, which matters once several writers, a rule, "
         "a retry, and a person's correction submit under one label from "
         "different hosts. ``derives_from`` says why a request was made; this "

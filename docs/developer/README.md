@@ -46,7 +46,7 @@ client.provenance(iofq)                                  # back to the dataset r
    That is the only scheduling mechanism.
 6. **A sum over runs is two plain specs.**
    A contribute spec reduces one run to its contribution, and a combine spec adds contributions and normalises.
-   One declaration, `chain`, lets a growing series reuse the previous sum.
+   One declaration, `carry`, lets a growing series reuse the previous sum.
    The framework never adds arrays.
 7. **Batch and automatic reduction are one mechanism.**
    A template is a partial request, a lookup fills fields from dataset metadata, and a rule adds a selector for datasets.
@@ -68,7 +68,7 @@ client.provenance(iofq)                                  # back to the dataset r
 | as needed | [stages.md](stages.md) | interactive work: sessions, stages, slots, views |
 | | [records.md](records.md) | requests, records, references, datasets, the data store, scheduling |
 | | [workflow-contract.md](workflow-contract.md) | spec, callable, inputs and outputs, validation, changes needed in scipp/ess#690 |
-| | [aggregation.md](aggregation.md) | contribute and combine specs, `chain` |
+| | [aggregation.md](aggregation.md) | contribute and combine specs, `carry` |
 | | [rules.md](rules.md) | templates, lookups, rules, `apply`, the trigger loop |
 | | [operations.md](operations.md) | client interface, publication, deployment, failure handling |
 | | [open-issues.md](open-issues.md) | open questions, findings from binding real workflows, deferred work |

@@ -257,7 +257,7 @@ CONTRIBUTE = WorkflowSpec(name='normalize-contribute',
 COMBINE = WorkflowSpec(name='normalize-combine',
                        params=CombineParams,           # contributions: list of references, scale
                        outputs=CombineOutputs,         # contribution, normalized
-                       chain={'contributions': 'contribution'})
+                       carry={'contributions': 'contribution'})
 ```
 
 The **contribute spec** reduces one run to its **contribution**, for example a numerator and a denominator.
@@ -266,7 +266,7 @@ Both are ordinary specs with ordinary validation, records, templates, and recomp
 The combine request waits for its members as pending outputs, like any other request.
 The framework never adds arrays and knows nothing about scipp.
 
-`chain` is the one declaration an aggregation needs.
+`carry` is the one declaration an aggregation needs.
 It says that the combined contribution of one run may be passed back as an element of `contributions` in a later run, where it stands for everything it was combined from.
 A series of k runs then reads two contributions per arrival instead of k.
 A combine that is not additive, such as reflectometry's stitch over angles, is the same shape without the declaration, and is recomputed over all members on each arrival.
@@ -382,7 +382,7 @@ The linked document argues the case and lists the costs.
 | [The session holds the stages and chooses their inputs](stages.md#who-chooses-the-stage-inputs) | only the session sees which parameter a person moves | stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
 | [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
-| [Aggregation is two plain specs plus `chain`](aggregation.md) | no new kind of request; the framework stays ignorant of scipp | summation in the framework; one spec with three entry points |
+| [Aggregation is two plain specs plus `carry`](aggregation.md) | no new kind of request; the framework stays ignorant of scipp | summation in the framework; one spec with three entry points |
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |
@@ -390,7 +390,7 @@ The linked document argues the case and lists the costs.
 
 ## Status
 
-The skeleton covers both execution shapes, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, aggregation with `chain`, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, and publication.
+The skeleton covers both execution shapes, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, aggregation with `carry`, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, and publication.
 LoKI SANS and Amor reflectometry are bound to it.
 Not in it: a SciCat dataset source, HTTP, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
 What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).

@@ -291,7 +291,7 @@ class Series(BaseModel, frozen=True):
 
     Nothing here says whether a combine may chain onto the previous one: that is
     a property of the combine's code, which the person writing a rule cannot
-    know, and it is declared by ``chain`` on the combine spec.
+    know, and it is declared by ``carry`` on the combine spec.
     """
 
     key: str

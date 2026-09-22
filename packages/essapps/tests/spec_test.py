@@ -139,7 +139,7 @@ def spec(**fields: object) -> WorkflowSpec:
         name='combine',
         version=1,
         title='Combine',
-        description='A workflow that declares a chain.',
+        description='A workflow that declares a carry.',
         params=CombineParams,
         outputs=CombineOutputs,
         **fields,
@@ -147,14 +147,14 @@ def spec(**fields: object) -> WorkflowSpec:
 
 
 def test_a_chain_declares_a_collection_parameter_and_the_output_it_takes() -> None:
-    assert spec(chain={'contributions': 'contribution'}).chain == {
+    assert spec(carry={'contributions': 'contribution'}).carry == {
         'contributions': 'contribution'
     }
-    assert spec().chain == {}
+    assert spec().carry == {}
 
 
 @pytest.mark.parametrize(
-    ('chain', 'message'),
+    ('carry', 'message'),
     [
         ({'absent': 'contribution'}, 'no parameter named'),
         ({'scale': 'contribution'}, 'not a collection of data references'),
@@ -173,15 +173,15 @@ def test_a_chain_declares_a_collection_parameter_and_the_output_it_takes() -> No
     ],
 )
 def test_the_two_ends_of_a_chain_are_checked_on_the_spec_alone(
-    chain: dict[str, str], message: str
+    carry: dict[str, str], message: str
 ) -> None:
     with pytest.raises(ValidationError, match=message):
-        spec(chain=chain)
+        spec(carry=carry)
 
 
 def test_serialized_spec_carries_the_chain_declaration() -> None:
     serialized = SerializedWorkflowSpec.model_validate_json(
-        spec(chain={'contributions': 'contribution'}).serialize().model_dump_json()
+        spec(carry={'contributions': 'contribution'}).serialize().model_dump_json()
     )
-    assert serialized.chain == {'contributions': 'contribution'}
+    assert serialized.carry == {'contributions': 'contribution'}
     assert 'scale' in serialized.params_schema['properties']

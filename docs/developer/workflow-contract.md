@@ -198,20 +198,20 @@ It is read by the framework and by UIs and means nothing to a throwaway run.
 A spec may also declare named failure reasons, each with a message.
 A workflow that fails for a declared reason returns it, the record carries its name, a UI can explain it, and a rule's retry policy can match it.
 
-**A chain declaration.**
-A spec may declare `chain`, a mapping from a collection parameter of data references to one of the spec's own outputs:
+**A carry declaration.**
+A spec may declare `carry`, a mapping from a collection parameter of data references to one of the spec's own outputs:
 
 ```python
 COMBINE = WorkflowSpec(name='normalize-combine', version=1,
                        params=CombineParams, outputs=CombineOutputs,
-                       chain={'contributions': 'contribution'})
+                       carry={'contributions': 'contribution'})
 ```
 
 That output may then be passed as an element of the parameter, where it stands for everything it was combined from, which is what lets a series be chained.
 `WorkflowSpec` in `spec.py` validates the shapes at the two ends: the parameter is a collection of data references, the output exists, and their formats match.
 That the combination does not depend on grouping and order is the author's promise, which no spec can check and a test helper does.
 This is the only declaration an aggregation needs, and it is an extension of this design rather than a field of scipp/ess#690.
-A declaration belongs on a spec only if it has a reader that cannot import workflow code, and `chain` has two, `apply` and the trigger loop.
+A declaration belongs on a spec only if it has a reader that cannot import workflow code, and `carry` has two, `apply` and the trigger loop.
 [aggregation.md](aggregation.md) covers the rest.
 
 ## Validation
@@ -239,9 +239,9 @@ The backend refuses a request whose spec module it cannot import, unless the req
 `assert_stage_equals_workflow` drives a workflow through a sequence of parameter sets, once through the session's own stage store and once through fresh calls of the stateless callable, and asserts equal outputs.
 That is the check on the contract of `stage`, and every workflow that offers one runs it.
 
-`assert_combine_is_associative` checks the promise behind `chain`.
+`assert_combine_is_associative` checks the promise behind `carry`.
 It combines the contributions of several members in one group, in two groups, one at a time, and in reverse order, and compares each result with the first.
-Every spec that declares a chain runs it.
+Every spec that declares a carry runs it.
 
 A third check, recomputing a completed record and comparing the outputs, lets a workflow package keep records from production as regression tests.
 

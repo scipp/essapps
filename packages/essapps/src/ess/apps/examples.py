@@ -377,7 +377,7 @@ NORMALIZE_COMBINE = WorkflowSpec(
     description='Sum the contributions of several runs and normalise the sum.',
     params=CombineParams,
     outputs=CombineOutputs,
-    chain={'contributions': 'contribution'},
+    carry={'contributions': 'contribution'},
 )
 
 NORMALIZE = WorkflowSpec(

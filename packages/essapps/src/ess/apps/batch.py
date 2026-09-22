@@ -144,7 +144,7 @@ def _combine(
     contributions = [
         OutputRef(record=record, output=series.output) for record in members.values()
     ]
-    chained = spec.chain.get(series.parameter)
+    chained = spec.carry.get(series.parameter)
     previous = _previous_combine(client, group, label, value, previous_name)
     if chained is not None and previous is not None:
         record, request = previous
@@ -317,7 +317,7 @@ def backlog(client: Client, rule: Rule) -> dict[str, RunRequest]:
 
 
 def _stale(client: Client, rule: Rule) -> list[RunRecord]:
-    """The heads under the rule's label made by a version other than ``rule``."""
+    """The latest records under the rule's label that another version made."""
     return [
         record
         for record in client.batch(rule.name)

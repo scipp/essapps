@@ -73,7 +73,7 @@ NORMALIZE_CONTRIBUTE = WorkflowSpec(name='normalize-contribute', version=1,
                                     params=ContributeParams, outputs=ContributeOutputs)
 NORMALIZE_COMBINE = WorkflowSpec(name='normalize-combine', version=1,
                                  params=CombineParams, outputs=CombineOutputs,
-                                 chain={'contributions': 'contribution'})
+                                 carry={'contributions': 'contribution'})
 ```
 
 - The **contribute spec** has one output, the contribution, so that one reference names everything a member adds.
@@ -138,10 +138,10 @@ It is a field of the contribute spec only, the finalize stage takes its value fr
 The adapter imports sciline, so it belongs in ess.reduce beside the spec module.
 It stays in the skeleton until `ess.reduce.spec` of scipp/ess#690 has merged.
 
-## The `chain` declaration
+## The `carry` declaration
 
 A series that grows by one run per arrival should not read all earlier contributions each time.
-`chain={'contributions': 'contribution'}` on the combine spec says that the output `contribution` of one run may be passed as an element of the parameter `contributions` of a later run, where it stands for everything it was combined from:
+`carry={'contributions': 'contribution'}` on the combine spec says that the output `contribution` of one run may be passed as an element of the parameter `contributions` of a later run, where it stands for everything it was combined from:
 
 ```python
 combine([combine([a, b]), c]) == combine([a, b, c])
@@ -150,10 +150,10 @@ combine([combine([a, b]), c]) == combine([a, b, c])
 The author may declare this only if the combination does not depend on how the elements are grouped or ordered.
 The framework cannot check that property.
 The test helper `ess.apps.testing.assert_combine_is_associative` does: it runs contribute and combine over a list of members in two groupings and one permutation, passes a combined value in again, and compares.
-Every combine spec that declares `chain` runs it.
+Every combine spec that declares `carry` runs it.
 The spec itself validates that the parameter is a collection of references, that the output exists, and that their formats match.
 
-`chain` is the only declaration an aggregation needs.
+`carry` is the only declaration an aggregation needs.
 Its one kind of reader is whatever builds the combine request of a series, which is `apply` and the trigger loop ([rules.md](rules.md)), and that reader cannot import workflow code.
 A component that ignores the declaration still validates, runs, records, and recomputes the spec correctly.
 It loses an optimisation only.
@@ -188,7 +188,7 @@ def covers(combine):                                   # follow the chained para
 - **Two arrivals close together cannot lose a member.**
   The later combine references every current member that the previous combine does not cover, not only the newest.
 - **A chained element is recognised without a rule.**
-  It is an output of a run of the combine spec itself, through the output that `chain` names.
+  It is an output of a run of the combine spec itself, through the output that `carry` names.
 - **The walk reads metadata only**, one record per combine of the chain.
   The k-th arrival costs k record reads and two contribution reads.
 - **A chained combine is a complete record.**
@@ -201,7 +201,7 @@ Chaining through disk is enough for automatic reduction: even a 4D contribution 
 
 ## Combines that are not additive
 
-A combine that is not additive is the same shape without `chain`.
+A combine that is not additive is the same shape without `carry`.
 Reflectometry's stitch is a combine spec with a collection parameter of per-angle curves, and a tomographic reconstruction would be another.
 A rule combines over all members on every arrival, which is affordable because such inputs are small.
 A rule's combine clause has one form for both cases.
@@ -279,14 +279,14 @@ The middle spec has no parameters and no workflow code.
 Its benefit is that changing a finalize parameter does not write the combined contribution again.
 An author who needs that can publish a finalize-only spec as a further cut.
 
-**No `chain`: always combine over all members.**
+**No `carry`: always combine over all members.**
 Correct, and simpler.
 A series of k members then reads k contributions per arrival instead of two, which is too much for event-mode contributions of gigabytes.
 
-**`chain` as an annotation on the parameter.**
+**`carry` as an annotation on the parameter.**
 It states a property of the callable that relates a parameter to an output, so it belongs on the spec and not on one of its fields.
 
-**`chain` on the rule instead of the spec.**
+**`carry` on the rule instead of the spec.**
 The person who writes a rule cannot know whether a combine is additive, and a wrong answer gives a wrong number without an error.
 
 ## Costs

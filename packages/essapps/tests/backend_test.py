@@ -343,7 +343,7 @@ def test_two_requests_in_one_group_chain_in_group_order(
     client: Client, run_ref: DatasetRef
 ) -> None:
     """Within a group, a later request supersedes the earlier one in the group,
-    not the head that was current before the group was submitted."""
+    not the record that was latest before the group was submitted."""
     group = client.submit_group(
         {
             'a': client.request(LOAD, {'run': run_ref}, label='tune', member_key='k'),

@@ -231,41 +231,41 @@ class Backend:
             raise SubmitError({n: r for n, r in reports.items() if not r.ok})
         ids = {name: RunRecord(request=req).id for name, req in group.items()}
         records = {}
-        heads: dict[tuple[str, str | None], str] = {}
+        latest: dict[tuple[str, str | None], str] = {}
         for name, req in group.items():
             params = _rewrite(req.params, {GROUP_PREFIX + n: i for n, i in ids.items()})
             record = RunRecord(
                 id=ids[name],
                 request=req.model_copy(update={'params': params}),
-                supersedes=self._supersedes(req, heads),
+                supersedes=self._supersedes(req, latest),
             )
             records[name] = record
             if req.label is not None:
-                heads[(req.label, req.member_key)] = record.id
+                latest[(req.label, req.member_key)] = record.id
         self.records.add(*records.values())
         self._pump()
         return {name: self.records.get(r.id) for name, r in records.items()}
 
     def _supersedes(
-        self, request: RunRequest, heads: Mapping[tuple[str, str | None], str]
+        self, request: RunRequest, latest: Mapping[tuple[str, str | None], str]
     ) -> str | None:
         """
-        The head this request's record supersedes, or None without a label.
+        The latest record this request's record supersedes, or None without a label.
 
         Within one group submitted together, a later request under the same
         label and member key supersedes the earlier one in the group, not the
-        head that was current before the group; ``heads`` carries those as they
-        are assigned while the group is built.
+        record that was latest before the group; ``latest`` holds the group's
+        own as they are assigned while it is built.
         """
         if request.label is None:
             return None
         key = (request.label, request.member_key)
-        if key in heads:
-            return heads[key]
-        head = self.records.latest(
+        if key in latest:
+            return latest[key]
+        record = self.records.latest(
             request.label, request.proposal, member_key=request.member_key
         )
-        return None if head is None else head.id
+        return None if record is None else record.id
 
     def submit_one(self, request: RunRequest) -> RunRecord:
         return self.submit({'request': request})['request']

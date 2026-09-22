@@ -130,7 +130,7 @@ def _is_collection(annotation: Any) -> bool:
 class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
     """The plain-data form of scipp/ess#690 with the declared additive combine."""
 
-    chain: Mapping[str, str] = {}
+    carry: Mapping[str, str] = {}
 
 
 class WorkflowSpec(_WorkflowSpec, frozen=True):
@@ -139,20 +139,20 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
 
     A spec is the signature of one callable and a record one call of it, so an
     aggregation over runs is two specs, a contribute spec and a combine spec,
-    and nothing about the split is declared here. What is declared is ``chain``:
-    that an output of one run may come back as an element of a collection
-    parameter of a later run of the same spec, and then stands for all the
+    and nothing about the split is declared here. What is declared is ``carry``:
+    that an output of one run may be carried back as an element of a collection
+    parameter of a later run of the same spec, where it stands for all the
     elements it was combined from.
     """
 
-    chain: Mapping[str, str] = Field(
+    carry: Mapping[str, str] = Field(
         default_factory=dict,
-        description="Collection parameter -> output whose value may be passed as "
-        "one of its elements and then stands for everything it combined.",
+        description="Collection parameter -> output whose value may be carried back "
+        "as one of its elements, where it stands for everything it combined.",
     )
 
     @model_validator(mode='after')
-    def _chain_is_a_collection_of_the_output(self) -> WorkflowSpec:
+    def _carry_is_a_collection_of_the_output(self) -> WorkflowSpec:
         """
         What the spec can check on its own: the shapes at the two ends.
 
@@ -162,7 +162,7 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
         """
         params = data_fields(self.params)
         outputs = data_fields(self.outputs)
-        for parameter, output in self.chain.items():
+        for parameter, output in self.carry.items():
             if parameter not in self.params.model_fields:
                 raise ValueError(f'no parameter named {parameter!r}')
             if parameter not in params or not _is_collection(
@@ -186,7 +186,7 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
 
     def serialize(self) -> SerializedWorkflowSpec:
         return SerializedWorkflowSpec(
-            **super().serialize().model_dump(), chain=dict(self.chain)
+            **super().serialize().model_dump(), carry=dict(self.carry)
         )
 
 
