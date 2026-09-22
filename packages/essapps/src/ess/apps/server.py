@@ -131,7 +131,9 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
 
     @app.exception_handler(LookupError)
     def _lookup_error(request: Request, exc: LookupError) -> JSONResponse:
-        return JSONResponse(status_code=404, content={'detail': str(exc)})
+        # str(KeyError('x')) is "'x'"; the message itself is the argument.
+        detail = exc.args[0] if exc.args else str(exc)
+        return JSONResponse(status_code=404, content={'detail': str(detail)})
 
     @app.exception_handler(ValueError)
     def _value_error(request: Request, exc: ValueError) -> JSONResponse:

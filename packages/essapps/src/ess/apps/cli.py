@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The ``essapps`` command: serve a backend, list its specs and datasets, submit
-a run, wait for it, read an output.
+a run, wait for it, read an output, publish one.
 
 Records are the only state kept between invocations, which is what these
 commands are meant to show: the shape a service needs on top of the client
@@ -21,7 +21,8 @@ from typing import Any
 
 import click
 
-from .backend import SubmitError
+from .backend import Publisher, SubmitError
+from .binding import import_object
 from .client import Client, local_backend
 from .records import RunRecord, Status
 from .remote import RemoteBackend, remote
@@ -72,15 +73,41 @@ def main(
     )
 
 
+def _publishers(
+    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> dict[str, Publisher]:
+    """``NAME=MODULE:FACTORY`` pairs to publishers by name, each factory called once."""
+    publishers = {}
+    for value in values:
+        name, sep, factory = value.partition('=')
+        if not sep or ':' not in factory:
+            raise click.BadParameter(f'expected NAME=MODULE:FACTORY, got {value!r}')
+        publishers[name] = import_object(factory)()
+    return publishers
+
+
 @main.command()
 @click.option('--root', required=True, type=click.Path(path_type=Path))
 @click.option('--registry', required=True, help='module:function, importable by a run.')
 @click.option('--datasets', required=True, type=click.Path(path_type=Path))
 @click.option('--pattern', default='*.h5', show_default=True)
+@click.option(
+    '--publisher',
+    'publishers',
+    multiple=True,
+    callback=_publishers,
+    help='NAME=MODULE:FACTORY, a publisher the server holds; repeatable.',
+)
 @click.option('--host', default='127.0.0.1', show_default=True)
 @click.option('--port', default=8000, show_default=True, type=int)
 def serve(
-    root: Path, registry: str, datasets: Path, pattern: str, host: str, port: int
+    root: Path,
+    registry: str,
+    datasets: Path,
+    pattern: str,
+    publishers: dict[str, Publisher],
+    host: str,
+    port: int,
 ) -> None:
     """Run a backend as a service; every request is its own throwaway process."""
     backend = local_backend(
@@ -88,6 +115,7 @@ def serve(
         registry=registry,
         throwaway=True,
         sources=[FolderSource(datasets, pattern)],
+        publishers=publishers,
     )
     serve_backend(backend, host=host, port=port)
 
@@ -115,6 +143,11 @@ def datasets(env: Env) -> None:
     with closing(env.client()) as client:
         for dataset in client.datasets():
             click.echo(f'{dataset.ref}\t{dataset.path}')
+
+
+def _message(exc: Exception) -> str:
+    """An exception's message; ``str(KeyError('x'))`` would be the quoted repr."""
+    return str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
 
 
 def _unwrap_optional(schema: dict[str, Any]) -> dict[str, Any]:
@@ -204,7 +237,7 @@ def submit(
         try:
             spec = client.spec(spec_id)
         except KeyError as e:
-            raise click.ClickException(str(e)) from e
+            raise click.ClickException(_message(e)) from e
         command = _submit_command(spec.params_schema)
         sub_ctx = command.make_context('submit', list(ctx.args), parent=ctx)
         with sub_ctx:
@@ -233,6 +266,30 @@ def wait(env: Env, record_id: str, timeout: float) -> None:
     if record.status == Status.FAILED:
         click.echo(record.failure.message if record.failure else 'failed', err=True)
         sys.exit(1)
+
+
+@main.command()
+@click.argument('record_id')
+@click.argument('output')
+@click.option('--via', 'publisher', required=True, help='A publisher the server holds.')
+@click.option(
+    '--allow-reused',
+    is_flag=True,
+    help='Publish a result a held stage served or an in-process binding computed, '
+    'which a recompute could not reproduce from the environment alone.',
+)
+@click.pass_obj
+def publish(
+    env: Env, record_id: str, output: str, publisher: str, allow_reused: bool
+) -> None:
+    """Publish an output through a named publisher; prints the PID."""
+    ref = OutputRef(record=record_id, output=output)
+    with closing(env.client()) as client:
+        try:
+            pid = client.publish(ref, publisher, allow_reused=allow_reused)
+        except (KeyError, ValueError) as e:
+            raise click.ClickException(_message(e)) from e
+    click.echo(pid)
 
 
 def _literal_or_file(

@@ -75,6 +75,48 @@ def test_output_server_path_names_the_servers_copy(
     assert Path(result.output.strip()).exists()
 
 
+def test_publish_refuses_an_in_process_binding_unless_allowed_then_is_idempotent(
+    runner: CliRunner, env: Mapping[str, str], completed: str
+) -> None:
+    args = ['publish', completed, 'data', '--via', 'fake']
+    refused = runner.invoke(main, args, env=env)
+    assert refused.exit_code == 1
+    assert 'in-process' in refused.output
+    assert 'Traceback' not in refused.output
+    first = runner.invoke(main, [*args, '--allow-reused'], env=env)
+    assert first.exit_code == 0, first.output
+    assert first.output.strip().startswith('fake/')
+    assert (
+        runner.invoke(main, [*args, '--allow-reused'], env=env).output == first.output
+    )
+
+
+def test_publish_via_an_unknown_publisher_is_a_clean_error(
+    runner: CliRunner, env: Mapping[str, str], completed: str
+) -> None:
+    result = runner.invoke(
+        main, ['publish', completed, 'data', '--via', 'nope'], env=env
+    )
+    assert result.exit_code == 1
+    assert 'Traceback' not in result.output
+    assert "Error: no publisher 'nope'; known: ['fake']" in result.output
+
+
+def test_serve_rejects_a_malformed_publisher(runner: CliRunner, tmp_path: Path) -> None:
+    args = [
+        'serve',
+        '--root',
+        str(tmp_path),
+        '--registry',
+        'a:b',
+        '--datasets',
+        str(tmp_path),
+    ]
+    result = runner.invoke(main, [*args, '--publisher', 'fake'])
+    assert result.exit_code == 2
+    assert 'NAME=MODULE:FACTORY' in result.output
+
+
 def test_submit_wait_output_round_trip(
     runner: CliRunner, env: Mapping[str, str], run_ref: DatasetRef
 ) -> None:

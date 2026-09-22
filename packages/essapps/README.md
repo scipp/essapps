@@ -78,10 +78,10 @@ The `service` extra brings in FastAPI, httpx, and uvicorn. Serve a backend from 
 ```sh
 mkdir -p /tmp/runs
 python -c "from ess.apps.examples import write_run; write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])"
-essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs
+essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs --publisher fake=ess.apps.testing:FakePublisher
 ```
 
-Every run it takes executes in a throwaway process, so the registry is named, not passed. From another process, `remote` replaces `local` and returns a `Client` whose backend forwards each call:
+Every run it takes executes in a throwaway process, so the registry is named, not passed, and so are the publishers it holds. From another process, `remote` replaces `local` and returns a `Client` whose backend forwards each call:
 
 ```python
 from ess.apps.remote import remote
@@ -100,6 +100,7 @@ essapps wait <record>
 essapps output <record>                                # lists the outputs
 essapps output <record> total                          # a literal, as JSON
 essapps output <record> data --to ./results            # downloads the file, prints its path
+essapps publish <record> data --via fake --allow-reused   # prints the PID; allowed because the example registry binds in-process
 ```
 
 ## Where things are
