@@ -77,10 +77,13 @@ def test_a_dataset_two_parameters_name_is_one_origin(
     assert counting_client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
 
 
-def test_a_dataset_no_source_has_fails_the_run(client: Client) -> None:
+def test_a_dataset_no_source_has_fails_the_run_naming_the_sources(
+    client: Client, datasets: Path
+) -> None:
     record = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=77)})
     assert record.status == Status.FAILED
     assert record.failure.kind == 'missing-dataset'
+    assert str(datasets) in record.failure.message
 
 
 def test_a_dataset_identified_by_path_is_its_own_location(

@@ -114,6 +114,9 @@ class FolderSource:
         self.instrument = instrument
         self.journal = journal or {}
 
+    def __repr__(self) -> str:
+        return f'FolderSource({str(self.path)!r}, {self.pattern!r})'
+
     def new_datasets(self, proposal: str) -> list[Dataset]:
         return self._scan()
 

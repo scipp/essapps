@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The ``essapps`` command: serve a backend, list its specs, submit a run, wait
-for it, read an output.
+The ``essapps`` command: serve a backend, list its specs and datasets, submit
+a run, wait for it, read an output.
 
 Records are the only state kept between invocations, which is what these
 commands are meant to show: the shape a service needs on top of the client
@@ -93,12 +93,28 @@ def serve(
 
 
 @main.command()
+@click.option(
+    '--json', 'as_json', is_flag=True, help='The serialized specs, schemas included.'
+)
 @click.pass_obj
-def specs(env: Env) -> None:
+def specs(env: Env, as_json: bool) -> None:
     """List the backend's specs, one per line: id, title, description."""
     with closing(RemoteBackend(env.url)) as backend:
-        for spec in backend.specs():
-            click.echo(f'{spec.id}\t{spec.title}\t{spec.description}')
+        found = backend.specs()
+    if as_json:
+        click.echo(json.dumps([s.model_dump(mode='json') for s in found], indent=2))
+        return
+    for spec in found:
+        click.echo(f'{spec.id}\t{spec.title}\t{spec.description}')
+
+
+@main.command()
+@click.pass_obj
+def datasets(env: Env) -> None:
+    """List the datasets the backend's sources know: reference and path."""
+    with closing(env.client()) as client:
+        for dataset in client.datasets():
+            click.echo(f'{dataset.ref}\t{dataset.path}')
 
 
 def _unwrap_optional(schema: dict[str, Any]) -> dict[str, Any]:

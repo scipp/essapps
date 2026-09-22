@@ -73,9 +73,11 @@ The checksum of every dataset file a run reads is on its record, so a recompute 
 
 ### Over HTTP
 
-The `service` extra brings in FastAPI, httpx, and uvicorn. Serve a backend from one shell:
+The `service` extra brings in FastAPI, httpx, and uvicorn. Serve a backend from one shell, over a folder holding a run file:
 
 ```sh
+mkdir -p /tmp/runs
+python -c "from ess.apps.examples import write_run; write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])"
 essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs
 ```
 
@@ -90,8 +92,9 @@ client = remote('http://127.0.0.1:8000', instrument='dream', proposal='p1', subm
 The `essapps` command does the same from a shell, with the flags of `submit` generated from the spec's parameter schema (`essapps submit load/v1 --help` lists them):
 
 ```sh
-essapps specs                                          # id, title, description per line
+essapps specs                                          # id, title, description per line; --json for the schemas
 export ESSAPPS_INSTRUMENT=dream ESSAPPS_PROPOSAL=p1
+essapps datasets                                       # run:dream/1 and its path
 essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id
 essapps wait <record>
 essapps output <record> total

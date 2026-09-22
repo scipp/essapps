@@ -2,7 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The ``essapps`` command, against a real server thread."""
 
+import json
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -50,6 +52,23 @@ def test_specs_lists_id_title_and_description_without_a_proposal(
     result = runner.invoke(main, ['specs'], env={'ESSAPPS_URL': server_url})
     assert result.exit_code == 0, result.output
     assert 'load/v1\tLoad\tLoad a run from a scipp HDF5 file' in result.output
+
+
+def test_specs_json_carries_the_params_schema(
+    runner: CliRunner, server_url: str
+) -> None:
+    result = runner.invoke(main, ['specs', '--json'], env={'ESSAPPS_URL': server_url})
+    assert result.exit_code == 0, result.output
+    load = next(s for s in json.loads(result.output) if s['name'] == 'load')
+    assert 'run' in load['params_schema']['properties']
+
+
+def test_datasets_lists_reference_and_path(
+    runner: CliRunner, env: Mapping[str, str], run_file: Path, run_ref: DatasetRef
+) -> None:
+    result = runner.invoke(main, ['datasets'], env=env)
+    assert result.exit_code == 0, result.output
+    assert f'{run_ref}\t{run_file}' in result.output.splitlines()
 
 
 def test_submit_help_lists_the_generated_flags(

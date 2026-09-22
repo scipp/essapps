@@ -599,8 +599,10 @@ class LocalBackend:
         if isinstance(ref, DatasetRef):
             located = self.locate(ref)
             if located is None:
+                asked = ', '.join(repr(s) for s in self.sources) or 'no sources'
                 return Failure(
-                    kind='missing-dataset', message=f'{ref}: no source has it'
+                    kind='missing-dataset',
+                    message=f'{ref}: no source has it; asked {asked}',
                 )
             locations[ref] = located
             return None

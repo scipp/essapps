@@ -350,7 +350,7 @@ Details: [operations.md](operations.md#failure-handling).
 |---|---|---|
 | Client interface | the API: request, validate, submit, run, view, pick, publish | `client` |
 | Transport | the `Backend` protocol over HTTP: the server holds a `LocalBackend`, `RemoteBackend` forwards each call | `server`, `remote` |
-| CLI | serve a backend; list specs, submit, wait, and read an output from a shell | `cli` |
+| CLI | serve a backend; list specs and datasets, submit, wait, and read an output from a shell | `cli` |
 | Backend | validates, resolves stand-ins, writes records, schedules, dispatches; single writer of the record store | `backend` |
 | Record store | records and queries over them; SQLite | `records`, `store` |
 | Data store | registry of disk copies, disk tier, private memory cache | `datastore` |
