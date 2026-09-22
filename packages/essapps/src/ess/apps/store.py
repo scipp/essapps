@@ -224,17 +224,27 @@ class RecordStore:
         )
         return [RunRecord.model_validate_json(r[0]) for r in rows]
 
-    def members_without_completed_record(
-        self, label: str, proposal: str
-    ) -> list[RunRecord]:
-        """The records of :meth:`batch` whose member key never completed."""
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+        """
+        The records of :meth:`batch` that failed or were cancelled, for member
+        keys that never completed.
+
+        A member whose latest record is still in flight is not offered, since
+        it may yet complete.
+        """
         rows = self._db.execute(
             'SELECT doc FROM records AS r '  # noqa: S608
-            f'WHERE proposal=? AND label=? AND {self._HEAD} '
+            f'WHERE proposal=? AND label=? AND {self._HEAD} AND status IN (?, ?) '
             'AND NOT EXISTS (SELECT 1 FROM records WHERE proposal=r.proposal'
             ' AND label=r.label AND member_key IS r.member_key AND status=?)'
             ' ORDER BY member_key, rowid',
-            (proposal, label, Status.COMPLETED.value),
+            (
+                proposal,
+                label,
+                Status.FAILED.value,
+                Status.CANCELLED.value,
+                Status.COMPLETED.value,
+            ),
         )
         return [RunRecord.model_validate_json(r[0]) for r in rows]
 

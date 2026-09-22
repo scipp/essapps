@@ -41,6 +41,25 @@ def test_update_changes_status_and_missing_record_raises(store: RecordStore) -> 
         store.update(RunRecord(request=request()))
 
 
+def test_members_to_retry_skips_members_in_flight_or_completed(
+    store: RecordStore,
+) -> None:
+    members = {
+        'failed': Status.FAILED,
+        'cancelled': Status.CANCELLED,
+        'running': Status.RUNNING,
+        'waiting': Status.WAITING,
+        'completed': Status.COMPLETED,
+    }
+    for key, status in members.items():
+        record = RunRecord(request=request(label='auto', member_key=key))
+        store.add(record)
+        record.status = status
+        store.update(record)
+    offered = store.members_to_retry('auto', 'p1')
+    assert [r.request.member_key for r in offered] == ['cancelled', 'failed']
+
+
 def test_list_filters_by_proposal_spec_status_label_and_member(
     store: RecordStore,
 ) -> None:

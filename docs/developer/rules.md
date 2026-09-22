@@ -132,14 +132,15 @@ Every clause is a query over the records and the sources, so a restart loses not
 A retry is the same query once more, not a second mechanism.
 Refusals are kept as a log for a user, never read by the loop itself.
 
-## Backlog, reprocess, and rerun
+## Backlog, reprocess, and retry
 
 Three deliberate operations call `apply` with a query instead of with a dataset.
 Each returns a group that `validate` shows before anything is created, and none of them runs on its own.
 
 - **`backlog`**: the datasets before a new rule's bound that its selector matches, offered when the rule is created.
 - **`reprocess`**: the members whose latest record under the rule's label came from an older rule version, offered when the rule moves to a new template or lookup version.
-- **`rerun`**: the members under a label that have no completed record.
+- **`retry`**: the members under a label whose latest record failed or was cancelled, the by-hand form of the trigger loop's retry policy.
+  A member with a record in flight is not offered.
 
 **A reprocess is a rebase of the pinned values onto the new template and lookup.**
 It keeps what the submitter pinned and fills again what the template and the lookup filled.

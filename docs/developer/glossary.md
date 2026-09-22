@@ -22,7 +22,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Annotations**: labels and notes attached to a record after the fact.
   Mutable, outside provenance, read by nothing in the framework.
 - **Apply**: the client operation that fills a template through a lookup for a set of datasets and returns a group to preview and submit whole.
-  Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and rerun operations.
+  Called by a batch form, by the trigger loop per arrival, and by the backlog, reprocess, and retry operations.
   In a notebook it accepts a DataFrame, member key as index and pinned values as columns.
   See [rules.md](rules.md).
 - **Backend**: the one component that accepts requests, keeps the records, and owns the stored results.

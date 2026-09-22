@@ -5,7 +5,7 @@ Batch: making requests from rules and templates.
 
 Batch and automatic reduction are one mechanism seen twice. :func:`apply` is
 the one operation: it makes a batch from a rule, or from a template and its
-lookup. :func:`backlog`, :func:`reprocess`, and :func:`rerun` call it with a
+lookup. :func:`backlog`, :func:`reprocess`, and :func:`retry` call it with a
 query. :class:`TriggerLoop` calls it with one dataset whenever the five clauses
 of :func:`trigger_status` hold, and keeps no memory of what it fired on.
 :func:`shadowed` is the check a reprocess itself does not make: which pinned
@@ -336,14 +336,17 @@ def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
     return _again(client, rule, _stale(client, rule))
 
 
-def rerun(
+def retry(
     client: Client, rule: Rule | Template, *, label: str | None = None
 ) -> dict[str, RunRequest]:
-    """The members under a label that have no completed record."""
+    """
+    The members under a label whose latest record failed or was cancelled.
+
+    The by-hand form of the trigger loop's retry policy: a member with a record
+    in flight or a completed one is not offered.
+    """
     label = label or rule.name
-    return _again(
-        client, rule, client.members_without_completed_record(label), label=label
-    )
+    return _again(client, rule, client.members_to_retry(label), label=label)
 
 
 def _selected_members(

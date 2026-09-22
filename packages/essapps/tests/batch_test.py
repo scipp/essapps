@@ -20,7 +20,7 @@ from ess.apps.batch import (
     batch_table,
     dataset_table,
     reprocess,
-    rerun,
+    retry,
     shadowed,
     trigger_status,
 )
@@ -306,7 +306,7 @@ def test_shadowed_is_empty_when_nothing_is_stale(
     assert empty.empty
 
 
-def test_rerun_offers_the_members_with_no_completed_record(
+def test_retry_offers_the_members_whose_latest_record_failed(
     client: Client, template: Template, tmp_path: Path
 ) -> None:
     client.sources.append(
@@ -318,8 +318,8 @@ def test_rerun_offers_the_members_with_no_completed_record(
     TriggerLoop(client, rule).run_once()
     stuck = client.records(label='auto', member_key='pid:pid/9')
     assert [r.failure.kind for r in stuck] == ['missing-dataset']
-    assert sorted(rerun(client, rule)) == ['pid:pid/9']
-    assert rerun(client, rule, label='nothing') == {}
+    assert sorted(retry(client, rule)) == ['pid:pid/9']
+    assert retry(client, rule, label='nothing') == {}
 
 
 # The trigger loop

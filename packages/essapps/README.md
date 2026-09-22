@@ -80,7 +80,7 @@ The checksum of every dataset file a run reads is on its record, so a recompute 
 | how a session chooses and holds stages | `stages.py`, `tests/stages_test.py` | [stages.md](../../docs/developer/stages.md) |
 | contribute and combine specs, `chain` | `aggregation.py`, `examples.py` | [aggregation.md](../../docs/developer/aggregation.md) |
 | templates, lookups, rules | `rules.py` | [rules.md](../../docs/developer/rules.md) |
-| `apply`, backlog, reprocess, rerun, the trigger loop, the batch table | `batch.py`, `tests/batch_test.py` | [rules.md](../../docs/developer/rules.md) |
+| `apply`, backlog, reprocess, retry, the trigger loop, the batch table | `batch.py`, `tests/batch_test.py` | [rules.md](../../docs/developer/rules.md) |
 | both execution shapes, the data store | `launcher.py`, `runner.py`, `datastore.py` | [records.md](../../docs/developer/records.md#where-runs-execute-and-where-data-lives) |
 | test helpers for workflow packages | `testing.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#test-helpers) |
 | real workflows bound to the framework | `loki.py`, `amor.py` | [open-issues.md](../../docs/developer/open-issues.md#what-binding-real-workflows-found) |
