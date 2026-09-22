@@ -18,7 +18,7 @@ from .backend import Backend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import RunRecord, RunRequest, Status, Submission
+from .records import Origin, RunRecord, RunRequest, Status
 from .sources import Dataset, DatasetSource
 from .spec import (
     DatasetRef,
@@ -72,7 +72,7 @@ class Client:
         *,
         label: str | None = None,
         member_key: str | None = None,
-        submission: Submission | None = None,
+        origin: Origin | None = None,
     ) -> RunRequest:
         """A request for this instrument and proposal."""
         spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
@@ -86,7 +86,7 @@ class Client:
             submitter=self.submitter,
             label=label,
             member_key=member_key,
-            submission=submission or Submission(),
+            origin=origin or Origin(),
         )
 
     def validate(self, request: RunRequest) -> ValidationReport:

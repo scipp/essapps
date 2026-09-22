@@ -26,10 +26,10 @@ The only path it may name is the identity of a local file that carries no run id
 | `instrument`, `proposal` | the scope of the run, both mandatory |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
-| `submission` | template version, rule version, lookup version and entry, and what the submitter pinned beyond them |
+| `origin` | template version, rule version, lookup version and entry, and what was pinned beyond them |
 
 The last two serve batches and rules ([rules.md](rules.md)).
-The submission is explanation and not provenance, because the resolved request alone reproduces the run.
+The origin is explanation and not provenance, because the resolved request alone reproduces the run.
 
 A **run record** is the request plus what happened to it.
 `RunRecord` adds to `request`:
@@ -100,7 +100,7 @@ Identity is not location: where a catalogue dataset's bytes are is asked of SciC
 
 **Nothing is stored per dataset.**
 Its proposal is checked against the request's at submission, when its SciCat entry is read anyway, and the data store registers a dataset only when it copies its bytes.
-The checksum of a local file goes on the record of the run that read it, so a recompute can tell whether it read the same bytes, and the path the submitter typed stays on the submission.
+The checksum of a local file goes on the record of the run that read it, so a recompute can tell whether it read the same bytes, and the path the submitter typed stays on the origin.
 A dataset has no request, no status, and nothing to recompute, so a dataset reference is never pending.
 Datasets come from a dataset source ([rules.md](rules.md#the-dataset-source)).
 

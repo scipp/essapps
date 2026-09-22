@@ -126,10 +126,10 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
     assert scales['pid:pid/2'] == 4.0  # what was pinned over both
     assert scales['run:dream/1'] == 2.0  # the template, matching no entry
-    submission = group['pid:pid/2'].submission
-    assert submission.pinned == {'scale': 4.0}
-    assert submission.entry == 'rest'
-    assert submission.template == 'load-defaults/v1'
+    origin = group['pid:pid/2'].origin
+    assert origin.pinned == {'scale': 4.0}
+    assert origin.entry == 'rest'
+    assert origin.template == 'load-defaults/v1'
     assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
 
 
@@ -169,7 +169,7 @@ def test_a_blank_cell_of_a_typed_frame_falls_through_to_the_template(
     )
     group = apply(client, template, pinned=frame, label='scan1')
     assert [r.params['scale'] for r in group.values()] == [2.0, 5.0]
-    assert [list(r.submission.pinned) for r in group.values()] == [
+    assert [list(r.origin.pinned) for r in group.values()] == [
         ['run'],
         ['run', 'scale'],
     ]
@@ -234,7 +234,7 @@ def test_reprocess_offers_the_members_an_older_rule_version_made(
     group = reprocess(client, moved)
     assert sorted(group) == ['pid:pid/1', 'pid:pid/2']
     assert group['pid:pid/1'].params['scale'] == 7.0
-    assert group['pid:pid/1'].submission.rule == 'auto-load/v2'
+    assert group['pid:pid/1'].origin.rule == 'auto-load/v2'
 
 
 def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) -> None:
@@ -361,7 +361,7 @@ def test_the_loop_fires_once_per_dataset_and_a_restart_changes_nothing(
     assert [r.request.member_key for r in fired] == ['pid:pid/1', 'pid:pid/2']
     assert [r.status for r in fired] == [Status.COMPLETED] * 2
     assert [r.request.label for r in fired] == ['auto-load'] * 2
-    assert fired[0].request.submission.rule == 'auto-load/v1'
+    assert fired[0].request.origin.rule == 'auto-load/v1'
     assert loop.run_once() == []
 
     # A second loop over the same store knows nothing and fires on nothing.
@@ -462,7 +462,7 @@ def test_apply_on_the_rule_passes_its_own_reservation(
     client: Client, rule: Rule, samples: FakeDatasetSource
 ) -> None:
     """A person adding a dataset the selector missed goes through ``apply``,
-    which sets ``submission.rule``, so the reservation lets it through."""
+    which sets ``origin.rule``, so the reservation lets it through."""
     TriggerLoop(client, rule)
     missed = client.datasets()[-1]
     records = client.submit_group(apply(client, rule, [missed]))

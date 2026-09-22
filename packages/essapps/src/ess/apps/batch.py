@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from .backend import GROUP_PREFIX, SubmitError
 from .client import Client
-from .records import RunRecord, RunRequest, Status, Submission
+from .records import Origin, RunRecord, RunRequest, Status
 from .rules import AsOf, Lookup, LookupEntry, Rule, Series, Template, matches, precedes
 from .sources import Dataset
 from .spec import DatasetRef, OutputRef, SpecId, as_ref
@@ -87,7 +87,7 @@ def apply(
             template.fill(**fills),
             label=label,
             member_key=key,
-            submission=Submission(
+            origin=Origin(
                 template=template.id,
                 rule=of_rule.id if of_rule is not None else None,
                 lookup=None if lookup is None else lookup.id,
@@ -160,7 +160,7 @@ def _combine(
         series.template.fill(**{series.parameter: contributions}),
         label=label,
         member_key=value,
-        submission=Submission(template=series.template.id, rule=rule.id),
+        origin=Origin(template=series.template.id, rule=rule.id),
     )
 
 
@@ -321,7 +321,7 @@ def _stale(client: Client, rule: Rule) -> list[RunRecord]:
     return [
         record
         for record in client.batch(rule.name)
-        if record.request.submission.rule != rule.id
+        if record.request.origin.rule != rule.id
     ]
 
 
@@ -382,7 +382,7 @@ def _again(
         client,
         rule,
         [known[str(r.request.member_key)] for r in members],
-        {str(r.request.member_key): r.request.submission.pinned for r in members},
+        {str(r.request.member_key): r.request.origin.pinned for r in members},
         label=label,
     )
 
@@ -416,7 +416,7 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
         dataset = known[str(record.request.member_key)]
         was = _without_pinned(client, previous, dataset)
         now = _without_pinned(client, rule, dataset)
-        for field, value in record.request.submission.pinned.items():
+        for field, value in record.request.origin.pinned.items():
             pinned = _leaves(field, value)
             before = _leaves(field, was.get(field))
             after = _leaves(field, now.get(field))
@@ -531,20 +531,20 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     records = client.batch(str(label))
     fields = dict.fromkeys(rule.template.blanks if rule is not None else ())
     for record in records:
-        fields |= dict.fromkeys(record.request.submission.pinned)
+        fields |= dict.fromkeys(record.request.origin.pinned)
     rows: dict[str, dict[str, Any]] = {}
     for record in records:
-        submission = record.request.submission
+        origin = record.request.origin
         params = record.request.params
         rows[str(record.request.member_key)] = {
             'record': record.id,
             'status': record.status.value,
             'spec': str(record.spec),
-            'template': submission.template,
-            'rule': submission.rule,
-            'lookup': submission.lookup,
-            'entry': submission.entry,
-            'pinned': ', '.join(submission.pinned),
+            'template': origin.template,
+            'rule': origin.rule,
+            'lookup': origin.lookup,
+            'entry': origin.entry,
+            'pinned': ', '.join(origin.pinned),
         }
         for field in fields:
             if field in params:

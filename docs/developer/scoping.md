@@ -15,8 +15,8 @@ This may eventually merge in to the scipp/ess monorepo, but for now we will keep
 Key scope to deliver eventually:
 
 - Manual-reduction: User configures a workflow and runs it on a dataset, possibly with some interactive inspection of (intermediate) results.
-- Batch-reduction: Same as manual reduction, but applied to many datasets, many paramaters shared, but some per-dataset individualization.
-- Auto-reduction: Configre workflow auto-applied to all new datasets.
+- Batch-reduction: Same as manual reduction, but applied to many datasets, many parameters shared, but some per-dataset individualization.
+- Auto-reduction: Configure workflow auto-applied to all new datasets.
 - Chaining and combining: an output of one workflow feeds another (beam centre, processed vanadium), runs are combined (angle series, sums over runs), and auto-reduction reduces a group of runs again whenever a run is added to it, because nobody at the instrument can say when a series is complete.
 
 Key scope on another axis:
@@ -50,7 +50,7 @@ For now this is random things that came to my mind, not in any order of importan
 - plotting and output inspection
 - SciCat integration (abstracted) <-> data handle?
 - data-slicer -> compute/backend to handle slicing of large data so only small result needs to be sent to frontend?
-workflow 
+workflow
 - config management (batch reduction) -> provenance graph; also non-batch reduction workflow chaining (may be manual), e.g., beam-center-finder-workflow -> reduciton-workflow
 - viz + plotting
 - look at Aiida or similar for inspiration

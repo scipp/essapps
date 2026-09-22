@@ -26,7 +26,7 @@ The recommendation in brackets is mine.
   How long each kind of run's outputs is kept, and the analysis window after which a proposal's records are dropped together.
   [One order: outputs of superseded records first, then outputs the spec marks as cheap to recompute from their inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show that they get it right.]
 - **Local paths after a drop.**
-  A local file's path stays on the record's submission after the bytes are dropped, until the proposal is dropped.
+  A local file's path stays on the record's origin after the bytes are dropped, until the proposal is dropped.
   [Keep it. A path is not data, and provenance needs it.]
 - **Two notebooks on one machine.**
   Each notebook is its own backend with its own record store, so referencing a result of one notebook from another needs a local transport.

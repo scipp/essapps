@@ -78,10 +78,12 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Member parameters**: the parameters that differ from member to member of an aggregation, such as the run.
   Only the adapter deals with them.
   sciline calls these member keys, which this document does not, because a member key here identifies a member.
+- **Origin**: the field on a run request that says where its values came from: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values pinned beyond template and lookup.
+  Explanation, not provenance, which is the data the run read.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.
 - **Pinned values**: the values of a request set for one member beyond the template and the lookup, the top rung of the precedence ladder.
-  The submission keeps them apart from the resolved parameters, so a reprocess under a new template or lookup version fills the rest again and leaves them alone.
+  The origin keeps them apart from the resolved parameters, so a reprocess under a new template or lookup version fills the rest again and leaves them alone.
   See [rules.md](rules.md#templates-and-lookups).
 - **Predecessor**: the request a new request is compared with when the session chooses the stage inputs.
   It is the request the new one supersedes, or, for a new member of a batch, the latest request under the same label.
@@ -129,8 +131,6 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Stage output**: an output that one spec produces and another takes as input, kept as a record.
   The word names a role, not a kind.
   See [records.md](records.md#reuse-means-a-workflow-boundary).
-- **Submission**: the field on a run record that says how its request was made: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values the submitter pinned beyond template and lookup.
-  Explanation, not provenance.
 - **Template**: a saved, versioned run request with some fields left blank.
   See [rules.md](rules.md).
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits.

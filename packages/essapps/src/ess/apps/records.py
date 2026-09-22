@@ -47,15 +47,15 @@ class Status(StrEnum):
         return self in (Status.COMPLETED, Status.FAILED, Status.CANCELLED)
 
 
-class Submission(BaseModel, frozen=True):
+class Origin(BaseModel, frozen=True):
     """
-    How a request was made: explanation, not provenance.
+    Where a request's values came from: explanation, not provenance.
 
-    The resolved request alone reproduces the run; this says which template
-    version, rule version, lookup version and lookup entry filled it, and which
-    values the submitter pinned beyond them, so that a reprocess under a new
-    template or lookup version carries what was pinned and recomputes what was
-    filled.
+    Provenance is the data a run read, reached through the resolved request,
+    which alone reproduces the run. This says which template version, rule
+    version, lookup version and lookup entry filled the request, and which
+    values were pinned beyond them, so that a reprocess under a new template or
+    lookup version carries what was pinned and fills the rest again.
     """
 
     template: str | None = None
@@ -93,8 +93,8 @@ class RunRequest(BaseModel, frozen=True):
         default=None,
         description="Which member of the batch under the label this is.",
     )
-    submission: Submission = Field(
-        default_factory=Submission,
+    origin: Origin = Field(
+        default_factory=Origin,
         description="How the request was made: template, rule, lookup entry, "
         "and the values the submitter pinned.",
     )

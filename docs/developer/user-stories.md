@@ -60,7 +60,7 @@ Checks: the bytes can be dropped; the record and the runs that used it remain ho
 
 Outcome: question.
 The bytes can be dropped, and the dependent records stay and lose recomputability.
-Whether the local path on the record's submission is sensitive enough to redact is undecided ([open-issues.md](open-issues.md#open-questions)).
+Whether the local path on the record's origin is sensitive enough to redact is undecided ([open-issues.md](open-issues.md#open-questions)).
 
 ### A5. Metadata corrected after the fact
 

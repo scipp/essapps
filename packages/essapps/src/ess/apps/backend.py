@@ -146,8 +146,8 @@ class Backend:
             errors += self._check_ref(ref, consumer, request, group or {})
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
-                request.submission.rule.rsplit('/v', 1)[0]
-                if request.submission.rule is not None
+                request.origin.rule.rsplit('/v', 1)[0]
+                if request.origin.rule is not None
                 else None
             )
             if submitted != rule:
@@ -212,7 +212,7 @@ class Backend:
             return [f'{ref}: a dataset cannot fill a literal field']
         return []
 
-    # Submission
+    # Origin
 
     def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
         """

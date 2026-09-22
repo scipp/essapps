@@ -53,7 +53,7 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
-The record stores the resolved result, and its `Submission` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
+The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
 ## Labels, batches, and slots
@@ -72,7 +72,7 @@ As the single writer it serializes two requests under one label and member key, 
 
 **A rule's label is reserved.**
 The trigger loop reserves it with the backend, which then refuses a request under it that the rule did not fill, so a batch a person happens to name after a rule cannot land in the rule's table.
-A run the selector missed is added by calling `apply` on the rule by hand, which sets the rule on the submission and so passes the reservation.
+A run the selector missed is added by calling `apply` on the rule by hand, which sets the rule on the origin and so passes the reservation.
 A member a person corrects is applied again with pinned values, which supersedes the rule's record under the same member key.
 
 A **slot** is a label with no member key, owned by one interactive tool, so that hundreds of reruns of one plot are one thing a person sees.
