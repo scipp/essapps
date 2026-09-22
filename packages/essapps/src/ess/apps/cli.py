@@ -23,7 +23,7 @@ import click
 
 from .backend import SubmitError
 from .client import Client, local_backend
-from .records import Status
+from .records import RunRecord, Status
 from .remote import RemoteBackend, remote
 from .server import serve as serve_backend
 from .sources import FolderSource
@@ -235,16 +235,59 @@ def wait(env: Env, record_id: str, timeout: float) -> None:
         sys.exit(1)
 
 
+def _literal_or_file(
+    client: Client, record: RunRecord, ref: OutputRef, into: Path | None, server: bool
+) -> str | None:
+    """A literal as JSON, a stored output as a path when one was asked for."""
+    if ref.output in record.outputs:
+        value = record.outputs[ref.output]
+        return json.dumps(value if ref.key is None else value[ref.key])
+    if into is not None:
+        return str(client.write_out(ref, into))
+    if server:
+        return str(client.write_out(ref))
+    return None
+
+
 @main.command()
 @click.argument('record_id')
-@click.argument('output')
+@click.argument('output', required=False)
 @click.option('--key', default=None)
+@click.option(
+    '--to',
+    'into',
+    type=click.Path(path_type=Path),
+    default=None,
+    help='Download a stored output into this folder and print its path.',
+)
+@click.option(
+    '--server-path',
+    is_flag=True,
+    help="Print a stored output's path on the server instead of its value.",
+)
 @click.pass_obj
-def output(env: Env, record_id: str, output: str, key: str | None) -> None:
-    """Print an output's value: JSON for a literal, else the value itself."""
+def output(
+    env: Env,
+    record_id: str,
+    output: str | None,
+    key: str | None,
+    into: Path | None,
+    server_path: bool,
+) -> None:
+    """
+    Print an output of RECORD_ID, or list its outputs when OUTPUT is omitted.
+
+    A literal prints as JSON. A stored output prints as its value, or as a
+    path with --to or --server-path; in a listing it prints as its reference.
+    """
     with closing(env.client()) as client:
-        value = client.output(OutputRef(record=record_id, output=output, key=key))
-    try:
-        click.echo(json.dumps(value))
-    except TypeError:
-        click.echo(str(value))
+        record = client.record(record_id)
+        if output is not None:
+            ref = OutputRef(record=record_id, output=output, key=key)
+            text = _literal_or_file(client, record, ref, into, server_path)
+            click.echo(str(client.output(ref)) if text is None else text)
+            return
+        for name in sorted(record.output_names()):
+            ref = OutputRef(record=record_id, output=name)
+            text = _literal_or_file(client, record, ref, into, server_path)
+            click.echo(f'{name}\t{ref if text is None else text}')

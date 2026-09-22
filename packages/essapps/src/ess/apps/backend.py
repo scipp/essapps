@@ -20,6 +20,7 @@ and nothing here reads what a spec means by them.
 
 from __future__ import annotations
 
+import shutil
 import time
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
@@ -172,8 +173,15 @@ class Backend(Protocol):
         """A plain-data view of an output, shaped by ``spec``."""
         ...
 
-    def write_out(self, ref: OutputRef) -> Path:
-        """Write an in-memory output to disk and return its path."""
+    def write_out(self, ref: OutputRef, into: Path | None = None) -> Path:
+        """
+        The output as a file.
+
+        Without ``into``, the data store's own copy, written on demand for an
+        in-memory output, at a path on the backend's host. With ``into``, a
+        copy named after the reference placed in that folder on the caller's
+        side, which over HTTP is a download: how large data leaves the service.
+        """
         ...
 
     def drop(self, ref: OutputRef) -> None:
@@ -644,8 +652,12 @@ class LocalBackend:
     def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
         return view(self.data.array(ref), spec)
 
-    def write_out(self, ref: OutputRef) -> Path:
-        return self.data.write_out(ref)
+    def write_out(self, ref: OutputRef, into: Path | None = None) -> Path:
+        path = self.data.write_out(ref)
+        if into is None:
+            return path
+        into.mkdir(parents=True, exist_ok=True)
+        return Path(shutil.copy(path, into / f'{ref}{path.suffix}'))
 
     def drop(self, ref: OutputRef) -> None:
         self.data.drop(ref)

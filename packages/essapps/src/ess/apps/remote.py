@@ -64,9 +64,9 @@ class RemoteBackend:
     """
     Forwards every ``Backend`` call to a server over HTTP.
 
-    ``downloads`` is where output files land, one folder per record; a
-    directory made here is removed by ``close``, one made elsewhere is left
-    for its owner.
+    ``downloads`` is where ``output`` lands the files it reads; a directory
+    made here is removed by ``close``, one made elsewhere is left for its
+    owner.
     """
 
     def __init__(
@@ -194,23 +194,15 @@ class RemoteBackend:
         The value of an output: inline from the record, or downloaded.
 
         A literal comes back with the record. A data output is downloaded on
-        every call, as the file the server's data store holds, and read with
-        the serializer its suffix names. Downloading every time keeps the
-        semantics of ``LocalBackend``: after ``drop`` the output is gone. This
-        is the data path a Tiled-style transport would replace.
+        every call and read with the serializer its suffix names. Downloading
+        every time keeps the semantics of ``LocalBackend``: after ``drop`` the
+        output is gone.
         """
         record = self.record(ref.record)
         if ref.output in record.outputs:
             value = record.outputs[ref.output]
             return value[ref.key] if ref.key is not None else value
-        params = {} if ref.key is None else {'key': ref.key}
-        r = _checked(
-            self._client.get(f'/outputs/{ref.record}/{ref.output}', params=params)
-        )
-        path = self.downloads / ref.record / _filename(r.headers)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(r.content)
-        return Serializers().load(path)
+        return Serializers().load(self.write_out(ref, self.downloads))
 
     def view(self, ref: OutputRef, spec: ViewSpec) -> dict[str, Any]:
         """As ``LocalBackend.view``, with lists where it has numpy arrays."""
@@ -221,16 +213,31 @@ class RemoteBackend:
         r = _checked(self._client.post('/view', json=body))
         return r.json()
 
-    def write_out(self, ref: OutputRef) -> Path:
+    def write_out(self, ref: OutputRef, into: Path | None = None) -> Path:
         """
-        Write the output to disk server-side; the returned path is the
-        server's, meaningful on the filesystem the server and the runs it
-        dispatches share, not necessarily on the client's.
+        Without ``into``, the server's own path, meaningful on the filesystem
+        the server and the runs it dispatches share, not necessarily on the
+        client's. With ``into``, the file the server's data store holds is
+        streamed into that folder; this is the data path a Tiled-style
+        transport would replace.
         """
-        r = _checked(
-            self._client.post('/write-out', json={'ref': ref.model_dump(mode='json')})
-        )
-        return Path(r.json()['path'])
+        if into is None:
+            body = {'ref': ref.model_dump(mode='json')}
+            return Path(
+                _checked(self._client.post('/write-out', json=body)).json()['path']
+            )
+        params = {} if ref.key is None else {'key': ref.key}
+        url = f'/outputs/{ref.record}/{ref.output}'
+        with self._client.stream('GET', url, params=params) as r:
+            if r.is_error:
+                r.read()
+            _checked(r)
+            into.mkdir(parents=True, exist_ok=True)
+            path = into / f'{ref}{Path(_filename(r.headers)).suffix}'
+            with path.open('wb') as file:
+                for chunk in r.iter_bytes():
+                    file.write(chunk)
+        return path
 
     def drop(self, ref: OutputRef) -> None:
         _checked(self._client.post('/drop', json={'ref': ref.model_dump(mode='json')}))

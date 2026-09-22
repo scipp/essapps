@@ -27,7 +27,7 @@ The reason is that a UI which reaches into backend internals owns state it does 
 The server holds one lock and a poller thread, because the backend is single-threaded by design: every route body and the poll run under the lock, and the poll is where dispatched runs are reconciled and waiting ones dispatched.
 `wait` is a loop over `record` on the client side, so the server never blocks on a client.
 An output travels as the file the data store holds, its suffix naming the serializer; this is the data path Tiled would replace.
-`write_out` returns the server's path, which is meaningful on the shared filesystem of the deployment.
+`write_out` returns the data store's own path, meaningful on the shared filesystem of the deployment; given a folder, it places a copy there on the caller's side, which over HTTP is a streamed download and the way large data leaves the service.
 A publisher is server-side code, so publishers are named when the server starts and a client publishes by name.
 Binding workflow code in-process is an affordance of `LocalBackend` and not on the protocol.
 
@@ -36,8 +36,8 @@ What the transport cost, in lines:
 | Module | Lines | Holds |
 |---|---|---|
 | `server` | 263 | one route per protocol method, the lock, the poller |
-| `remote` | 268 | `RemoteBackend`, `remote()` |
-| `cli` | 250 | `essapps serve`, `specs`, `datasets`, `submit`, `wait`, `output` |
+| `remote` | 275 | `RemoteBackend`, `remote()` |
+| `cli` | 293 | `essapps serve`, `specs`, `datasets`, `submit`, `wait`, `output` |
 
 Closing the backend surface into the protocol changed no behaviour.
 The poller thread is the one structural addition: in local mode `wait` drives `poll`, and in the server nothing else would.

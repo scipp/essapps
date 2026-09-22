@@ -10,7 +10,7 @@ import scipp as sc
 
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
-from ess.apps.datastore import MissingCopyError
+from ess.apps.datastore import MissingCopyError, Serializers
 from ess.apps.examples import (
     EXPORT,
     FAIL,
@@ -143,6 +143,15 @@ def test_session_outputs_stay_in_memory_until_written_out(
     path = client.write_out(record.ref('data'))
     assert path.exists()
     assert data.has_copy(record.ref('data'))
+
+
+def test_write_out_into_a_folder_copies_the_file(
+    client: Client, run_ref: DatasetRef, tmp_path: Path
+) -> None:
+    record = client.run(LOAD, {'run': run_ref})
+    path = client.write_out(record.ref('data'), tmp_path / 'out')
+    assert path.parent == tmp_path / 'out'
+    assert sc.identical(Serializers().load(path), client.output(record.ref('data')))
 
 
 def test_chaining_through_memory_and_literal_outputs(

@@ -185,8 +185,8 @@ class Client:
     def view(self, ref: OutputRef, **spec: Any) -> dict[str, Any]:
         return self.backend.view(ref, ViewSpec(**spec))
 
-    def write_out(self, ref: OutputRef) -> Path:
-        return self.backend.write_out(ref)
+    def write_out(self, ref: OutputRef, into: Path | None = None) -> Path:
+        return self.backend.write_out(ref, into)
 
     def drop(self, ref: OutputRef) -> None:
         self.backend.drop(ref)

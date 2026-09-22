@@ -3,12 +3,14 @@
 """The HTTP transport: a real server thread, a RemoteBackend through Client."""
 
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 import scipp as sc
 
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client
+from ess.apps.datastore import Serializers
 from ess.apps.examples import LOAD, REBIN
 from ess.apps.records import Status
 from ess.apps.remote import remote
@@ -27,6 +29,18 @@ def test_output_matches_a_local_run_and_a_literal_comes_back_inline(
     assert sc.identical(remote_client.output(record.ref('data')), expected)
     total = remote_client.output(record.ref('total'))
     assert total == {'value': 72.0, 'unit': 'counts'}
+
+
+def test_write_out_downloads_into_a_folder_or_names_the_servers_path(
+    remote_client: Client, run_ref: DatasetRef, tmp_path: Path
+) -> None:
+    (record,) = remote_client.wait([remote_client.run(LOAD, {'run': run_ref})])
+    ref = record.ref('data')
+    downloaded = remote_client.write_out(ref, tmp_path / 'out')
+    assert downloaded.parent == tmp_path / 'out'
+    assert sc.identical(Serializers().load(downloaded), remote_client.output(ref))
+    # The server runs on this machine, so its own path is visible here.
+    assert remote_client.write_out(ref).exists()
 
 
 def test_validate_reports_errors_and_submit_of_the_same_request_raises(

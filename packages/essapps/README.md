@@ -97,7 +97,9 @@ export ESSAPPS_INSTRUMENT=dream ESSAPPS_PROPOSAL=p1
 essapps datasets                                       # run:dream/1 and its path
 essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id
 essapps wait <record>
-essapps output <record> total
+essapps output <record>                                # lists the outputs
+essapps output <record> total                          # a literal, as JSON
+essapps output <record> data --to ./results            # downloads the file, prints its path
 ```
 
 ## Where things are

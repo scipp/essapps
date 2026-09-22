@@ -7,9 +7,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+import scipp as sc
 from click.testing import CliRunner
 
 from ess.apps.cli import main
+from ess.apps.datastore import Serializers
 from ess.apps.spec import DatasetRef
 
 
@@ -26,6 +28,51 @@ def env(server_url: str) -> Mapping[str, str]:
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
+
+
+@pytest.fixture
+def completed(runner: CliRunner, env: Mapping[str, str], run_ref: DatasetRef) -> str:
+    """The id of a completed load run, submitted and awaited through the CLI."""
+    result = runner.invoke(
+        main, ['submit', 'load/v1', '--run', str(run_ref), '--scale', '2.0'], env=env
+    )
+    assert result.exit_code == 0, result.output
+    record_id = result.output.strip()
+    assert runner.invoke(main, ['wait', record_id], env=env).exit_code == 0
+    return record_id
+
+
+def test_output_without_a_name_lists_literals_inline_and_stored_by_reference(
+    runner: CliRunner, env: Mapping[str, str], completed: str
+) -> None:
+    result = runner.invoke(main, ['output', completed], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == [
+        f'data\t{completed}.data',
+        'total\t{"value": 72.0, "unit": "counts"}',
+    ]
+
+
+def test_output_to_a_folder_downloads_the_file(
+    runner: CliRunner, env: Mapping[str, str], completed: str, tmp_path: Path
+) -> None:
+    result = runner.invoke(
+        main, ['output', completed, 'data', '--to', str(tmp_path / 'out')], env=env
+    )
+    assert result.exit_code == 0, result.output
+    path = Path(result.output.strip())
+    assert path.parent == tmp_path / 'out'
+    assert isinstance(Serializers().load(path), sc.DataArray)
+
+
+def test_output_server_path_names_the_servers_copy(
+    runner: CliRunner, env: Mapping[str, str], completed: str
+) -> None:
+    result = runner.invoke(
+        main, ['output', completed, 'data', '--server-path'], env=env
+    )
+    assert result.exit_code == 0, result.output
+    assert Path(result.output.strip()).exists()
 
 
 def test_submit_wait_output_round_trip(
