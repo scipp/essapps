@@ -78,19 +78,19 @@ Without these rules the store would become a second catalogue by accretion, one 
 ## Publication
 
 **Only finalized data enters SciCat.**
-Stage outputs and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
+Intermediates and unreviewed outputs stay in our store, because data in SciCat cannot be removed through the regular API.
 Publication is an explicit, idempotent operation on one output, triggered by a person after inspection or by an automatic-reduction rule.
 Publishing an output that already has a PID returns that PID.
 
 **The SciCat entry carries a self-contained provenance snapshot.**
-It holds the raw PIDs the output derives from, the resolved parameters, the spec identity, the workflow ID and the stage's inputs and outputs, the package versions, and the environment.
+It holds the raw PIDs the output derives from, the resolved parameters, the spec identity, the workflow ID, the names of the supplied intermediates and of the outputs, the package versions, and the environment.
 It can be read without any service of ours, and our record is then a copy of it.
 `Backend.provenance` builds the snapshot by walking the record's references.
 A publication may name the PID it supersedes, which the snapshot records, since an entry in SciCat is never removed.
 
 **Publication reads a disk copy of a result that was computed cold.**
 An output that exists only in a session is written out first.
-A record whose result came out of a held stage is recomputed in a throwaway process first, so that what enters SciCat was computed from its parameters and stage inputs alone and the record describes it exactly.
+A record whose result came out of a held stage is recomputed in a throwaway process first, so that what enters SciCat was computed from its parameters and supplied intermediates alone and the record describes it exactly.
 A record bound to workflow code in-process from a notebook is refused unless the client overrides, because such a record cannot be reproduced elsewhere.
 
 **The intent to publish is recorded before SciCat is written, and the PID after.**
@@ -102,7 +102,7 @@ Otherwise automatic reduction would reprocess its own output.
 
 ## Scope: instrument plus proposal
 
-**Instrument and proposal are mandatory on every stage request.**
+**Instrument and proposal are mandatory on every run request.**
 Run-number resolution, UI navigation, templates, and authorization by SciCat membership all operate within a proposal, the experiment allocation that owns data and defines who may access it.
 The backend checks proposal access on every reference it resolves or serves, not only at submission.
 Cluster jobs run under the submitting user's account.

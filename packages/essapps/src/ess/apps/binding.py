@@ -3,9 +3,9 @@
 """
 Binding specs to code.
 
-A workflow is the code behind a spec: given the parameters of a stage request,
-it builds the stage a stage record names, from the stage's inputs to its
-outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
+A workflow is the code behind a spec: given the parameters of a run request
+that it does not vary, it builds the stage the request cuts, from the stage's
+inputs to its outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
 references where the request does; the code asks the runner's :class:`Inputs`
 for the form it wants, a local path or a scipp object, so which form each
 parameter takes is decided here, next to the sciline key it maps to, and never
@@ -65,10 +65,10 @@ def resolve(value: Any, form: Form, inputs: Inputs) -> Any:
 
 class StageCall(Protocol):
     """
-    One stage of a workflow, called once per stage record.
+    One stage of a workflow, called once per run record.
 
-    ``params`` holds the parameters the stage takes as inputs, ``intermediates``
-    the intermediates it takes as inputs, already as objects, and the result
+    ``params`` holds the parameters the request varies, ``intermediates`` the
+    intermediates it supplies, already as objects, and the result
     holds the stage's outputs by field name.
     """
 
@@ -88,11 +88,12 @@ class Accumulator(Protocol):
 
 class Workflow(Protocol):
     """
-    The code behind a spec: builds the stages that stage records name.
+    The code behind a spec: builds the stages that run requests cut.
 
-    ``params`` holds the request's parameters, with the spec's defaults for
-    the fields neither it nor the stage sets; ``inputs`` and ``outputs`` are the
-    stage's names. What a stage holds between calls is what its inputs cannot
+    ``params`` holds the request's parameters that it does not vary, with the
+    spec's defaults for the fields it does not set; ``inputs`` names the
+    parameters it varies and the intermediates it supplies, and ``outputs`` the
+    outputs to compute. What a stage holds between calls is what its inputs cannot
     affect, so holding it is a cache and dropping it always safe. A stage that
     leaves a needed parameter unset fails here or when called, since only the
     code knows what depends on what.

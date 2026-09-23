@@ -36,7 +36,7 @@ from ess.apps.examples import (
     load_workflow,
     write_run,
 )
-from ess.apps.records import Accumulate, StageRecord, Status
+from ess.apps.records import Accumulate, RunRecord, Status
 from ess.apps.rules import (
     AsOf,
     Between,
@@ -130,9 +130,9 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert origin.pinned == {'scale': 4.0}
     assert origin.entry == 'rest'
     assert origin.template == 'load-defaults/v1'
-    # The template's blank is the stage input; the rest is params.
-    assert as_ref(group['pid:pid/1'].inputs['run']) == dataset_ref(pid='pid/1')
-    assert 'run' not in group['pid:pid/1'].params
+    # Each member varies the template's blank, whose value is in params.
+    assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
+    assert group['pid:pid/1'].vary == ('run',)
 
 
 def test_apply_without_datasets_is_the_batch_form(
@@ -507,14 +507,14 @@ def sample(path: Path, values: list[float], pid: str) -> Dataset:
     return Dataset(path=write_run(path, values), pid=pid, metadata={'sample': 'sio2'})
 
 
-def _accumulated(record: StageRecord) -> list[OutputRef]:
+def _accumulated(record: RunRecord) -> list[OutputRef]:
     """What a finalize accumulates; every accumulated input lists the same records."""
     lists = [
         [r.record for r in Accumulate.model_validate(value).accumulate]
-        for value in record.request.inputs.values()
+        for value in record.request.supplied.values()
     ]
     assert all(records == lists[0] for records in lists)
-    return Accumulate.model_validate(record.request.inputs['numerator']).accumulate
+    return Accumulate.model_validate(record.request.supplied['numerator']).accumulate
 
 
 def test_each_arrival_of_a_series_submits_a_member_and_a_chained_finalize(
@@ -866,8 +866,8 @@ def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
     )
 
 
-def _can(record: StageRecord) -> str:
-    return as_ref(record.request.inputs['can']).dataset
+def _can(record: RunRecord) -> str:
+    return as_ref(record.request.params['can']).dataset
 
 
 def test_an_as_of_fill_is_the_nearest_earlier_matching_dataset(

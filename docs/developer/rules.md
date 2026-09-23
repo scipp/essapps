@@ -23,7 +23,7 @@ batch_table(client, 'scan')
 ```
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
-Each member is a stage request: the template's blanks, here `run`, are its stage inputs, and every other value is its `params`.
+Each member is a run request that holds every filled value in `params` and varies the template's blanks, here `run`.
 The two members above agree on everything but their blanks, so they share one workflow ID, and in a session one held stage.
 `batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
@@ -55,7 +55,7 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
-The filled values of the template's blanks become the member's stage inputs, and all other filled values its `params`.
+Every filled value goes into the member's `params`, and the member varies the template's blanks.
 A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a workflow ID of its own.
 The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
@@ -159,9 +159,9 @@ A run that silently did not happen is a decision the user cannot see, and [snake
 
 There are two kinds of batching.
 Batching for convenience is many independent requests from one template, made by a person or by a rule without a series.
-Batching for merging is an aggregation: a member stage request per run, and a finalize stage request that accumulates the members' intermediates ([aggregation.md](aggregation.md)).
+Batching for merging is an aggregation: a member run request per run, and a finalize run request that accumulates the members' intermediates ([aggregation.md](aggregation.md)).
 
-**A rule with a series submits a member stage request and a finalize stage request per arrival.**
+**A rule with a series submits a member run request and a finalize run request per arrival.**
 
 ```python
 rule = Rule(
@@ -176,8 +176,8 @@ rule = Rule(
 
 `Series(key, accumulate, outputs)` names the dataset field whose value keys datasets into a series, the intermediates to accumulate, and the outputs of the finalize.
 The rule holds one template.
-Each member is the stage from the template's blanks to the intermediates in `accumulate`.
-Each finalize has the values the arriving member was given as its `params`, takes one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
+Each member varies the template's blanks and outputs the intermediates in `accumulate`.
+Each finalize has as its `params` the values the arriving member was given, without the ones the member varies, supplies one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
 It accumulates the intermediates of every current member of the series, or the previous finalize's values plus what that finalize does not cover when chaining is valid, for which the condition is in [aggregation.md](aggregation.md#when-chaining-is-valid).
 Nothing on the rule says whether chaining is allowed, because that is a property of the accumulator, which the person writing a rule cannot know.
 Successive finalizes of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.

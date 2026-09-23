@@ -3,10 +3,11 @@
 """
 The record store: SQLite, one writer, schema-versioned.
 
-Holds stage records, indexed by the workflow ID of their request (a hash of
-spec, params, instrument, and proposal), the reference edges between them, and
-the registry of disk copies (the part of the data store that knows where bytes
-are), keyed by reference in either form. Records are never deleted one at a time.
+Holds run records, indexed by the workflow ID of their request (a hash of
+spec, the parameters not varied, instrument, and proposal), the reference edges
+between them, and the registry of disk copies (the part of the data store that
+knows where bytes are), keyed by reference in either form. Records are never
+deleted one at a time.
 
 See docs/developer/records.md.
 """
@@ -20,10 +21,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Self
 
-from .records import StageRecord, Status
+from .records import RunRecord, Status
 from .spec import Ref, SpecId
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -113,7 +114,7 @@ class RecordStore:
 
     # Records
 
-    def add(self, *records: StageRecord) -> None:
+    def add(self, *records: RunRecord) -> None:
         """Insert records in one transaction: all of them or none."""
         with self._db:
             self._db.execute('BEGIN')
@@ -141,7 +142,7 @@ class RecordStore:
                     [(record.id, r.record, r.output, r.key) for r in req.refs()],
                 )
 
-    def update(self, record: StageRecord) -> None:
+    def update(self, record: RunRecord) -> None:
         with self._db:
             cur = self._db.execute(
                 'UPDATE records SET status=?, doc=? WHERE id=?',
@@ -150,13 +151,13 @@ class RecordStore:
         if cur.rowcount != 1:
             raise KeyError(record.id)
 
-    def get(self, record_id: str) -> StageRecord:
+    def get(self, record_id: str) -> RunRecord:
         row = self._db.execute(
             'SELECT doc FROM records WHERE id=?', (record_id,)
         ).fetchone()
         if row is None:
             raise KeyError(record_id)
-        return StageRecord.model_validate_json(row[0])
+        return RunRecord.model_validate_json(row[0])
 
     def __contains__(self, record_id: str) -> bool:
         return (
@@ -176,7 +177,7 @@ class RecordStore:
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[StageRecord]:
+    ) -> list[RunRecord]:
         """Records matching every given filter, oldest first."""
         clauses, args = [], []
         for column, value in (
@@ -200,11 +201,11 @@ class RecordStore:
             f'SELECT doc FROM records {where} ORDER BY created, rowid {tail}',  # noqa: S608
             args,
         )
-        return [StageRecord.model_validate_json(r[0]) for r in rows]
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
 
     def latest(
         self, label: str, proposal: str, *, member_key: str | None = None
-    ) -> StageRecord | None:
+    ) -> RunRecord | None:
         """
         The latest record under this label and member key, whatever its status.
 
@@ -220,9 +221,9 @@ class RecordStore:
             'ORDER BY rowid DESC LIMIT 1',
             (proposal, label, member_key),
         ).fetchone()
-        return None if row is None else StageRecord.model_validate_json(row[0])
+        return None if row is None else RunRecord.model_validate_json(row[0])
 
-    def batch(self, label: str, proposal: str) -> list[StageRecord]:
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
         """The records under this label: the latest per member key, by member key."""
         rows = self._db.execute(
             'SELECT doc FROM records AS r '  # noqa: S608
@@ -230,9 +231,9 @@ class RecordStore:
             'ORDER BY member_key, rowid',
             (proposal, label),
         )
-        return [StageRecord.model_validate_json(r[0]) for r in rows]
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
 
-    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
         """
         The records of :meth:`batch` that failed or were cancelled, for member
         keys that never completed.
@@ -254,7 +255,7 @@ class RecordStore:
                 Status.COMPLETED.value,
             ),
         )
-        return [StageRecord.model_validate_json(r[0]) for r in rows]
+        return [RunRecord.model_validate_json(r[0]) for r in rows]
 
     def referencing(self, record_id: str, output: str | None = None) -> list[str]:
         """IDs of records that reference an output of ``record_id``."""
@@ -269,14 +270,14 @@ class RecordStore:
             )
         return [r[0] for r in rows]
 
-    def by_status(self, *statuses: Status) -> Iterator[StageRecord]:
+    def by_status(self, *statuses: Status) -> Iterator[RunRecord]:
         marks = ','.join('?' * len(statuses))
         rows = self._db.execute(
             f'SELECT doc FROM records WHERE status IN ({marks}) '  # noqa: S608
             'ORDER BY created, rowid',
             [s.value for s in statuses],
         )
-        return (StageRecord.model_validate_json(r[0]) for r in rows)
+        return (RunRecord.model_validate_json(r[0]) for r in rows)
 
     # Registry of disk copies
 

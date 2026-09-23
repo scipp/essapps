@@ -79,16 +79,18 @@ def environment_name() -> str | None:
 
 class Job(BaseModel, frozen=True):
     """
-    What a runner is given: a stage request with its literal references inlined.
+    What a runner is given: a run request with its literal references inlined.
 
     ``workflow`` is the request's workflow ID, which names the stage a session
-    holds; ``params`` are the request's parameters, defaults filled, and
-    ``inputs`` the stage inputs.
+    holds; ``params`` are the request's parameters, defaults filled, ``vary``
+    the ones the stage takes as inputs, and ``supplied`` the intermediates
+    supplied in place of what computes them.
     """
 
     workflow: str
     params: dict[str, Any]
-    inputs: dict[str, Any]
+    supplied: dict[str, Any]
+    vary: tuple[str, ...]
     outputs: tuple[str, ...]
 
 
@@ -240,7 +242,7 @@ class Runner:
         inputs: Inputs,
         outputs: Outputs,
     ) -> RunResult:
-        """Execute the stage ``job`` names and report what happened."""
+        """Execute the run ``job`` describes and report what happened."""
         if binding.factory is None:
             raise ValueError(f'{binding.spec.id} has no workflow to run')
         spec = binding.spec
@@ -253,48 +255,48 @@ class Runner:
             binding=binding.how,
         )
         try:
-            fields = spec.params.model_fields
-            staged = [name for name in job.inputs if name in fields]
-            intermediates = [name for name in job.inputs if name not in fields]
+            fixed_values = {k: v for k, v in job.params.items() if k not in job.vary}
             fixed = submodel(
                 spec.params,
                 [
                     name
-                    for name, info in fields.items()
-                    if name not in staged
-                    and (name in job.params or not info.is_required())
+                    for name, info in spec.params.model_fields.items()
+                    if name not in job.vary
+                    and (name in fixed_values or not info.is_required())
                 ],
                 'Fixed',
-            ).model_validate(job.params)
-            fed = submodel(spec.params, staged, 'Staged').model_validate(
-                {name: job.inputs[name] for name in staged}
+            ).model_validate(fixed_values)
+            varied = submodel(spec.params, job.vary, 'Varied').model_validate(
+                {name: job.params[name] for name in job.vary}
             )
             result.resolved_params = _resolved(
-                fixed.model_dump(mode='json') | fed.model_dump(mode='json')
+                fixed.model_dump(mode='json') | varied.model_dump(mode='json')
             )
-            result.checksums = self._checksums({**job.params, **job.inputs}, inputs)
+            result.checksums = self._checksums({**job.params, **job.supplied}, inputs)
             workflow = self._workflow(spec, binding.factory)
             outputs_ = tuple(job.outputs)
+            stage_inputs = (*job.vary, *job.supplied)
 
             def build() -> StageCall:
-                return workflow.stage(fixed, tuple(job.inputs), outputs_, inputs)
+                return workflow.stage(fixed, stage_inputs, outputs_, inputs)
 
             if self._stages is None or isinstance(workflow, FunctionWorkflow):
                 # A plain function has no graph to cut, so its stage holds nothing.
                 call = build()
             else:
-                held = {str(ref) for ref in dataset_refs(job.params)}
+                held = {str(ref) for ref in dataset_refs(fixed_values)}
                 name = (
                     job.workflow,
-                    tuple(sorted(job.inputs)),
+                    tuple(sorted(job.vary)),
+                    tuple(sorted(job.supplied)),
                     outputs_,
                     tuple(sorted(c for c in result.checksums.items() if c[0] in held)),
                 )
                 call, result.reused = self._stages.stage(name, build)
             values = {}
-            for name in intermediates:
+            for name, value in job.supplied.items():
                 values[name], reused = self._intermediate(
-                    spec, workflow, job.workflow, name, job.inputs[name], inputs
+                    spec, workflow, job.workflow, name, value, inputs
                 )
                 result.reused |= reused
             self._store(
@@ -302,7 +304,7 @@ class Runner:
                 result,
                 spec,
                 outputs_,
-                dict(call(fed, values, inputs)),
+                dict(call(varied, values, inputs)),
                 outputs,
             )
             result.status = Status.COMPLETED

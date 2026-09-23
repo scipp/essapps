@@ -17,7 +17,7 @@ pytest.importorskip('ess.amor')
 
 from ess.apps import amor
 from ess.apps.client import Client, local
-from ess.apps.records import StageRecord
+from ess.apps.records import RunRecord
 from ess.apps.sources import FolderSource
 from ess.apps.spec import dataset_ref
 
@@ -75,7 +75,7 @@ def reflectivity_params(run: int, **overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
-def members(client: Client, **overrides: Any) -> dict[int, StageRecord]:
+def members(client: Client, **overrides: Any) -> dict[int, RunRecord]:
     """
     One reduced sample run per rotation: one batch, as ``apply`` would submit it.
 

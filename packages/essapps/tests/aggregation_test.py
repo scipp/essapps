@@ -33,7 +33,7 @@ from ess.apps.examples import (
     registry,
     write_run,
 )
-from ess.apps.records import Accumulate, StageRecord, Status
+from ess.apps.records import Accumulate, RunRecord, Status
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
 from ess.apps.testing import assert_accumulator_is_associative, equal
@@ -133,7 +133,7 @@ def finalize_stage(wf: WorkflowHandle) -> StageHandle:
     return wf.stage(inputs=['numerator', 'denominator'], outputs=['normalized'])
 
 
-def accumulated(members: list[StageRecord]) -> dict[str, Accumulate]:
+def accumulated(members: list[RunRecord]) -> dict[str, Accumulate]:
     """The finalize's inputs: the accumulation of every member's intermediates."""
     return {
         name: Accumulate(accumulate=[m.ref(name) for m in members])
@@ -178,14 +178,14 @@ def test_a_growing_series_pushes_only_the_new_member(
     """The session holds the accumulator; every record still lists all members."""
     wf = session.workflow(NORMALIZE, PARAMS)
     contribute, finalize = member_stage(wf), finalize_stage(wf)
-    members: list[StageRecord] = []
+    members: list[RunRecord] = []
     totals = []
     for run in runs:
         members.append(contribute.compute({'run': run}))
         totals.append(finalize.compute(accumulated(members)))
         assert len(pushed) == len(members)
     assert [t.reused for t in totals] == [False, True, True]
-    assert len(totals[-1].request.inputs['denominator']['accumulate']) == 3
+    assert len(totals[-1].request.supplied['denominator']['accumulate']) == 3
     assert equal(session.output(totals[-1], 'normalized'), by_sciline(datasets))
 
 
@@ -234,12 +234,29 @@ def test_a_default_members_omit_disagrees_with_another_value_on_the_finalize(
     assert any('made with floor=0.0' in e for e in report.errors)
 
 
-def test_a_parameter_only_the_finalize_reads_may_be_its_stage_input(
+def test_the_agreement_rule_ignores_what_a_member_varies(
+    client: Client, runs: list[DatasetRef]
+) -> None:
+    """
+    Each member varies ``run``, so a finalize that sets ``run`` agrees with
+    every member; ``floor``, which both set, must still agree.
+    """
+    wf = client.workflow(NORMALIZE, PARAMS)
+    members = client.wait([member_stage(wf).compute({'run': run}) for run in runs])
+    setting_run = wf.with_params(run=runs[0])
+    request = finalize_stage(setting_run).request(accumulated(members))
+    assert client.validate(request).ok
+    disagreeing = setting_run.with_params(floor=0.0)
+    report = client.validate(finalize_stage(disagreeing).request(accumulated(members)))
+    assert any('made with floor=1.5' in e for e in report.errors), report.errors
+
+
+def test_a_parameter_only_the_finalize_reads_may_be_varied_by_it(
     client: Client, runs: list[DatasetRef], datasets: Path
 ) -> None:
     """
     The members record the default of ``scale``, which their stage does not
-    read; the finalize takes ``scale`` as a stage input, so it is not compared.
+    read; the finalize varies ``scale``, so it is not compared.
     """
     wf = client.workflow(NORMALIZE, {'floor': PARAMS['floor']})
     members = client.wait([member_stage(wf).compute({'run': run}) for run in runs])
@@ -250,6 +267,8 @@ def test_a_parameter_only_the_finalize_reads_may_be_its_stage_input(
     values = accumulated(members) | {'scale': PARAMS['scale']}
     (total,) = client.wait([finalize.compute(values)])
     assert total.status == Status.COMPLETED, total.failure
+    assert total.request.params['scale'] == PARAMS['scale']
+    assert total.request.vary == ('scale',)
     assert equal(client.output(total, 'normalized'), by_sciline(datasets))
 
 
@@ -257,8 +276,8 @@ def test_a_finalize_leaving_the_members_run_unset_is_accepted_at_submit(
     client: Client, runs: list[DatasetRef]
 ) -> None:
     """
-    ``run`` is a required parameter the members take as a stage input; the
-    finalize takes the intermediates in its place, so it never needs it.
+    ``run`` is a required parameter the members vary; the finalize is supplied
+    the intermediates in its place, so it never needs it.
     """
     wf = client.workflow(NORMALIZE, PARAMS)
     members = client.wait([member_stage(wf).compute({'run': run}) for run in runs])

@@ -3,6 +3,7 @@
 """The session shape: everything in one process, outputs staying in memory."""
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -78,15 +79,46 @@ def test_a_default_given_or_omitted_names_one_workflow_and_shares_its_stage(
     assert second.reused
 
 
-def test_a_stage_over_a_parameter_with_a_default_leaves_it_out_of_params(
+def test_a_varied_parameter_is_recorded_in_params_and_named_in_vary(
     client: Client, run_ref: DatasetRef
 ) -> None:
     stage = client.workflow(LOAD, {'run': run_ref}).stage(inputs=['scale'])
     record = stage.compute({'scale': 2.0})
     assert record.status == Status.COMPLETED, record.failure
-    assert 'scale' not in record.request.params
-    assert record.request.inputs == {'scale': 2.0}
+    assert record.request.params['scale'] == 2.0
+    assert record.request.vary == ('scale',)
+    assert record.request.supplied == {}
     assert record.resolved_params['scale'] == 2.0
+
+
+def test_a_plain_run_records_what_it_would_without_vary_and_supplied(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    """A plain run's record is the record of a run with nothing varied or supplied."""
+    record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
+    dumped = client.record(record.id).request.model_dump(mode='json')
+    assert dumped == {
+        'spec': {'name': 'load', 'version': 1},
+        'params': {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0},
+        'supplied': {},
+        'outputs': ['data', 'total'],
+        'vary': [],
+        'instrument': 'dream',
+        'proposal': 'p1',
+        'submitter': 'simon',
+        'label': None,
+        'member_key': None,
+        'origin': {
+            'template': None,
+            'rule': None,
+            'lookup': None,
+            'entry': None,
+            'pinned': {},
+        },
+    }
+    hashed = {k: dumped[k] for k in ('spec', 'params', 'instrument', 'proposal')}
+    content = json.dumps(hashed, sort_keys=True).encode()
+    assert record.request.workflow_id == hashlib.sha256(content).hexdigest()[:16]
 
 
 def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
@@ -141,10 +173,11 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     provenance = client.provenance(record)
     assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
     assert provenance['workflow'] == record.request.workflow_id
-    assert provenance['stage'] == {'inputs': [], 'outputs': ['data', 'total']}
+    assert provenance['supplied'] == []
+    assert provenance['outputs'] == ['data', 'total']
 
 
-def test_a_dataset_in_a_stage_input_is_checksummed(
+def test_a_dataset_in_a_varied_parameter_is_checksummed(
     client: Client, run_ref: DatasetRef, run_file: Path
 ) -> None:
     load = client.workflow(LOAD, {'scale': 2.0}).stage(inputs=['run'])
@@ -152,7 +185,7 @@ def test_a_dataset_in_a_stage_input_is_checksummed(
     assert record.status == Status.COMPLETED, record.failure
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
-    assert client.provenance(record)['stage']['inputs'] == ['run']
+    assert client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
 
 
 @pytest.fixture
@@ -291,8 +324,10 @@ def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     second = tune.compute({'bins': 3})
     assert not first.reused
     assert second.reused
-    assert second.request.inputs == {'bins': 3}
-    assert 'bins' not in second.request.params
+    assert first.request.params['bins'] == 2
+    assert second.request.params['bins'] == 3
+    assert second.request.vary == ('bins',)
+    assert first.request.workflow_id == second.request.workflow_id
     assert client.latest('tune').id == second.id
     assert [r.id for r in client.records(label='tune')] == [first.id, second.id]
 
@@ -360,7 +395,7 @@ def test_validation_reports_errors_before_any_record_exists(
 
 
 def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> None:
-    """A stage without intermediate inputs is checked against the whole model."""
+    """A request that supplies no intermediate is checked against the whole model."""
     report = client.validate(client.request(LOAD, {}))
     assert report.errors == ('run: Field required',)
     with pytest.raises(SubmitError, match='run: Field required'):
@@ -368,19 +403,20 @@ def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> No
 
 
 @pytest.mark.parametrize(
-    ('params', 'inputs', 'outputs', 'message'),
+    ('params', 'supplied', 'vary', 'outputs', 'message'),
     [
-        ({'scale': 2.0}, {'scale': 3.0}, (), 'a stage input that params also sets'),
-        ({}, {'bogus': 1}, (), 'neither a parameter nor an intermediate'),
-        ({}, {}, ('nope',), 'not an output'),
-        ({}, {'scale': 'x'}, (), 'scale'),
+        ({}, {'bogus': 1}, (), (), 'bogus: not an intermediate'),
+        ({}, {'scale': 3.0}, (), (), 'scale: not an intermediate'),
+        ({}, {}, ('bogus',), (), 'bogus: varied but not a parameter'),
+        ({}, {}, (), ('nope',), 'not an output'),
+        ({'scale': 'x'}, {}, ('scale',), (), 'scale'),
     ],
 )
-def test_validation_checks_the_names_of_a_stage(
-    client: Client, run_ref: DatasetRef, params, inputs, outputs, message
+def test_validation_checks_the_names_of_a_request(
+    client: Client, run_ref: DatasetRef, params, supplied, vary, outputs, message
 ) -> None:
-    request = client.request(
-        LOAD, {'run': run_ref, **params}, inputs=inputs, outputs=outputs
+    request = client.workflow(LOAD, {'run': run_ref, **params}).request(
+        supplied=supplied, vary=vary, outputs=outputs
     )
     report = client.validate(request)
     assert any(message in e for e in report.errors), report.errors

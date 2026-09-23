@@ -32,14 +32,14 @@ Dimensionality and event mode do not change the shape: a 4D volume adds like a c
 sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per intermediate, which sciline calls an accumulation key, and a finalize stage.
 An `Aggregation` holds nothing between calls, so whoever loops over the members holds the accumulators.
 
-## Inside one run, or across stage records
+## Inside one run, or across run records
 
 An aggregation appears in one of two places, never half in each.
 
 **Inside one run**, the workflow code runs `Aggregation.compute` itself, and the framework sees an ordinary spec.
 This is for members the framework has no records for: angle groups inside a Bifrost run, chunks of an NMX file.
 
-**Across stage records**, each member has a stage record of its own.
+**Across run records**, each member has a run record of its own.
 Members then run in parallel, a series grows by one member without reducing the others again, and a member can be removed.
 This is for runs, and the rest of this document is about it.
 
@@ -64,9 +64,9 @@ client.output(total, 'normalized')
 ```
 
 This is `sciline.Aggregation(pipeline, members=[RunFile])`: `member` is its contribute stage and `finalize` its finalize stage.
-Outside a session each `compute` is dispatched and returns at once, and the finalize stage record waits for its members as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
+Outside a session each `compute` is dispatched and returns at once, and the finalize run record waits for its members as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
 
-**`Accumulate` is a stage input whose value is the accumulation of the outputs it lists.**
+**`Accumulate` is a supplied intermediate whose value is the accumulation of the outputs it lists.**
 The binding resolves it with the accumulator the author gave for that intermediate, in the order listed.
 The framework never adds arrays, never chooses between summation and concatenation, and never places normalisation.
 
@@ -75,7 +75,7 @@ Events keep the binning a parameter of the finalize stage, and cost memory and d
 A histogram fixes the bins in the member stage, and is small.
 The framework does not see the difference.
 
-A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is left out of `wf` and made an input of the finalize stage:
+A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is varied by the finalize stage:
 
 ```python
 wf = client.workflow(NORMALIZE, {'floor': 1.5})                    # 'run' and 'scale' not given
@@ -83,14 +83,14 @@ finalize = wf.stage(inputs=['numerator', 'denominator', 'scale'], outputs=['norm
 ```
 
 The members' records hold the default of `scale`, filled at submit, which their stage does not read.
-The finalize takes `scale` as a stage input, so the agreement below does not compare it.
+The finalize varies `scale`, so the agreement below does not compare it.
 
 ## Members agree on their parameters
 
-Members and finalize made from one `wf` share every parameter they do not take as a stage input: the same masks, the same direct beam, the same wavelength bins.
-**The backend refuses an intermediate from a stage record of the same spec that disagrees with the consuming request on a parameter both set in `params`,** and names that parameter.
+Members and finalize made from one `wf` share every parameter they do not vary: the same masks, the same direct beam, the same wavelength bins.
+**The backend refuses an intermediate from a run record of the same spec that disagrees with the consuming request on a parameter both set in `params` and neither varies,** and names the first parameter that disagrees: "made with floor=1.5, this request sets floor=0.0".
 Both sides are compared as recorded, defaults filled, so a member that omitted a default agrees with a finalize that gives it.
-A parameter one side takes as a stage input, such as the members' `run`, is not compared.
+A parameter either side varies, such as the members' `run`, is not compared: members differ in it by intent.
 The check is made at validation and without workflow code.
 
 A correction that changes a shared parameter, such as better masks, gives another workflow ID, and all members run again with it.
@@ -111,8 +111,8 @@ finalize = wf.stage(inputs=['sample_numerator', 'sample_denominator',
 ## When chaining is valid
 
 A series that grows by one run per arrival should not read every member again.
-A finalize stage may name an accumulated intermediate as an output as well as an input.
-`sciline.Stage` passes such a value through, so the finalize stage record stores the accumulated value, and the next finalize accumulates it with the new member:
+A finalize may name an accumulated intermediate as an output as well as supply it.
+`sciline.Stage` passes such a value through, so the finalize run record stores the accumulated value, and the next finalize accumulates it with the new member:
 
 ```python
 finalize = wf.stage(inputs=['numerator', 'denominator'],
@@ -128,14 +128,14 @@ That is associativity, a property of the accumulator and not of the spec.
 sciline's `Accumulator` contract already requires it, and `ess.apps.testing.assert_accumulator_is_associative` checks it.
 Commutativity is not required, because a chain keeps the order in which members arrived.
 
-The **current members** of a series are a query: the latest stage record per member key under the label, leaving out failed, cancelled, and excluded ones.
+The **current members** of a series are a query: the latest run record per member key under the label, leaving out failed, cancelled, and excluded ones.
 A finalize over all current members is always correct.
 A **chained** finalize accumulates the previous finalize's values and every current member that the previous finalize does not cover.
 `apply` decides between the two (`ess.apps.batch._finalize`):
 
 ```python
 def elements_of_next_finalize(series):
-    current = current_members(series)                  # stage records
+    current = current_members(series)                  # run records
     previous = latest_finalize(series)
     if previous and covers(previous) <= current:
         return [previous] + [m for m in current if m not in covers(previous)]
@@ -143,11 +143,11 @@ def elements_of_next_finalize(series):
 
 def covers(finalize):                                  # follow the Accumulate back
     return union(covers(producer(ref)) if is_finalize(producer(ref)) else {producer(ref)}
-                 for ref in finalize.inputs[accumulate[0]].accumulate)
+                 for ref in finalize.supplied[accumulate[0]].accumulate)
 ```
 
-- **The comparison is between stage records, not member keys.**
-  A corrected member has a new stage record, so the previous finalize covers a record that is no longer current.
+- **The comparison is between run records, not member keys.**
+  A corrected member has a new run record, so the previous finalize covers a record that is no longer current.
   The check fails, and the next finalize accumulates all current members.
   The same happens when a member is excluded or reprocessed under a new rule version.
   Removing a member is therefore never a subtraction.
@@ -156,12 +156,12 @@ def covers(finalize):                                  # follow the Accumulate b
 - **Two arrivals close together cannot lose a member.**
   The later finalize accumulates every current member that the previous finalize does not cover, not only the newest.
 - **A chained element is recognised without a declaration.**
-  A finalize is a stage record whose inputs include an `Accumulate`.
+  A finalize is a run record that supplies an `Accumulate`.
 - **The walk reads metadata only**, one record per finalize of the chain.
   The k-th arrival costs k record reads and two reads of each accumulated value.
-- **A chained finalize is a complete stage record.**
+- **A chained finalize is a complete run record.**
   Its references resolve to records that name the files, and a recompute walks the chain back to the members.
-  If disk copies of intermediates were evicted, the member stage records run again.
+  If disk copies of intermediates were evicted, the member run records run again.
 
 A superseded finalize's accumulated values are needed only by the finalize that superseded it, which has already run.
 The data store evicts outputs of superseded records first, and that costs nothing until a recompute walks the chain.
@@ -179,15 +179,15 @@ A rule's `Series` accumulates only, and how a rule submits such a spec is an [op
 In a session an aggregation needs nothing of its own.
 Sessions and stages are explained in [stages.md](stages.md).
 
-- **Member stage records name one stage**, the same workflow ID, input names, and outputs, so the session builds it once.
+- **Member run requests name one stage**, with the same workflow ID, the same varied parameter, and the same outputs, so the session builds it once.
   What the members share, such as a direct beam, is computed once.
-- **The session holds one accumulator per workflow ID and input**, with the list of outputs pushed so far.
+- **The session holds one accumulator per workflow ID and intermediate**, with the list of outputs pushed so far.
   A finalize whose `Accumulate` lists every member so far plus a new one pushes only the new one.
 - **A corrected or removed member starts a fresh accumulator**, because the request's list does not begin with what was pushed.
   Nothing is subtracted.
-- **A finalize call that changes only a finalize parameter taken as a stage input** reuses the held finalize stage and the held accumulators.
+- **A finalize call that changes only a finalize parameter it varies** reuses the held finalize stage and the held accumulators.
 
-A series that grows in a session lists every current member in every finalize, so every stage record is complete as written:
+A series that grows in a session lists every current member in every finalize, so every run record is complete as written:
 
 ```python
 members = []
@@ -203,7 +203,7 @@ def add_run(run):
 ## The fold
 
 The **fold** is an optional addition for a series that arrives faster than its accumulated values can be read and written.
-A long-lived runner holds the accumulators of one series, accumulates in memory, and writes a finalize stage record every n arrivals or when the series goes quiet.
+A long-lived runner holds the accumulators of one series, accumulates in memory, and writes a finalize run record every n arrivals or when the series goes quiet.
 Between records, what it holds is recomputable from the last record and the members since, so held state remains a cache.
 A fold's records carry the `reused` flag, so publication recomputes them along the chain.
 The fold needs a runner that is addressed by its series, which does not exist yet, and nothing requires it before such a series appears.
@@ -212,21 +212,21 @@ The fold needs a runner that is addressed by its series, which does not exist ye
 ## How this maps onto sciline
 
 sciline composes stages and accumulators in one process, with values in memory.
-The framework records each stage call, with values as outputs of stage records.
+The framework records each call as a run record, with values as outputs of run records.
 
 | sciline | Framework |
 |---|---|
-| `Pipeline` with parameters set | spec and `params` of a stage request, named by its workflow ID |
-| `Stage.compute` | a stage record |
-| `Aggregation.contribute_stage` | a member stage, from the member's parameters to the exposed intermediates |
+| `Pipeline` with parameters set | spec and the parameters not varied of a run request, named by its workflow ID |
+| `Stage.compute` | a run record |
+| `Aggregation.contribute_stage` | a member stage, varying the member's parameters, with the exposed intermediates as outputs |
 | accumulators | the binding's accumulators, which resolve `Accumulate` |
-| `Aggregation.finalize_stage` | a finalize stage, from the intermediates to the outputs |
+| `Aggregation.finalize_stage` | a finalize stage, supplied the intermediates, with the results as outputs |
 | member table | the batch table that `apply` takes |
-| `Aggregation.compute(table)` | a group: one member stage request per row, one finalize stage request |
+| `Aggregation.compute(table)` | a group: one member run request per row, one finalize run request |
 | accumulators held by a loop | accumulators held by a session; on disk, the accumulated values a finalize passes through |
 
 One structure serves adding a run in a notebook, a rule's growing series, a batch summed at once, and a parallel reduction of five hundred runs.
-They differ in where the intermediates come from and how often the accumulated values are written as outputs of a stage record.
+They differ in where the intermediates come from and how often the accumulated values are written as outputs of a run record.
 
 ## Alternatives considered
 
@@ -263,6 +263,6 @@ Associativity belongs to the accumulator, which the author tests.
 - Intermediates are stored outputs in shared mode, and often large. A chained series of k arrivals writes k accumulated values.
 - A member made with another value than the others, because a lookup or a pinned value set something only for it, cannot be accumulated with them ([open-issues.md](open-issues.md#open-questions)).
 - A correction to a shared parameter runs every member again.
-- A parameter one side takes as a stage input is not compared, so a member stage that takes a value the finalize also sets is not checked against it.
+- The agreement rule does not compare a parameter either side varies, so a value a member varies is not checked against a value the finalize sets.
 - An accumulated value must be storable. essreflectometry accumulates a list of ORSO entries beside its events, which the author must convert.
 - A member stage in a throwaway process computes again what all members share.

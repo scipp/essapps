@@ -101,7 +101,7 @@ Actor: user in a notebook.
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
 Outcome: fits.
-Adding a run is a member stage record plus a finalize that accumulates the previous finalize's values with the new member, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+Adding a run is a member run record plus a finalize that accumulates the previous finalize's values with the new member, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -166,7 +166,7 @@ Actor: user in the local or web application.
 Checks: the output is addressable as an input without export or import; the batch form can take it; provenance of the reduction reaches the run the beam centre came from.
 
 Outcome: fits.
-A value that other requests reference is an output of a stage record, and a field may hold a literal or a reference; an exposed intermediate, such as a beam centre, may be supplied as a stage input ([records.md](records.md#reuse-means-a-stage-record)).
+A value that other requests reference is an output of a run record, and a field may hold a literal or a reference; an exposed intermediate, such as a beam centre, may be supplied in place of what computes it ([records.md](records.md#reuse-means-a-run-record)).
 
 ### C2. Vanadium from the catalogue
 
@@ -177,7 +177,7 @@ Actor: user configuring single, batch, or automatic reduction.
 Checks: a published output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
 Outcome: fits.
-A PID typed at submission resolves to the stage record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
+A PID typed at submission resolves to the run record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
 
 ### C3. Per-bank diffraction results
 
@@ -214,7 +214,7 @@ Actor: instrument scientist in a notebook.
 Checks: two workflows chained in memory; the vanadium output is still recorded so batch can reuse it later.
 
 Outcome: fits.
-Each workflow has a stage in the session, and the first one's output is an output of a stage record that the session holds in memory ([stages.md](stages.md#more-than-one-workflow)).
+Each workflow has a stage in the session, and the first one's output is an output of a run record that the session holds in memory ([stages.md](stages.md#more-than-one-workflow)).
 
 ## D. Batch
 
@@ -307,7 +307,7 @@ Actor: reflectometry user during a beamtime.
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combination; the UI shows one curve per sample, not one per arrival.
 
 Outcome: question.
-A rule with a series submits a member stage request and a finalize stage request on every arrival, and successive finalizes supersede each other under the series value as member key ([rules.md](rules.md#series)).
+A rule with a series submits a member run request and a finalize run request on every arrival, and successive finalizes supersede each other under the series value as member key ([rules.md](rules.md#series)).
 That covers the sum of same-angle runs, which is an accumulation.
 The stitch over angles is not associative, so it is a spec over a list of references and not a finalize, and a rule has no field for such a spec ([open-issues.md](open-issues.md#open-questions)).
 

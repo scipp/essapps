@@ -283,7 +283,25 @@ def test_plain_runs_that_differ_in_one_value_share_no_stage(
     assert second.supersedes == first.id
 
 
-def test_another_workflow_record_or_another_cut_builds_a_new_stage(
+def test_a_varied_value_replaces_the_handles_and_stays_out_of_the_workflow_id(
+    client: Client, data: OutputRef
+) -> None:
+    first = (
+        client.workflow(HISTOGRAM, {'data': data, 'bins': 2})
+        .stage(inputs=['bins'])
+        .compute({'bins': 4})
+    )
+    assert first.request.params['bins'] == 4
+    second = (
+        client.workflow(HISTOGRAM, {'data': data})
+        .stage(inputs=['bins'])
+        .compute({'bins': 8})
+    )
+    assert second.request.workflow_id == first.request.workflow_id
+    assert second.reused
+
+
+def test_another_workflow_or_another_cut_builds_a_new_stage(
     client: Client, data: OutputRef
 ) -> None:
     wf = client.workflow(HISTOGRAM, {'data': data})

@@ -71,12 +71,10 @@ def two_run_workflow() -> Any:
 
 
 def job(
-    params: dict[str, Any],
-    outputs: tuple[str, ...],
-    inputs: dict[str, Any] | None = None,
+    params: dict[str, Any], outputs: tuple[str, ...], vary: tuple[str, ...] = ()
 ) -> Job:
     """A job as the backend makes it; the workflow ID only names a held stage."""
-    return Job(workflow='wf', params=params, inputs=inputs or {}, outputs=outputs)
+    return Job(workflow='wf', params=params, supplied={}, vary=vary, outputs=outputs)
 
 
 def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
@@ -115,12 +113,12 @@ def test_a_changed_file_is_hashed_again(tmp_path: Path) -> None:
     assert first.checksums != second.checksums
 
 
-def test_a_dataset_in_a_stage_input_is_checksummed_but_does_not_name_the_stage(
+def test_a_dataset_in_a_varied_parameter_is_checksummed_but_does_not_name_the_stage(
     tmp_path: Path,
 ) -> None:
     """
-    The held stage is named by the datasets the request's params fix; a
-    dataset the stage takes as input changes per call and only its checksum is
+    The held stage is named by the datasets of the parameters not varied; a
+    dataset in a varied parameter changes per call and only its checksum is
     recorded.
     """
     files = [write_run(tmp_path / f'dream_{i}.h5', [float(i)] * 3) for i in (1, 2)]
@@ -134,7 +132,7 @@ def test_a_dataset_in_a_stage_input_is_checksummed_but_does_not_name_the_stage(
     first, second = (
         session.run(
             f'r{i}',
-            job({}, ('normalized',), {'run': ref.model_dump(mode='json')}),
+            job({'run': ref.model_dump(mode='json')}, ('normalized',), vary=('run',)),
             binding,
             inputs,
             Collected(),
@@ -215,7 +213,7 @@ def test_a_plain_function_holds_nothing_between_runs(tmp_path: Path) -> None:
     results = [
         session.run(
             f'r{i}',
-            job({}, ('total',), {'run': ref.model_dump(mode='json')}),
+            job({'run': ref.model_dump(mode='json')}, ('total',), vary=('run',)),
             binding,
             inputs,
             Collected(),

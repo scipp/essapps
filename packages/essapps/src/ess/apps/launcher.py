@@ -24,7 +24,7 @@ from typing import Any, Protocol
 
 from .binding import Registry, import_object
 from .datastore import DataStore
-from .records import Failure, RunResult, StageRecord, Status
+from .records import Failure, RunRecord, RunResult, Status
 from .runner import JOB, MARKER, Job, Runner
 from .spec import OutputRef, Ref, SpecId
 
@@ -37,18 +37,18 @@ class Launcher(Protocol):
 
     def start(
         self,
-        record: StageRecord,
+        record: RunRecord,
         job: Job,
         locations: dict[Ref, Path],
-    ) -> StageRecord:
+    ) -> RunRecord:
         """Begin executing; returns the record terminal (session) or dispatched."""
         ...
 
-    def poll(self, record: StageRecord) -> StageRecord:
+    def poll(self, record: RunRecord) -> RunRecord:
         """Reconcile a dispatched record; returns it unchanged if still running."""
         ...
 
-    def cancel(self, record: StageRecord) -> None: ...
+    def cancel(self, record: RunRecord) -> None: ...
 
 
 class _CacheOutputs:
@@ -92,10 +92,10 @@ class SessionLauncher:
 
     def start(
         self,
-        record: StageRecord,
+        record: RunRecord,
         job: Job,
         locations: dict[Ref, Path],
-    ) -> StageRecord:
+    ) -> RunRecord:
         result = self.runner.run(
             record.id,
             job,
@@ -107,10 +107,10 @@ class SessionLauncher:
         record.apply(result)
         return record
 
-    def poll(self, record: StageRecord) -> StageRecord:
+    def poll(self, record: RunRecord) -> RunRecord:
         return record
 
-    def cancel(self, record: StageRecord) -> None:
+    def cancel(self, record: RunRecord) -> None:
         pass
 
 
@@ -142,15 +142,15 @@ class SubprocessLauncher:
     def can_run(self, spec: SpecId) -> bool:
         return spec in self._registry
 
-    def workdir(self, record: StageRecord) -> Path:
+    def workdir(self, record: RunRecord) -> Path:
         return self._data.root / record.id
 
     def start(
         self,
-        record: StageRecord,
+        record: RunRecord,
         job: Job,
         locations: dict[Ref, Path],
-    ) -> StageRecord:
+    ) -> RunRecord:
         workdir = self.workdir(record)
         workdir.mkdir(parents=True, exist_ok=True)
         job = {
@@ -176,7 +176,7 @@ class SubprocessLauncher:
         record.launcher_job = str(proc.pid)
         return record
 
-    def poll(self, record: StageRecord) -> StageRecord:
+    def poll(self, record: RunRecord) -> RunRecord:
         marker = self.workdir(record) / MARKER
         if marker.exists():
             done = json.loads(marker.read_text())
@@ -198,7 +198,7 @@ class SubprocessLauncher:
         )
         return record
 
-    def _alive(self, record: StageRecord) -> bool:
+    def _alive(self, record: RunRecord) -> bool:
         proc = self._procs.get(record.id)
         if proc is not None:
             if proc.poll() is None:
@@ -213,12 +213,12 @@ class SubprocessLauncher:
             return False
         return True
 
-    def _reap(self, record: StageRecord) -> None:
+    def _reap(self, record: RunRecord) -> None:
         proc = self._procs.pop(record.id, None)
         if proc is not None:
             proc.wait()
 
-    def cancel(self, record: StageRecord) -> None:
+    def cancel(self, record: RunRecord) -> None:
         proc = self._procs.pop(record.id, None)
         if proc is not None and proc.poll() is None:
             proc.kill()

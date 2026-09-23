@@ -26,9 +26,9 @@ client.provenance(iofq)                                  # back to the dataset r
 
 ## The ideas
 
-1. **A run is a stage request, and the request is plain data.**
-   It names a spec with parameter values set and the inputs and outputs of the stage to compute; the backend fills the spec's defaults, so the record holds every value the run used.
-   The backend writes it down as a stage record, together with what happened: status, outputs, resolved parameters, package versions.
+1. **A run is a request, and the request is plain data.**
+   It names a spec with its parameter values, any intermediates supplied in place of what computes them, and the outputs to compute; the backend fills the spec's defaults, so the record holds every value the run used.
+   The backend writes it down as a run record, together with what happened: status, outputs, resolved parameters, package versions.
    A notebook, a UI, and an automatic trigger all submit the same kind of request.
 2. **Data is named by reference.**
    A reference is either "output X of record Y" or a dataset identity such as a SciCat PID.
@@ -53,9 +53,9 @@ client.provenance(iofq)                                  # back to the dataset r
    A template is a partial request, a lookup fills fields from dataset metadata, and a rule adds a selector for datasets.
    One operation, `apply`, makes requests from them.
    The trigger loop calls it for each new dataset and keeps no memory of its own.
-8. **Workflow code builds the stages that stage records name.**
+8. **Workflow code builds the stages that run requests cut.**
    The framework does not import sciline.
-   An adapter in ess.reduce turns a pipeline into a workflow, and each stage record into a `sciline.Stage`.
+   An adapter in ess.reduce turns a pipeline into a workflow, and each run into a call of a `sciline.Stage`.
 9. **The Python client interface is the API, and publication is explicit.**
    UIs use the client interface only, and HTTP is a later transport for it.
    Plots get small arrays through views, which are not recorded.
@@ -67,7 +67,7 @@ client.provenance(iofq)                                  # back to the dataset r
 |---|---|---|
 | 30 minutes | [architecture.md](architecture.md) | the whole design in teaching order, with code, a components table, and a table of decisions |
 | as needed | [stages.md](stages.md) | interactive work: sessions, stages, slots, views |
-| | [records.md](records.md) | stage requests and stage records, references, datasets, the data store, scheduling |
+| | [records.md](records.md) | run requests and run records, references, datasets, the data store, scheduling |
 | | [workflow-contract.md](workflow-contract.md) | spec, the workflow protocol, inputs and outputs, validation, changes needed in scipp/ess#690 |
 | | [aggregation.md](aggregation.md) | member and finalize stages, `Accumulate`, chaining |
 | | [rules.md](rules.md) | templates, lookups, rules, `apply`, the trigger loop |

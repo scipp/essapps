@@ -3,12 +3,14 @@
 """
 What a session holds between runs: stages and accumulators.
 
-A stage record names its stage: the workflow ID of its request (a hash of
-spec, params, instrument, and proposal), its inputs, and its outputs. The
-session holds the stage it built for that name, so a later stage record naming
-the same stage computes only what lies downstream of its inputs. The checksums
-of the datasets ``params`` names are part of the name, so a file that changed
-on disk does not find the stage built from its earlier bytes.
+A run request names the stage it cuts: the workflow ID of the request (a hash
+of spec, the parameters not varied, instrument, and proposal), the names of the
+parameters it varies, the names of the intermediates it supplies, and its
+outputs. The session holds the stage it built for that name, so a later request
+naming the same stage computes only what lies downstream of the stage's inputs.
+The checksums of the datasets the parameters not varied name are part of the
+name, so a file that changed on disk does not find the stage built from its
+earlier bytes.
 
 An accumulator is held by the workflow ID, the input it fills, and the
 outputs pushed into it so far. A request whose list of outputs to accumulate

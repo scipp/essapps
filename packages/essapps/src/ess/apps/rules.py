@@ -25,7 +25,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .records import Plain, StageRequest
+from .records import Plain, RunRequest
 from .sources import Dataset
 from .spec import SpecId, WorkflowSpec, data_fields
 
@@ -108,13 +108,13 @@ class Template(BaseModel, frozen=True):
     def from_request(
         cls,
         name: str,
-        request: StageRequest,
+        request: RunRequest,
         spec: WorkflowSpec,
         blank: Iterable[str] = (),
     ) -> Template:
         """Save a request as a template with its data-reference fields blank."""
         blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
-        params = {k: v for k, v in request.values().items() if k not in blanks}
+        params = {k: v for k, v in request.params.items() if k not in blanks}
         return cls(name=name, spec=request.spec, params=params, blanks=blanks)
 
     @property

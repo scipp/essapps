@@ -12,9 +12,10 @@ to a server that holds a ``LocalBackend``.
 
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
-and is cancelled if any is cancelled. Recompute is explicit. The outputs an accumulated
-stage input names are references like any other, so they are scheduled,
-resolved, and checked like any other input, and nothing here combines them.
+and is cancelled if any is cancelled. Recompute is explicit. The outputs an
+accumulated intermediate names are references like any other, so they are
+scheduled, resolved, and checked like any other input, and nothing here combines
+them.
 """
 
 from __future__ import annotations
@@ -35,8 +36,8 @@ from .records import (
     Accumulate,
     Derivation,
     Failure,
-    StageRecord,
-    StageRequest,
+    RunRecord,
+    RunRequest,
     Status,
 )
 from .runner import Job
@@ -117,16 +118,16 @@ class Backend(Protocol):
         ...
 
     def validate(
-        self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
+        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
     ) -> ValidationReport:
         """Whether a request would be accepted, without submitting it."""
         ...
 
-    def submit(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
+    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
         """Submit requests atomically; ``@name`` refs point at members of the group."""
         ...
 
-    def record(self, record_id: str) -> StageRecord:
+    def record(self, record_id: str) -> RunRecord:
         """A record by id."""
         ...
 
@@ -140,27 +141,25 @@ class Backend(Protocol):
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[StageRecord]:
+    ) -> list[RunRecord]:
         """Records matching every given filter, oldest first."""
         ...
 
     def latest(
         self, label: str, proposal: str, member_key: str | None = None
-    ) -> StageRecord | None:
+    ) -> RunRecord | None:
         """The record that supersedes the others under a label (a slot)."""
         ...
 
-    def batch(self, label: str, proposal: str) -> list[StageRecord]:
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
         """The batch table under a label: the latest record per member key."""
         ...
 
-    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
         """The failed or cancelled latest record of each member that never completed."""
         ...
 
-    def wait(
-        self, record_ids: list[str], *, timeout: float = 60.0
-    ) -> list[StageRecord]:
+    def wait(self, record_ids: list[str], *, timeout: float = 60.0) -> list[RunRecord]:
         """Block until every record is terminal, or raise past the timeout."""
         ...
 
@@ -168,11 +167,11 @@ class Backend(Protocol):
         """Cancel a record; a no-op once it is terminal."""
         ...
 
-    def recompute(self, record_id: str) -> StageRecord:
+    def recompute(self, record_id: str) -> RunRecord:
         """Run a record's request again as a new record linked to the old one."""
         ...
 
-    def retry(self, record_id: str) -> StageRecord:
+    def retry(self, record_id: str) -> RunRecord:
         """Like ``recompute``, marked as a retry rather than a deliberate rerun."""
         ...
 
@@ -276,17 +275,17 @@ class LocalBackend:
     # Validation
 
     def validate(
-        self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
+        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
     ) -> ValidationReport:
         """
         Three layers: shape and spec, the values, runnability.
 
         The request is checked as it would be recorded, the spec's defaults
-        filled. A stage without intermediate inputs is checked against the whole
-        params model, so a missing parameter is refused here. Whether a stage
-        that takes an intermediate has what its outputs need is known only to
-        the workflow code, so such a stage that leaves a needed parameter unset
-        fails when it runs.
+        filled. A request that supplies no intermediate is checked against the
+        whole params model, so a missing parameter is refused here. Whether a
+        request that supplies an intermediate has what its outputs need is known
+        only to the workflow code, so such a request that leaves a needed
+        parameter unset fails when it runs.
         """
         if request.spec not in self.registry:
             return ValidationReport(
@@ -299,18 +298,18 @@ class LocalBackend:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
         params = data_fields(spec.params)
         intermediates = data_fields(spec.outputs)
-        for path, ref in walk_refs(request.values()):
-            name = field_of(path)
-            if name in spec.params.model_fields:
-                errors += self._check_ref(ref, params.get(name), request, group or {})
-            else:
-                errors += self._check_ref(
-                    ref,
-                    intermediates.get(name),
-                    request,
-                    group or {},
-                    intermediate=True,
-                )
+        for path, ref in walk_refs(request.params):
+            errors += self._check_ref(
+                ref, params.get(field_of(path)), request, group or {}
+            )
+        for path, ref in walk_refs(request.supplied):
+            errors += self._check_ref(
+                ref,
+                intermediates.get(field_of(path)),
+                request,
+                group or {},
+                intermediate=True,
+            )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
                 request.origin.rule.rsplit('/v', 1)[0]
@@ -332,8 +331,8 @@ class LocalBackend:
         self,
         ref: Ref,
         consumer: DataField | None,
-        request: StageRequest,
-        group: Mapping[str, StageRequest],
+        request: RunRequest,
+        group: Mapping[str, RunRequest],
         *,
         intermediate: bool = False,
     ) -> list[str]:
@@ -342,9 +341,9 @@ class LocalBackend:
 
         An intermediate supplied from a record of the same spec must agree with
         it on every parameter both requests set, so that a parameter both sides
-        read has one value. A parameter one of them takes as a stage input, or
-        leaves unset, is not compared: the finalize of a sum over runs leaves
-        unset the run each member takes.
+        read has one value. A parameter either request varies, or leaves unset,
+        is not compared: each member of a sum over runs varies its run, and the
+        finalize leaves the run unset.
         """
         if isinstance(ref, DatasetRef):
             return self._check_dataset(ref, consumer)
@@ -365,7 +364,7 @@ class LocalBackend:
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
         if intermediate and producer_spec == request.spec:
-            theirs, ours = producer_request.params, request.params
+            theirs, ours = producer_request.fixed, request.fixed
             for name in sorted(theirs.keys() & ours.keys()):
                 if theirs[name] != ours[name]:
                     return [
@@ -402,7 +401,7 @@ class LocalBackend:
 
     # Origin
 
-    def submit(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
+    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
         """
         Submit requests atomically; ``@name`` refs point at members of the group.
 
@@ -417,12 +416,12 @@ class LocalBackend:
             )
         if any(not r.ok for r in reports.values()):
             raise SubmitError({n: r for n, r in reports.items() if not r.ok})
-        ids = {name: StageRecord(request=req).id for name, req in group.items()}
+        ids = {name: RunRecord(request=req).id for name, req in group.items()}
         records = {}
         latest: dict[tuple[str, str | None], str] = {}
         named = {GROUP_PREFIX + n: i for n, i in ids.items()}
         for name, req in group.items():
-            record = StageRecord(
+            record = RunRecord(
                 id=ids[name],
                 request=self._complete(req, named),
                 supersedes=self._supersedes(req, latest),
@@ -434,9 +433,7 @@ class LocalBackend:
         self._pump()
         return {name: self.record_store.get(r.id) for name, r in records.items()}
 
-    def _complete(
-        self, request: StageRequest, named: Mapping[str, str]
-    ) -> StageRequest:
+    def _complete(self, request: RunRequest, named: Mapping[str, str]) -> RunRequest:
         """
         The request as recorded: defaults filled, group references by ID,
         outputs named.
@@ -448,15 +445,15 @@ class LocalBackend:
         return request.model_copy(
             update={
                 'params': _rewrite(request.params, named),
-                'inputs': _rewrite(request.inputs, named),
+                'supplied': _rewrite(request.supplied, named),
                 'outputs': request.outputs or self.registry.spec(request.spec).results,
             }
         )
 
-    def _with_defaults(self, request: StageRequest) -> StageRequest:
+    def _with_defaults(self, request: RunRequest) -> RunRequest:
         """
         The request with the spec's default in ``params`` for every parameter
-        that has one and is neither given nor a stage input.
+        that has one and is not given.
 
         The record then says which value every parameter had, so that two
         requests that differ only in giving a default name the same pipeline,
@@ -468,9 +465,7 @@ class LocalBackend:
         missing = [
             name
             for name, info in params.model_fields.items()
-            if not info.is_required()
-            and name not in request.params
-            and name not in request.inputs
+            if not info.is_required() and name not in request.params
         ]
         if not missing:
             return request
@@ -478,7 +473,7 @@ class LocalBackend:
         return request.model_copy(update={'params': {**request.params, **defaults}})
 
     def _supersedes(
-        self, request: StageRequest, latest: Mapping[tuple[str, str | None], str]
+        self, request: RunRequest, latest: Mapping[tuple[str, str | None], str]
     ) -> str | None:
         """
         The latest record this request's record supersedes, or None without a label.
@@ -498,19 +493,19 @@ class LocalBackend:
         )
         return None if record is None else record.id
 
-    def recompute(self, record_id: str) -> StageRecord:
+    def recompute(self, record_id: str) -> RunRecord:
         """Run a record's request again as a new record linked to the old one."""
         return self._derive(record_id, 'recompute')
 
-    def retry(self, record_id: str) -> StageRecord:
+    def retry(self, record_id: str) -> RunRecord:
         return self._derive(record_id, 'retry')
 
-    def _derive(self, record_id: str, reason: Any) -> StageRecord:
+    def _derive(self, record_id: str, reason: Any) -> RunRecord:
         old = self.record_store.get(record_id)
         report = self.validate(old.request)
         if not report.ok:
             raise SubmitError({record_id: report})
-        new = StageRecord(
+        new = RunRecord(
             request=self._with_defaults(old.request),
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
@@ -519,7 +514,7 @@ class LocalBackend:
         self._pump()
         return self.record_store.get(new.id)
 
-    def record(self, record_id: str) -> StageRecord:
+    def record(self, record_id: str) -> RunRecord:
         return self.record_store.get(record_id)
 
     def records(
@@ -532,7 +527,7 @@ class LocalBackend:
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[StageRecord]:
+    ) -> list[RunRecord]:
         return self.record_store.list(
             proposal=proposal,
             spec=spec,
@@ -545,13 +540,13 @@ class LocalBackend:
 
     def latest(
         self, label: str, proposal: str, member_key: str | None = None
-    ) -> StageRecord | None:
+    ) -> RunRecord | None:
         return self.record_store.latest(label, proposal, member_key=member_key)
 
-    def batch(self, label: str, proposal: str) -> list[StageRecord]:
+    def batch(self, label: str, proposal: str) -> list[RunRecord]:
         return self.record_store.batch(label, proposal)
 
-    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
         return self.record_store.members_to_retry(label, proposal)
 
     def cancel(self, record_id: str) -> None:
@@ -578,7 +573,7 @@ class LocalBackend:
 
     def wait(
         self, record_ids: list[str], *, timeout: float = 60.0, interval: float = 0.05
-    ) -> list[StageRecord]:
+    ) -> list[RunRecord]:
         deadline = time.monotonic() + timeout
         while True:
             self.poll()
@@ -616,7 +611,7 @@ class LocalBackend:
                     record.status = Status.WAITING
                     self.record_store.update(record)
 
-    def _propagate(self, record: StageRecord) -> None:
+    def _propagate(self, record: RunRecord) -> None:
         """Failure and cancellation flow to every record waiting on this one."""
         if record.status == Status.COMPLETED:
             return
@@ -625,7 +620,7 @@ class LocalBackend:
             if not dependent.status.terminal:
                 self._inherit(dependent, record)
 
-    def _inherit(self, record: StageRecord, producer: StageRecord) -> None:
+    def _inherit(self, record: RunRecord, producer: RunRecord) -> None:
         """End a record because an input of it failed or was cancelled."""
         if producer.status == Status.CANCELLED:
             self._finish(record, Status.CANCELLED)
@@ -638,14 +633,14 @@ class LocalBackend:
         self._propagate(record)
 
     def _finish(
-        self, record: StageRecord, status: Status, failure: Failure | None = None
+        self, record: RunRecord, status: Status, failure: Failure | None = None
     ) -> None:
         record.status = status
         record.failure = failure
         record.finished = datetime.now(UTC)
         self.record_store.update(record)
 
-    def _dispatch(self, record: StageRecord) -> None:
+    def _dispatch(self, record: RunRecord) -> None:
         spec = self.registry.spec(record.spec)
         params, outputs = data_fields(spec.params), data_fields(spec.outputs)
         locations: dict[Ref, Path] = {}
@@ -667,7 +662,8 @@ class LocalBackend:
         job = Job(
             workflow=request.workflow_id,
             params=_inline(request.params, literals),
-            inputs=_inline(request.inputs, literals),
+            supplied=_inline(request.supplied, literals),
+            vary=request.vary,
             outputs=request.outputs,
         )
         done = self.launcher.start(record, job, locations)
@@ -756,10 +752,8 @@ class LocalBackend:
             'record': record.id,
             'spec': str(record.spec),
             'workflow': record.request.workflow_id,
-            'stage': {
-                'inputs': sorted(record.request.inputs),
-                'outputs': list(record.request.outputs),
-            },
+            'supplied': sorted(record.request.supplied),
+            'outputs': list(record.request.outputs),
             'params': record.resolved_params,
             'package_versions': record.package_versions,
             'environment': record.environment,
@@ -810,7 +804,7 @@ class LocalBackend:
         return pid
 
 
-def _dead(producers: Iterable[StageRecord]) -> StageRecord | None:
+def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:
     """The first producer that ended without completing, if there is one."""
     return next(
         (p for p in producers if p.status.terminal and p.status != Status.COMPLETED),
@@ -818,7 +812,7 @@ def _dead(producers: Iterable[StageRecord]) -> StageRecord | None:
     )
 
 
-def _cycle(group: Mapping[str, StageRequest]) -> set[str]:
+def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
     """Members of the group that lie on a cycle of ``@name`` references."""
     edges = {
         name: {
@@ -866,32 +860,35 @@ def _inline(value: Any, literals: Mapping[str, Any]) -> Any:
     return value
 
 
-def _shape_errors(spec: WorkflowSpec, request: StageRequest) -> list[str]:
+def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
     """
     What is wrong with the names and values of a request, without workflow code.
 
     A params model ignores fields it does not declare unless its author forbids
     them, and a reduction parameter dropped in silence gives a wrong number
-    without an error, so every name is checked against the spec. A stage input
-    is a parameter ``params`` leaves unset or an intermediate; a data
-    intermediate is supplied as a reference or an accumulation of references.
-    A stage without intermediate inputs gets every parameter from the request,
-    so it is checked against the whole params model; a stage that takes an
-    intermediate is checked field by field, since which parameters it needs is
-    known only to the workflow code.
+    without an error, so every name is checked against the spec. A varied
+    parameter is a parameter with a value; a supplied intermediate is one the
+    spec exposes, and a data intermediate is supplied as a reference or an
+    accumulation of references. A request that supplies no intermediate gets
+    every parameter from ``params``, so it is checked against the whole params
+    model; one that supplies an intermediate is checked field by field, since
+    which parameters it needs is known only to the workflow code.
     """
     fields = spec.params.model_fields
     errors = [
         f'{name}: not a parameter of {spec.id}'
         for name in sorted(set(request.params) - set(fields))
     ]
-    for name in sorted(request.inputs):
-        if name in request.params:
-            errors.append(f'{name}: a stage input that params also sets')
-        elif name not in fields and name not in spec.intermediates:
-            errors.append(
-                f'{name}: neither a parameter nor an intermediate of {spec.id}'
-            )
+    for name in request.vary:
+        if name not in fields:
+            errors.append(f'{name}: varied but not a parameter of {spec.id}')
+        elif name not in request.params:
+            errors.append(f'{name}: varied but given no value')
+    errors += [
+        f'{name}: not an intermediate of {spec.id}'
+        for name in sorted(request.supplied)
+        if name not in spec.intermediates
+    ]
     errors += [
         f'{name}: not an output of {spec.id}'
         for name in request.outputs
@@ -899,17 +896,19 @@ def _shape_errors(spec: WorkflowSpec, request: StageRequest) -> list[str]:
     ]
     if errors:
         return errors
-    given = {name: value for name, value in request.values().items() if name in fields}
-    whole = all(name in fields for name in request.inputs)
-    model = spec.params if whole else submodel(spec.params, given, 'Given')
+    model = (
+        submodel(spec.params, request.params, 'Given')
+        if request.supplied
+        else spec.params
+    )
     try:
-        model.model_validate(given)
+        model.model_validate(request.params)
     except ValidationError as e:
         errors += [
             f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
         ]
     data = data_fields(spec.outputs)
-    for name, value in request.inputs.items():
+    for name, value in request.supplied.items():
         if name not in data:
             continue
         if as_ref(value) is None:

@@ -116,7 +116,7 @@ essapps publish <record> data --via fake --allow-reused   # prints the PID; allo
 
 | To see | Read | Design document |
 |---|---|---|
-| stage requests, stage records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
+| run requests, run records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
 | the transport boundary, the server, the CLI | `backend.py`, `server.py`, `remote.py`, `cli.py` | [operations.md](../../docs/developer/operations.md#the-client-interface) |
 | the workflow protocol, `Inputs`, stages, entry points | `binding.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md) |
 | a sciline pipeline as a callable and as a stage | `adapter.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#the-sciline-adapter) |

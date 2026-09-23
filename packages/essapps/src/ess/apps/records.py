@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Stage requests and stage records: what ran, in sciline's terms.
+Run requests and run records: what ran.
 
-A stage request is one call of a stage cut from a pipeline with parameters set,
-with the stage's inputs and outputs named; a stage record is the request plus
-what happened to it.
+A run request is one run of a workflow, every parameter value set, with any
+intermediates supplied in place of what computes them and the outputs to
+compute named; a run record is the request plus what happened to it.
 
 See docs/developer/records.md.
 """
@@ -78,38 +78,48 @@ class Origin(BaseModel, frozen=True):
 
 class Accumulate(BaseModel, frozen=True):
     """
-    A stage input that is the accumulation of several outputs.
+    A supplied intermediate that is the accumulation of several outputs.
 
     The binding accumulates them with the accumulator its author gave for the
     input, in the order listed; the framework never combines values itself.
     Every accumulator is associative, so an element may itself be an
-    accumulated value that a finalize stage passed through as an output.
+    accumulated value that a finalize run passed through as an output.
     """
 
     accumulate: list[OutputRef]
 
 
-class StageRequest(BaseModel, frozen=True):
+class RunRequest(BaseModel, frozen=True):
     """
-    One call of a stage cut from a pipeline with parameters set: everything
-    needed to run it.
+    One run of a workflow: everything needed to run it.
 
-    ``params`` are the pipeline's parameters and ``inputs`` the stage inputs by
-    name: parameters ``params`` leaves unset, and intermediates the spec exposes,
-    supplied as a reference or an :class:`Accumulate`. ``outputs`` are the
-    outputs to compute, empty for the spec's results. As recorded, ``params``
-    holds every parameter that is not a stage input, the spec's default filled in
-    for each one not given; only a required parameter without a default may stay
-    unset, when the stage takes an intermediate in place of what needs it. A
-    request is complete: it never names a session or a process, and the only
+    ``params`` holds every parameter value, the ones a caller varies included;
+    as recorded, the spec's default is filled in for each parameter not given.
+    ``supplied`` holds intermediates the spec exposes, each a reference or an
+    :class:`Accumulate`, supplied in place of what computes them. Only a
+    required parameter without a default may stay unset, and only when the
+    request supplies an intermediate in place of what needs it. ``outputs`` are
+    the outputs to compute, empty for the spec's results.
+
+    ``vary`` names the parameters a caller varies from run to run, so that a
+    session holds the stage cut at them. Like ``label``, it is a hint: it does
+    not change the result, it is not part of the workflow ID, and provenance
+    does not rely on it.
+
+    A request is complete: it never names a session or a process, and the only
     path it may name is the identity of a local file that carries no run
     identity.
     """
 
     spec: SpecId
     params: dict[str, Plain] = Field(default_factory=dict)
-    inputs: dict[str, Plain] = Field(default_factory=dict)
+    supplied: dict[str, Plain] = Field(default_factory=dict)
     outputs: tuple[str, ...] = ()
+    vary: tuple[str, ...] = Field(
+        default=(),
+        description="Parameters a caller varies; a hint for the session, not "
+        "part of the workflow ID.",
+    )
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)
@@ -128,26 +138,34 @@ class StageRequest(BaseModel, frozen=True):
     )
 
     @property
+    def fixed(self) -> dict[str, Any]:
+        """The parameters the request does not vary."""
+        return {k: v for k, v in self.params.items() if k not in self.vary}
+
+    @property
     def workflow_id(self) -> str:
         """
-        A hash of spec, params, instrument, and proposal: the pipeline this
-        request's stage is cut from, which names the stage a session holds.
+        A hash of spec, the parameters not varied, instrument, and proposal:
+        the pipeline from which a session cuts the stage it holds.
 
-        Two requests that configure the same spec with the same values name the
-        same pipeline, whatever their stages. Keys are sorted so that the order in
-        which values were given does not change the identity.
+        Two requests that set the same values name the same pipeline, whatever
+        they vary or supply. Keys are sorted so that the order in which values
+        were given does not change the identity.
         """
         content = json.dumps(
-            self.model_dump(
-                mode='json', include={'spec', 'params', 'instrument', 'proposal'}
-            ),
+            {
+                'spec': self.spec.model_dump(mode='json'),
+                'params': self.fixed,
+                'instrument': self.instrument,
+                'proposal': self.proposal,
+            },
             sort_keys=True,
         )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     def values(self) -> dict[str, Any]:
-        """Parameters and stage inputs together, as plain data."""
-        return {**self.params, **self.inputs}
+        """Parameters and supplied intermediates together, as plain data."""
+        return {**self.params, **self.supplied}
 
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""
@@ -192,9 +210,9 @@ class RunResult(BaseModel):
     failure: Failure | None = None
 
 
-class StageRecord(BaseModel):
+class RunRecord(BaseModel):
     """
-    A stage request plus what happened to it.
+    A run request plus what happened to it.
 
     Immutable once the run completes, except for status, and never deleted on its
     own. Small output values live in ``outputs``; data-reference outputs are listed
@@ -205,7 +223,7 @@ class StageRecord(BaseModel):
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    request: StageRequest
+    request: RunRequest
     status: Status = Status.SUBMITTED
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started: datetime | None = None

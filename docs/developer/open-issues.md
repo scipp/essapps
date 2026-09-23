@@ -38,10 +38,10 @@ The recommendation in brackets is mine.
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
 - **Per-dataset lookup fills in a series.**
-  `apply` puts every filled value except the template's blanks into `params`, so members that a lookup fills differently are not accumulated together.
-  The alternative is to make such fields stage inputs, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
-- **Validation of a stage cut at an intermediate.**
-  Such a stage that leaves a needed parameter unset fails when it runs; a stage without intermediate inputs is checked against the whole parameter model at submit.
+  `apply` has each member vary only the template's blanks, so members that a lookup fills differently are not accumulated together.
+  The alternative is to have members vary such fields as well, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
+- **Validation of a request that supplies an intermediate.**
+  Such a request that leaves a needed parameter unset fails when it runs; a request that supplies no intermediate is checked against the whole parameter model at submit.
   Whether a GUI can learn this before submitting is open: in local mode the backend imports the registry and could ask the workflow, in shared mode it does not.
 - **Chaining on disk.**
   The skeleton writes the chain into the finalize request: its `Accumulate` lists the previous finalize and the members it does not cover.
@@ -91,7 +91,7 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 - **Collection keys are the submitter's invention.**
   Nothing ties a key of a collection parameter to the record it came from, and a reference into a pending collection output is not checked for its key, so a transposed dictionary is accepted and fails at run time.
 - **Chaining between specs is checked by format only.**
-  A declared `ArraySpec` is read by nobody, so an output of another spec with a matching format passes validation as an intermediate input and fails inside the stage.
+  A declared `ArraySpec` is read by nobody, so an output of another spec with a matching format passes validation as a supplied intermediate and fails inside the stage.
   The runner checks an output's dimensions and coordinate names, but not its unit and not the `binned` flag.
 - **The vocabulary lacks the parameter types real reductions need.**
   A pixel-index range, an angle range, a Q range, and an edges model whose range is derived from the data are all missing.
@@ -103,7 +103,7 @@ See [aggregation.md](aggregation.md).
 
 - **A combination that is not associative has no consistency check over its members.**
   The members of an accumulation agree with the finalize on every parameter both set, which the backend checks.
-  A stitch takes references to stage records of another spec, which the check does not cover, so a stitch over curves reduced with different detector limits passes silently.
+  A stitch takes references to run records of another spec, which the check does not cover, so a stitch over curves reduced with different detector limits passes silently.
 
 ### Rules
 
@@ -113,7 +113,7 @@ See [rules.md](rules.md).
   Reflectometry sums same-angle runs and then stitches the angles.
   The first level is a series, and the second is a spec over a list of references, which a rule cannot yet submit (see [open questions](#open-questions)).
 - **Roles are named but not defined.**
-  A rule that feeds sample runs into one member stage and background runs into another needs a role per dataset and a mapping from role to stage input.
+  A rule that feeds sample runs into one member stage and background runs into another needs a role per dataset and a mapping from role to the parameter a member varies.
   "A series of fixed roles" names this and says nothing about how it works.
 - **A feedback cycle has no rule shape.**
   Amor fits scale factors over all members and then re-reduces each member with its factor, which is a cycle from members to the stitch and back to members.
@@ -147,7 +147,7 @@ It does not contain:
 - A SciCat dataset source.
   The folder source and the in-memory fake are the only implementations, which keeps the tests off SciCat.
 - A rule over a combination that is not associative, and a series over two member tables.
-- The fold: a long-lived runner that holds the accumulators of one series, accumulates in memory, and writes a finalize stage record every few arrivals.
+- The fold: a long-lived runner that holds the accumulators of one series, accumulates in memory, and writes a finalize run record every few arrivals.
   It is not needed until a series arrives faster than its accumulated values can be read and written.
 - The `paused` status and the runner liveness timeout described in [operations.md](operations.md#failure-handling).
 - A rule that fires on a completed record.
@@ -184,12 +184,12 @@ Resource hints on the spec for the cluster launcher, such as memory as a functio
 These are changes to scipp/sciline#245, the proposal this design's stages and aggregations build on.
 
 - **The design document of the proposal describes essapps as one spec with a declared contribution and three entry points**, and says that the spec declares which parameters the finalize stage reads.
-  It should instead say that essapps records each `Stage.compute` as a stage record holding the pipeline's parameters, that a spec exposes the intermediates a stage may take or return, and that the binding reuses the accumulators an `Aggregation` takes.
+  It should instead say that essapps records each `Stage.compute` as a run record holding the pipeline's parameters, that a spec exposes the intermediates a stage may take or return, and that the binding reuses the accumulators an `Aggregation` takes.
 - **Finalize inputs need no change to sciline.**
   `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a finalize parameter cannot be given per call.
-  The adapter does not use that stage: a finalize stage record is a plain `Stage` whose inputs are the intermediates and any finalize parameter the caller names.
+  The adapter does not use that stage: a finalize run is a plain `Stage` whose inputs are the supplied intermediates and any finalize parameter the request varies.
   An argument for naming finalize inputs is therefore not needed.
 - **A parameter read by both stages must reach the finalize stage with the value the members were made with.**
   Within one process the snapshot guarantees this.
-  Across processes the backend checks that the members and the finalize agree on every parameter both set.
+  Across processes the backend checks that the members and the finalize agree on every parameter both set and neither varies.
   The proposal could name this as the consumer's responsibility.

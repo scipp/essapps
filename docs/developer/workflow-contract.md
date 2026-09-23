@@ -1,7 +1,7 @@
 # The contract between the framework and workflow code
 
 This document defines how the framework calls scientific code.
-It covers how a spec is bound to an implementation, how a workflow builds the stage a stage record names, how input data reaches the code, how outputs come back, and the extensions the design needs on top of the workflow spec of scipp/ess#690.
+It covers how a spec is bound to an implementation, how a workflow builds the stage a run request names, how input data reaches the code, how outputs come back, and the extensions the design needs on top of the workflow spec of scipp/ess#690.
 [architecture.md](architecture.md) places this in the whole design.
 
 ## A workflow end to end
@@ -45,8 +45,8 @@ See `binding.py`.
 
 ## The workflow protocol
 
-**A spec is the signature of a pipeline, and a stage record is one call of a stage cut from it.**
-The workflow is the code behind the spec, and it builds the stage a stage record names.
+**A spec is the signature of a pipeline, and a run record is one call of a stage cut from it.**
+The workflow is the code behind the spec, and it builds the stage a run request names.
 The protocol is `Workflow` in `binding.py`:
 
 ```python
@@ -60,8 +60,9 @@ class StageCall(Protocol):
                  inputs: Inputs) -> Mapping[str, Any]: ...
 ```
 
-`stage` gets the request's `params`, which hold the spec's defaults for every field that is not a stage input, filled at submit, and the stage's input and output names.
-Each call of the returned `StageCall` gets the parameters among the stage inputs, and the intermediates among them already as objects.
+`stage` gets the request's parameters that are not in `vary`, with the spec's defaults filled at submit, and the stage's input and output names.
+The input names are the parameters the request names in `vary` and the intermediates it supplies.
+Each call of the returned `StageCall` gets the varied parameters as a model, and the supplied intermediates already as objects.
 It returns the stage's outputs by field name.
 A plain run is the stage with no inputs, whose outputs are the spec's results.
 
@@ -129,7 +130,7 @@ That the NMX product is then held in memory before it is written is a cost accep
 
 ## The sciline adapter
 
-**An adapter turns a sciline pipeline into a workflow, and each stage record into a `sciline.Stage`.**
+**An adapter turns a sciline pipeline into a workflow, and each run request into a `sciline.Stage`.**
 `PipelineAdapter` in `adapter.py` does it, and `examples.py` binds the `NORMALIZE` spec with it:
 
 ```python
@@ -154,10 +155,10 @@ def normalize_workflow() -> PipelineAdapter:
 `accumulators` gives, by sciline key, a factory for the accumulator of each intermediate that may be accumulated.
 It is the same dictionary a `sciline.Aggregation` takes, so a package defines it once for notebooks and for the binding.
 
-For `stage` the adapter sets the request's `params` on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
+For `stage` the adapter sets the parameters it is given on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
 An intermediate input cuts off its providers and everything upstream of them.
 A `Stage` computes once everything the inputs cannot affect, holds it at its **frontier**, and on each call recomputes only what lies downstream of the inputs.
-References in `params` are resolved once, when the stage is built; references in the stage inputs on every call.
+References in the parameters not varied are resolved once, when the stage is built; references in the stage inputs on every call.
 Correctness follows from the graph for any choice of stage inputs, so the choice decides only where the frontier sits and what a rerun costs.
 A parameter input that the outputs do not need, which `sciline.Stage` refuses, is held and ignored, because it cannot change the result and which parameters a caller varies must not decide whether a run succeeds.
 
@@ -214,7 +215,7 @@ A spec may also declare named failure reasons, each with a message.
 A workflow that fails for a declared reason returns it, the record carries its name, a UI can explain it, and a rule's retry policy can match it.
 
 **Exposed intermediates.**
-A spec may name some of its outputs as `intermediates`: values inside the pipeline that a plain run does not compute, and that a stage may take as inputs.
+A spec may name some of its outputs as `intermediates`: values inside the pipeline that a plain run does not compute, and that a request may supply in place of what computes them.
 
 ```python
 class NormalizeOutputs(BaseModel):
@@ -227,7 +228,7 @@ NORMALIZE = WorkflowSpec(name='normalize', version=1, params=NormalizeParams,
 ```
 
 - A plain run computes the spec's `results`, the outputs that are not intermediates; the serialized spec carries both.
-- A stage may name any output as an output and any intermediate as an input.
+- A request may name any output as an output and supply any intermediate.
 - An intermediate is declared with a format like any output, because it may be stored, referenced, and viewed.
 
 The exposed intermediates are the author's domain types that an app or an aggregation needs, such as a detector image, a beam centre, or a numerator and denominator.
@@ -244,15 +245,15 @@ This is an extension of this design rather than a field of scipp/ess#690.
 A parameter the spec does not declare is refused, because a pydantic model ignores unknown fields unless its author forbids them, and a reduction parameter dropped in silence gives a wrong number without an error.
 scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the top-level fields itself.
 Requiring a closed parameter model in the spec would be the better place.
-The same check covers the stage's names: a stage input must be a parameter `params` leaves unset or an exposed intermediate, and an output must be an output of the spec.
+The same check covers the request's names: a name in `vary` must be a parameter of the spec with a value in `params`, a name in `supplied` an exposed intermediate, and an output an output of the spec.
 The check sees the request with the spec's defaults filled, as it will be recorded.
-A stage without intermediate inputs is validated against the whole parameter model, so a missing required parameter is refused.
-A stage that takes an intermediate is validated field by field, because whether its inputs suffice for its outputs depends on the graph: such a stage that leaves a needed parameter unset fails when it runs ([records.md](records.md#what-the-backend-checks)).
+A request that supplies no intermediate is validated against the whole parameter model, so a missing required parameter is refused.
+A request that supplies an intermediate is validated field by field, because whether the stage's inputs suffice for its outputs depends on the graph: such a request that leaves a needed parameter unset fails when it runs ([records.md](records.md#what-the-backend-checks)).
 The backend runs this layer by importing the spec module alone, never a factory.
 esslivedata keeps the spec separate from the workflow factory precisely so that specs can be validated without importing workflow code, and scipp/ess#690 must keep that separation.
 
 **Runnability**: every reference resolves to a record the submitter may read and, for a collection element, to a key the producer declares.
-An intermediate supplied from a stage record of the same spec agrees with it on every parameter both requests set in `params`.
+An intermediate supplied from a run record of the same spec agrees with it on every parameter both requests set in `params`, apart from those either request varies.
 Files exist where the launcher would look, and the launcher's environment has the spec.
 Anything past that, such as a file that opens but lacks a monitor, is a run that fails fast, not a validation error.
 
@@ -313,7 +314,7 @@ A `Stage` recomputes everything downstream of all its inputs, so a stage whose i
   `assert_stage_equals_workflow` is the check, and the record's `reused` flag lets publication insist on a result computed without a held stage.
 - Authors must expose the intermediates that apps and aggregations use, each with a format.
 - Every accumulator must be associative, which the framework cannot check and a test helper must.
-- A stage that leaves a needed parameter unset fails when it runs, not when it is submitted.
+- A request that supplies an intermediate and leaves a needed parameter unset fails when it runs, not when it is submitted.
 - DREAM and imaging masks are Python callables today.
   Each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 - The backend must walk the request's values to find references, and the spec's JSON Schema, including nested models, to check them.

@@ -25,7 +25,7 @@ for num_bins in (50, 100, 200):
 
 `wf` is the reduction with every parameter but `q` set, held on the client side only.
 `tune` names a stage cut from it, from `q` to `iofq`.
-Every call submits a complete stage request, `{spec: ..., params: {...}, inputs: {'q': ...}, outputs: ['iofq']}`, and the backend fills the spec's defaults into `params`.
+Every call submits a complete run request, `{spec: ..., params: {..., 'q': ...}, vary: ['q'], outputs: ['iofq']}`, and the backend fills the spec's defaults into `params`.
 The first call builds the stage, and the later ones reuse it.
 The rest of this document explains how.
 
@@ -36,9 +36,9 @@ It holds three things in memory:
 
 | Held object | Addressed by |
 |---|---|
-| output of a stage record | the stage record's ID |
-| stage | workflow ID, input names, output names, checksums of the datasets `params` names |
-| accumulator | workflow ID, the input it fills, the outputs pushed into it so far |
+| output of a run record | the run record's ID |
+| stage | workflow ID, names of the varied parameters, names of the supplied intermediates, output names, checksums of the datasets the parameters not varied name |
+| accumulator | workflow ID, the intermediate it fills, the outputs pushed into it so far |
 
 The outputs let a chained request get its input without a disk read.
 A stage holds intermediate results of a workflow.
@@ -65,7 +65,7 @@ flowchart LR
 
 With the Q bins, field `q`, as the only stage input, the frontier holds the converted events.
 A call with new Q bins runs the histogram and the normalisation, and nothing else.
-A stage input may also be an intermediate, such as a beam centre supplied from another stage record; the stage then cuts off whatever would compute it.
+A stage input may also be an intermediate, such as a beam centre supplied from another run record; the stage then cuts off whatever would compute it.
 
 A `Stage` recomputes everything downstream of all its inputs on every call.
 A stage whose inputs are `q` and the sample run therefore loads the run again when only `q` changes.
@@ -80,31 +80,37 @@ The workflow author cannot make this choice, because no fixed choice serves both
 The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
 The caller knows which parameter will move, and the first call already builds the stage.
 
-**Each stage record names its stage**: the workflow ID of its request, a hash of spec, params, instrument, and proposal, its input names, and its outputs.
+A call of the handle splits its values by name.
+A value for a parameter goes into the request's `params`, and the parameter is named in `vary`.
+A value for an intermediate goes into `supplied`.
+A varied value replaces the value the handle holds for that parameter, if any.
+
+**Each run request names its stage**: the workflow ID of the request, a hash of spec, the parameters not varied, instrument, and proposal; the names of the parameters it varies; the names of the intermediates it supplies; and its outputs.
+`vary` is a hint for the session, like `label`: it does not change the result, and provenance does not rely on it.
 Because `params` holds the defaults filled at submit, a request that omits a default and one that gives it name the same stage.
-The session holds the stage it built under that name, together with the checksums of the datasets `params` names, so that a file that changed on disk does not find a stage built from its earlier bytes.
-A later stage record that names the same stage computes only what lies downstream of its inputs.
-A stage record without a handle, such as a member that a rule submits, runs the stage it names in the same way.
-Nothing is inferred from earlier requests: a `client.run` that differs from the previous one in a single field has another workflow ID and is a plain run.
+The session holds the stage it built under that name, together with the checksums of the datasets that the parameters not varied name, so that a file that changed on disk does not find a stage built from its earlier bytes.
+A later request that names the same stage computes only what lies downstream of the stage's inputs.
+A request without a handle, such as a member that a rule submits, runs the stage it names in the same way.
+Nothing is inferred from earlier requests: a `client.run` varies nothing, so one that differs from the previous one in a single field has another workflow ID and is a plain run.
 
 `ess.apps.stages.Stages` holds stages and accumulators:
 
 ```python
-call, held = stages.stage(name, build)            # name: (workflow ID, inputs, outputs, checksums)
+call, held = stages.stage(name, build)            # name: (workflow ID, varied, supplied, outputs, checksums)
 value, held = stages.accumulate(name, refs, make, load)
 ```
 
 A stage belongs to no label.
-Two plots that move the same parameter with the same `params` are served by one stage, so the loaded data is held once.
+Two plots that vary the same parameter with the same other parameters are served by one stage, so the loaded data is held once.
 
 The session holds a bounded number of stages and drops the least recently used.
-A stage resolves the references in `params` when it is built and holds those objects.
+A stage resolves the references in the parameters not varied when it is built and holds those objects.
 They count towards the session's memory, and they stay valid when the session's output cache drops its own copy.
 
 ### Held accumulators
 
-A finalize stage of a sum over runs takes `Accumulate` inputs, each listing the outputs of the member stage records to accumulate ([aggregation.md](aggregation.md)).
-The session holds one accumulator per workflow ID and input, with the list of outputs pushed into it so far.
+The finalize request of a sum over runs supplies an `Accumulate` for an intermediate, listing the outputs of the member run records to accumulate ([aggregation.md](aggregation.md)).
+The session holds one accumulator per workflow ID and intermediate, with the list of outputs pushed into it so far.
 When a request's list begins with that list, the session pushes only the rest, so adding a third run pushes one value, not three.
 Any other list, such as one in which a corrected member replaces an earlier record, starts a fresh accumulator; nothing is ever taken out.
 
@@ -137,9 +143,9 @@ Every workflow bound through an adapter runs it.
 
 ## Reruns and their records
 
-Every call through a stage is a complete stage request and writes a complete stage record.
-Changing a threshold is a stage record with a new value of its stage input.
-Adding one more run to a sum is a member stage record plus a finalize stage record whose `Accumulate` lists one more output.
+Every call through a stage is a complete run request and writes a complete run record.
+Changing a threshold is a run record with a new value of the parameter it varies.
+Adding one more run to a sum is a member run record plus a finalize run record whose `Accumulate` lists one more output.
 
 The record carries a `reused` flag, which says that a held stage served it.
 Publication reads the flag and recomputes such a result in a throwaway process first, so that what enters SciCat was computed without held state.
@@ -228,8 +234,8 @@ The application may compare that output with what was on screen and warn if they
 Shared interactive use is a hosting question, a process per user as JupyterHub provides, and the framework never sees a session.
 
 **The stateless model with splits** has no state between runs.
-The workflow author exposes the value where the expensive part ends as an intermediate, and a first stage stores it as an output of a stage record.
-On the first rung, every rerun is a throwaway process that runs a second stage, which takes that output as an intermediate input and runs the cheap part.
+The workflow author exposes the value where the expensive part ends as an intermediate, and a first run stores it as an output of its run record.
+On the first rung, every rerun is a throwaway process that supplies that output as an intermediate and runs the cheap part.
 On the second rung, runners stay alive and keep their outputs, and the launcher routes a request to the runner that already holds its input.
 A routing miss falls back to the first rung, so the second rung is an addition to the first.
 
