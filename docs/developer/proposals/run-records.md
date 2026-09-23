@@ -1,6 +1,6 @@
 # Records of workflow runs
 
-**Status: implemented in the skeleton.** The code under `packages/essapps/src/ess/apps` follows this document; the open questions at the end are still open.
+**Status: implemented in the skeleton.** The code under `packages/essapps/src/ess/apps` follows this document, and the questions at the end are open.
 It changes [records.md](../records.md), [workflow-contract.md](../workflow-contract.md), [stages.md](../stages.md), [aggregation.md](../aggregation.md), and the series part of [rules.md](../rules.md).
 
 ## Summary
@@ -64,7 +64,7 @@ class RunRecord(BaseModel):
     # what happened:
     status: Status
     outputs: dict[str, Any]; stored_outputs: list[OutputRef]
-    resolved_params: ...; package_versions: ...; environment: ...; binding: ...
+    package_versions: ...; environment: ...; binding: ...
     checksums: ...; derives_from: ...; supersedes: ...; failure: ...; published: ...
     reused: bool
 ```
@@ -74,6 +74,7 @@ In `ess.apps.records`.
 **Defaults are filled at submit.**
 When the backend accepts a request, it adds to `params` the spec's default for every parameter that has one and is not given.
 A plain run therefore records the whole params model.
+Every value is recorded in the form the params model gives it, so `0` and `0.0` given for one float field are one value and one workflow ID, and the record keeps no second copy of the parameters.
 Only a required parameter without a default may stay unset, and only a request that supplies an intermediate in place of what needs it can do without it.
 The record says which value every parameter had, so a recompute runs with the values of the first run even after the spec's defaults change.
 
@@ -100,15 +101,15 @@ result = client.run(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db,
 result.ref('iofq')
 ```
 
-This is shorthand for a configured pipeline and one stage with no inputs:
+This is shorthand for a template with every value set and no blanks, one stage with no inputs:
 
 ```python
-wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db, 'q_bins': 100})
-result = wf.stage().compute()                   # no outputs named: the spec's results
+sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db, 'q_bins': 100})
+result = client.run(sans)                       # no blanks, no outputs named: the spec's results
 ```
 
-`compute` always takes the values of the stage's inputs, and a stage with no inputs takes none.
-`client.workflow(spec, params)` holds the spec and the values given on the client side only, like `functools.partial`; nothing is stored until a run request is submitted.
+`client.run(template, values)` takes the values of the template's blanks, and a template with no blanks takes none.
+A template is plain data held on the client side; nothing is stored until a run request is submitted.
 
 Scripts that run a workflow once never need more than this.
 
@@ -117,11 +118,11 @@ Scripts that run a workflow once never need more than this.
 A GUI slider, or a notebook loop, declares the stage it needs before the first call:
 
 ```python
-wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db})   # q_bins unset
-tune = wf.stage(inputs=['q_bins'], outputs=['iofq'], label='iofq-plot')
+sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db})   # q_bins unset
+tune = sans.cut(blanks=('q_bins',), outputs=('iofq',), name='iofq-plot')
 
 for q in (50, 100, 200):
-    r = tune.compute({'q_bins': q})       # one run record per call
+    r = client.run(tune, {'q_bins': q})   # one run record per call
     plot(client.view(r.ref('iofq')))
 ```
 
@@ -130,15 +131,15 @@ The load, the conversion to wavelength, and the masking run once.
 Each call writes a run record `{spec: SANS, params: {..., 'q_bins': q}, vary: ['q_bins'], outputs: ['iofq']}`, which is complete: recomputing it needs nothing from the session.
 Apart from `vary` and `label`, it is the record a plain run with the same values writes.
 
-The handle is the declaration the session needs.
+The template is the declaration the session needs.
 There is no inference from successive requests, and the first call already builds the stage.
 
 ### Showing an intermediate
 
 ```python
-wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db, 'q_bins': 100})
-det = wf.stage(outputs=['detector_image']).compute()          # an exposed intermediate as output
-spectrum = wf.stage(outputs=['wavelength_spectrum']).compute()
+sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db, 'q_bins': 100})
+det = client.run(sans.cut(outputs=('detector_image',)))          # an exposed intermediate as output
+spectrum = client.run(sans.cut(outputs=('wavelength_spectrum',)))
 client.view(det.ref('detector_image'))
 ```
 
@@ -151,28 +152,28 @@ A beam centre found in one view and used in the next.
 In this pipeline the beam centre is an intermediate that a finder computes; here a person supplies it instead:
 
 ```python
-wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db})   # q_bins unset
-det = wf.stage(outputs=['detector_image']).compute()
+sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db})   # q_bins unset
+det = client.run(sans.cut(outputs=('detector_image',)))
 centre = client.run(PICK_CENTRE, {'image': det.ref('detector_image')})   # a person clicks, or another spec runs
 
-reduce = wf.stage(inputs=['beam_centre', 'q_bins'], outputs=['iofq'])
-reduce.compute({'beam_centre': centre.ref('centre'), 'q_bins': 100})
+reduce = sans.cut(blanks=('beam_centre', 'q_bins'), outputs=('iofq',))
+client.run(reduce, {'beam_centre': centre.ref('centre'), 'q_bins': 100})
 ```
 
 The run record holds `beam_centre` in `supplied`, with the run record it came from, and `q_bins` in `params`.
-The parameters of the finder that `wf` also holds did not affect this result, and the record does not claim they did: it says "this pipeline, cut at `beam_centre`".
+The parameters of the finder that `sans` also sets did not affect this result, and the record does not claim they did: it says "this pipeline, cut at `beam_centre`".
 Which values a cut makes irrelevant follows from the graph when the binding builds the stage, as in sciline.
 
 ### Aggregation over runs: a batch at once
 
 ```python
-wf = client.workflow(SANS, {'masks': masks, 'direct_beam': db, 'q_bins': 100})   # sample_run unset
+sans = Template(spec=SANS, params={'masks': masks, 'direct_beam': db, 'q_bins': 100})   # sample_run unset
 
-contribute = wf.stage(inputs=['sample_run'], outputs=['numerator', 'denominator'], label='members')
-members = [contribute.compute({'sample_run': r}) for r in runs]                    # dispatched in parallel
+contribute = sans.cut(blanks=('sample_run',), outputs=('numerator', 'denominator'), name='members')
+members = [client.run(contribute, {'sample_run': r}) for r in runs]                  # dispatched in parallel
 
-finalize = wf.stage(inputs=['numerator', 'denominator'], outputs=['iofq'], label='total')
-total = finalize.compute({
+finalize = sans.cut(blanks=('numerator', 'denominator'), outputs=('iofq',), name='total')
+total = client.run(finalize, {
     'numerator':   Accumulate(accumulate=[m.ref('numerator') for m in members]),
     'denominator': Accumulate(accumulate=[m.ref('denominator') for m in members]),
 })
@@ -180,7 +181,7 @@ client.output(total, 'iofq')
 ```
 
 This is `sciline.Aggregation(pipeline, members=[SampleRun])`: the first stage is its `contribute_stage`, the second its `finalize_stage`.
-Outside a session each `compute` is dispatched and returns at once, and the finalize record waits for its members as pending outputs, the one scheduling primitive.
+Outside a session each `client.run` is dispatched and returns at once, and the finalize record waits for its members as pending outputs, the one scheduling primitive.
 
 `Accumulate` is a reference form of its own.
 It says: the value of this input is the accumulation of these outputs.
@@ -189,7 +190,7 @@ The framework never adds anything; the binding resolves `Accumulate` with the ac
 **Members cannot disagree on shared parameters.**
 The backend refuses an intermediate supplied from a run record of the same spec that disagrees with the consuming request on a parameter both set in `params`, and names that parameter.
 A parameter either request varies is not compared.
-Members and finalize made from one `wf` agree by construction, so masks and direct beam have one value.
+Members and finalize cut from one template agree by construction, so masks and direct beam have one value.
 The members vary `sample_run`, and the finalize leaves it unset, so it is not compared.
 The check compares recorded values and needs no workflow code.
 This replaces the `SHARED` entry and the check inside the combine callable.
@@ -200,8 +201,8 @@ This replaces the `SHARED` entry and the check inside the combine callable.
 members = []
 
 def add_run(run):
-    members.append(contribute.compute({'sample_run': run}))
-    return finalize.compute({
+    members.append(client.run(contribute, {'sample_run': run}))
+    return client.run(finalize, {
         'numerator':   Accumulate(accumulate=[m.ref('numerator') for m in members]),
         'denominator': Accumulate(accumulate=[m.ref('denominator') for m in members]),
     })
@@ -219,8 +220,8 @@ Adding r3 pushes one contribution, not three.
 ### Correcting or removing a member
 
 ```python
-members[1] = contribute.compute({'sample_run': r2_fixed})
-total = finalize.compute({
+members[1] = client.run(contribute, {'sample_run': r2_fixed})
+total = client.run(finalize, {
     'numerator':   Accumulate(accumulate=[m.ref('numerator') for m in members]),
     'denominator': Accumulate(accumulate=[m.ref('denominator') for m in members]),
 })
@@ -238,19 +239,19 @@ That is what sciline does too: a changed pipeline parameter means a new `Aggrega
 Sample runs and background runs in ess.sans:
 
 ```python
-wf = client.workflow(SANS_WITH_BACKGROUND, {'masks': masks, 'direct_beam': db, 'q_bins': 100})
+sans = Template(spec=SANS_WITH_BACKGROUND, params={'masks': masks, 'direct_beam': db, 'q_bins': 100})
 # sample_run and background_run both unset
 
-sample = wf.stage(inputs=['sample_run'], outputs=['sample_numerator', 'sample_denominator'])
-background = wf.stage(inputs=['background_run'], outputs=['background_numerator', 'background_denominator'])
-s = [sample.compute({'sample_run': r}) for r in sample_runs]
-b = [background.compute({'background_run': r}) for r in background_runs]
+sample = sans.cut(blanks=('sample_run',), outputs=('sample_numerator', 'sample_denominator'))
+background = sans.cut(blanks=('background_run',), outputs=('background_numerator', 'background_denominator'))
+s = [client.run(sample, {'sample_run': r}) for r in sample_runs]
+b = [client.run(background, {'background_run': r}) for r in background_runs]
 
-finalize = wf.stage(
-    inputs=['sample_numerator', 'sample_denominator', 'background_numerator', 'background_denominator'],
-    outputs=['iofq'],
+finalize = sans.cut(
+    blanks=('sample_numerator', 'sample_denominator', 'background_numerator', 'background_denominator'),
+    outputs=('iofq',),
 )
-finalize.compute({
+client.run(finalize, {
     'sample_numerator':       Accumulate(accumulate=[m.ref('sample_numerator') for m in s]),
     'sample_denominator':     Accumulate(accumulate=[m.ref('sample_denominator') for m in s]),
     'background_numerator':   Accumulate(accumulate=[m.ref('background_numerator') for m in b]),
@@ -258,7 +259,7 @@ finalize.compute({
 })
 ```
 
-Nothing special is needed: two member stages cut from one `wf`, one finalize stage.
+Nothing special is needed: two member stages cut from one template, one finalize stage.
 
 ## The spec and the binding
 
@@ -337,7 +338,7 @@ The binding reuses the same accumulators, and there is no second adapter for agg
 
 All three are caches over records: dropping one costs time and never changes a result.
 The session does not infer stage inputs from the request a later one supersedes.
-The handle a client builds with `wf.stage(...)` names the stage through `vary` and `supplied`, and a run request without a handle, for example one submitted from a rule, names it the same way.
+A template names the stage through its blanks, which a request made from it carries as `vary` and `supplied`, whether a client cut the template for a slider or a rule holds it.
 
 ## Batches and rules
 
@@ -353,7 +354,7 @@ template = Template(name='sans-defaults', spec=SANS.id,
 Members that agree on everything but their blanks share one workflow ID, and in a session they share one held stage.
 A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, gives that member a workflow ID of its own.
 
-A rule with a series submits, on each arrival, one member run request and one finalize run request, the finalize with the values the arriving member was given outside its `vary`:
+A rule with a series submits, on each arrival, one member run request and one finalize run request, the finalize with the template's values:
 
 ```python
 rule = Rule(
@@ -364,50 +365,33 @@ rule = Rule(
 )
 ```
 
-The member stage goes from the blanks to the accumulated intermediates; the finalize stage from their accumulation, which it supplies, to the outputs.
+The member stage, `template.cut(outputs=accumulate)`, goes from the blanks to the accumulated intermediates; the finalize stage, `template.cut(blanks=accumulate, outputs=outputs)`, from their accumulation, which it supplies, to the outputs.
 The rule holds one template instead of two, and `Series` names no combine spec, contribution output, or collection parameter.
-A member made with another value than the arriving member, because a lookup or a pinned value set something only for it, cannot be accumulated with the others: the finalize is refused and the trigger loop logs the refusal.
+A member made with a value other than the template's, because a lookup or a pinned value set a field beyond the blanks, cannot be accumulated with the others: the finalize is refused and the trigger loop logs the refusal.
 
-## Chaining without a session
+## A growing series without a session
 
 A rule runs each request in a throwaway process, and no session holds an accumulator.
-A finalize over all current members then reads k contributions on the k-th arrival.
-For event-mode or 4D contributions of several gigabytes that is too much.
+Every finalize request lists every current member of the series in its `Accumulate`, and its outputs are the series' outputs only.
+The sum a finalize record stands for is therefore read off its request alone, with no walk back through earlier finalizes.
+The cost is reading: the finalize of the k-th arrival reads k contributions per accumulated value, which for event-mode or 4D contributions of several gigabytes is a lot.
 
-Chaining needs no declaration on the spec.
-A finalize stage can select an accumulated value as an output as well as an input.
-`sciline.Stage` passes such a value through, so the finalize record stores the accumulated value:
+A runner may lower that cost with a cache.
+It keeps the accumulated value of an earlier finalize, and when a later finalize's list begins with the list that value was accumulated from, it reads only the rest.
+That is the rule a session's held accumulator follows (`Stages.accumulate` in `stages.py`).
+The request stays the same, so the cache is invisible in the records.
+It is not built.
 
-```python
-finalize = wf.stage(inputs=['numerator', 'denominator'],
-                    outputs=['numerator', 'denominator', 'iofq'])     # accumulated values stored
-```
-
-The next arrival accumulates the previous finalize's value with the new member:
-
-```python
-finalize.compute({
-    'numerator':   Accumulate(accumulate=[previous.ref('numerator'), new.ref('numerator')]),
-    'denominator': Accumulate(accumulate=[previous.ref('denominator'), new.ref('denominator')]),
-})
-```
-
-This is correct if accumulating a pre-accumulated value gives the same result as accumulating its parts.
-That is associativity, and it is a property of the accumulator, not of the spec.
-sciline's `Accumulator` contract already requires it, because `Aggregation.combine` pushes combined values too; `ess.apps.testing.assert_accumulator_is_associative` checks it for an accumulator.
-Commutativity is not required, because a chain keeps the order in which members arrived.
-A combination that is not associative, such as reflectometry's stitch over angles with its global fit of scale factors, is not an accumulator: it stays a spec whose parameter is a list of references to per-angle outputs, computed over all members whenever it is requested. A rule has no clause for it yet (see the open questions).
-
-Which members a previous finalize covers is found by following its `Accumulate` elements back until they reach member run records.
-`_covers` in `batch.py` does this walk.
-The conditions for chaining are unchanged: the previous finalize completed, and every record it covers is still a current member.
+No finalize accumulates a value that another finalize accumulated, so nothing here requires an accumulator to be associative.
+sciline's `Accumulator` contract asks for associativity, and nothing here relies on it.
+A combination that is not an accumulation, such as reflectometry's stitch over angles with its global fit of scale factors, stays a spec whose parameter is a list of references to per-angle outputs, computed over all members whenever it is requested. A rule has no clause for it yet (see the open questions).
 
 ## Validation and identity
 
 - **Validation sees the request as it will be recorded, defaults filled.**
   The workflow ID of the recorded request is the one a session names its stage by.
 - **Every name in `vary` is a parameter of the spec with a value in `params`.**
-  A value given to `stage.compute` for a varied parameter replaces the value the handle holds; nothing conflicts.
+  A value given to `client.run` for a parameter replaces the template's value; nothing conflicts.
 - **A supplied intermediate must be exposed by the spec, and a data intermediate is a reference or an `Accumulate`.**
   Parameters upstream of it may stay set in `params`; the record does not claim they affected the result.
 - **An intermediate of spec S supplied from a run record of S must agree with it on every parameter both requests set in `params`, apart from those either request varies.**
@@ -423,7 +407,7 @@ The conditions for chaining are unchanged: the previous finalize completed, and 
 Needed where a record cannot hold a supplied intermediate, and not here:
 
 - the contribute and combine specs per pipeline, and the rule "cut a workflow into specs where an aggregation adds";
-- `carry` on `WorkflowSpec`, and the associativity helper for it (replaced by one for accumulators);
+- `carry` on `WorkflowSpec`, and the associativity helper for it;
 - `ess.apps.aggregation.Aggregation`, the `SHARED` entry, and the combine callable's agreement check; the sciline adapter takes `accumulators=` instead;
 - `default_stage_inputs`, and the session's inference of stage inputs from the predecessor request;
 - the combine template and the `output` and `parameter` fields of `Series`.
@@ -433,20 +417,18 @@ Unchanged:
 - references, datasets, groups, and pending outputs as the only scheduling primitive;
 - records are complete without the session, and everything a session holds is a cache;
 - labels, member keys, superseding, templates, lookups, rules, and the trigger loop, apart from the series changes above;
-- non-associative combinations as specs over lists of references;
+- combinations that are not accumulations as specs over lists of references;
 - the framework never adds arrays and never imports sciline.
 
-The reuse rule in [records.md](../records.md#reuse-means-a-workflow-boundary) reads "a value other requests reference must be an output of a run record".
+The reuse rule in [records.md](../records.md#reuse-means-a-run-record) reads "a value other requests reference must be an output of a run record".
 Exposed intermediates can be such outputs, so reuse does not force a spec boundary; separate pipelines remain separate specs.
 
 ## Open questions
 
 1. **Exposed intermediates in ess.reduce.spec.** The skeleton adds `intermediates` to the spec of scipp/ess#690. Whether that belongs upstream, and in which form, is open.
-2. **Per-dataset lookup fills in a series.** The skeleton does not vary them, so members that a lookup fills differently are not accumulated together. The alternative is to vary such fields as well, which the agreement rule does not compare, but which lets members differ in a value the finalize may also read.
+2. **Per-dataset lookup fills in a series.** The skeleton does not vary them, and a finalize has the template's values, so a member that a lookup fills beyond the blanks is not accumulated. The alternative is to vary such fields as well, which the agreement rule does not compare, but which lets members differ in a value the finalize may also read.
 3. **Validation of a request that supplies an intermediate.** Can a GUI learn that such a request leaves a needed parameter unset before submitting? In local mode the backend imports the registry and could ask the binding; in shared mode it does not.
-4. **Chaining on disk.** The skeleton writes the chain into the finalize request, as sketched above. The alternative is for a stateless runner to find the previous finalize itself, a cache lookup invisible in the request, so that every request lists all members.
-5. **A rule over a combination that is not an accumulation.** `Series` only accumulates. A rule that stitches reflectometry angles, a spec over a list of references such as `amor.COMBINE`, has no clause for it, although the design allows the stitch itself as an ordinary request.
-6. **An aggregation helper on the client.** `wf.aggregation(members=..., accumulate=..., outputs=...)` could write the member and finalize stages for a notebook. It adds no concept, and nothing needs it yet.
+4. **A rule over a combination that is not an accumulation.** `Series` only accumulates. A rule that stitches reflectometry angles, a spec over a list of references such as `amor.COMBINE`, has no clause for it, although the design allows the stitch itself as an ordinary request.
 
 ## Alternatives considered
 
@@ -464,6 +446,12 @@ It removes `carry` and `SHARED` too, but adds a second kind of spec and records 
 
 **Contribute and combine specs with `carry`.**
 Every pipeline that aggregates is published as two or three specs, the adapter re-derives the member parameters to check that members agree, and the associativity declaration lives on the spec although it is a property of the code.
+
+**Finalizes that accumulate onto earlier finalizes.**
+A finalize also outputs the accumulated values, and the next finalize lists them with the members the previous one does not cover.
+The k-th arrival then reads two values per accumulated value instead of k.
+What a finalize record sums is then found only by walking back through earlier finalizes, a correction is detected only by comparing the records a previous finalize covers with the current members, and every accumulator must be associative.
+A cache in the runner gives the same saving and leaves the request as it is.
 
 **Stage-level records whose inputs hold varied parameters apart from `params`.**
 A request `(spec, params, inputs, outputs)` where `inputs` holds both the parameters a stage varies and the supplied intermediates, and `params` holds the rest.
@@ -484,6 +472,6 @@ Filling defaults at submit makes the run request hold every value that ran, and 
 - A varied parameter is left out of the workflow ID, so two requests that differ only in which parameters they vary, and in their values, share a workflow ID; they differ in the held stage they name.
 - Authors must expose the intermediates that apps and aggregations use, with formats.
 - `Accumulate` is a reference form of its own, resolved by the binding.
-- Every accumulator must be associative, which the framework cannot check and a test helper must.
-- Clients that want a stage write two calls, `client.workflow(...)` and `wf.stage(...)`, instead of relying on the session to infer it. `client.run` stays for the plain case.
+- Without a session, the finalize of the k-th arrival reads k contributions per accumulated value.
+- Clients that want a stage declare it as a template with its blanks, instead of relying on the session to infer it. `client.run(spec, params)` stays for the plain case.
 - A rule cannot run a combination that is not an accumulation, such as a stitch over angles.

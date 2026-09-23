@@ -16,15 +16,15 @@ It must also keep its own promise that every result has a complete record.
 The `loki-session.ipynb` notebook in the skeleton shows both on the esssans tutorial data: a rerun with changed Q bins takes about a quarter of a second instead of three, and each rerun has a record that reproduces it from raw data.
 
 ```python
-wf = client.workflow(IOFQ, params)                   # ess.apps.loki.IOFQ, 'q' left unset
-tune = wf.stage(inputs=['q'], outputs=['iofq'], label='iofq')
+tune = Template(spec=IOFQ, params=params,          # ess.apps.loki.IOFQ, 'q' left unset
+                blanks=('q',), outputs=('iofq',), name='iofq')
 for num_bins in (50, 100, 200):
-    record = tune.compute({'q': QEdges(start=0.01, stop=0.3, num_bins=num_bins)})
+    record = client.run(tune, {'q': QEdges(start=0.01, stop=0.3, num_bins=num_bins)})
     plot(client.view(record.ref('iofq')))
 ```
 
-`wf` is the reduction with every parameter but `q` set, held on the client side only.
-`tune` names a stage cut from it, from `q` to `iofq`.
+`tune` is a template: the reduction with every parameter but `q` set, and the stage from `q` to `iofq`.
+It is plain data, held on the client side only.
 Every call submits a complete run request, `{spec: ..., params: {..., 'q': ...}, vary: ['q'], outputs: ['iofq']}`, and the backend fills the spec's defaults into `params`.
 The first call builds the stage, and the later ones reuse it.
 The rest of this document explains how.
@@ -75,23 +75,25 @@ It never decides what a rerun returns.
 ## Who names the stage
 
 **The caller names the stage, before the first call.**
-A client sets every parameter but the moving ones with `client.workflow(spec, params)`, and cuts a stage from it with `wf.stage(inputs=..., outputs=...)`.
+A client writes the stage as a template, `Template(spec=..., params=..., blanks=..., outputs=...)`.
+It sets every parameter but the moving ones, which are its blanks.
+`template.cut(blanks=..., outputs=...)` derives another stage over the same spec and values.
 The workflow author cannot make this choice, because no fixed choice serves both "tune one parameter" and "the same settings over many runs".
 The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
 The caller knows which parameter will move, and the first call already builds the stage.
 
-A call of the handle splits its values by name.
-A value for a parameter goes into the request's `params`, and the parameter is named in `vary`.
+`client.run(template, values)` fills the blanks and splits the values by name.
+A value for a parameter goes into the request's `params`, and a blank that is a parameter is named in `vary`.
 A value for an intermediate goes into `supplied`.
-A varied value replaces the value the handle holds for that parameter, if any.
+A value for a parameter that is not a blank replaces the template's value and is not varied, so it changes the workflow ID.
 
 **Each run request names its stage**: the workflow ID of the request, a hash of spec, the parameters not varied, instrument, and proposal; the names of the parameters it varies; the names of the intermediates it supplies; and its outputs.
 `vary` is a hint for the session, like `label`: it does not change the result, and provenance does not rely on it.
 Because `params` holds the defaults filled at submit, a request that omits a default and one that gives it name the same stage.
 The session holds the stage it built under that name, together with the checksums of the datasets that the parameters not varied name, so that a file that changed on disk does not find a stage built from its earlier bytes.
 A later request that names the same stage computes only what lies downstream of the stage's inputs.
-A request without a handle, such as a member that a rule submits, runs the stage it names in the same way.
-Nothing is inferred from earlier requests: a `client.run` varies nothing, so one that differs from the previous one in a single field has another workflow ID and is a plain run.
+`apply` makes a rule's members from the rule's template in the same way ([rules.md](rules.md)).
+Nothing is inferred from earlier requests: a `client.run(spec, params)` varies nothing, so one that differs from the previous one in a single field has another workflow ID and is a plain run.
 
 `ess.apps.stages.Stages` holds stages and accumulators:
 
@@ -113,6 +115,7 @@ The finalize request of a sum over runs supplies an `Accumulate` for an intermed
 The session holds one accumulator per workflow ID and intermediate, with the list of outputs pushed into it so far.
 When a request's list begins with that list, the session pushes only the rest, so adding a third run pushes one value, not three.
 Any other list, such as one in which a corrected member replaces an earlier record, starts a fresh accumulator; nothing is ever taken out.
+Without a session, a finalize reads every output its list names.
 
 ### What this costs
 
@@ -164,9 +167,9 @@ A **label** is a field on a request, and the latest record under a label superse
 [rules.md](rules.md#labels-batches-and-slots) defines labels, which batches and rules use as well.
 For interactive work this means:
 
-- A stage handle carries its label, `wf.stage(..., label='iofq')`, so every call of it lands in the same slot.
+- A template's name is the label of the records made from it, `Template(..., name='iofq')`, so every call of it lands in the same slot.
 - A plot, a record browser, and a replay tool identify a series of reruns by its slot. The slot is the stable identity across superseded records.
-- Comparing two variants side by side is two slots. The second is assigned when the user forks. Discarding a variant drops its label from the UI and changes nothing else.
+- Comparing two variants side by side is two slots. The second is assigned when the user forks, as the same stage under another name, `tune.cut(name='iofq-fine')`. Discarding a variant drops its label from the UI and changes nothing else.
 - Cancelling the queued earlier records of a slot is one client call.
 - Inspection shows the latest record with its difference from the record it superseded: "one value changed" for a slider, "one more member" for a growing sum.
 - The data store evicts outputs of superseded records first.
@@ -256,7 +259,7 @@ A routing miss falls back to the first rung, so the second rung is an addition t
 On the first rung of the stateless model, two [user stories](user-stories.md) fail: tuning a SANS reduction with feedback within a second or two, and tuning vanadium and sample together, where each change to the vanadium runs both parts again.
 
 How a growing series is accumulated does not depend on the model.
-It is a chained finalize in all three ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+It is a finalize over every current member in all three ([aggregation.md](aggregation.md#a-growing-series)).
 
 ### What a rerun costs without held state
 
@@ -344,7 +347,7 @@ Caching every intermediate is not affordable with event data, and the graph does
 ## Costs
 
 - The first call of a stage, and every switch to a stage over another parameter, costs a full computation.
-- A client that wants a stage writes two calls, `client.workflow(...)` and `wf.stage(...)`; `client.run` covers the plain case.
+- A client that wants a stage declares it as a template, with its blanks and outputs, before the first call; `client.run(spec, params)` covers the plain case.
 - Reuse is exact only if providers are pure. The test helper is the check.
 - A series of N slider moves is N records. Slots keep that from being what a person sees, and superseded outputs are evicted first.
 - A local application in one process shares the interpreter between UI and runs. A long run blocks the UI until sessions can run in another process.

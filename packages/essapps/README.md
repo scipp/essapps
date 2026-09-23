@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ess.apps.client import local
 from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
-from ess.apps.records import Accumulate
+from ess.apps.records import Accumulate, Template
 from ess.apps.sources import FolderSource
 from ess.apps.spec import OutputRef, dataset_ref
 
@@ -40,14 +40,14 @@ assert run in [candidate.ref for candidate in client.pick()]
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
 
-# Interactive reruns of a sciline pipeline: client.workflow sets every parameter
-# but 'bins', and the stage over 'bins' is the part of the pipeline a rerun needs.
-# The session holds it from the first call, so the second comes out of it.
-# Both carry the label 'hist', the slot the plot owns, so the second supersedes
-# the first.
-hist = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'], label='hist')
-first = hist.compute({'bins': 2})
-second = hist.compute({'bins': 8})
+# Interactive reruns of a sciline pipeline: the template sets every parameter
+# but 'bins', its blank, and names the stage over 'bins', the part of the
+# pipeline a rerun needs. The session holds it from the first call, so the
+# second comes out of it. Both carry the template's name 'hist' as their label,
+# the slot the plot owns, so the second supersedes the first.
+hist = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',), name='hist')
+first = client.run(hist, {'bins': 2})
+second = client.run(hist, {'bins': 8})
 assert second.reused and client.latest('hist').id == second.id
 client.view(second.ref('histogram'))  # plain numpy arrays
 
@@ -59,17 +59,17 @@ group = client.submit_group({
 })
 client.output(group['sum'], 'total')
 
-# A sum over runs, cut from one client.workflow without 'run'. NORMALIZE
-# exposes the numerator and denominator as intermediates: a member stage per run
-# computes them, and a finalize stage normalises their accumulation. The binding
+# A sum over runs, cut from one template without 'run'. NORMALIZE exposes the
+# numerator and denominator as intermediates: a member stage per run computes
+# them, and a finalize stage normalises their accumulation. The binding
 # accumulates; the framework never adds.
-wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})
-member = wf.stage(inputs=['run'], outputs=['numerator', 'denominator'])
-finalize = wf.stage(inputs=['numerator', 'denominator'], outputs=['normalized'])
+normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})
+member = normalize.cut(blanks=('run',), outputs=('numerator', 'denominator'))
+finalize = normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',))
 members = [
-    member.compute({'run': dataset_ref(instrument='dream', run=n)}) for n in (1, 2)
+    client.run(member, {'run': dataset_ref(instrument='dream', run=n)}) for n in (1, 2)
 ]
-total = finalize.compute({
+total = client.run(finalize, {
     name: Accumulate(accumulate=[m.ref(name) for m in members])
     for name in ('numerator', 'denominator')
 })
@@ -122,7 +122,8 @@ essapps publish <record> data --via fake --allow-reused   # prints the PID; allo
 | a sciline pipeline as a callable and as a stage | `adapter.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#the-sciline-adapter) |
 | how a session holds stages | `stages.py`, `tests/stages_test.py` | [stages.md](../../docs/developer/stages.md) |
 | a sum over runs: member and finalize stages, accumulators | `examples.py`, `batch.py` | [aggregation.md](../../docs/developer/aggregation.md) |
-| templates, lookups, rules | `rules.py` | [rules.md](../../docs/developer/rules.md) |
+| templates | `records.py` | [rules.md](../../docs/developer/rules.md#templates-and-lookups), [stages.md](../../docs/developer/stages.md#who-names-the-stage) |
+| lookups, rules | `rules.py` | [rules.md](../../docs/developer/rules.md) |
 | `apply`, backlog, reprocess, retry, the trigger loop, the batch table | `batch.py`, `tests/batch_test.py` | [rules.md](../../docs/developer/rules.md) |
 | both execution shapes, the data store | `launcher.py`, `runner.py`, `datastore.py` | [records.md](../../docs/developer/records.md#where-runs-execute-and-where-data-lives) |
 | test helpers for workflow packages | `testing.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#test-helpers) |

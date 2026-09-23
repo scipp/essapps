@@ -20,7 +20,7 @@ The recommendation in brackets is mine.
 - **Measurements the decision needs.**
   The feedback loop of a throwaway process in three configurations: cold, with a pool of idle runners that have their imports done, and with a runner that already holds the intermediate in memory.
   The three numbers separate the cost of process start, of the disk read, and of the computation.
-  Also one read and one write of a 4D intermediate of several gigabytes per arrival, which decides when a series needs the [fold](aggregation.md#the-fold).
+  Also the read of a 4D intermediate of several gigabytes, which a finalize makes once per member on every arrival, and which decides when a series needs a cache of earlier finalizes or the [fold](aggregation.md#the-fold).
   [Measure before remote interactive work is designed.]
 - **Retention policy for disk copies in shared mode.**
   How long each kind of run's outputs is kept, and the analysis window after which a proposal's records are dropped together.
@@ -38,22 +38,15 @@ The recommendation in brackets is mine.
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
 - **Per-dataset lookup fills in a series.**
-  `apply` has each member vary only the template's blanks, so members that a lookup fills differently are not accumulated together.
+  `apply` has each member vary only the template's blanks, and a finalize has the template's values, so a member that a lookup fills beyond the blanks is not accumulated.
   The alternative is to have members vary such fields as well, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
 - **Validation of a request that supplies an intermediate.**
   Such a request that leaves a needed parameter unset fails when it runs; a request that supplies no intermediate is checked against the whole parameter model at submit.
   Whether a GUI can learn this before submitting is open: in local mode the backend imports the registry and could ask the workflow, in shared mode it does not.
-- **Chaining on disk.**
-  The skeleton writes the chain into the finalize request: its `Accumulate` lists the previous finalize and the members it does not cover.
-  The alternative is for a runner without a session to find the previous finalize itself, a cache lookup invisible in the request, so that every request lists all members.
-- **A rule over a combination that is not associative.**
-  `Series` names the intermediates to accumulate and the outputs of a finalize with the members' own parameters.
+- **A rule over a combination that is not an accumulation.**
+  `Series` names the intermediates to accumulate and the outputs of a finalize with the template's values.
   A stitch over angles is a separate spec over a list of references to the members' outputs, and a rule has no field that names it.
   A second template on the series, or a second rule whose candidates are the completed member records of the first, would each express it.
-- **An aggregation helper on the client.**
-  `wf.aggregation(members=..., accumulate=..., outputs=...)` could write the member and finalize stages for a notebook.
-  It adds no concept.
-  [Not until something needs it.]
 - **Where the workflow contract lives once it is stable.**
   `Inputs`, `Workflow`, `StageCall`, `FunctionWorkflow`, and `resolve` are in `ess.apps.binding`, and the sciline adapter is in `ess.apps.adapter`.
   Workflow packages must not depend on the framework in order to publish a workflow.
@@ -101,7 +94,7 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 
 See [aggregation.md](aggregation.md).
 
-- **A combination that is not associative has no consistency check over its members.**
+- **A combination that is not an accumulation has no consistency check over its members.**
   The members of an accumulation agree with the finalize on every parameter both set, which the backend checks.
   A stitch takes references to run records of another spec, which the check does not cover, so a stitch over curves reduced with different detector limits passes silently.
 
@@ -146,7 +139,8 @@ It does not contain:
   This is the next implementation worth building, as a second implementation of the same data-store interface, with the test that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 - A SciCat dataset source.
   The folder source and the in-memory fake are the only implementations, which keeps the tests off SciCat.
-- A rule over a combination that is not associative, and a series over two member tables.
+- A rule over a combination that is not an accumulation, and a series over two member tables.
+- A cache in a runner that keeps the accumulated value of an earlier finalize and reads only the members a later finalize adds, under the prefix rule of a session's held accumulator.
 - The fold: a long-lived runner that holds the accumulators of one series, accumulates in memory, and writes a finalize run record every few arrivals.
   It is not needed until a series arrives faster than its accumulated values can be read and written.
 - The `paused` status and the runner liveness timeout described in [operations.md](operations.md#failure-handling).

@@ -205,7 +205,7 @@ class Backend(Protocol):
         ...
 
     def provenance(self, record_id: str) -> dict[str, Any]:
-        """A self-contained snapshot: raw origins, resolved params, spec, versions."""
+        """A self-contained snapshot: raw origins, params, spec, versions."""
         ...
 
 
@@ -280,12 +280,14 @@ class LocalBackend:
         """
         Three layers: shape and spec, the values, runnability.
 
-        The request is checked as it would be recorded, the spec's defaults
-        filled. A request that supplies no intermediate is checked against the
-        whole params model, so a missing parameter is refused here. Whether a
-        request that supplies an intermediate has what its outputs need is known
-        only to the workflow code, so such a request that leaves a needed
-        parameter unset fails when it runs.
+        The request is checked as it would be recorded: the spec's defaults
+        filled, and once its values validate, each in the form the params
+        model gives it, so that the agreement check compares like with like. A
+        request that supplies no intermediate is checked against the whole
+        params model, so a missing parameter is refused here. Whether a
+        request that supplies an intermediate has what its outputs need is
+        known only to the workflow code, so such a request that leaves a
+        needed parameter unset fails when it runs.
         """
         if request.spec not in self.registry:
             return ValidationReport(
@@ -296,6 +298,7 @@ class LocalBackend:
         errors = _shape_errors(spec, request)
         if errors:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
+        request = self._as_recorded(request)
         params = data_fields(spec.params)
         intermediates = data_fields(spec.outputs)
         for path, ref in walk_refs(request.params):
@@ -353,7 +356,10 @@ class LocalBackend:
                 return [f'{ref}: no group member named {name!r}']
             producer_request = group[name]
             if producer_request.spec in self.registry:
-                producer_request = self._with_defaults(producer_request)
+                try:
+                    producer_request = self._as_recorded(producer_request)
+                except ValidationError:  # its own report refuses the group
+                    producer_request = self._with_defaults(producer_request)
         else:
             if ref.record not in self.record_store:
                 return [f'{ref}: no such record']
@@ -441,12 +447,30 @@ class LocalBackend:
         A request without outputs asks for the spec's results, and its record
         names them, so that what a record computed never depends on the spec.
         """
-        request = self._with_defaults(request)
+        request = self._as_recorded(request)
         return request.model_copy(
             update={
                 'params': _rewrite(request.params, named),
                 'supplied': _rewrite(request.supplied, named),
                 'outputs': request.outputs or self.registry.spec(request.spec).results,
+            }
+        )
+
+    def _as_recorded(self, request: RunRequest) -> RunRequest:
+        """
+        The request with defaults filled and every value in the form the params
+        model gives it, so that ``0`` and ``0.0`` given for one float field are
+        one value and one workflow ID. Raises for a request whose values do not
+        validate.
+        """
+        request = self._with_defaults(request)
+        params = self.registry.spec(request.spec).params
+        model = (
+            submodel(params, request.params, 'Given') if request.supplied else params
+        )
+        return request.model_copy(
+            update={
+                'params': model.model_validate(request.params).model_dump(mode='json')
             }
         )
 
@@ -506,7 +530,7 @@ class LocalBackend:
         if not report.ok:
             raise SubmitError({record_id: report})
         new = RunRecord(
-            request=self._with_defaults(old.request),
+            request=self._as_recorded(old.request),
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
         )
@@ -746,15 +770,20 @@ class LocalBackend:
     # Publication
 
     def provenance(self, record_id: str) -> dict[str, Any]:
-        """A self-contained snapshot: raw origins, resolved params, spec, versions."""
+        """
+        A self-contained snapshot: raw origins, params, spec, versions.
+
+        Params keep their reference form; the value a literal output fed into
+        a parameter is under ``literals`` of the input record it came from.
+        """
         record = self.record_store.get(record_id)
         return {
             'record': record.id,
             'spec': str(record.spec),
-            'workflow': record.request.workflow_id,
             'supplied': sorted(record.request.supplied),
             'outputs': list(record.request.outputs),
-            'params': record.resolved_params,
+            'params': record.request.params,
+            'literals': record.outputs,
             'package_versions': record.package_versions,
             'environment': record.environment,
             'binding': record.binding,
@@ -763,7 +792,10 @@ class LocalBackend:
                 for d in record.request.datasets()
             ],
             'checksums': record.checksums,
-            'inputs': [self.provenance(r.record) for r in record.request.refs()],
+            'inputs': [
+                self.provenance(r)
+                for r in dict.fromkeys(ref.record for ref in record.request.refs())
+            ],
         }
 
     def publish(

@@ -17,7 +17,7 @@ pytest.importorskip('ess.amor')
 
 from ess.apps import amor
 from ess.apps.client import Client, local
-from ess.apps.records import RunRecord
+from ess.apps.records import RunRecord, Template
 from ess.apps.sources import FolderSource
 from ess.apps.spec import dataset_ref
 
@@ -84,12 +84,13 @@ def members(client: Client, **overrides: Any) -> dict[int, RunRecord]:
     """
     params = reflectivity_params(SAMPLE_RUNS[0], **overrides)
     del params['sample_run']
-    stage = client.workflow(amor.REFLECTIVITY, params).stage(
-        inputs=['sample_run'], label=LABEL
+    stage = Template(
+        spec=amor.REFLECTIVITY, params=params, blanks=('sample_run',), name=LABEL
     )
     records = {}
     for run in SAMPLE_RUNS:
-        record = stage.compute(
+        record = client.run(
+            stage,
             {'sample_run': dataset_ref(instrument='amor', run=run)},
             member_key=str(run),
         )
@@ -192,7 +193,6 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
     # workflow ID of its own, so no held stage fits it.
     assert rescaled.supersedes == curves[608].id
     assert not rescaled.reused
-    assert rescaled.resolved_params['scale_factor'] == factor
     expected = client.output(combined, 'scaled', key='608')
     assert client.output(rescaled, 'reflectivity').sum().value == pytest.approx(
         expected.sum().value
@@ -204,9 +204,11 @@ def test_a_stage_over_the_bin_count_is_served_after_its_first_call(
 ) -> None:
     params = reflectivity_params(SAMPLE_RUNS[0])
     del params['q_num_bins']
-    rebin = client.workflow(amor.REFLECTIVITY, params).stage(
-        inputs=['q_num_bins'], label='rebin'
+    rebin = Template(
+        spec=amor.REFLECTIVITY, params=params, blanks=('q_num_bins',), name='rebin'
     )
-    first, second, third = (rebin.compute({'q_num_bins': n}) for n in (200, 100, 50))
+    first, second, third = (
+        client.run(rebin, {'q_num_bins': n}) for n in (200, 100, 50)
+    )
     assert [r.reused for r in (first, second, third)] == [False, True, True]
     assert client.output(third, 'reflectivity').sizes == {'Q': 50}

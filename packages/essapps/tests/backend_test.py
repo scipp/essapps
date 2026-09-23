@@ -24,7 +24,7 @@ from ess.apps.examples import (
     registry,
     write_run,
 )
-from ess.apps.records import Status
+from ess.apps.records import RunRequest, Status, Template
 from ess.apps.sources import Dataset, FolderSource
 from ess.apps.spec import (
     DatasetRef,
@@ -69,26 +69,38 @@ def test_a_default_given_or_omitted_names_one_workflow_and_shares_its_stage(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
-    omitted = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'])
-    given = client.workflow(HISTOGRAM, {'data': data, 'threshold': 0.0}).stage(
-        inputs=['bins']
+    omitted = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',))
+    given = Template(
+        spec=HISTOGRAM, params={'data': data, 'threshold': 0.0}, blanks=('bins',)
     )
-    first = omitted.compute({'bins': 2})
-    second = given.compute({'bins': 3})
+    first = client.run(omitted, {'bins': 2})
+    second = client.run(given, {'bins': 3})
     assert first.request.workflow_id == second.request.workflow_id
     assert second.reused
+
+
+def test_a_value_is_recorded_in_the_form_its_field_gives_it(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    """``1`` given for a float field is ``1.0``: one value and one workflow."""
+    records = [
+        client.run(LOAD, {'run': run_ref, 'scale': 1}),
+        client.run(LOAD, {'run': run_ref, 'scale': 1.0}),
+        client.run(LOAD, {'run': run_ref}),
+    ]
+    assert all(type(r.request.params['scale']) is float for r in records)
+    assert len({r.request.workflow_id for r in records}) == 1
 
 
 def test_a_varied_parameter_is_recorded_in_params_and_named_in_vary(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    stage = client.workflow(LOAD, {'run': run_ref}).stage(inputs=['scale'])
-    record = stage.compute({'scale': 2.0})
+    stage = Template(spec=LOAD, params={'run': run_ref}, blanks=('scale',))
+    record = client.run(stage, {'scale': 2.0})
     assert record.status == Status.COMPLETED, record.failure
     assert record.request.params['scale'] == 2.0
     assert record.request.vary == ('scale',)
     assert record.request.supplied == {}
-    assert record.resolved_params['scale'] == 2.0
 
 
 def test_a_plain_run_records_what_it_would_without_vary_and_supplied(
@@ -142,8 +154,8 @@ def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
     fresh = client.run(LOAD, {'run': run_ref})
     client.close()
     assert again.request == record.request
-    assert again.resolved_params['scale'] == 1.0
-    assert fresh.resolved_params['scale'] == 5.0
+    assert again.request.params['scale'] == 1.0
+    assert fresh.request.params['scale'] == 5.0
 
 
 def test_equal_workflow_values_name_one_workflow(
@@ -155,10 +167,10 @@ def test_equal_workflow_values_name_one_workflow(
     assert first.id != second.id
     assert first.request.workflow_id == second.request.workflow_id
     assert other.request.workflow_id != first.request.workflow_id
-    changed = client.workflow(LOAD, {'scale': 2.0}).with_params(run=run_ref)
-    assert client.submit(changed.request()).request.workflow_id == (
-        first.request.workflow_id
+    from_template = client.run(
+        Template(spec=LOAD, params={'scale': 2.0}), {'run': run_ref}
     )
+    assert from_template.request.workflow_id == first.request.workflow_id
 
 
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
@@ -169,10 +181,9 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert as_ref(record.request.params['run']) == run_ref
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
-    assert record.resolved_params['run'] == {'dataset': 'run:dream/1'}
+    assert record.request.params['run'] == {'dataset': 'run:dream/1'}
     provenance = client.provenance(record)
     assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
-    assert provenance['workflow'] == record.request.workflow_id
     assert provenance['supplied'] == []
     assert provenance['outputs'] == ['data', 'total']
 
@@ -180,8 +191,8 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
 def test_a_dataset_in_a_varied_parameter_is_checksummed(
     client: Client, run_ref: DatasetRef, run_file: Path
 ) -> None:
-    load = client.workflow(LOAD, {'scale': 2.0}).stage(inputs=['run'])
-    record = load.compute({'run': run_ref})
+    load = Template(spec=LOAD, params={'scale': 2.0}, blanks=('run',))
+    record = client.run(load, {'run': run_ref})
     assert record.status == Status.COMPLETED, record.failure
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
@@ -267,7 +278,7 @@ def test_run_completes_with_inline_and_stored_outputs(
     assert record.status == Status.COMPLETED
     assert record.outputs == {'total': {'value': 72.0, 'unit': 'counts'}}
     assert record.stored_outputs == [record.ref('data')]
-    assert record.resolved_params['scale'] == 2.0
+    assert record.request.params['scale'] == 2.0
     assert record.binding == 'in_process'
     assert 'essapps' in record.package_versions
     assert client.output(record, 'data').sum().value == 72.0
@@ -308,20 +319,28 @@ def test_chaining_through_memory_and_literal_outputs(
         'output': 'total',
         'key': None,
     }
-    assert rebinned.resolved_params['offset'] == {'value': 36.0, 'unit': 'counts'}
-    assert client.output(rebinned).sizes == {'x': 2}
+    rebinned_data = client.output(rebinned)
+    assert rebinned_data.sizes == {'x': 2}
+    # The total, 36 counts, is added to each of the 8 points before binning.
+    assert rebinned_data.sum().value == 36.0 + 8 * 36.0
     assert client.backend.record_store.referencing(loaded.id, 'data') == [rebinned.id]
+    # The snapshot keeps the reference and carries the value it fed from the
+    # snapshot of the record it came from.
+    snapshot = client.provenance(rebinned)
+    assert snapshot['params']['offset']['record'] == loaded.id
+    (upstream,) = snapshot['inputs']
+    assert upstream['literals']['total'] == {'value': 36.0, 'unit': 'counts'}
 
 
 def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
-    tune = client.workflow(HISTOGRAM, {'data': data}).stage(
-        inputs=['bins'], label='tune'
+    tune = Template(
+        spec=HISTOGRAM, params={'data': data}, blanks=('bins',), name='tune'
     )
-    first = tune.compute({'bins': 2})
-    second = tune.compute({'bins': 3})
+    first = client.run(tune, {'bins': 2})
+    second = client.run(tune, {'bins': 3})
     assert not first.reused
     assert second.reused
     assert first.request.params['bins'] == 2
@@ -415,8 +434,15 @@ def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> No
 def test_validation_checks_the_names_of_a_request(
     client: Client, run_ref: DatasetRef, params, supplied, vary, outputs, message
 ) -> None:
-    request = client.workflow(LOAD, {'run': run_ref, **params}).request(
-        supplied=supplied, vary=vary, outputs=outputs
+    request = RunRequest(
+        spec=LOAD.id,
+        params={'run': run_ref, **params},
+        supplied=supplied,
+        vary=vary,
+        outputs=outputs,
+        instrument=client.instrument,
+        proposal=client.proposal,
+        submitter=client.submitter,
     )
     report = client.validate(request)
     assert any(message in e for e in report.errors), report.errors
@@ -603,7 +629,8 @@ def test_element_of_a_literal_collection_output_is_inlined(
         {'data': loaded.ref('data'), 'offset': summed.ref('totals', 'x')},
     )
     assert rebinned.status == Status.COMPLETED, rebinned.failure
-    assert rebinned.resolved_params['offset'] == {'value': 72.0, 'unit': 'counts'}
+    # The element of the collection, 72 counts, is added to each of the 8 points.
+    assert client.output(rebinned).sum().value == 36.0 + 8 * 72.0
 
 
 def test_cyclic_group_is_refused(client: Client) -> None:

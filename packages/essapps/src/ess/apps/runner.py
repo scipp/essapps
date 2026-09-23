@@ -104,22 +104,6 @@ def file_checksum(path: Path) -> str:
         return hashlib.file_digest(file, 'sha256').hexdigest()
 
 
-def _resolved(value: Any) -> Any:
-    """
-    The JSON form of the parameters, references reduced to what identifies them.
-
-    A dataset reference dumps every identity field, all but one of them empty;
-    the record shows the identity the request gave, as provenance does.
-    """
-    if isinstance(value, dict):
-        if as_ref(value) is not None:
-            return {k: v for k, v in value.items() if v is not None}
-        return {k: _resolved(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_resolved(v) for v in value]
-    return value
-
-
 def _elements(value: Any) -> list[Any]:
     """What an output field holds: one value, or the elements of a collection."""
     if isinstance(value, dict):
@@ -210,8 +194,8 @@ class Runner:
         A dataset is the only input whose bytes the framework did not write, so a
         recompute can only tell whether it read the same bytes if we take these.
         The key is the reference rather than a parameter path, because a dataset
-        two parameters name is one file; which parameter read it is in
-        ``resolved_params``.
+        two parameters name is one file; which parameter read it is in the
+        request.
         """
         checksums = {}
         for ref in dataset_refs(values):
@@ -268,9 +252,6 @@ class Runner:
             ).model_validate(fixed_values)
             varied = submodel(spec.params, job.vary, 'Varied').model_validate(
                 {name: job.params[name] for name in job.vary}
-            )
-            result.resolved_params = _resolved(
-                fixed.model_dump(mode='json') | varied.model_dump(mode='json')
             )
             result.checksums = self._checksums({**job.params, **job.supplied}, inputs)
             workflow = self._workflow(spec, binding.factory)

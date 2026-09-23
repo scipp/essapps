@@ -12,16 +12,19 @@ client = local(root, instrument='dream', proposal='p1', submitter='me')
 loaded = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=1)})
 hist = client.run(HISTOGRAM, {'data': loaded.ref('data'), 'bins': 8})
 
-wf = client.workflow(HISTOGRAM, {'data': loaded.ref('data')})     # 'bins' left unset
-tune = wf.stage(inputs=['bins'], outputs=['histogram'], label='hist')
-tune.compute({'bins': 16})
+tune = Template(spec=HISTOGRAM, params={'data': loaded.ref('data')},   # 'bins' left unset
+                blanks=('bins',), outputs=('histogram',), name='hist')
+client.run(tune, {'bins': 16})
 ```
 
 A **run record** is one run of a spec with every parameter value set, like `compute` on a configured `sciline.Pipeline`.
 A call of a stage, like one `sciline.Stage.compute`, is one run record too: the parameter values the call takes are in `params`, and the intermediates it takes are in `supplied`.
-`client.workflow(spec, params)` holds a spec and the values given on the client side only, like `functools.partial`, and makes run requests; nothing of it is stored beyond the requests.
-A value that `stage.compute` gives for a parameter replaces the value the workflow handle holds.
-`client.run` is shorthand for one run record that varies nothing and supplies nothing.
+A **template** names the stage: the spec, the values set, the blanks each request fills, and the outputs to compute.
+It is plain data.
+`client.run(template, values)` fills its blanks and submits one run request, and a value for a parameter that is not a blank replaces the template's value.
+A template a client cuts for a slider lives on the client, and every request made from it carries its values, so nothing else of it is stored.
+The templates of batches and rules are stored ([rules.md](rules.md#templates-and-lookups)).
+`client.run(spec, params)` is shorthand for one run record that varies nothing and supplies nothing: a spec stands for a template with nothing set and no blanks.
 
 A **run request** is everything needed to run a workflow once, and its values alone reproduce the outputs.
 It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
@@ -32,10 +35,10 @@ The only path it may name is the identity of a local file that carries no run id
 | Field | Purpose |
 |---|---|
 | `spec` | name and version of the workflow interface |
-| `params` | every parameter value, varied ones included, with data fields holding references; the backend fills the spec's defaults at submit |
+| `params` | every parameter value, varied ones included, with data fields holding references; recorded with the spec's defaults filled and in the form the params model gives each value |
 | `supplied` | intermediates the spec exposes, by name, each supplied in place of what computes it |
 | `outputs` | the outputs to compute; empty means the spec's results, and the record lists them explicitly |
-| `vary` | names of the parameters a caller varies from run to run |
+| `vary` | names of the parameters a caller varies from run to run: the blanks of its template that are parameters |
 | `instrument`, `proposal` | the scope, both mandatory |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
@@ -60,7 +63,6 @@ A **run record** is the run request plus what happened to it.
 | `id` | UUID, so records move between stores without renumbering |
 | `status` | submitted, waiting, dispatched, running, completed, failed, or cancelled |
 | `created`, `started`, `finished` | timestamps |
-| `resolved_params` | parameter values after the spec's defaults were applied |
 | `outputs`, `stored_outputs` | small values in the record, references to outputs whose bytes the data store holds |
 | `package_versions`, `environment`, `binding` | what the run was computed with, and how the spec was bound to code |
 | `reused` | whether the result came out of a stage the session already held |
@@ -73,9 +75,10 @@ A **run record** is the run request plus what happened to it.
 Which of the two output fields a value lands in is decided by its type and is invisible to clients.
 A run record is immutable once the run completes, except for its status and the publication state of its outputs.
 
-**Defaults are filled at submit.**
-When the backend accepts a request, submitted or re-submitted by a recompute or retry, it adds to `params` the spec's default for every parameter that has one and is not given.
-A plain run therefore records the whole params model.
+**Defaults are filled at submit, and every value is recorded in the form the params model gives it.**
+When the backend accepts a request, submitted or re-submitted by a recompute or retry, it adds to `params` the spec's default for every parameter that has one and is not given, and passes `params` through the params model.
+A plain run therefore records the whole params model, and `0` and `0.0` given for one float field are one recorded value and one workflow ID.
+The request's `params` is what the run read, so the record keeps no second copy of the parameters.
 Only a required parameter without a default may stay unset, and only when the request supplies an intermediate in place of what needs it.
 A recompute runs with the recorded values, so a spec whose default changed since does not change what the record means.
 
@@ -86,7 +89,7 @@ It is derived from the request, never stored as a record of its own; a session n
 To recompute a run record, the runner sets the parameters outside `vary` on the pipeline, builds the stage from the varied names, the supplied names, and the outputs, and calls it with the varied values and the resolved supplied intermediates.
 How the runner cuts the pipeline does not change the result, which is why `vary` is not provenance.
 
-**Resolved values, package versions, and the environment are what make "recompute this record" true.**
+**Recorded parameter values, package versions, and the environment are what make "recompute this record" true.**
 Without them a changed default or an upgraded package silently changes what a record means.
 The environment is an opaque name and revision, at ESS a conda environment, which the framework records and compares and does no more with.
 A recompute is exact only in that environment, and refuses to run elsewhere unless the client overrides.
@@ -136,7 +139,8 @@ Only an output reference can be pending, so the scheduler has one kind of depend
 
 **Provenance is the graph obtained by following references backwards**, from a result to the parameters, datasets, and software versions of every run that contributed.
 A run record's `params` and `supplied` may hold references to outputs of other run records.
-`Backend.provenance` walks it into a self-contained snapshot, which names the workflow ID, the supplied intermediates, and the outputs of every run record on the way.
+`Backend.provenance` walks it into a self-contained snapshot, which names the parameters, the supplied intermediates, the outputs, and the values of the literal outputs of every run record on the way.
+It leaves out the workflow ID, which depends on what a caller varied and so on a caching choice.
 There is no separate provenance model and no "which record produced this" query, because the reference names the record.
 
 ## Datasets
@@ -254,16 +258,16 @@ A value inside a pipeline becomes such an output when the spec exposes it as an 
 Reuse therefore does not force a cut into separate specs, and separate pipelines remain separate specs.
 
 ```python
-wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db})
-det = wf.stage(outputs=['detector_image']).compute()         # an intermediate as output
+sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db})
+det = client.run(sans.cut(outputs=('detector_image',)))          # an intermediate as output
 centre = client.run(PICK_CENTRE, {'image': det.ref('detector_image')})
 
-reduce = wf.stage(inputs=['beam_centre', 'q_bins'], outputs=['iofq'])
-reduce.compute({'beam_centre': centre.ref('centre'), 'q_bins': 100})
+reduce = sans.cut(blanks=('beam_centre', 'q_bins'), outputs=('iofq',))
+client.run(reduce, {'beam_centre': centre.ref('centre'), 'q_bins': 100})
 ```
 
-The run record of `reduce` says that `beam_centre` was supplied, and from which run record.
-The parameters of the beam-centre finder that `wf` also holds did not affect this result, and the record does not claim they did: it says "this pipeline, with `beam_centre` supplied".
+The run record made from `reduce` says that `beam_centre` was supplied, and from which run record.
+The parameters of the beam-centre finder that `sans` also sets did not affect this result, and the record does not claim they did: it says "this pipeline, with `beam_centre` supplied".
 
 Three reasons make a value an output of a run record.
 
@@ -277,7 +281,7 @@ Inside a session this reason disappears, because a held stage recomputes only wh
 Aggregation: each member of a sum over runs is a run record whose outputs are the intermediates that add ([aggregation.md](aggregation.md)).
 
 Storing an intermediate is the only strategy that works on a fire-and-forget remote runner.
-The author decides which values are exposed; the caller decides which stages to cut at them.
+The author decides which values are exposed; the caller decides which templates to cut at them.
 
 ## The record store
 

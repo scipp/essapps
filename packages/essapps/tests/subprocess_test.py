@@ -145,7 +145,8 @@ def test_persisted_request_keeps_reference_form(
         'output': 'total',
         'key': None,
     }
-    assert done.resolved_params['offset'] == {'value': 10.0, 'unit': 'counts'}
+    # The runner is given the total, 10 counts, added to each of the 4 points.
+    assert client.output(done).sum().value == 10.0 + 4 * 10.0
     assert client.provenance(done)['inputs'][0]['spec'] == 'load/v1'
 
 

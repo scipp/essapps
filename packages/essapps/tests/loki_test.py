@@ -19,6 +19,7 @@ from ess.reduce.spec.parameters import QEdges, WavelengthEdges
 
 from ess.apps import loki
 from ess.apps.client import Client, local
+from ess.apps.records import Template
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
 
@@ -76,9 +77,9 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert center.failure is None, center.failure
     assert center.outputs['center']['unit'] == 'm'
 
-    wf = client.workflow(loki.IOFQ, refs | {'beam_center': center.ref()})
-    rebin = wf.stage(inputs=['q'], label='iofq')
-    first = rebin.compute({'q': q_edges(100)})
+    params = refs | {'beam_center': center.ref()}
+    rebin = Template(spec=loki.IOFQ, params=params, blanks=('q',), name='iofq')
+    first = client.run(rebin, {'q': q_edges(100)})
     assert first.failure is None, first.failure
     assert client.output(first, 'iofq').sizes == {'Q': 100}
     # 60392 is both the background transmission and the empty beam: one file.
@@ -86,17 +87,18 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
 
     # A rebinning under the same label: a new record that supersedes the first,
     # served from the stage the first call built.
-    second = rebin.compute({'q': q_edges(50)})
+    second = client.run(rebin, {'q': q_edges(50)})
     assert second.reused
     assert client.output(second, 'iofq').sizes == {'Q': 50}
     assert client.latest('iofq').id == second.id
     assert [r.id for r in client.records(label='iofq')] == [first.id, second.id]
 
     # Another wavelength binning is another workflow ID, whose stage is not held.
-    rewavelength = wf.with_params(
-        wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100)
-    ).stage(inputs=['q'])
-    assert not rewavelength.compute({'q': q_edges(50)}).reused
+    wavelength = WavelengthEdges(start=1.0, stop=13.0, num_bins=100)
+    rewavelength = Template(
+        spec=loki.IOFQ, params=params | {'wavelength': wavelength}, blanks=('q',)
+    )
+    assert not client.run(rewavelength, {'q': q_edges(50)}).reused
 
     provenance = client.provenance(second)
     (upstream,) = provenance['inputs']

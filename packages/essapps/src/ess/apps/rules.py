@@ -3,10 +3,11 @@
 """
 Rules: the stored data requests are made from.
 
-A rule is to a batch what a template is to a request. A template is a stored,
-immutable, versioned partial request; a lookup is an ordered table beside it
-that supplies fills per dataset; a rule is a template with a lookup and a
-selector, and says which datasets it applies to.
+A rule is to a batch what a template is to a request. A template
+(:class:`ess.apps.records.Template`) is a partial request, stored and
+versioned here; a lookup is an ordered table beside it that supplies fills
+per dataset; a rule is a template with a lookup and a selector, and says
+which datasets it applies to.
 
 All of it is versioned by copy, and the records say which version made them.
 The exceptions are a rule's exclusions and its active flag, which are mutable
@@ -25,9 +26,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .records import Plain, RunRequest
+from .records import Plain, Template
 from .sources import Dataset
-from .spec import SpecId, WorkflowSpec, data_fields
 
 
 class Criterion(BaseModel, frozen=True):
@@ -82,72 +82,6 @@ def matches(criteria: Criteria, dataset: Dataset) -> bool:
         name in fields and criterion.matches(fields[name])
         for name, criterion in criteria.items()
     )
-
-
-class Template(BaseModel, frozen=True):
-    """
-    A stored, immutable, versioned partial request.
-
-    ``params`` holds the plain JSON form a request's params have, whatever
-    objects the author passed, so a template read back from storage equals the
-    one that was stored. ``blanks`` are the fields a use must supply;
-    ``dataset_field`` is the one a dataset fills when a rule or
-    :func:`ess.apps.batch.apply` supplies one, which is the sole blank unless a
-    template has several.
-    """
-
-    name: str
-    version: int = 1
-    spec: SpecId
-    params: dict[str, Plain] = Field(default_factory=dict)
-    blanks: tuple[str, ...] = ()
-    dataset_field: str | None = None
-    derived_from: str | None = None
-
-    @classmethod
-    def from_request(
-        cls,
-        name: str,
-        request: RunRequest,
-        spec: WorkflowSpec,
-        blank: Iterable[str] = (),
-    ) -> Template:
-        """Save a request as a template with its data-reference fields blank."""
-        blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
-        params = {k: v for k, v in request.params.items() if k not in blanks}
-        return cls(name=name, spec=request.spec, params=params, blanks=blanks)
-
-    @property
-    def id(self) -> str:
-        return f'{self.name}/v{self.version}'
-
-    def revise(self, **changes: Any) -> Template:
-        """A new version by copy; the old one stays."""
-        return Template(
-            **dict(self)
-            | {
-                'version': self.version + 1,
-                'params': self.params | changes,
-                'derived_from': self.id,
-            }
-        )
-
-    def fill(self, **values: Any) -> dict[str, Any]:
-        missing = set(self.blanks) - values.keys()
-        if missing:
-            raise ValueError(f'template {self.name} needs {sorted(missing)}')
-        return self.params | values
-
-    def field_for_dataset(self) -> str:
-        """The blank a dataset fills."""
-        if self.dataset_field is not None:
-            return self.dataset_field
-        if len(self.blanks) == 1:
-            return self.blanks[0]
-        raise ValueError(
-            f'template {self.name} has blanks {list(self.blanks)}; name the one a '
-            'dataset fills in dataset_field'
-        )
 
 
 class AsOf(BaseModel, frozen=True):
@@ -287,10 +221,9 @@ class Series(BaseModel, frozen=True):
     the member key of the series' finalize records. Each member is the stage
     from the template's blanks to the intermediates named in ``accumulate``;
     each arrival adds a finalize, the stage from their accumulation to
-    ``outputs``, with the parameters of the arriving member, on which every
-    member it accumulates must agree. A finalize also outputs the accumulated
-    values, so that the next one can accumulate onto them instead of reading
-    every member again, which is valid because every accumulator is associative.
+    ``outputs``, with the template's values, on which every member it
+    accumulates must agree. Every finalize lists every current member of the
+    series, so the sum a record stands for is read off its request alone.
 
     A combination that is not an accumulation, such as a stitch over angles,
     is a spec of its own over a list of references and not a series.

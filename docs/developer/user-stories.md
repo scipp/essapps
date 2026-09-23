@@ -88,7 +88,7 @@ Actor: user in a notebook.
 Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
 Outcome: fits.
-The client names a stage whose inputs are the fields a person changes, and the session holds it, so only the post-processing runs again ([stages.md](stages.md#who-names-the-stage)); and saving a request as a template blanks the data-reference fields and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
+The client names a stage as a template whose blanks are the fields a person changes, and the session holds it, so only the post-processing runs again ([stages.md](stages.md#who-names-the-stage)); and saving a request as a template blanks the data-reference fields and what the request varied, and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
 
 ### B2. Add a run to a sum, then remove one
 
@@ -101,7 +101,7 @@ Actor: user in a notebook.
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
 Outcome: fits.
-Adding a run is a member run record plus a finalize that accumulates the previous finalize's values with the new member, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+Adding a run is a member run record plus a finalize over every current member, of which a held accumulator pushes only the new one, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#a-growing-series)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -149,10 +149,10 @@ Actor: user returning after a week.
 1. Opens the notebook or web UI.
 2. Wants the reduction made last Tuesday and the parameters it used.
 
-Checks: records can be listed by proposal and time; a record shows its resolved parameters.
+Checks: records can be listed by proposal and time; a record shows the parameters it ran with.
 
 Outcome: fits.
-A record carries its proposal, its timestamps, and the parameter values the run resolved to ([records.md](records.md#requests-and-records)).
+A record carries its proposal, its timestamps, and every parameter value the run used, defaults filled ([records.md](records.md#requests-and-records)).
 
 ## C. Chaining
 
@@ -203,7 +203,7 @@ Actor: reflectometry user.
 Checks: the stitch that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
 Outcome: fits.
-The stitch is a spec whose parameter is a list of references to the per-angle curves, recomputed over all members ([aggregation.md](aggregation.md#combinations-that-are-not-associative)).
+The stitch is a spec whose parameter is a list of references to the per-angle curves, recomputed over all members ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)).
 
 ### C5. Vanadium and sample tuned together
 
@@ -309,7 +309,7 @@ Checks: a rule can key runs into a group; every arrival reduces the member and c
 Outcome: question.
 A rule with a series submits a member run request and a finalize run request on every arrival, and successive finalizes supersede each other under the series value as member key ([rules.md](rules.md#series)).
 That covers the sum of same-angle runs, which is an accumulation.
-The stitch over angles is not associative, so it is a spec over a list of references and not a finalize, and a rule has no field for such a spec ([open-issues.md](open-issues.md#open-questions)).
+The stitch over angles is not an accumulation, so it is a spec over a list of references and not a finalize, and a rule has no field for such a spec ([open-issues.md](open-issues.md#open-questions)).
 
 ### E2. Automatic reduction goes quiet
 
@@ -359,7 +359,7 @@ Actor: user, then a colleague.
 Checks: the answer does not depend on any of our services still running; the provenance reaches raw data.
 
 Outcome: fits.
-The SciCat entry carries a provenance snapshot of the raw PIDs, the resolved parameters, the spec identity, the package versions, and the environment, readable without any service of ours ([operations.md](operations.md#publication)).
+The SciCat entry carries a provenance snapshot of the raw PIDs, the parameters, the spec identity, the package versions, and the environment, readable without any service of ours ([operations.md](operations.md#publication)).
 
 ### F2. Reproduce after two upgrades
 

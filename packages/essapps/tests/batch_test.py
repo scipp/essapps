@@ -36,7 +36,7 @@ from ess.apps.examples import (
     load_workflow,
     write_run,
 )
-from ess.apps.records import Accumulate, RunRecord, Status
+from ess.apps.records import Accumulate, RunRecord, Status, Template
 from ess.apps.rules import (
     AsOf,
     Between,
@@ -48,7 +48,6 @@ from ess.apps.rules import (
     Rule,
     Selector,
     Series,
-    Template,
 )
 from ess.apps.sources import Dataset
 from ess.apps.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, dataset_ref
@@ -517,7 +516,7 @@ def _accumulated(record: RunRecord) -> list[OutputRef]:
     return Accumulate.model_validate(record.request.supplied['numerator']).accumulate
 
 
-def test_each_arrival_of_a_series_submits_a_member_and_a_chained_finalize(
+def test_each_arrival_of_a_series_submits_a_member_and_a_finalize_over_all_members(
     client: Client, tmp_path: Path
 ) -> None:
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
@@ -527,23 +526,21 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_finalize(
     member, finalize = first = loop.run_once()
     assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
     assert member.request.outputs == ('numerator', 'denominator')
-    assert finalize.request.outputs == ('numerator', 'denominator', 'normalized')
+    assert finalize.request.outputs == ('normalized',)
     assert finalize.request.workflow_id == member.request.workflow_id
     assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
     client.wait(first)
 
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
-    member, chained = client.wait(loop.run_once())
-    # The finalize accumulates onto the previous one, not onto both members.
-    assert _accumulated(chained) == [
-        OutputRef(record=finalize.id, output='numerator'),
+    second, next_finalize = client.wait(loop.run_once())
+    assert _accumulated(next_finalize) == [
         OutputRef(record=member.id, output='numerator'),
+        OutputRef(record=second.id, output='numerator'),
     ]
-    assert chained.status == Status.COMPLETED, chained.failure
-    assert client.output(chained, 'denominator').value == 18.0
+    assert next_finalize.status == Status.COMPLETED, next_finalize.failure
     # Successive finalizes supersede each other under the series value.
-    assert chained.supersedes == finalize.id
-    assert client.latest('series', 'sio2').id == chained.id
+    assert next_finalize.supersedes == finalize.id
+    assert client.latest('series', 'sio2').id == next_finalize.id
     assert [r.request.member_key for r in client.batch('series')] == [
         'pid:pid/1',
         'pid:pid/2',
@@ -560,23 +557,28 @@ def test_a_finalize_per_arrival_equals_one_over_all_members(
     members = []
     for i, values in enumerate([[1.0, 2.0], [2.0, 2.0], [4.0, 3.0]], start=1):
         source.add(sample(tmp_path / f'{i}.h5', values, f'pid/{i}'))
-        member, chained = client.wait(loop.run_once())
+        member, finalize = client.wait(loop.run_once())
         members.append(member)
-    wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})
+    over_all = Template(
+        spec=NORMALIZE,
+        params={'floor': 1.5, 'scale': 2.0},
+        blanks=('numerator', 'denominator'),
+    )
     (at_once,) = client.wait(
         [
-            wf.stage(inputs=['numerator', 'denominator']).compute(
+            client.run(
+                over_all,
                 {
                     name: Accumulate(accumulate=[m.ref(name) for m in members])
                     for name in ('numerator', 'denominator')
-                }
+                },
             )
         ]
     )
     assert at_once.status == Status.COMPLETED, at_once.failure
-    assert chained.status == Status.COMPLETED, chained.failure
+    assert finalize.status == Status.COMPLETED, finalize.failure
     assert sc.identical(
-        client.output(chained, 'normalized'), client.output(at_once, 'normalized')
+        client.output(finalize, 'normalized'), client.output(at_once, 'normalized')
     )
 
 
@@ -584,11 +586,8 @@ def test_a_corrected_member_is_not_counted_twice(
     client: Client, tmp_path: Path
 ) -> None:
     """
-    Chaining is valid only while the previous finalize covers current members.
-
-    The correction gives the member a new record, so the previous finalize covers
-    one that is no longer current, and the finalize accumulates all members
-    again instead of adding the correction to a sum that still holds the old value.
+    Every finalize lists all current members, so a corrected member replaces its
+    old record in the next sum.
     """
     first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')
     source = FakeDatasetSource(first)
@@ -597,8 +596,7 @@ def test_a_corrected_member_is_not_counted_twice(
     loop = TriggerLoop(client, rule)
     client.wait(loop.run_once())
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
-    _, chained = client.wait(loop.run_once())
-    assert client.output(chained, 'denominator').value == 18.0
+    client.wait(loop.run_once())
 
     # The first run is acquired again and reduced again under its member key.
     write_run(first.path, [5.0, 5.0, 5.0, 5.0])
@@ -610,9 +608,10 @@ def test_a_corrected_member_is_not_counted_twice(
     ]
     (done,) = client.wait([finalize])
     assert done.status == Status.COMPLETED, done.failure
-    # The corrected member counts once: 20 from it and 8 from the other member,
-    # not 18 from the superseded sum plus 20 again.
-    assert client.output(done, 'denominator').value == 28.0
+    # The corrected member counts once: 5 + 2 counts per point over a denominator
+    # of 20 from it and 8 from the other member, scaled by 2.
+    normalized = client.output(done, 'normalized')
+    assert list(normalized.values) == [(5.0 + 2.0) / 28.0 * 2.0] * 4
 
 
 def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
@@ -628,15 +627,17 @@ def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
     member, finalize = client.wait(loop.run_once())
     assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
-    assert client.output(finalize, 'denominator').value == 8.0
+    # 2 counts per point over the remaining member's total of 8, scaled by 2.
+    normalized = client.output(finalize, 'normalized')
+    assert list(normalized.values) == [2.0 / 8.0 * 2.0] * 4
 
 
 def test_a_member_pinned_to_another_value_refuses_the_series(
     client: Client, tmp_path: Path
 ) -> None:
     """
-    A finalize has the arriving member's values, and a member made with another
-    value for a parameter it sets cannot be accumulated with the others.
+    A finalize has the template's values, and a member made with another value
+    for a parameter it sets cannot be accumulated with the others.
     """
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
     client.backend.sources.append(source)
@@ -646,7 +647,8 @@ def test_a_member_pinned_to_another_value_refuses_the_series(
     second = sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2')
     source.add(second)
     group = apply(client, rule, [second], {'pid:pid/2': {'floor': 0.0}})
-    with pytest.raises(SubmitError, match=r'made with floor=1\.5'):
+    message = r'made with floor=0\.0, this request sets floor=1\.5'
+    with pytest.raises(SubmitError, match=message):
         client.submit_group(group)
     assert client.batch('series')[-1].request.member_key == 'sio2'
 

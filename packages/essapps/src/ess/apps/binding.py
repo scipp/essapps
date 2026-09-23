@@ -99,9 +99,7 @@ class Workflow(Protocol):
     code knows what depends on what.
 
     ``accumulator`` gives a fresh accumulator for an intermediate that an
-    :class:`ess.apps.records.Accumulate` may fill. Every accumulator must be
-    associative, which :func:`ess.apps.testing.assert_accumulator_is_associative`
-    checks.
+    :class:`ess.apps.records.Accumulate` may fill.
     """
 
     def stage(

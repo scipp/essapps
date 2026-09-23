@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Run requests and run records: what ran.
+Templates, run requests, and run records: what to run, and what ran.
 
 A run request is one run of a workflow, every parameter value set, with any
 intermediates supplied in place of what computes them and the outputs to
-compute named; a run record is the request plus what happened to it.
+compute named; a run record is the request plus what happened to it. A
+template is a partial request: the values set and the blanks a use fills.
 
 See docs/developer/records.md.
 """
@@ -15,14 +16,23 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 from pydantic_core import to_jsonable_python
 
-from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
+from .spec import (
+    DatasetRef,
+    OutputRef,
+    SpecId,
+    WorkflowSpec,
+    data_fields,
+    dataset_refs,
+    walk_refs,
+)
 
 
 def _plain(value: Any) -> Any:
@@ -82,8 +92,6 @@ class Accumulate(BaseModel, frozen=True):
 
     The binding accumulates them with the accumulator its author gave for the
     input, in the order listed; the framework never combines values itself.
-    Every accumulator is associative, so an element may itself be an
-    accumulated value that a finalize run passed through as an output.
     """
 
     accumulate: list[OutputRef]
@@ -176,6 +184,122 @@ class RunRequest(BaseModel, frozen=True):
         return dataset_refs(self.values())
 
 
+class Template(BaseModel, frozen=True):
+    """
+    A partial request: a spec, the values set, and the blanks a use fills.
+
+    A blank is a parameter the use varies from request to request, or an
+    intermediate it supplies in place of what computes it: the stage's inputs.
+    Every request made from one template names the same stage, which a session
+    holds. Records made from a template carry its name as their label. The
+    templates of batches and rules are stored and versioned; a slider's
+    template lives on the client for as long as the slider does.
+
+    ``params`` holds the plain JSON form a request's params have, whatever
+    objects the author passed, so a template read back from storage equals the
+    one that was stored. ``outputs`` names the outputs to compute, empty for
+    the spec's results. ``dataset_field`` is the blank a dataset fills when a
+    rule or :func:`ess.apps.batch.apply` supplies one, which is the sole blank
+    unless a template has several.
+    """
+
+    spec: SpecId
+    params: dict[str, Plain] = Field(default_factory=dict)
+    blanks: tuple[str, ...] = ()
+    outputs: tuple[str, ...] = ()
+    name: str | None = None
+    version: int = 1
+    dataset_field: str | None = None
+    derived_from: str | None = None
+
+    @field_validator('spec', mode='before')
+    @classmethod
+    def _spec_id(cls, value: Any) -> Any:
+        return value.id if isinstance(value, WorkflowSpec) else value
+
+    @classmethod
+    def from_request(
+        cls,
+        name: str,
+        request: RunRequest,
+        spec: WorkflowSpec,
+        blank: Iterable[str] = (),
+    ) -> Template:
+        """
+        Save a request as a template: its data-reference fields, what it varied,
+        and what it supplied are the blanks.
+        """
+        blanks = tuple(
+            sorted(
+                set(data_fields(spec.params))
+                | set(blank)
+                | set(request.vary)
+                | set(request.supplied)
+            )
+        )
+        params = {k: v for k, v in request.params.items() if k not in blanks}
+        return cls(
+            name=name,
+            spec=request.spec,
+            params=params,
+            blanks=blanks,
+            outputs=request.outputs,
+        )
+
+    @property
+    def id(self) -> str | None:
+        """Name and version; a template without a name has no identity."""
+        return None if self.name is None else f'{self.name}/v{self.version}'
+
+    def revise(self, **changes: Any) -> Template:
+        """A new version by copy; the old one stays."""
+        return Template(
+            **dict(self)
+            | {
+                'version': self.version + 1,
+                'params': self.params | changes,
+                'derived_from': self.id,
+            }
+        )
+
+    def cut(
+        self,
+        *,
+        blanks: Iterable[str] | None = None,
+        outputs: Iterable[str] | None = None,
+        name: str | None = None,
+    ) -> Template:
+        """The stage from ``blanks`` to ``outputs`` over the same spec and values."""
+        return self.model_copy(
+            update={
+                'blanks': self.blanks if blanks is None else tuple(blanks),
+                'outputs': self.outputs if outputs is None else tuple(outputs),
+                'name': self.name if name is None else name,
+            }
+        )
+
+    def fill(self, **values: Any) -> dict[str, Any]:
+        """The template's values with every blank filled; other values override."""
+        missing = set(self.blanks) - values.keys()
+        if missing:
+            raise ValueError(f'{self} needs {sorted(missing)}')
+        return self.params | values
+
+    def __str__(self) -> str:
+        return f'template {self.id or f"over {self.spec}"}'
+
+    def field_for_dataset(self) -> str:
+        """The blank a dataset fills."""
+        if self.dataset_field is not None:
+            return self.dataset_field
+        if len(self.blanks) == 1:
+            return self.blanks[0]
+        raise ValueError(
+            f'{self} has blanks {list(self.blanks)}; name the one a dataset '
+            'fills in dataset_field'
+        )
+
+
 class Derivation(BaseModel, frozen=True):
     record: str
     reason: Literal['retry', 'recompute', 'copy']
@@ -195,7 +319,6 @@ class RunResult(BaseModel):
     status: Status
     started: datetime
     finished: datetime
-    resolved_params: dict[str, Any] | None = None
     outputs: dict[str, Any] = Field(default_factory=dict)
     stored_outputs: list[OutputRef] = Field(default_factory=list)
     package_versions: dict[str, str] = Field(default_factory=dict)
@@ -215,11 +338,13 @@ class RunRecord(BaseModel):
     A run request plus what happened to it.
 
     Immutable once the run completes, except for status, and never deleted on its
-    own. Small output values live in ``outputs``; data-reference outputs are listed
-    in ``stored_outputs`` and their bytes live in the data store. ``checksums``
-    holds the checksum of each local file the run read, keyed by the string form
-    of the dataset reference that named it, so that a recompute can tell whether
-    it read the same bytes.
+    own. The request is recorded with every value in the form its params model
+    gives it, so what a run read is the request's ``params``. Small output values
+    live in ``outputs``; data-reference outputs are listed in ``stored_outputs``
+    and their bytes live in the data store. ``checksums`` holds the checksum of
+    each local file the run read, keyed by the string form of the dataset
+    reference that named it, so that a recompute can tell whether it read the
+    same bytes.
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -228,7 +353,6 @@ class RunRecord(BaseModel):
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started: datetime | None = None
     finished: datetime | None = None
-    resolved_params: dict[str, Any] | None = None
     outputs: dict[str, Any] = Field(default_factory=dict)
     stored_outputs: list[OutputRef] = Field(default_factory=list)
     package_versions: dict[str, str] = Field(default_factory=dict)

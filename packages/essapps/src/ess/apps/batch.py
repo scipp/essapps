@@ -29,8 +29,8 @@ from pydantic import BaseModel
 
 from .backend import GROUP_PREFIX, SubmitError
 from .client import Client
-from .records import Accumulate, Origin, RunRecord, RunRequest, Status
-from .rules import AsOf, Lookup, LookupEntry, Rule, Series, Template, matches, precedes
+from .records import Accumulate, Origin, RunRecord, RunRequest, Status, Template
+from .rules import AsOf, Lookup, LookupEntry, Rule, Series, matches, precedes
 from .sources import Dataset
 from .spec import DatasetRef, OutputRef, as_ref
 
@@ -58,8 +58,8 @@ def apply(
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
-    member's request is followed by a finalize request over the series it
-    belongs to.
+    member's request is followed by a finalize request over every current
+    member of the series it belongs to.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -74,22 +74,18 @@ def apply(
         if datasets
         else [(key, None) for key in values]
     )
+    member = template if series is None else template.cut(outputs=series.accumulate)
     group: dict[str, RunRequest] = {}
     arrived: dict[str, list[str]] = {}
-    finalizes: dict[str, str] = {}
     for key, dataset in members:
         entry = (
             lookup.entry(dataset)
             if lookup is not None and dataset is not None
             else None
         )
-        fills = _member_fill(client, template, entry, dataset) | values.get(key, {})
-        filled = template.fill(**fills)
         group[key] = client.request(
-            template.spec,
-            filled,
-            vary=template.blanks,
-            outputs=series.accumulate if series is not None else (),
+            member,
+            _member_fill(client, template, entry, dataset) | values.get(key, {}),
             label=label,
             member_key=key,
             origin=Origin(
@@ -107,18 +103,9 @@ def apply(
                 )
             value = str(dataset.fields[series.key])
             arrived.setdefault(value, []).append(key)
-            name = f'{key}+finalize'
-            group[name] = _finalize(
-                client,
-                of_rule,
-                series,
-                label,
-                value,
-                group,
-                arrived[value],
-                finalizes.get(value),
+            group[f'{key}+finalize'] = _finalize(
+                client, of_rule, series, label, value, group, arrived[value]
             )
-            finalizes[value] = name
     return group
 
 
@@ -130,40 +117,28 @@ def _finalize(
     value: str,
     group: Mapping[str, RunRequest],
     arrived: Iterable[str],
-    previous_name: str | None,
 ) -> RunRequest:
     """
-    The finalize request one arrival of a series submits.
+    The finalize request one arrival of a series submits: the accumulation of
+    every current member of the series, those in this group included.
 
-    It accumulates the intermediates of every current member of the series. If
-    the previous finalize covers only records that are still current members, it
-    accumulates onto that finalize's accumulated values instead of the members
-    it covers. A member that was corrected, excluded, or reprocessed leaves the
-    previous finalize covering a record that is no longer current, and then the
-    finalize accumulates all current members, so that a correction is not
-    counted twice. Its params are the values the arriving member was given
-    except those the member varies, and the backend refuses it if a record it
-    accumulates set any of them otherwise.
+    It is the rule's template cut from the accumulated intermediates to the
+    series' outputs, so it has the template's values, and the backend refuses
+    it if a member it accumulates set any of them otherwise. Because every
+    finalize lists every current member, a corrected, excluded, or failed
+    member is simply not among them. Serving part of the sum from a previous
+    finalize is a cache a runner may keep, and never in the request.
     """
-    arrived = list(arrived)
     members = _current_members(client, rule, series, label, value)
     members |= {str(group[name].member_key): GROUP_PREFIX + name for name in arrived}
-    elements = list(members.values())
-    previous = _previous_finalize(client, group, label, value, previous_name)
-    if previous is not None:
-        record, request = previous
-        covered = _covers(client, group, series, request)
-        if covered <= set(elements):
-            elements = [record] + [r for r in elements if r not in covered]
-    member = group[arrived[-1]]
-    return client.workflow(member.spec, member.fixed).request(
-        supplied={
+    return client.request(
+        rule.template.cut(blanks=series.accumulate, outputs=series.outputs),
+        {
             name: Accumulate(
-                accumulate=[OutputRef(record=r, output=name) for r in elements]
+                accumulate=[OutputRef(record=r, output=name) for r in members.values()]
             )
             for name in series.accumulate
         },
-        outputs=(*series.accumulate, *series.outputs),
         label=label,
         member_key=value,
         origin=Origin(template=rule.template.id, rule=rule.id),
@@ -203,59 +178,6 @@ def _current_members(
             continue
         members[key] = record.id
     return members
-
-
-def _previous_finalize(
-    client: Client,
-    group: Mapping[str, RunRequest],
-    label: str,
-    value: str,
-    previous_name: str | None,
-) -> tuple[str, RunRequest] | None:
-    """The finalize this arrival may accumulate onto, by record ID and request."""
-    if previous_name is not None:
-        return GROUP_PREFIX + previous_name, group[previous_name]
-    record = client.latest(label, value)
-    if record is None or record.status in (Status.FAILED, Status.CANCELLED):
-        return None
-    return record.id, record.request
-
-
-def _covers(
-    client: Client,
-    group: Mapping[str, RunRequest],
-    series: Series,
-    request: RunRequest,
-) -> set[str]:
-    """
-    The member records a finalize covers, directly or through the finalizes it
-    accumulates onto, found by following the accumulation back.
-
-    The walk reads one record per element of the chain, so a series chained one
-    arrival at a time costs a record read per member of it. Keeping the covered
-    set on the record instead would make every writer responsible for it.
-    """
-    covered: set[str] = set()
-    accumulated = request.supplied.get(series.accumulate[0], {})
-    for element in accumulated.get('accumulate', []):
-        ref = as_ref(element)
-        if not isinstance(ref, OutputRef):
-            continue
-        producer = _producer(client, group, ref.record)
-        if producer is not None and _accumulates(producer):
-            covered |= _covers(client, group, series, producer)
-        else:
-            covered.add(ref.record)
-    return covered
-
-
-def _producer(
-    client: Client, group: Mapping[str, RunRequest], record: str
-) -> RunRequest | None:
-    """The request behind a reference, in this group or in the record store."""
-    if record.startswith(GROUP_PREFIX):
-        return group.get(record[len(GROUP_PREFIX) :])
-    return client.record(record).request
 
 
 def _member_fill(

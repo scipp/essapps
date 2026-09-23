@@ -12,6 +12,7 @@ import pytest
 
 from ess.apps.client import Client
 from ess.apps.examples import HISTOGRAM, LOAD, REBIN
+from ess.apps.records import Template
 from ess.apps.spec import DatasetRef
 from ess.apps.testing import FakePublisher
 
@@ -63,9 +64,9 @@ def test_publish_refuses_reused_and_in_process_records_by_default(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
-    tune = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'], label='s')
-    tune.compute({'bins': 2})
-    second = tune.compute({'bins': 3})
+    tune = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',), name='s')
+    client.run(tune, {'bins': 2})
+    second = client.run(tune, {'bins': 3})
     assert second.reused
     with pytest.raises(ValueError, match='reused'):
         client.publish(second.ref('histogram'), 'fake')

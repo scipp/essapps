@@ -31,7 +31,7 @@ from ess.apps.examples import (
     histogram_workflow,
     write_run,
 )
-from ess.apps.records import Status
+from ess.apps.records import Status, Template
 from ess.apps.spec import DatasetRef, OutputRef, dataset_ref, submodel
 from ess.apps.stages import Stages
 from ess.apps.testing import assert_stage_equals_workflow, equal
@@ -257,19 +257,19 @@ def test_a_named_stage_is_held_from_its_first_call(
     client: Client, data: OutputRef
 ) -> None:
     """``reused`` is what publication reads: the result came out of a held stage."""
-    tune = client.workflow(HISTOGRAM, {'data': data}).stage(
-        inputs=['bins'], label='hist'
+    tune = Template(
+        spec=HISTOGRAM, params={'data': data}, blanks=('bins',), name='hist'
     )
-    first = tune.compute({'bins': 2})
-    second = tune.compute({'bins': 8})
+    first = client.run(tune, {'bins': 2})
+    second = client.run(tune, {'bins': 8})
     assert not first.reused
     assert second.reused
     assert client.output(second).sizes == {'x': 8}
     assert client.latest('hist').id == second.id
 
-    # The stage is named by what it is, so another handle on it finds it too.
-    again = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'])
-    assert again.compute({'bins': 4}).reused
+    # The stage is named by what it is, so another template for it finds it too.
+    again = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',))
+    assert client.run(again, {'bins': 4}).reused
 
 
 def test_plain_runs_that_differ_in_one_value_share_no_stage(
@@ -283,19 +283,16 @@ def test_plain_runs_that_differ_in_one_value_share_no_stage(
     assert second.supersedes == first.id
 
 
-def test_a_varied_value_replaces_the_handles_and_stays_out_of_the_workflow_id(
+def test_a_varied_value_replaces_the_templates_and_stays_out_of_the_workflow_id(
     client: Client, data: OutputRef
 ) -> None:
-    first = (
-        client.workflow(HISTOGRAM, {'data': data, 'bins': 2})
-        .stage(inputs=['bins'])
-        .compute({'bins': 4})
+    first = client.run(
+        Template(spec=HISTOGRAM, params={'data': data, 'bins': 2}, blanks=('bins',)),
+        {'bins': 4},
     )
     assert first.request.params['bins'] == 4
-    second = (
-        client.workflow(HISTOGRAM, {'data': data})
-        .stage(inputs=['bins'])
-        .compute({'bins': 8})
+    second = client.run(
+        Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',)), {'bins': 8}
     )
     assert second.request.workflow_id == first.request.workflow_id
     assert second.reused
@@ -304,15 +301,17 @@ def test_a_varied_value_replaces_the_handles_and_stays_out_of_the_workflow_id(
 def test_another_workflow_or_another_cut_builds_a_new_stage(
     client: Client, data: OutputRef
 ) -> None:
-    wf = client.workflow(HISTOGRAM, {'data': data})
-    assert not wf.stage(inputs=['bins']).compute({'bins': 2}).reused
+    hist = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',))
+    assert not client.run(hist, {'bins': 2}).reused
 
-    refiltered = wf.with_params(threshold=2.0).stage(inputs=['bins'])
-    assert not refiltered.compute({'bins': 4}).reused
-    assert refiltered.compute({'bins': 8}).reused
+    refiltered = Template(
+        spec=HISTOGRAM, params={'data': data, 'threshold': 2.0}, blanks=('bins',)
+    )
+    assert not client.run(refiltered, {'bins': 4}).reused
+    assert client.run(refiltered, {'bins': 8}).reused
 
-    both = wf.stage(inputs=['threshold', 'bins'])
-    assert not both.compute({'threshold': 2.0, 'bins': 8}).reused
+    both = hist.cut(blanks=('threshold', 'bins'))
+    assert not client.run(both, {'threshold': 2.0, 'bins': 8}).reused
 
 
 def test_a_file_that_changed_on_disk_does_not_find_the_stage_built_from_its_bytes(
@@ -323,12 +322,12 @@ def test_a_file_that_changed_on_disk_does_not_find_the_stage_built_from_its_byte
     checksums of the datasets a request's params name are part of a stage's name.
     """
     run = dataset_ref(instrument='dream', run=1)
-    tune = client.workflow(HISTOGRAM, {'data': run}).stage(inputs=['bins'])
-    assert not tune.compute({'bins': 2}).reused
-    assert tune.compute({'bins': 4}).reused
+    tune = Template(spec=HISTOGRAM, params={'data': run}, blanks=('bins',))
+    assert not client.run(tune, {'bins': 2}).reused
+    assert client.run(tune, {'bins': 4}).reused
 
     write_run(run_file, [9.0] * 6)
-    again = tune.compute({'bins': 4})
+    again = client.run(tune, {'bins': 4})
     assert not again.reused
     assert client.output(again).sum().value == 54.0
 
@@ -337,17 +336,20 @@ def test_an_intermediate_is_a_stage_output_and_a_stage_input(
     client: Client, run_ref: DatasetRef
 ) -> None:
     """Cutting the pipeline at the intermediates gives what a plain run gives."""
-    wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})
-    member = wf.stage(inputs=['run'], outputs=['numerator', 'denominator']).compute(
-        {'run': run_ref}
+    normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})
+    member = client.run(
+        normalize.cut(blanks=('run',), outputs=('numerator', 'denominator')),
+        {'run': run_ref},
     )
     assert member.output_names() == {'numerator', 'denominator'}
-    finalize = wf.stage(
-        inputs=['numerator', 'denominator'], outputs=['normalized']
-    ).compute(
-        {'numerator': member.ref('numerator'), 'denominator': member.ref('denominator')}
+    finalize = client.run(
+        normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',)),
+        {
+            'numerator': member.ref('numerator'),
+            'denominator': member.ref('denominator'),
+        },
     )
-    plain = wf.with_params(run=run_ref).stage().compute()
+    plain = client.run(normalize, {'run': run_ref})
     assert [r.status for r in (member, finalize, plain)] == [Status.COMPLETED] * 3
     assert plain.output_names() == {'normalized'}
     assert equal(client.output(finalize), client.output(plain))

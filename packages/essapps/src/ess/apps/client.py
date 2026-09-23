@@ -18,7 +18,7 @@ from .backend import Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import Origin, RunRecord, RunRequest, Status
+from .records import Origin, RunRecord, RunRequest, Status, Template
 from .sources import Dataset, DatasetSource
 from .spec import (
     Format,
@@ -63,43 +63,45 @@ class Client:
     def specs(self) -> list[SerializedWorkflowSpec]:
         return self.backend.specs()
 
-    def workflow(
-        self,
-        spec: WorkflowSpec | SpecId,
-        params: BaseModel | Mapping[str, Any] | None = None,
-    ) -> WorkflowHandle:
-        """
-        A pipeline with parameters set, for this instrument and proposal.
-
-        Nothing runs and nothing is stored: the handle only makes run
-        requests, each of which carries ``spec`` and ``params``.
-        """
-        spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
-        if isinstance(params, BaseModel):
-            params = params.model_dump(mode='json', exclude_unset=True)
-        return WorkflowHandle(self, spec_id, dict(params or {}))
-
     def request(
         self,
-        spec: WorkflowSpec | SpecId,
-        params: BaseModel | Mapping[str, Any] | None = None,
+        template: Template | WorkflowSpec | SpecId,
+        values: BaseModel | Mapping[str, Any] | None = None,
         *,
-        vary: Iterable[str] = (),
-        outputs: Iterable[str] = (),
         label: str | None = None,
         member_key: str | None = None,
         origin: Origin | None = None,
     ) -> RunRequest:
         """
-        A run request over ``spec`` and ``params``; ``vary`` names the
-        parameters a caller varies from request to request.
+        A run request from a template, its blanks filled with ``values``.
+
+        A spec stands for a template with nothing set and no blanks, so
+        ``values`` are then the parameters of a plain run. A value named among
+        the spec's intermediates is supplied; the rest are parameters, and the
+        blanks among them are what the request varies. Nothing is stored until
+        the request is submitted.
         """
-        return self.workflow(spec, params).request(
-            vary=vary,
-            outputs=outputs,
-            label=label,
+        if not isinstance(template, Template):
+            template = Template(spec=template)
+        if isinstance(values, BaseModel):
+            values = values.model_dump(mode='json', exclude_unset=True)
+        try:
+            intermediates = self.spec(template.spec).intermediates
+        except KeyError:  # validation reports the unknown spec
+            intermediates = ()
+        filled = template.fill(**dict(values or {}))
+        return RunRequest(
+            spec=template.spec,
+            params={k: v for k, v in filled.items() if k not in intermediates},
+            supplied={k: v for k, v in filled.items() if k in intermediates},
+            vary=tuple(b for b in template.blanks if b not in intermediates),
+            outputs=template.outputs,
+            instrument=self.instrument,
+            proposal=self.proposal,
+            submitter=self.submitter,
+            label=template.name if label is None else label,
             member_key=member_key,
-            origin=origin,
+            origin=origin or Origin(),
         )
 
     def validate(self, request: RunRequest) -> ValidationReport:
@@ -113,10 +115,17 @@ class Client:
         return self.backend.submit(group)
 
     def run(
-        self, spec: WorkflowSpec | SpecId, params: Any = None, **kwargs: Any
+        self,
+        template: Template | WorkflowSpec | SpecId,
+        values: BaseModel | Mapping[str, Any] | None = None,
+        **kwargs: Any,
     ) -> RunRecord:
-        """A plain run: nothing varied or supplied, computing the spec's results."""
-        return self.submit(self.request(spec, params, **kwargs))
+        """
+        Submit one request made from ``template``. It runs at once in a session
+        and is dispatched otherwise, and it waits for any pending output among
+        ``values``. Given a spec, this is a plain run.
+        """
+        return self.submit(self.request(template, values, **kwargs))
 
     def datasets(self) -> list[Dataset]:
         """Every dataset the backend's sources know for this proposal, by identity."""
@@ -212,130 +221,6 @@ class Client:
 
     def provenance(self, record: RunRecord | str) -> dict[str, Any]:
         return self.backend.provenance(record if isinstance(record, str) else record.id)
-
-
-class WorkflowHandle:
-    """
-    A pipeline with parameters set, and the client that cuts stages from it.
-
-    Held on the client side only, like :func:`functools.partial`: every request it
-    makes carries ``spec`` and ``params``, and the backend records nothing else
-    of it. ``params`` are the values given; the backend fills the spec's defaults
-    when it accepts a request.
-    """
-
-    def __init__(self, client: Client, spec: SpecId, params: dict[str, Any]) -> None:
-        self.client = client
-        self.spec = spec
-        self.params = params
-
-    def with_params(self, **params: Any) -> WorkflowHandle:
-        """Another pipeline: these values changed or added."""
-        return WorkflowHandle(self.client, self.spec, {**self.params, **params})
-
-    def request(
-        self,
-        *,
-        supplied: Mapping[str, Any] | None = None,
-        vary: Iterable[str] = (),
-        outputs: Iterable[str] = (),
-        label: str | None = None,
-        member_key: str | None = None,
-        origin: Origin | None = None,
-    ) -> RunRequest:
-        return RunRequest(
-            spec=self.spec,
-            params=self.params,
-            supplied=dict(supplied or {}),
-            vary=tuple(vary),
-            outputs=tuple(outputs),
-            instrument=self.client.instrument,
-            proposal=self.client.proposal,
-            submitter=self.client.submitter,
-            label=label,
-            member_key=member_key,
-            origin=origin or Origin(),
-        )
-
-    def stage(
-        self,
-        *,
-        inputs: Iterable[str] = (),
-        outputs: Iterable[str] = (),
-        label: str | None = None,
-    ) -> StageHandle:
-        """
-        The part of the pipeline from ``inputs`` to ``outputs``.
-
-        Inputs are parameters the caller varies and intermediates the spec
-        exposes; without ``outputs``, the spec's results. A session holds the
-        stage from the first call on.
-        """
-        intermediates = self.client.spec(self.spec).intermediates
-        inputs = tuple(inputs)
-        return StageHandle(
-            self,
-            vary=tuple(name for name in inputs if name not in intermediates),
-            supplied=tuple(name for name in inputs if name in intermediates),
-            outputs=tuple(outputs),
-            label=label,
-        )
-
-
-class StageHandle:
-    """
-    A stage cut from a pipeline with parameters set; a call is a run record.
-
-    A call's values for parameters go into the request's ``params`` and are
-    named in ``vary``; its values for intermediates go into ``supplied``.
-    """
-
-    def __init__(
-        self,
-        workflow: WorkflowHandle,
-        *,
-        vary: tuple[str, ...],
-        supplied: tuple[str, ...],
-        outputs: tuple[str, ...],
-        label: str | None,
-    ) -> None:
-        self.workflow = workflow
-        self.vary = vary
-        self.supplied = supplied
-        self.outputs = outputs
-        self.label = label
-
-    def request(
-        self,
-        values: Mapping[str, Any],
-        *,
-        member_key: str | None = None,
-        origin: Origin | None = None,
-    ) -> RunRequest:
-        inputs = {*self.vary, *self.supplied}
-        if set(values) != inputs:
-            raise ValueError(
-                f'the stage takes {sorted(inputs)}, given {sorted(values)}'
-            )
-        return self.workflow.with_params(
-            **{name: values[name] for name in self.vary}
-        ).request(
-            supplied={name: values[name] for name in self.supplied},
-            vary=self.vary,
-            outputs=self.outputs,
-            label=self.label,
-            member_key=member_key,
-            origin=origin,
-        )
-
-    def compute(
-        self, values: Mapping[str, Any] | None = None, **kwargs: Any
-    ) -> RunRecord:
-        """
-        Submit one call. It runs at once in a session and is dispatched otherwise,
-        and it waits for any pending output among ``values``.
-        """
-        return self.workflow.client.submit(self.request(values or {}, **kwargs))
 
 
 def local_backend(

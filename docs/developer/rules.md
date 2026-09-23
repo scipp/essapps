@@ -35,8 +35,12 @@ Automatic reduction is this scan plus a lookup, a selector, and a loop that call
 
 ## Templates and lookups
 
-**A template is a stored, immutable, versioned partial request.**
-It comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and keeps every other field literal.
+**A template is a partial request: the spec, the values set, the blanks each use fills, and the outputs to compute.**
+Its blanks are the inputs of a stage, so the requests made from one template name one stage, and the stage behind a notebook slider is a template too ([stages.md](stages.md#who-names-the-stage)).
+The batch form and the slider therefore use one concept.
+The template of a batch or a rule is stored, immutable, and versioned.
+Records made from a template carry its name as their label unless the caller gives another, and a rule's records carry the rule's name.
+A template comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and what the request varied or supplied, and keeps every other field literal.
 A template moves to a new version, or to a new spec version, by copy through `Template.revise`, and the records say which version filled them.
 Its parameters, like a lookup's fills and the pinned values on a record, are held in the plain JSON form a request's parameters have, whatever objects the author passed, so that stored data compares and displays alike whether it was just made or read back.
 A batch rerun under the copy is a new batch whose records link to the old ones.
@@ -175,16 +179,15 @@ rule = Rule(
 ```
 
 `Series(key, accumulate, outputs)` names the dataset field whose value keys datasets into a series, the intermediates to accumulate, and the outputs of the finalize.
-The rule holds one template.
-Each member varies the template's blanks and outputs the intermediates in `accumulate`.
-Each finalize has as its `params` the values the arriving member was given, without the ones the member varies, supplies one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
-It accumulates the intermediates of every current member of the series, or the previous finalize's values plus what that finalize does not cover when chaining is valid, for which the condition is in [aggregation.md](aggregation.md#when-chaining-is-valid).
-Nothing on the rule says whether chaining is allowed, because that is a property of the accumulator, which the person writing a rule cannot know.
+The rule holds one template, and both stages are cut from it.
+Each member is `template.cut(outputs=accumulate)`: it varies the template's blanks and outputs the intermediates to accumulate.
+Each finalize is `template.cut(blanks=accumulate, outputs=outputs)`: its `params` are the template's values, and it supplies one `Accumulate` per intermediate that lists every current member of the series ([aggregation.md](aggregation.md#a-growing-series)).
+Its outputs are the series' outputs only.
 Successive finalizes of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.
-A series of k runs therefore costs k finalizes, and the superseded ones are the first evicted.
+A series of k runs therefore costs k finalizes, the k-th of which reads k values per intermediate, and the superseded ones are the first evicted.
 
-**Members that disagree on a parameter are not accumulated together.**
-A member made with another value than the arriving member, because a lookup entry or a pinned value set something only for it, cannot be accumulated with the others.
+**A member must agree with the template on every field it does not vary.**
+A member made with another value, because a lookup entry or a pinned value set a field beyond the blanks, cannot be accumulated with the others.
 The backend refuses such a finalize and names the parameter, and the trigger loop logs the refusal.
 
 **A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
@@ -196,8 +199,8 @@ The members are the records under the rule's label, and which series each belong
 A metadata correction at the instrument therefore moves a run between series and the next finalize reflects it, while earlier records are untouched because they hold resolved references.
 An exclusion added after a member's record exists drops that member from the next finalize the same way.
 
-A combination that is not associative, such as a stitch over angles, is not a series.
-It is a spec of its own whose parameter is a list of references ([aggregation.md](aggregation.md#combinations-that-are-not-associative)), and a rule has no field that names it yet ([open-issues.md](open-issues.md#open-questions)).
+A combination that is not an accumulation, such as a stitch over angles, is not a series.
+It is a spec of its own whose parameter is a list of references ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)), and a rule has no field that names it yet ([open-issues.md](open-issues.md#open-questions)).
 
 ## The dataset source
 
@@ -224,7 +227,7 @@ The batch table is a frame, and the pieces above are how it is built:
 | Pinned values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
 | Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
-| Chained finalize | a cumulative reduction within the group; the superseded partials are its intermediate values |
+| Finalize of a series | a reduction over the group so far, done again on each arrival; the superseded finalizes are its earlier values |
 | Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
 
 The picture is exact for the view and wrong for the store.
@@ -272,7 +275,7 @@ Each arrival therefore accumulates what exists.
 **A combine template on the series.**
 The series names a second template, for a combine spec over a list of references to the members' contributions, with the output that is the contribution and the parameter that takes it.
 The rule then holds two templates that share most of their values and can disagree.
-With exposed intermediates, the finalize has the member's own parameters, so the rule holds one template.
+With exposed intermediates, the finalize is the rule's own template cut at the intermediates, so the rule holds one template.
 
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.

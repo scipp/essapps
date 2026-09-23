@@ -78,8 +78,7 @@ A stage over an intermediate input returns what a plain run returns when that in
 
 **`accumulator(name)` gives a fresh accumulator for an intermediate that an `Accumulate` may fill.**
 An accumulator is sciline's: `push` a value, read `value`.
-Every accumulator must be associative, because a finalize may accumulate onto an accumulated value that an earlier finalize passed through ([aggregation.md](aggregation.md#when-chaining-is-valid)).
-The framework cannot check this; a test helper does.
+The runner pushes the outputs an `Accumulate` lists in the order listed, and asks nothing else of the accumulator ([aggregation.md](aggregation.md#a-growing-series)).
 
 **A plain function is a workflow with parameter stages only.**
 `FunctionWorkflow` wraps `(params, inputs) -> outputs`: its stages compute everything and hold nothing, it drops the outputs not asked for, and it refuses intermediate inputs and accumulators.
@@ -268,12 +267,7 @@ The backend refuses a request whose spec module it cannot import, unless the req
 It compares each result with a plain run, the stage with no inputs, with every value set.
 That is the check on the contract of `stage`, and every workflow bound through an adapter runs it.
 
-`assert_accumulator_is_associative(factory, values)` checks the promise every accumulator makes.
-It accumulates at least three values at once, in two groups whose accumulations are pushed again, and one at a time onto the accumulation so far, and compares each result with the first.
-Order is kept, because a chain keeps the order in which members arrived, so commutativity is not required.
-Every accumulator a binding gives runs it.
-
-A third check, recomputing a completed record and comparing the outputs, lets a workflow package keep records from production as regression tests.
+A second check, recomputing a completed record and comparing the outputs, lets a workflow package keep records from production as regression tests.
 
 ## Alternatives considered
 
@@ -313,7 +307,6 @@ A `Stage` recomputes everything downstream of all its inputs, so a stage whose i
 - Reuse through a stage is exact only if providers are pure.
   `assert_stage_equals_workflow` is the check, and the record's `reused` flag lets publication insist on a result computed without a held stage.
 - Authors must expose the intermediates that apps and aggregations use, each with a format.
-- Every accumulator must be associative, which the framework cannot check and a test helper must.
 - A request that supplies an intermediate and leaves a needed parameter unset fails when it runs, not when it is submitted.
 - DREAM and imaging masks are Python callables today.
   Each such workflow needs a range vocabulary and a conversion before its requests are plain data.

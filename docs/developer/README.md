@@ -14,11 +14,11 @@ client = local('/tmp/essapps', instrument='loki', proposal='p1', submitter='me',
 run = dataset_ref(instrument='loki', run=60339)
 centre = client.run(BEAM_CENTER, {'sample_run': run, ...})
 
-wf = client.workflow(IOFQ, {'sample_run': run, 'beam_center': centre.ref('center'), ...})
-tune = wf.stage(inputs=['q'], outputs=['iofq'], label='iofq')    # 'q' left unset in wf
+tune = Template(spec=IOFQ, params={'sample_run': run, 'beam_center': centre.ref('center'), ...},
+                blanks=('q',), outputs=('iofq',), name='iofq')       # the stage over 'q'
 
 for num_bins in (50, 100, 200):                          # a slider, in effect
-    iofq = tune.compute({'q': QEdges(start=0.01, stop=0.3, num_bins=num_bins)})
+    iofq = client.run(tune, {'q': QEdges(start=0.01, stop=0.3, num_bins=num_bins)})
     plot(client.view(iofq.ref('iofq')))
 
 client.provenance(iofq)                                  # back to the dataset references
@@ -28,7 +28,7 @@ client.provenance(iofq)                                  # back to the dataset r
 
 1. **A run is a request, and the request is plain data.**
    It names a spec with its parameter values, any intermediates supplied in place of what computes them, and the outputs to compute; the backend fills the spec's defaults, so the record holds every value the run used.
-   The backend writes it down as a run record, together with what happened: status, outputs, resolved parameters, package versions.
+   The backend writes it down as a run record, together with what happened: status, outputs, package versions.
    A notebook, a UI, and an automatic trigger all submit the same kind of request.
 2. **Data is named by reference.**
    A reference is either "output X of record Y" or a dataset identity such as a SciCat PID.
@@ -39,7 +39,7 @@ client.provenance(iofq)                                  # back to the dataset r
    No record names a session, and everything a session holds can be recomputed from records.
    Batch and automatic reduction run each request in a throwaway process that writes its outputs to disk.
 4. **A rerun recomputes only what the changed parameter affects.**
-   The client names the stage, from the parameters that move to the outputs, and the session holds a sciline `Stage` for it.
+   The client names the stage as a template, whose blanks are the parameters that move, and the session holds a sciline `Stage` for it.
    Each rerun is still a complete record.
    A label on the request groups the reruns, so a person sees the latest result and not a hundred records.
 5. **Chaining is a reference to an output that does not exist yet.**
@@ -48,9 +48,10 @@ client.provenance(iofq)                                  # back to the dataset r
 6. **A sum over runs is a stage per run and a finalize stage that agree on their parameters.**
    The spec exposes the intermediates that add, such as a numerator and a denominator.
    A member stage per run computes them, and a finalize stage accumulates them with the binding's accumulators and normalises.
-   A growing series accumulates onto the previous finalize's values, and the framework never adds arrays.
+   Every finalize lists every member it sums, and the framework never adds arrays.
 7. **Batch and automatic reduction are one mechanism.**
    A template is a partial request, a lookup fills fields from dataset metadata, and a rule adds a selector for datasets.
+   The stage a slider fills is a template too.
    One operation, `apply`, makes requests from them.
    The trigger loop calls it for each new dataset and keeps no memory of its own.
 8. **Workflow code builds the stages that run requests cut.**
@@ -69,7 +70,7 @@ client.provenance(iofq)                                  # back to the dataset r
 | as needed | [stages.md](stages.md) | interactive work: sessions, stages, slots, views |
 | | [records.md](records.md) | run requests and run records, references, datasets, the data store, scheduling |
 | | [workflow-contract.md](workflow-contract.md) | spec, the workflow protocol, inputs and outputs, validation, changes needed in scipp/ess#690 |
-| | [aggregation.md](aggregation.md) | member and finalize stages, `Accumulate`, chaining |
+| | [aggregation.md](aggregation.md) | member and finalize stages, `Accumulate`, growing series |
 | | [rules.md](rules.md) | templates, lookups, rules, `apply`, the trigger loop |
 | | [operations.md](operations.md) | client interface, publication, deployment, failure handling |
 | | [open-issues.md](open-issues.md) | open questions, findings from binding real workflows, deferred work |

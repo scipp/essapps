@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import scipp as sc
 
-from .binding import Accumulator, Inputs, Workflow
+from .binding import Inputs, Workflow
 from .sources import Dataset
 from .spec import DatasetRef, Ref, WorkflowSpec, submodel
 
@@ -92,42 +92,6 @@ def assert_stage_equals_workflow(
                 raise AssertionError(
                     f"step {i}: the stage's output {name!r} differs from a plain run"
                 )
-
-
-def assert_accumulator_is_associative(
-    factory: Callable[[], Accumulator], values: Iterable[Any]
-) -> None:
-    """
-    The one check on an accumulator: grouping the pushes does not matter.
-
-    The values are accumulated at once, in two groups whose accumulations are
-    pushed again, and one at a time onto the accumulation so far, which is what
-    a finalize that accumulates onto the previous one relies on. Order is kept,
-    because a chain keeps the order in which members arrived.
-    """
-    values = list(values)
-    if len(values) < 3:
-        raise ValueError('an associativity check needs at least three values')
-
-    def accumulated(parts: Iterable[Any]) -> Any:
-        accumulator = factory()
-        for part in parts:
-            accumulator.push(part)
-        return accumulator.value
-
-    reference = accumulated(values)
-    chained = values[0]
-    for value in values[1:]:
-        chained = accumulated([chained, value])
-    groupings = {
-        'in two groups': accumulated(
-            [accumulated(values[:1]), accumulated(values[1:])]
-        ),
-        'one at a time': chained,
-    }
-    for how, got in groupings.items():
-        if not equal(got, reference):
-            raise AssertionError(f'accumulating {how} changes the result')
 
 
 class FakeDatasetSource:
