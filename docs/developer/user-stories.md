@@ -10,6 +10,102 @@ Every gap and every question is also listed in [open-issues.md](open-issues.md).
 Stories are grouped by the part of the design they exercise.
 Each has the actor, the story, the checks the run-through must answer, and the outcome.
 
+Every story has a test in [`packages/essapps/tests/stories/`](../../packages/essapps/tests/stories), one file per section, named after the story: `test_b1_...` is story B1.
+The test is the story written with the client interface, with the toy workflows of `ess.apps.examples` standing in for instrument workflows.
+A story the skeleton cannot show yet is an expected failure whose reason says what is missing.
+
+## S. Small stories
+
+Each small story exercises one mechanism, and comes from an example in the design documents.
+Its test is the shortest way to do it with the client.
+
+### S1. Reduce one run
+
+Actor: user in a notebook.
+
+1. Reduces one run with one parameter changed from its default.
+2. Reads the result.
+
+Checks: the record names the run and every parameter value the reduction used, defaults included.
+
+Outcome: fits ([records.md](records.md#requests-and-records)).
+
+### S2. Tune one parameter
+
+Actor: user in a notebook.
+
+1. Reduces a run and plots the result.
+2. Changes the binning several times, looking at the plot after each change.
+
+Checks: a change recomputes only what the binning affects; the plot shows the latest result; each result can be reproduced from its record alone.
+
+Outcome: fits ([stages.md](stages.md#who-names-the-stage)).
+
+### S3. Look at a value inside a reduction
+
+Actor: user in a notebook.
+
+1. Reduces a run and wants to see a value the reduction computes on the way, such as a numerator, instead of its final result.
+
+Checks: no separate workflow is needed; the value is recorded and viewed like a result.
+
+Outcome: fits ([workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690)).
+
+### S4. Submit a chain in one go
+
+Actor: user in a notebook.
+
+1. Submits two reductions and a third that combines their results, without waiting for the first two.
+
+Checks: the third runs after the first two have completed; its record names the records it used.
+
+Outcome: fits ([records.md](records.md#scheduling-pending-outputs-as-inputs)).
+
+### S5. Sum runs
+
+Actor: user in a notebook.
+
+1. Has three runs of the same sample.
+2. Reduces them as one measurement.
+
+Checks: the result equals the reduction of the summed counts; each run is reduced on its own; the result names the runs it sums.
+
+Outcome: fits ([aggregation.md](aggregation.md)).
+
+### S6. Sum sample runs and background runs
+
+Actor: user in a notebook.
+
+1. Has several sample runs and several background runs.
+2. Sums each set and subtracts the background.
+
+Checks: each sample run and each background run is reduced on its own; the result names every run.
+
+Outcome: gap.
+The stage of a sample run leaves the background run unset, and the backend refuses it, because a request that supplies no intermediate is checked against every parameter of the spec ([open-issues.md](open-issues.md#open-questions)).
+
+### S7. Reduce each sample with the can measured before it
+
+Actor: instrument scientist.
+
+1. Has the sample runs and can runs of a beamtime.
+2. Reduces every sample, subtracting the can measured most recently before it.
+
+Checks: each sample gets its can without the user naming it.
+
+Outcome: fits ([rules.md](rules.md#templates-and-lookups)).
+
+### S8. Trace a result to raw data
+
+Actor: user.
+
+1. Has a result that took two steps to make.
+2. Asks which raw runs and parameter values it came from.
+
+Checks: the answer reaches the raw runs through every step.
+
+Outcome: fits ([records.md](records.md#references)).
+
 ## A. Getting data in
 
 ### A1. Browse a local folder next to a catalogue reference
@@ -503,10 +599,18 @@ A proposal's records and disk copies are dropped together after an export, refer
 
 ## Summary
 
-Of the 38 stories, 32 fit, five raise a question, and one is a gap.
+Of the 46 stories, 39 fit, five raise a question, and two are gaps.
 
 | Story | Title | Outcome |
 |---|---|---|
+| S1 | Reduce one run | fits |
+| S2 | Tune one parameter | fits |
+| S3 | Look at a value inside a reduction | fits |
+| S4 | Submit a chain in one go | fits |
+| S5 | Sum runs | fits |
+| S6 | Sum sample runs and background runs | gap |
+| S7 | Reduce each sample with the can measured before it | fits |
+| S8 | Trace a result to raw data | fits |
 | A1 | Browse a local folder next to a catalogue reference | fits |
 | A2 | Run number instead of file | fits |
 | A3 | Work without the facility mount | fits |

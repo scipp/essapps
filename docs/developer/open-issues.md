@@ -40,6 +40,9 @@ The recommendation in brackets is mine.
 - **Per-dataset lookup fills in a series.**
   `apply` has each member vary only the template's blanks, and a finalize has the template's values, so a member that a lookup fills beyond the blanks is not accumulated.
   The alternative is to have members vary such fields as well, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
+- **Validation of a stage that leaves a parameter unset.**
+  A request that supplies no intermediate is checked against the whole parameter model, so the stage of a sample run in a sum with two member tables, which leaves the background run unset, is refused although it never reads it ([user story S6](user-stories.md#s6-sum-sample-runs-and-background-runs)).
+  Telling which parameters a stage reads needs the dependencies of the exposed values, which only the workflow code knows today.
 - **Validation of a request that supplies an intermediate.**
   Such a request that leaves a needed parameter unset fails when it runs; a request that supplies no intermediate is checked against the whole parameter model at submit.
   Whether a GUI can learn this before submitting is open: in local mode the backend imports the registry and could ask the workflow, in shared mode it does not.

@@ -218,6 +218,7 @@ def registry() -> Registry:
         (NORMALIZE, normalize_workflow),
         (EXPORT, export_workflow),
         (SUBTRACT, subtract_workflow),
+        (BACKGROUND, background_workflow),
     ):
         reg.bind(spec, factory)
     return reg
@@ -378,4 +379,66 @@ def normalize_workflow() -> PipelineAdapter:
             'denominator': Denominator,
         },
         accumulators=ACCUMULATORS,
+    )
+
+
+# Two member tables: sample runs and background runs are summed separately, and
+# the background is subtracted after both sums.
+
+SampleFile = NewType('SampleFile', Path)
+BackgroundFile = NewType('BackgroundFile', Path)
+SampleCounts = NewType('SampleCounts', sc.DataArray)
+BackgroundCounts = NewType('BackgroundCounts', sc.DataArray)
+Subtracted = NewType('Subtracted', sc.DataArray)
+
+
+def sample_counts(path: SampleFile) -> SampleCounts:
+    return SampleCounts(sc.io.load_hdf5(path))
+
+
+def background_counts(path: BackgroundFile) -> BackgroundCounts:
+    return BackgroundCounts(sc.io.load_hdf5(path))
+
+
+def subtracted(sample: SampleCounts, background: BackgroundCounts) -> Subtracted:
+    return Subtracted(sample - background)
+
+
+class BackgroundParams(BaseModel):
+    sample_run: OpaqueFile
+    background_run: OpaqueFile
+
+
+class BackgroundOutputs(BaseModel):
+    subtracted: Array(ArraySpec(dims=('x',), unit='counts'))
+    sample_counts: Array()
+    background_counts: Array()
+
+
+BACKGROUND = WorkflowSpec(
+    name='background',
+    version=1,
+    title='Background subtraction',
+    description='Summed sample runs minus summed background runs: a sum over '
+    'runs with two member tables.',
+    params=BackgroundParams,
+    outputs=BackgroundOutputs,
+    intermediates=('sample_counts', 'background_counts'),
+)
+
+
+def background_workflow() -> PipelineAdapter:
+    return PipelineAdapter(
+        sciline.Pipeline([sample_counts, background_counts, subtracted]),
+        keys={'sample_run': SampleFile, 'background_run': BackgroundFile},
+        resolve={'sample_run': 'path', 'background_run': 'path'},
+        targets={
+            'subtracted': Subtracted,
+            'sample_counts': SampleCounts,
+            'background_counts': BackgroundCounts,
+        },
+        accumulators={
+            SampleCounts: sciline.Buffered(add),
+            BackgroundCounts: sciline.Buffered(add),
+        },
     )
