@@ -196,6 +196,15 @@ Two invariants keep it safe:
 
 A session is therefore a cache.
 Losing one costs time and nothing else.
+
+The client interface follows the same line:
+
+3. Every method on a client handle sends one plain-data request and gets references back, and no handle holds state that the records cannot rebuild.
+
+`client.workflow` makes a value, `wf.stage` only names a stage, and `stage.compute` sends one stage request and returns a stage record whose outputs are references.
+Where a value lives and where a stage runs are the backend's choice and invisible to the caller.
+What a stage computes is not: it is in the request as plain data, never as a sciline object, because a record must be recomputable from its request alone and a shared backend must validate what it accepts.
+A long-lived holder of state, such as a runner that keeps a series' accumulator ([aggregation.md](aggregation.md)), satisfies the rule only by writing records it can be rebuilt from.
 The second invariant holds for every value the system keeps in memory, which is what later lets a growing sum over runs be kept on disk or in memory interchangeably.
 It holds because reduction here consumes datasets.
 It would not hold for a live stream, which is esslivedata's problem and out of scope.
@@ -420,6 +429,7 @@ The linked document argues the case and lists the costs.
 |---|---|---|
 | [Data is named by reference](records.md#references) | one mechanism serves inputs, provenance, scheduling, and publication | file paths in requests; a separate provenance model; opaque data handles |
 | [Stateless records, stateful sessions](records.md#where-runs-execute-and-where-data-lives) | batch and provenance need complete records; interactive work needs memory | stateful jobs as in esslivedata; disk-only runs; shared memory across processes |
+| [Client handles send plain data and hold nothing](#where-a-run-executes) | where values live and where stages run can change without changing a caller; a record stays recomputable from its request | sciline objects or remote proxies of them in the API |
 | [Memory caches are private](records.md#the-data-store) | a registry of other processes' memory needs a coherence protocol | a registry that tracks in-memory copies |
 | [Workflow records and stage records](records.md#requests-and-records) | a record says which part of a pipeline ran, in sciline's terms | one record kind, a call of a spec with every parameter set |
 | [Reuse means a stage record](records.md#reuse-means-a-stage-record) | a referenced value needs a record | references to values that no stage record outputs |
