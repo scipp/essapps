@@ -24,7 +24,7 @@ import click
 from .backend import Publisher, SubmitError
 from .binding import import_object
 from .client import Client, local_backend
-from .records import RunRecord, Status
+from .records import StageRecord, Status
 from .remote import RemoteBackend, remote
 from .server import serve as serve_backend
 from .sources import FolderSource
@@ -293,7 +293,7 @@ def publish(
 
 
 def _literal_or_file(
-    client: Client, record: RunRecord, ref: OutputRef, into: Path | None, server: bool
+    client: Client, record: StageRecord, ref: OutputRef, into: Path | None, server: bool
 ) -> str | None:
     """A literal as JSON, a stored output as a path when one was asked for."""
     if ref.output in record.outputs:

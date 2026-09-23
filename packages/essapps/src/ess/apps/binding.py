@@ -3,20 +3,18 @@
 """
 Binding specs to code.
 
-A workflow is one callable from the validated params model to its outputs by
-field name. The params model holds references where the request does; the
-callable asks the runner's :class:`Inputs` for the form it wants, a local path or
-a scipp object, so which form each parameter takes is decided here, next to the
-sciline key it maps to, and never by the spec. Where the bytes come from,
-a session's memory, the data store, or a work directory, is the runner's.
-The callable is stateless: no call affects a later one. It may offer a stage as
-well, a callable over a subset of its parameters that holds what those
-parameters cannot affect, which a session asks for and keeps; see
-:class:`StagedWorkflow`.
-A factory makes the callable; a throwaway runner calls it
-once, a session runner keeps it. Installed packages provide specs through the
-entry-point group ``ess.apps.specs`` and factories through
-``ess.apps.workflows`` under the same
+A workflow is the code behind a spec: given the values of a workflow record,
+it builds the stage a stage record names, from the stage's inputs to its
+outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
+references where the request does; the code asks the runner's :class:`Inputs`
+for the form it wants, a local path or a scipp object, so which form each
+parameter takes is decided here, next to the sciline key it maps to, and never
+by the spec. Where the bytes come from, a session's memory, the data store, or
+a work directory, is the runner's. A workflow holds nothing between calls; a
+session holds the stages it built. A factory makes the workflow, and a plain
+function ``(params, inputs) -> outputs`` is one too (:class:`FunctionWorkflow`).
+Installed packages provide specs through the entry-point group
+``ess.apps.specs`` and factories through ``ess.apps.workflows`` under the same
 entry-point name, so a backend can load every spec without importing any
 workflow code; only a runner asks for a factory. A notebook may bind a spec
 in-process, but may not shadow an installed one.
@@ -28,7 +26,6 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Collection, Iterable, Mapping
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -66,44 +63,114 @@ def resolve(value: Any, form: Form, inputs: Inputs) -> Any:
     return value
 
 
-Workflow = Callable[[BaseModel, Inputs], Mapping[str, Any]]
-Factory = Callable[[], Workflow]
+class StageCall(Protocol):
+    """
+    One stage of a workflow, called once per stage record.
+
+    ``params`` holds the parameters the stage takes as inputs, ``intermediates``
+    the intermediates it takes as inputs, already as objects, and the result
+    holds the stage's outputs by field name.
+    """
+
+    def __call__(
+        self, params: BaseModel, intermediates: Mapping[str, Any], inputs: Inputs
+    ) -> Mapping[str, Any]: ...
+
+
+class Accumulator(Protocol):
+    """sciline's accumulator: push values, read their accumulation."""
+
+    def push(self, value: Any) -> None: ...
+
+    @property
+    def value(self) -> Any: ...
+
+
+class Workflow(Protocol):
+    """
+    The code behind a spec: builds the stages that stage records name.
+
+    ``params`` holds the workflow record's values, with the spec's defaults for
+    the fields neither it nor the stage sets; ``inputs`` and ``outputs`` are the
+    stage's names. What a stage holds between calls is what its inputs cannot
+    affect, so holding it is a cache and dropping it always safe. A stage that
+    leaves a needed parameter unset fails here or when called, since only the
+    code knows what depends on what.
+
+    ``accumulator`` gives a fresh accumulator for an intermediate that an
+    :class:`ess.apps.records.Accumulate` may fill. Every accumulator must be
+    associative, which :func:`ess.apps.testing.assert_accumulator_is_associative`
+    checks.
+    """
+
+    def stage(
+        self,
+        params: BaseModel,
+        inputs: Collection[str],
+        outputs: Collection[str],
+        data: Inputs,
+    ) -> StageCall: ...
+
+    def accumulator(self, name: str) -> Accumulator: ...
+
+
+class FunctionWorkflow:
+    """
+    A plain function ``(params, inputs) -> outputs`` as a workflow.
+
+    A function has no graph to cut, so its only stages are those whose inputs
+    are parameters; they compute everything and hold nothing, and the outputs
+    not asked for are dropped. Nothing it computes can be accumulated.
+    """
+
+    def __init__(
+        self,
+        function: Callable[[BaseModel, Inputs], Mapping[str, Any]],
+        spec: WorkflowSpec,
+    ) -> None:
+        self._function = function
+        self._spec = spec
+
+    def stage(
+        self,
+        params: BaseModel,
+        inputs: Collection[str],
+        outputs: Collection[str],
+        data: Inputs,
+    ) -> StageCall:
+        intermediates = set(inputs) - set(self._spec.params.model_fields)
+        if intermediates:
+            raise ValueError(
+                f'{self._spec.id} is a plain function and takes no intermediates; '
+                f'asked for {sorted(intermediates)}'
+            )
+        fixed = params.model_dump()
+
+        def call(
+            params: BaseModel, intermediates: Mapping[str, Any], inputs: Inputs
+        ) -> dict[str, Any]:
+            full = self._spec.params.model_validate({**fixed, **params.model_dump()})
+            computed = self._function(full, inputs)
+            return {name: computed[name] for name in outputs if name in computed}
+
+        return call
+
+    def accumulator(self, name: str) -> Accumulator:
+        raise ValueError(f'{self._spec.id} is a plain function and accumulates nothing')
+
+
+def as_workflow(code: Any, spec: WorkflowSpec) -> Workflow:
+    """What a factory made, as a workflow: a plain function is wrapped."""
+    if callable(getattr(code, 'stage', None)):
+        return code  # type: ignore[no-any-return]
+    return FunctionWorkflow(code, spec)
+
+
+Factory = Callable[[], Any]
 Loader = Callable[[], Factory]
 SPEC_GROUP = 'ess.apps.specs'
 WORKFLOW_GROUP = 'ess.apps.workflows'
 How = Literal['entry_point', 'in_process']
-
-
-class StagedWorkflow(Protocol):
-    """
-    A workflow that also offers a stage over some of its parameters.
-
-    ``stage`` returns a callable with the workflow's own signature. It is valid
-    for every request that equals ``params`` in all fields outside
-    ``stage_inputs``, and for those it returns what the workflow returns:
-    ``wf.stage(p0, s, inputs)(p, inputs) == wf(p, inputs)``. It may hold whatever
-    the stage inputs cannot affect, which makes what it holds a cache and
-    dropping it always safe. ``default_stage_inputs`` names the fields to feed
-    when the session has not yet seen which parameter moves.
-
-    The workflow itself stays stateless; only the session decides whether to ask
-    for a stage, and holds the ones it asked for. A plain function offers none.
-    """
-
-    default_stage_inputs: Collection[str]
-
-    def __call__(self, params: BaseModel, inputs: Inputs) -> Mapping[str, Any]: ...
-
-    def stage(
-        self, params: BaseModel, stage_inputs: AbstractSet[str], inputs: Inputs
-    ) -> Workflow: ...
-
-
-def staged(workflow: Workflow) -> StagedWorkflow | None:
-    """The workflow as a stage offer, or None if it offers no stage."""
-    if not callable(getattr(workflow, 'stage', None)):
-        return None
-    return workflow  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)

@@ -6,9 +6,9 @@ LoKI at Larmor bound to the spec vocabulary: a beam centre and an I(Q) reduction
 The two specs are the instrument half of the notebook story in
 ``notebooks/loki-session.ipynb``: the beam centre is computed once from the
 sample run, its output feeds the I(Q) reduction as a reference, and the Q
-binning parameters are what a slider moves, so that the session stages the
-reduction over them and a rerun costs only the part of the sciline graph that
-depends on them.
+binning parameters are what a slider moves: the notebook names a stage over
+them, so that a rerun costs only the part of the sciline graph that depends on
+them.
 
 The workflow is the one of the ``loki-iofq`` tutorial in esssans. Everything the
 tutorial sets that is not a parameter here -- the detector name, gravity
@@ -186,7 +186,6 @@ def iofq_workflow() -> PipelineAdapter:
             'direct_beam': 'path',
         },
         targets={'iofq': BackgroundSubtractedIofQ},
-        default_stage_inputs=['q'],
     )
 
 

@@ -63,8 +63,9 @@ def test_publish_refuses_reused_and_in_process_records_by_default(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
-    client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='s')
-    second = client.run(HISTOGRAM, {'data': data, 'bins': 3}, label='s')
+    tune = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'], label='s')
+    tune.compute({'bins': 2})
+    second = tune.compute({'bins': 3})
     assert second.reused
     with pytest.raises(ValueError, match='reused'):
         client.publish(second.ref('histogram'), 'fake')

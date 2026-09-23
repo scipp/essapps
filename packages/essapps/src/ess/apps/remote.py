@@ -26,7 +26,7 @@ from pydantic import TypeAdapter
 from .backend import SubmitError, ValidationReport
 from .client import Client
 from .datastore import Serializers
-from .records import RunRecord, RunRequest, Status
+from .records import StageRecord, StageRequest, Status
 from .sources import Dataset
 from .spec import OutputRef, SerializedWorkflowSpec, SpecId
 from .views import ViewSpec
@@ -101,7 +101,7 @@ class RemoteBackend:
         return TypeAdapter(list[Dataset]).validate_python(r.json())
 
     def validate(
-        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
+        self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
     ) -> ValidationReport:
         body = {'request': request.model_dump(mode='json')}
         if group is not None:
@@ -109,14 +109,14 @@ class RemoteBackend:
         r = _checked(self._client.post('/validate', json=body))
         return ValidationReport.model_validate(r.json())
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
         body = {name: r.model_dump(mode='json') for name, r in group.items()}
         r = _checked(self._client.post('/submit', json=body))
-        return {name: RunRecord.model_validate(v) for name, v in r.json().items()}
+        return {name: StageRecord.model_validate(v) for name, v in r.json().items()}
 
-    def record(self, record_id: str) -> RunRecord:
+    def record(self, record_id: str) -> StageRecord:
         r = _checked(self._client.get(f'/records/{record_id}'))
-        return RunRecord.model_validate(r.json())
+        return StageRecord.model_validate(r.json())
 
     def records(
         self,
@@ -128,7 +128,7 @@ class RemoteBackend:
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[RunRecord]:
+    ) -> list[StageRecord]:
         body = {
             'proposal': proposal,
             'spec': spec.model_dump(mode='json') if spec is not None else None,
@@ -139,28 +139,28 @@ class RemoteBackend:
             'limit': limit,
         }
         r = _checked(self._client.post('/records/query', json=body))
-        return TypeAdapter(list[RunRecord]).validate_python(r.json())
+        return TypeAdapter(list[StageRecord]).validate_python(r.json())
 
     def latest(
         self, label: str, proposal: str, member_key: str | None = None
-    ) -> RunRecord | None:
+    ) -> StageRecord | None:
         body = {'label': label, 'proposal': proposal, 'member_key': member_key}
         r = _checked(self._client.post('/records/latest', json=body))
-        return None if r.json() is None else RunRecord.model_validate(r.json())
+        return None if r.json() is None else StageRecord.model_validate(r.json())
 
-    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+    def batch(self, label: str, proposal: str) -> list[StageRecord]:
         body = {'label': label, 'proposal': proposal}
         r = _checked(self._client.post('/records/batch', json=body))
-        return TypeAdapter(list[RunRecord]).validate_python(r.json())
+        return TypeAdapter(list[StageRecord]).validate_python(r.json())
 
-    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
         body = {'label': label, 'proposal': proposal}
         r = _checked(self._client.post('/records/members-to-retry', json=body))
-        return TypeAdapter(list[RunRecord]).validate_python(r.json())
+        return TypeAdapter(list[StageRecord]).validate_python(r.json())
 
     def wait(
         self, record_ids: list[str], *, timeout: float = 60.0, interval: float = 0.2
-    ) -> list[RunRecord]:
+    ) -> list[StageRecord]:
         """
         Poll ``record`` for each id until every one is terminal.
 
@@ -181,13 +181,13 @@ class RemoteBackend:
     def cancel(self, record_id: str) -> None:
         _checked(self._client.post(f'/records/{record_id}/cancel'))
 
-    def recompute(self, record_id: str) -> RunRecord:
+    def recompute(self, record_id: str) -> StageRecord:
         r = _checked(self._client.post(f'/records/{record_id}/recompute'))
-        return RunRecord.model_validate(r.json())
+        return StageRecord.model_validate(r.json())
 
-    def retry(self, record_id: str) -> RunRecord:
+    def retry(self, record_id: str) -> StageRecord:
         r = _checked(self._client.post(f'/records/{record_id}/retry'))
-        return RunRecord.model_validate(r.json())
+        return StageRecord.model_validate(r.json())
 
     def output(self, ref: OutputRef) -> Any:
         """

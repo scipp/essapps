@@ -1,38 +1,65 @@
 # Records, references, and where data lives
 
-This document covers the run request, the run record, the two forms of reference by which a request names data, where a run executes, and where its outputs live.
+This document covers the workflow record, the stage request and the stage record, the two forms of reference by which a request names data, where a run executes, and where its outputs live.
 It is the detail behind [Requests, records, references](architecture.md#requests-records-references) and [Where a run executes](architecture.md#where-a-run-executes).
 
 ## Requests and records
 
-Two runs from a notebook, the second taking an output of the first:
+Two runs from a notebook, the second taking an output of the first, and a stage that leaves one parameter to each call:
 
 ```python
 client = local(root, instrument='dream', proposal='p1', submitter='me')
 loaded = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=1)})
 hist = client.run(HISTOGRAM, {'data': loaded.ref('data'), 'bins': 8})
+
+wf = client.workflow(HISTOGRAM, {'data': loaded.ref('data')})     # 'bins' left unset
+tune = wf.stage(inputs=['bins'], outputs=['histogram'], label='hist')
+tune.compute({'bins': 16})
 ```
 
-A **run request** is everything needed to execute a workflow once, and its parameter values alone reproduce the outputs.
-It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
-The only path it may name is the identity of a local file that carries no run identity.
+The records mirror sciline.
+A **workflow record** is a pipeline with parameters set, like a configured `sciline.Pipeline`.
+A **stage record** is one call of a stage cut from it, like one `sciline.Stage.compute`.
+`client.run` is shorthand for a workflow record with every value set and one stage record with no inputs.
 
-`RunRequest` in `ess.apps.records`:
+`WorkflowRecord` in `ess.apps.records`:
 
 | Field | Purpose |
 |---|---|
-| `spec` | name and version of the workflow interface being called |
-| `params` | parameter values, with data fields holding references |
-| `instrument`, `proposal` | the scope of the run, both mandatory |
+| `spec` | name and version of the workflow interface |
+| `params` | the parameter values given, with data fields holding references; fields may be left unset |
+| `instrument`, `proposal` | the scope, both mandatory |
+| `id` | a hash of the fields above |
+
+**A workflow record is a value, not a run.**
+It has no outputs and never changes, and equal content gives an equal ID, so two clients that set the same values name the same workflow record.
+It holds the values given, not the spec's defaults, which apply at run time to fields that neither it nor the stage sets.
+It is created on first use and reused thereafter.
+
+A **stage request** is everything needed to run one stage once, and its values alone reproduce the outputs.
+It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
+The only path it may name is the identity of a local file that carries no run identity.
+
+`StageRequest`:
+
+| Field | Purpose |
+|---|---|
+| `workflow` | the workflow record, by value, so that a record is complete on its own |
+| `inputs` | the stage inputs by name: parameters the workflow record leaves unset, and intermediates the spec exposes |
+| `outputs` | the outputs to compute; empty means the spec's results, and the record lists them explicitly |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
 | `origin` | template version, rule version, lookup version and entry, and what was pinned beyond them |
 
-The last two serve batches and rules ([rules.md](rules.md)).
+A **stage input** is either a parameter or an intermediate.
+A parameter input holds a literal or a reference, like any parameter.
+An intermediate input holds a reference to an output of another stage record, or an **`Accumulate`**, which lists several such references and stands for their accumulation ([aggregation.md](aggregation.md)).
+`StageRequest.values()` is the workflow record's values plus the parameter inputs, the effective parameters of the call.
+The last two fields serve batches and rules ([rules.md](rules.md)).
 The origin is explanation and not provenance, because the resolved request alone reproduces the run.
 
-A **run record** is the request plus what happened to it.
-`RunRecord` adds to `request`:
+A **stage record** is the stage request plus what happened to it.
+`StageRecord` adds to `request`:
 
 | Field | Purpose |
 |---|---|
@@ -49,8 +76,19 @@ A **run record** is the request plus what happened to it.
 | `failure` | structured reason a run failed, so a user sees why without reading logs |
 | `published` | PID per published output |
 
+| | Workflow record | Stage record |
+|---|---|---|
+| sciline counterpart | `Pipeline` with parameters set | one `Stage.compute` call |
+| identity | its content | a UUID |
+| mutable | never | status and publication |
+| has outputs | no | yes |
+| label, member key, supersedes | no | yes |
+| created | on first use, reused thereafter | per call |
+
 Which of the two output fields a value lands in is decided by its type and is invisible to clients.
-A record is immutable once the run completes, except for its status and the publication state of its outputs.
+A stage record is immutable once the run completes, except for its status and the publication state of its outputs.
+The record store indexes stage records by the ID of their workflow record.
+To recompute a stage record, the runner rebuilds the pipeline from the workflow record, builds the stage from the input names and the outputs, resolves the inputs, and computes.
 
 **Resolved values, package versions, and the environment are what make "recompute this record" true.**
 Without them a changed default or an upgraded package silently changes what a record means.
@@ -64,6 +102,25 @@ Two kinds of content sit beside the record rather than in it: the runner's conso
 Annotations are labels and notes a user attaches after inspection, such as "use this vanadium".
 They are outside provenance, may change at any time, and nothing in the framework reads them.
 
+### What the backend checks
+
+The backend checks a stage request against the spec, without workflow code:
+
+- **Every name is known.**
+  A workflow record's parameter must be a parameter of the spec, and an output must be an output of it.
+  A stage input must be a parameter the workflow record leaves unset, or an intermediate the spec exposes.
+  A stage input that the workflow record also sets is refused, so the effective parameters have no overlap and no doubt about which value was used.
+- **Every value given is valid for its field**, field by field through the parameter model, and an intermediate input holds a reference or an `Accumulate`.
+- **An intermediate from a stage record of the same spec must come from the same workflow record.**
+  This is a comparison of two IDs, made before anything is computed.
+  It makes one value of every shared parameter a property of the records, not of the binding.
+- **References resolve**, as in [workflow-contract.md](workflow-contract.md#validation).
+
+**A missing parameter fails at run time, not at validation.**
+Whether a stage's inputs and the workflow record's values suffice for its outputs depends on the graph, which only the workflow code knows.
+A stage that leaves a needed parameter unset fails at the start of its run, with a structured reason.
+A supplied intermediate makes the parameters upstream of it irrelevant, and those may stay set in the workflow record; the stage record does not claim they affected the result.
+
 ## References
 
 A **reference** is a value that a parameter field of matching type may hold instead of a literal.
@@ -71,16 +128,17 @@ It is the only way a request names data, and it has two forms:
 
 | Form | Names | Skeleton | Example |
 |---|---|---|---|
-| Output reference | output X of record Y, optionally one element of a collection output | `OutputRef` | `{"record": "b41c…", "output": "data", "key": null}` |
+| Output reference | output X of stage record Y, optionally one element of a collection output | `OutputRef` | `{"record": "b41c…", "output": "data", "key": null}` |
 | Dataset reference | data the framework did not compute | `DatasetRef` | `{"dataset": "pid:20.500.12269/abc"}` |
 
 **A reference names data by identity, never by where the bytes are**, and a record keeps its references in that form.
 The data store's internal keys never appear in a request.
-A reference may name a **pending output**, one whose record has not completed yet, and the backend holds the request until it does.
+A reference may name a **pending output**, one whose stage record has not completed yet, and the backend holds the request until it does.
 Only an output reference can be pending, so the scheduler has one kind of dependency.
 
 **Provenance is the graph obtained by following references backwards**, from a result to the parameters, datasets, and software versions of every run that contributed.
-`Backend.provenance` walks it into a self-contained snapshot.
+A stage record references its workflow record, and both may hold references to outputs of other stage records.
+`Backend.provenance` walks it into a self-contained snapshot, which names the workflow record and the stage's inputs and outputs of every stage record on the way.
 There is no separate provenance model and no "which record produced this" query, because the reference names the record.
 
 ## Datasets
@@ -107,7 +165,7 @@ Datasets come from a dataset source ([rules.md](rules.md#the-dataset-source)).
 **Stand-ins resolve at submission**, because provenance must not depend on a search that could give a different answer later.
 A user may type a run number, a PID, or a path, and the backend turns it into a reference before it persists anything.
 A run number is looked up in SciCat, where it is unique within an instrument and proposal, and a path under the facility filesystem resolves to the PID of the dataset that owns it.
-A PID resolves to the run record named in its provenance snapshot while the store still has it, and otherwise to a dataset reference.
+A PID resolves to the stage record named in its provenance snapshot while the store still has it, and otherwise to a dataset reference.
 Any other path becomes a local dataset.
 Nothing is downloaded at submission, and SciCat is not needed again once a reference exists.
 
@@ -117,10 +175,10 @@ A missing copy is reported as such, never silently recomputed, because a silent 
 
 | Data | Where the truth lives | On a missing copy | Copies evictable |
 |---|---|---|---|
-| An output of a run record | the record: parameters, references, versions | recompute, explicitly | yes |
+| An output of a stage record | the record: parameters, references, versions | recompute, explicitly | yes |
 | A catalogue dataset | the PID, and SciCat says where the bytes are | download again | yes |
 | A local file | its identity and the user's path | nothing to recover from, unless a store copy was made | only by an explicit drop |
-| A published run record | the PID, whose entry carries the provenance snapshot | download rather than recompute | yes |
+| A published stage record | the PID, whose entry carries the provenance snapshot | download rather than recompute | yes |
 
 ## Where runs execute and where data lives
 
@@ -141,7 +199,7 @@ It holds because reduction here consumes datasets, and it would not hold for a l
 Ephemeral identities are dangerous when other things depend on them (scipp/esslivedata#1042), so nothing depends on this one.
 
 A session is defined by its owner, not by where it runs.
-Beside the outputs of its records it holds the **stages** of its workflows, which are what makes a rerun cheap ([stages.md](stages.md)).
+Beside the outputs of its records it holds the **stages** that stage records name, which are what makes a rerun cheap, and the accumulators of a growing sum ([stages.md](stages.md)).
 The workflow itself holds nothing between runs.
 In **local mode**, client, backend, launcher, session, and data store are one Python process: a notebook or a local application.
 In **shared mode** the backend is a service for one instrument, batch and automatic reduction run there without sessions, and the shared web UI submits and inspects.
@@ -191,21 +249,37 @@ When it expires the bytes are dropped with `Client.drop` and the record stays, w
 Store copies of local files are exempt, because the framework cannot bring them back.
 Such a copy is dropped only by an explicit operation on it or with its proposal, after which every record that reaches it through references is no longer recomputable, and such copies count against a per-proposal quota.
 
-## Reuse means a workflow boundary
+## Reuse means a stage record
 
-**A value that other requests reference must be an output of a run of its own, with its own record.**
-Workflow authors therefore cut a workflow into separate specs exactly where such a value arises, and nowhere else.
-Three reasons produce a cut.
+**A value that other requests reference must be an output of a stage record.**
+A value inside a pipeline becomes such an output when the spec exposes it as an intermediate and a stage names it as an output.
+Reuse therefore does not force a cut into separate specs, and separate pipelines remain separate specs.
+
+```python
+wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db})
+det = wf.stage(outputs=['detector_image']).compute()         # an intermediate as output
+centre = client.run(PICK_CENTRE, {'image': det.ref('detector_image')})
+
+reduce = wf.stage(inputs=['beam_centre', 'q_bins'], outputs=['iofq'])
+reduce.compute({'beam_centre': centre.ref('centre'), 'q_bins': 100})
+```
+
+The stage record of `reduce` says that `beam_centre` was supplied, and from which stage record.
+The parameters of the beam-centre finder that `wf` also holds did not affect this result, and the record does not claim they did: it says "this pipeline, cut at `beam_centre`".
+
+Three reasons make a value an output of a stage record.
 
 Reuse: one artefact feeds many runs, such as processed vanadium, a beam centre, or a direct beam, which sample reductions, batch, and automatic reduction all take as an input.
 This reason holds inside a session too, because the artefact needs a record of its own before batch can reuse it.
 
-Iteration without a session: an expensive step whose result is tuned from a throwaway runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
-Inside a session this reason disappears, because a stage recomputes only what a changed parameter affects and the loaded data stays a value the stage holds, with no record, no reference, and no life beyond the session.
+Iteration without a session: an expensive part whose result is tuned from a throwaway runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
+A stage that outputs the preprocessed data as an intermediate stores it, and a second stage takes it as input.
+Inside a session this reason disappears, because a held stage recomputes only what lies downstream of its inputs, and the loaded data stays a value the stage holds, with no record, no reference, and no life beyond the session.
 
-Aggregation: a sum over runs is cut where the members' contributions are added, so that each member has a record of its own ([aggregation.md](aggregation.md)).
+Aggregation: each member of a sum over runs is a stage record whose outputs are the intermediates that add ([aggregation.md](aggregation.md)).
 
-Splitting is the only strategy that works on a fire-and-forget remote runner, and it lets the UI tell which part is cheap, because that part is a separate workflow.
+Storing an intermediate is the only strategy that works on a fire-and-forget remote runner.
+The author decides which values are exposed; the caller decides which stages to cut at them.
 
 ## The record store
 
@@ -250,8 +324,8 @@ A request whose reference names a collection element that the completed producer
 Groups must be acyclic, and a group is validated whole before any record is created.
 A waiting request has no timeout, because every record it waits on reaches a terminal state through its own failure handling.
 
-This one primitive covers a vanadium stage feeding a sample reduction submitted together, temperature scans, angle series, and aggregation over a series of runs.
-An aggregation is one member request per run plus one combine request whose collection parameter references an output of each member ([aggregation.md](aggregation.md)).
+This one primitive covers a vanadium reduction feeding a sample reduction submitted together, temperature scans, angle series, and aggregation over a series of runs.
+An aggregation is one member stage request per run plus one finalize stage request whose `Accumulate` inputs reference an output of each member ([aggregation.md](aggregation.md)).
 
 **Members of a batch are independent.**
 There is no ordering between them, and rerunning a member is a new record under the same label and member key.
@@ -283,7 +357,11 @@ Reliable command delivery over Kafka was a long struggle in esslivedata (scipp/e
 *Every dataset as a record of a built-in `file` spec*, so that a reference has one form.
 It buys a UUID over an identity SciCat already keeps, a spec with no workflow, and a rule to stop the record store from becoming a catalogue, and gives nothing the two forms do not, because "which records used this dataset" is the same index over references either way.
 
-*References to intermediate results*, so that a value inside a workflow can be reused without cutting the workflow.
+*One record kind*: a record is one call of a spec with all its parameters set, and a session infers the stage from successive requests.
+The record cannot say which part of a pipeline ran, so aggregation needs specs cut at the values that add, and a supplied intermediate cannot be expressed at all.
+A caller cannot declare the stage it needs, so the first call of every slider computes everything and holds nothing.
+
+*References to values that no stage record outputs*, so that any node of a pipeline can be reused without exposing it.
 Such a value has no record, no parameters, and no versions, so provenance and recompute would stop at it.
 
 ## Costs
@@ -293,7 +371,10 @@ Remote sessions need a session launcher, an idle timeout, and a cap on the numbe
 Shared mode pays one disk write and one read per output, plus a process start per run.
 Whether a chained consumer exists is known only for requests submitted together as a group, so placement cannot be inferred for a request submitted on its own.
 
-The author chooses where to cut a workflow, and the cut is not always clean.
+Two record kinds: the record store, recompute, the UI, and publication handle the pair, and a stage record always joins to exactly one workflow record.
+A stage that leaves a needed parameter unset fails when it runs, not when it is submitted.
+
+The author chooses which intermediates to expose, with their formats, and the choice is not always clean.
 Processed vanadium in diffraction is rebinned onto the sample's edges without interpolation, so a stored dense vanadium is usable only for compatible binning, and the alternative is to keep it as events.
 
 Every rerun in a session is a complete record, so a series of N slider moves is N records, and labels keep that from being what a person sees ([rules.md](rules.md#labels-batches-and-slots)).

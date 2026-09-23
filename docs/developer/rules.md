@@ -23,6 +23,8 @@ batch_table(client, 'scan')
 ```
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
+Each member is a stage request: the template's blanks, here `run`, are its stage inputs, and every other value is its workflow record.
+The two members above agree on everything but their blanks, so they share one workflow record, and in a session one held stage.
 `batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
 Each shows the value the request was made with, whoever supplied it, and the `pinned` column names the fields of the row a person pinned.
@@ -53,6 +55,8 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
+The filled values of the template's blanks become the member's stage inputs, and all other filled values its workflow record.
+A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a workflow record of its own.
 The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
@@ -88,7 +92,7 @@ A **slot** is a label with no member key, owned by one interactive tool, so that
 | `lookup` | the table beside it, with its version |
 | `selector` | metadata criteria that pick the datasets, and a lower `Bound` |
 | `retry` | the failure reasons on which a failed record is resubmitted, and a limit |
-| `series` | optional: the dataset field that keys a series, and the combine template |
+| `series` | optional: the dataset field that keys a series, the intermediates to accumulate, and the outputs of the finalize |
 | `exclusions` | member keys the rule must not fire on, each with a reason |
 | `active` | whether the rule fires at all |
 
@@ -154,24 +158,46 @@ A run that silently did not happen is a decision the user cannot see, and [snake
 ## Series
 
 There are two kinds of batching.
-Batching for convenience is many independent requests from one template, made by a person or by a rule without a series key.
-Batching for merging is an aggregation: one request per member, and a combine request whose collection parameter references the members' contributions.
+Batching for convenience is many independent requests from one template, made by a person or by a rule without a series.
+Batching for merging is an aggregation: a member stage request per run, and a finalize stage request that accumulates the members' intermediates ([aggregation.md](aggregation.md)).
 
-**A rule with a series key submits a member request and a combine request per arrival.**
-Its `Series` field names the dataset field whose value keys datasets into a series, the combine template, the member output that is the contribution, and the collection parameter of the combine spec that takes it.
-The combine request references the contribution of every current member of the series, or the previous combine plus what that combine does not cover when chaining is valid, for which the condition is in [aggregation.md](aggregation.md#when-chaining-is-valid).
-Nothing on the rule says whether chaining is allowed, because that is a property of the combine's code, which the person writing a rule cannot know.
-Successive combines of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.
-A series of k runs therefore costs k-1 combines, and the superseded ones are the first evicted.
+**A rule with a series submits a member stage request and a finalize stage request per arrival.**
+
+```python
+rule = Rule(
+    name='normalize-series',
+    template=Template(name='normalize-defaults', spec=NORMALIZE.id,
+                      params={'floor': 1.5, 'scale': 2.0}, blanks=('run',)),
+    selector=Selector(match={'role': Like(pattern='sample')}),
+    series=Series(key='sample_name', accumulate=('numerator', 'denominator'),
+                  outputs=('normalized',)),
+)
+```
+
+`Series(key, accumulate, outputs)` names the dataset field whose value keys datasets into a series, the intermediates to accumulate, and the outputs of the finalize.
+The rule holds one template.
+Each member is the stage from the template's blanks to the intermediates in `accumulate`.
+Each finalize is cut from the arriving member's workflow record, takes one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
+It accumulates the intermediates of every current member of the series, or the previous finalize's values plus what that finalize does not cover when chaining is valid, for which the condition is in [aggregation.md](aggregation.md#when-chaining-is-valid).
+Nothing on the rule says whether chaining is allowed, because that is a property of the accumulator, which the person writing a rule cannot know.
+Successive finalizes of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.
+A series of k runs therefore costs k finalizes, and the superseded ones are the first evicted.
+
+**Members under different workflow records are not accumulated together.**
+A member whose workflow record differs from the others', because a lookup entry or a pinned value set something only for it, cannot be accumulated with them.
+The backend refuses such a finalize, and the trigger loop logs the refusal.
 
 **A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
-A series of fixed roles, a scatter and its transmission, is the same rule with the combine fired only when every role is present.
-The rule says whether its combine is published, and by default it is not.
+A series of fixed roles, a scatter and its transmission, is the same rule with the finalize fired only when every role is present.
+The rule says whether its finalize is published, and by default it is not.
 
 **Series membership is not stored.**
-The members are the records under the rule's label, and which series each belongs to is asked of the dataset source when a combine is submitted.
-A metadata correction at the instrument therefore moves a run between series and the next combine reflects it, while earlier records are untouched because they hold resolved references.
-An exclusion added after a member's record exists drops that member from the next combine the same way.
+The members are the records under the rule's label, and which series each belongs to is asked of the dataset source when a finalize is submitted.
+A metadata correction at the instrument therefore moves a run between series and the next finalize reflects it, while earlier records are untouched because they hold resolved references.
+An exclusion added after a member's record exists drops that member from the next finalize the same way.
+
+A combination that is not associative, such as a stitch over angles, is not a series.
+It is a spec of its own whose parameter is a list of references ([aggregation.md](aggregation.md#combinations-that-are-not-associative)), and a rule has no field that names it yet ([open-issues.md](open-issues.md#open-questions)).
 
 ## The dataset source
 
@@ -198,7 +224,7 @@ The batch table is a frame, and the pieces above are how it is built:
 | Pinned values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
 | Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
-| Chained combine | a cumulative reduction within the group; the superseded partials are its intermediate values |
+| Chained finalize | a cumulative reduction within the group; the superseded partials are its intermediate values |
 | Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
 
 The picture is exact for the view and wrong for the store.
@@ -239,9 +265,14 @@ Every backlogged sample would get the latest can rather than the can measured be
 An up-to-date check of this kind, as build systems and Snakemake make it, hides a decision from the user, because the run that did not happen is invisible.
 Requests are therefore always made, and a superseding record shows the repeat.
 
-**Waiting for a series to be complete before combining.**
+**Waiting for a series to be complete before accumulating.**
 Completeness is not knowable at the instrument, since the user decides to measure one more angle.
-Each arrival therefore combines what exists.
+Each arrival therefore accumulates what exists.
+
+**A combine template on the series.**
+The series names a second template, for a combine spec over a list of references to the members' contributions, with the output that is the contribution and the parameter that takes it.
+The rule then holds two templates that share most of their values and can disagree.
+With exposed intermediates, the finalize is cut from the member's own workflow record, so the rule holds one template.
 
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.
@@ -255,5 +286,5 @@ No current workflow needs it, and if one arises it is a rule on the completed pr
   Its default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
 - An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
 - The acquisition must write the fields a lookup or a selector matches on into the catalogue, which is a requirement on the instrument to be stated to the instrument teams early.
-- A series a person defines by hand, "these runs, and keep combining as more arrive", has no place here.
+- A series a person defines by hand, "these runs, and keep accumulating as more arrive", has no place here.
   It would be a rule with members a person lists instead of a selector, and it is left out until someone asks for it.

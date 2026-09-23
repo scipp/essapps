@@ -24,8 +24,8 @@ from typing import Any, Protocol
 
 from .binding import Registry, import_object
 from .datastore import DataStore
-from .records import Failure, RunRecord, RunResult, Status
-from .runner import JOB, MARKER, Runner
+from .records import Failure, RunResult, StageRecord, Status
+from .runner import JOB, MARKER, Job, Runner
 from .spec import OutputRef, Ref, SpecId
 
 
@@ -37,18 +37,18 @@ class Launcher(Protocol):
 
     def start(
         self,
-        record: RunRecord,
-        params: dict[str, Any],
+        record: StageRecord,
+        job: Job,
         locations: dict[Ref, Path],
-    ) -> RunRecord:
+    ) -> StageRecord:
         """Begin executing; returns the record terminal (session) or dispatched."""
         ...
 
-    def poll(self, record: RunRecord) -> RunRecord:
+    def poll(self, record: StageRecord) -> StageRecord:
         """Reconcile a dispatched record; returns it unchanged if still running."""
         ...
 
-    def cancel(self, record: RunRecord) -> None: ...
+    def cancel(self, record: StageRecord) -> None: ...
 
 
 class _CacheOutputs:
@@ -92,27 +92,25 @@ class SessionLauncher:
 
     def start(
         self,
-        record: RunRecord,
-        params: dict[str, Any],
+        record: StageRecord,
+        job: Job,
         locations: dict[Ref, Path],
-    ) -> RunRecord:
+    ) -> StageRecord:
         result = self.runner.run(
             record.id,
-            params,
+            job,
             self.registry.binding(record.spec),
             _SessionInputs(self._data, locations),
             _CacheOutputs(self._data),
-            label=record.request.label,
-            member_key=record.request.member_key,
         )
         record = record.model_copy()
         record.apply(result)
         return record
 
-    def poll(self, record: RunRecord) -> RunRecord:
+    def poll(self, record: StageRecord) -> StageRecord:
         return record
 
-    def cancel(self, record: RunRecord) -> None:
+    def cancel(self, record: StageRecord) -> None:
         pass
 
 
@@ -144,21 +142,21 @@ class SubprocessLauncher:
     def can_run(self, spec: SpecId) -> bool:
         return spec in self._registry
 
-    def workdir(self, record: RunRecord) -> Path:
+    def workdir(self, record: StageRecord) -> Path:
         return self._data.root / record.id
 
     def start(
         self,
-        record: RunRecord,
-        params: dict[str, Any],
+        record: StageRecord,
+        job: Job,
         locations: dict[Ref, Path],
-    ) -> RunRecord:
+    ) -> StageRecord:
         workdir = self.workdir(record)
         workdir.mkdir(parents=True, exist_ok=True)
         job = {
             'record': record.id,
             'spec': record.spec.model_dump(),
-            'params': params,
+            'job': job.model_dump(mode='json'),
             'registry': self.registry_path,
             'locations': {str(k): str(v) for k, v in locations.items()},
         }
@@ -178,7 +176,7 @@ class SubprocessLauncher:
         record.launcher_job = str(proc.pid)
         return record
 
-    def poll(self, record: RunRecord) -> RunRecord:
+    def poll(self, record: StageRecord) -> StageRecord:
         marker = self.workdir(record) / MARKER
         if marker.exists():
             done = json.loads(marker.read_text())
@@ -200,7 +198,7 @@ class SubprocessLauncher:
         )
         return record
 
-    def _alive(self, record: RunRecord) -> bool:
+    def _alive(self, record: StageRecord) -> bool:
         proc = self._procs.get(record.id)
         if proc is not None:
             if proc.poll() is None:
@@ -215,12 +213,12 @@ class SubprocessLauncher:
             return False
         return True
 
-    def _reap(self, record: RunRecord) -> None:
+    def _reap(self, record: StageRecord) -> None:
         proc = self._procs.pop(record.id, None)
         if proc is not None:
             proc.wait()
 
-    def cancel(self, record: RunRecord) -> None:
+    def cancel(self, record: StageRecord) -> None:
         proc = self._procs.pop(record.id, None)
         if proc is not None and proc.poll() is None:
             proc.kill()

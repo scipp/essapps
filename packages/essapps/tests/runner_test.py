@@ -9,9 +9,16 @@ import scipp as sc
 from pydantic import BaseModel
 
 from ess.apps.binding import Binding, Inputs
-from ess.apps.examples import LOAD, LoadParams, write_run
+from ess.apps.examples import (
+    LOAD,
+    NORMALIZE,
+    LoadParams,
+    load_workflow,
+    normalize_workflow,
+    write_run,
+)
 from ess.apps.records import Status
-from ess.apps.runner import FileInputs, Runner
+from ess.apps.runner import FileInputs, Job, Runner
 from ess.apps.spec import (
     Array,
     ArraySpec,
@@ -63,6 +70,15 @@ def two_run_workflow() -> Any:
     return run
 
 
+def job(
+    params: dict[str, Any],
+    outputs: tuple[str, ...],
+    inputs: dict[str, Any] | None = None,
+) -> Job:
+    """A job as the backend makes it; the workflow ID only names a held stage."""
+    return Job(workflow='wf', params=params, inputs=inputs or {}, outputs=outputs)
+
+
 def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
     tmp_path: Path,
 ) -> None:
@@ -74,8 +90,8 @@ def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
     binding = Binding(TWO_RUNS, two_run_workflow, 'in_process')
     inputs = FileInputs({str(ref): file}, sc.io.load_hdf5)
 
-    first = session.run('r1', params, binding, inputs, Collected())
-    second = session.run('r2', params, binding, inputs, Collected())
+    first = session.run('r1', job(params, ('total',)), binding, inputs, Collected())
+    second = session.run('r2', job(params, ('total',)), binding, inputs, Collected())
 
     assert first.status is Status.COMPLETED, first.failure
     assert second.status is Status.COMPLETED, second.failure
@@ -92,11 +108,44 @@ def test_a_changed_file_is_hashed_again(tmp_path: Path) -> None:
     binding = Binding(TWO_RUNS, two_run_workflow, 'in_process')
     inputs = FileInputs({str(ref): file}, sc.io.load_hdf5)
 
-    first = session.run('r1', params, binding, inputs, Collected())
+    first = session.run('r1', job(params, ('total',)), binding, inputs, Collected())
     write_run(file, [4.0, 5.0, 6.0, 7.0])
-    second = session.run('r2', params, binding, inputs, Collected())
+    second = session.run('r2', job(params, ('total',)), binding, inputs, Collected())
 
     assert first.checksums != second.checksums
+
+
+def test_a_dataset_in_a_stage_input_is_checksummed_but_does_not_name_the_stage(
+    tmp_path: Path,
+) -> None:
+    """
+    The held stage is named by the datasets the workflow record fixes; a
+    dataset the stage takes as input changes per call and only its checksum is
+    recorded.
+    """
+    files = [write_run(tmp_path / f'dream_{i}.h5', [float(i)] * 3) for i in (1, 2)]
+    refs = [dataset_ref(path=file) for file in files]
+    session = Runner(keep=True)
+    binding = Binding(NORMALIZE, normalize_workflow, 'in_process')
+    inputs = FileInputs(
+        {str(ref): file for ref, file in zip(refs, files, strict=True)},
+        sc.io.load_hdf5,
+    )
+    first, second = (
+        session.run(
+            f'r{i}',
+            job({}, ('normalized',), {'run': ref.model_dump(mode='json')}),
+            binding,
+            inputs,
+            Collected(),
+        )
+        for i, ref in enumerate(refs)
+    )
+    assert second.status is Status.COMPLETED, second.failure
+    assert not first.reused
+    assert second.reused
+    assert set(first.checksums) == {str(refs[0])}
+    assert set(second.checksums) == {str(refs[1])}
 
 
 def test_an_output_without_the_declared_dims_fails_the_run(tmp_path: Path) -> None:
@@ -116,7 +165,7 @@ def test_an_output_without_the_declared_dims_fails_the_run(tmp_path: Path) -> No
     outputs = Collected()
     result = Runner(keep=False).run(
         'r1',
-        {'run': ref.model_dump(mode='json')},
+        job({'run': ref.model_dump(mode='json')}, ('data', 'total')),
         Binding(LOAD, wrong_dims, 'in_process'),
         FileInputs({str(ref): file}, sc.io.load_hdf5),
         outputs,
@@ -145,7 +194,7 @@ def test_an_output_without_a_declared_coord_fails_the_run() -> None:
 
     result = Runner(keep=False).run(
         'r1',
-        {},
+        job({}, ('curve',)),
         Binding(spec, without_the_coord, 'in_process'),
         FileInputs({}, sc.io.load_hdf5),
         Collected(),
@@ -154,3 +203,24 @@ def test_an_output_without_a_declared_coord_fails_the_run() -> None:
     assert result.status is Status.FAILED
     assert result.failure.kind == 'output-shape'
     assert "'curve'" in result.failure.message
+
+
+def test_a_plain_function_holds_nothing_between_runs(tmp_path: Path) -> None:
+    """A function has no graph to cut, so no run of it comes out of held state."""
+    file = write_run(tmp_path / 'dream_1.h5', [1.0, 2.0, 3.0])
+    ref = dataset_ref(path=file)
+    session = Runner(keep=True)
+    binding = Binding(LOAD, load_workflow, 'in_process')
+    inputs = FileInputs({str(ref): file}, sc.io.load_hdf5)
+    results = [
+        session.run(
+            f'r{i}',
+            job({}, ('total',), {'run': ref.model_dump(mode='json')}),
+            binding,
+            inputs,
+            Collected(),
+        )
+        for i in range(2)
+    ]
+    assert [r.status for r in results] == [Status.COMPLETED] * 2
+    assert not any(r.reused for r in results)

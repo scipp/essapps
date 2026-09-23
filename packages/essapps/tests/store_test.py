@@ -2,19 +2,34 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from ess.apps.records import RunRecord, RunRequest, Status
+from ess.apps.records import (
+    Accumulate,
+    StageRecord,
+    StageRequest,
+    Status,
+    WorkflowRecord,
+)
 from ess.apps.spec import OutputRef, SpecId, dataset_ref
 from ess.apps.store import RecordStore, StoreLockedError
 
 SPEC = SpecId(name='reduce', version=1)
 
 
-def request(**kwargs) -> RunRequest:
-    base = {'spec': SPEC, 'instrument': 'dream', 'proposal': 'p1', 'submitter': 'simon'}
-    return RunRequest(**(base | kwargs))
+def request(
+    *,
+    spec: SpecId = SPEC,
+    proposal: str = 'p1',
+    params: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> StageRequest:
+    workflow = WorkflowRecord(
+        spec=spec, params=params or {}, instrument='dream', proposal=proposal
+    )
+    return StageRequest(workflow=workflow, submitter='simon', **kwargs)
 
 
 @pytest.fixture
@@ -24,7 +39,7 @@ def store(tmp_path: Path):
 
 
 def test_add_get_round_trips_record(store: RecordStore) -> None:
-    record = RunRecord(request=request(params={'threshold': 3}))
+    record = StageRecord(request=request(params={'threshold': 3}))
     store.add(record)
     assert store.get(record.id) == record
     assert record.id in store
@@ -32,13 +47,13 @@ def test_add_get_round_trips_record(store: RecordStore) -> None:
 
 
 def test_update_changes_status_and_missing_record_raises(store: RecordStore) -> None:
-    record = RunRecord(request=request())
+    record = StageRecord(request=request())
     store.add(record)
     record.status = Status.RUNNING
     store.update(record)
     assert store.get(record.id).status == Status.RUNNING
     with pytest.raises(KeyError):
-        store.update(RunRecord(request=request()))
+        store.update(StageRecord(request=request()))
 
 
 def test_members_to_retry_skips_members_in_flight_or_completed(
@@ -52,7 +67,7 @@ def test_members_to_retry_skips_members_in_flight_or_completed(
         'completed': Status.COMPLETED,
     }
     for key, status in members.items():
-        record = RunRecord(request=request(label='auto', member_key=key))
+        record = StageRecord(request=request(label='auto', member_key=key))
         store.add(record)
         record.status = status
         store.update(record)
@@ -63,9 +78,9 @@ def test_members_to_retry_skips_members_in_flight_or_completed(
 def test_list_filters_by_proposal_spec_status_label_and_member(
     store: RecordStore,
 ) -> None:
-    a = RunRecord(request=request(label='tune'))
-    b = RunRecord(request=request(proposal='p2', label='scan', member_key='300K'))
-    c = RunRecord(request=request(spec=SpecId(name='other', version=2)))
+    a = StageRecord(request=request(label='tune'))
+    b = StageRecord(request=request(proposal='p2', label='scan', member_key='300K'))
+    c = StageRecord(request=request(spec=SpecId(name='other', version=2)))
     c.status = Status.COMPLETED
     for r in (a, b, c):
         store.add(r)
@@ -79,9 +94,9 @@ def test_list_filters_by_proposal_spec_status_label_and_member(
 
 
 def test_latest_is_the_head_of_the_labels_chain(store: RecordStore) -> None:
-    first = RunRecord(request=request(label='tune'))
+    first = StageRecord(request=request(label='tune'))
     store.add(first)
-    second = RunRecord(request=request(label='tune'), supersedes=first.id)
+    second = StageRecord(request=request(label='tune'), supersedes=first.id)
     store.add(second)
     assert store.latest('tune', 'p1').id == second.id
     assert store.latest('tune', 'p2') is None
@@ -90,9 +105,9 @@ def test_latest_is_the_head_of_the_labels_chain(store: RecordStore) -> None:
 def test_the_head_does_not_depend_on_creation_time(store: RecordStore) -> None:
     """Several writers may submit under one label from different hosts, so the
     order under a label cannot depend on a clock."""
-    first = RunRecord(request=request(label='tune'))
+    first = StageRecord(request=request(label='tune'))
     store.add(first)
-    second = RunRecord(
+    second = StageRecord(
         request=request(label='tune'),
         supersedes=first.id,
         created=first.created - timedelta(hours=1),
@@ -104,12 +119,12 @@ def test_the_head_does_not_depend_on_creation_time(store: RecordStore) -> None:
 def test_latest_per_member_key_supersedes_only_within_the_member(
     store: RecordStore,
 ) -> None:
-    def member(key: str) -> RunRecord:
-        return RunRecord(request=request(label='scan', member_key=key))
+    def member(key: str) -> StageRecord:
+        return StageRecord(request=request(label='scan', member_key=key))
 
     first, other = member('300K'), member('310K')
     store.add(first, other)
-    corrected = RunRecord(
+    corrected = StageRecord(
         request=request(label='scan', member_key='300K'), supersedes=first.id
     )
     store.add(corrected)
@@ -121,14 +136,14 @@ def test_latest_per_member_key_supersedes_only_within_the_member(
 
 
 def test_batch_table_is_the_head_per_member_key(store: RecordStore) -> None:
-    def member(key: str | None) -> RunRecord:
-        return RunRecord(request=request(label='scan', member_key=key))
+    def member(key: str | None) -> StageRecord:
+        return StageRecord(request=request(label='scan', member_key=key))
 
     first, other = member('300K'), member('310K')
     by_hand = member(None)
-    elsewhere = RunRecord(request=request(label='other', member_key='300K'))
+    elsewhere = StageRecord(request=request(label='other', member_key='300K'))
     store.add(first, other, by_hand, elsewhere)
-    corrected = RunRecord(
+    corrected = StageRecord(
         request=request(label='scan', member_key='300K'), supersedes=first.id
     )
     store.add(corrected)
@@ -141,19 +156,43 @@ def test_batch_table_is_the_head_per_member_key(store: RecordStore) -> None:
 
 
 def test_referencing_finds_records_by_output_of_producer(store: RecordStore) -> None:
-    producer = RunRecord(request=request())
-    consumer = RunRecord(
+    producer = StageRecord(request=request())
+    consumer = StageRecord(
         request=request(
             params={'vanadium': OutputRef(record=producer.id, output='result')}
         )
     )
-    other = RunRecord(request=request())
+    other = StageRecord(request=request())
     for r in (producer, consumer, other):
         store.add(r)
     assert store.referencing(producer.id) == [consumer.id]
     assert store.referencing(producer.id, 'result') == [consumer.id]
     assert store.referencing(producer.id, 'other') == []
     assert store.referencing(other.id) == []
+
+
+def test_referencing_finds_references_in_stage_inputs_and_accumulations(
+    store: RecordStore,
+) -> None:
+    a, b = StageRecord(request=request()), StageRecord(request=request())
+    finalize = StageRecord(
+        request=request(
+            inputs={
+                'numerator': Accumulate(
+                    accumulate=[
+                        OutputRef(record=a.id, output='numerator'),
+                        OutputRef(record=b.id, output='numerator'),
+                    ]
+                ),
+                'denominator': OutputRef(record=a.id, output='denominator'),
+            }
+        )
+    )
+    store.add(a, b, finalize)
+    assert store.referencing(a.id) == [finalize.id]
+    assert store.referencing(a.id, 'denominator') == [finalize.id]
+    assert store.referencing(b.id, 'numerator') == [finalize.id]
+    assert store.get(finalize.id) == finalize
 
 
 def test_registry_records_where_copies_are(store: RecordStore, tmp_path: Path) -> None:
@@ -178,7 +217,7 @@ def test_second_writer_is_refused(tmp_path: Path) -> None:
 
 
 def test_store_reopens_after_close(tmp_path: Path) -> None:
-    record = RunRecord(request=request())
+    record = StageRecord(request=request())
     with RecordStore(tmp_path / 'records.db') as s:
         s.add(record)
     with RecordStore(tmp_path / 'records.db') as s:

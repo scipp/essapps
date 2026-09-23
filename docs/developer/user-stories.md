@@ -88,7 +88,7 @@ Actor: user in a notebook.
 Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
 Outcome: fits.
-The session takes the stage inputs from the fields a person changes ([stages.md](stages.md#who-chooses-the-stage-inputs)), and saving a request as a template blanks the data-reference fields and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
+The client names a stage whose inputs are the fields a person changes, and the session holds it, so only the post-processing runs again ([stages.md](stages.md#who-names-the-stage)); and saving a request as a template blanks the data-reference fields and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
 
 ### B2. Add a run to a sum, then remove one
 
@@ -101,7 +101,7 @@ Actor: user in a notebook.
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
 Outcome: fits.
-Adding a run is a member request plus a combine over the previous combined contribution and the new member, and removing one is a combine over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+Adding a run is a member stage record plus a finalize that accumulates the previous finalize's values with the new member, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#when-chaining-is-valid)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -154,7 +154,7 @@ Checks: records can be listed by proposal and time; a record shows its resolved 
 Outcome: fits.
 A record carries its proposal, its timestamps, and the parameter values the run resolved to ([records.md](records.md#requests-and-records)).
 
-## C. Chaining and stage outputs
+## C. Chaining
 
 ### C1. Beam centre feeds a sample reduction
 
@@ -166,7 +166,7 @@ Actor: user in the local or web application.
 Checks: the output is addressable as an input without export or import; the batch form can take it; provenance of the reduction reaches the run the beam centre came from.
 
 Outcome: fits.
-A value that other requests reference is an output of a record of its own, and a field may hold a literal or a reference ([records.md](records.md#reuse-means-a-workflow-boundary)).
+A value that other requests reference is an output of a stage record, and a field may hold a literal or a reference; an exposed intermediate, such as a beam centre, may be supplied as a stage input ([records.md](records.md#reuse-means-a-stage-record)).
 
 ### C2. Vanadium from the catalogue
 
@@ -174,10 +174,10 @@ Actor: user configuring single, batch, or automatic reduction.
 
 1. References a processed vanadium run that was published to SciCat.
 
-Checks: a published stage output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
+Checks: a published output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
 Outcome: fits.
-A PID typed at submission resolves to the run record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
+A PID typed at submission resolves to the stage record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
 
 ### C3. Per-bank diffraction results
 
@@ -200,10 +200,10 @@ Actor: reflectometry user.
 2. Reduces them together so the curves are scaled against each other.
 3. Exports one ORSO file with one dataset per angle.
 
-Checks: the combine that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
+Checks: the stitch that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
 Outcome: fits.
-The stitch is a combine spec without `carry`, recomputed over all members on each arrival ([aggregation.md](aggregation.md#combines-that-are-not-additive)).
+The stitch is a spec whose parameter is a list of references to the per-angle curves, recomputed over all members ([aggregation.md](aggregation.md#combinations-that-are-not-associative)).
 
 ### C5. Vanadium and sample tuned together
 
@@ -214,7 +214,7 @@ Actor: instrument scientist in a notebook.
 Checks: two workflows chained in memory; the vanadium output is still recorded so batch can reuse it later.
 
 Outcome: fits.
-Each workflow contributes a stage, and the first one's output is a record's output that the session holds in memory ([stages.md](stages.md#more-than-one-workflow)).
+Each workflow has a stage in the session, and the first one's output is an output of a stage record that the session holds in memory ([stages.md](stages.md#more-than-one-workflow)).
 
 ## D. Batch
 
@@ -304,10 +304,12 @@ Actor: reflectometry user during a beamtime.
 2. Nobody can say in advance how many angles there will be.
 3. After each run the stitched curve in the web UI grows by one angle, within minutes of the run.
 
-Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combine; the UI shows one curve per sample, not one per arrival.
+Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combination; the UI shows one curve per sample, not one per arrival.
 
-Outcome: fits.
-A rule with a series key submits a member request and a combine request on every arrival, and successive combines supersede each other under the series value as member key ([rules.md](rules.md#series)).
+Outcome: question.
+A rule with a series submits a member stage request and a finalize stage request on every arrival, and successive finalizes supersede each other under the series value as member key ([rules.md](rules.md#series)).
+That covers the sum of same-angle runs, which is an accumulation.
+The stitch over angles is not associative, so it is a spec over a list of references and not a finalize, and a rule has no field for such a spec ([open-issues.md](open-issues.md#open-questions)).
 
 ### E2. Automatic reduction goes quiet
 
@@ -343,7 +345,7 @@ Actor: instrument scientist.
 Checks: the rule moves to the new version deliberately; every record names the template version that made it.
 
 Outcome: fits.
-A rule names one template version and moves by copy, and what the old version made is reprocessed only when a person asks for it ([rules.md](rules.md#backlog-reprocess-and-rerun)).
+A rule names one template version and moves by copy, and what the old version made is reprocessed only when a person asks for it ([rules.md](rules.md#backlog-reprocess-and-retry)).
 
 ## F. Publication and provenance
 
@@ -501,7 +503,7 @@ A proposal's records and disk copies are dropped together after an export, refer
 
 ## Summary
 
-Of the 38 stories, 33 fit, four raise a question, and one is a gap.
+Of the 38 stories, 32 fit, five raise a question, and one is a gap.
 
 | Story | Title | Outcome |
 |---|---|---|
@@ -527,7 +529,7 @@ Of the 38 stories, 33 fit, four raise a question, and one is a gap.
 | D4 | Typo caught before 500 failures | fits |
 | D5 | Understand why a run failed | fits |
 | D6 | Rerun last year's batch with a new workflow version | fits |
-| E1 | Series grows, reduction follows | fits |
+| E1 | Series grows, reduction follows | question |
 | E2 | Automatic reduction goes quiet | fits |
 | E3 | Reduction of our own output | fits |
 | E4 | Template improved during a beamtime | fits |

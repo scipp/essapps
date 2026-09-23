@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import scipp as sc
 from pydantic import BaseModel
 
 from ess.apps.backend import SubmitError
@@ -27,8 +28,7 @@ from ess.apps.batch import (
 from ess.apps.client import Client
 from ess.apps.examples import (
     LOAD,
-    NORMALIZE_COMBINE,
-    NORMALIZE_CONTRIBUTE,
+    NORMALIZE,
     REBIN,
     SUBTRACT,
     LoadOutputs,
@@ -36,7 +36,7 @@ from ess.apps.examples import (
     load_workflow,
     write_run,
 )
-from ess.apps.records import RunRecord, Status
+from ess.apps.records import Accumulate, StageRecord, Status
 from ess.apps.rules import (
     AsOf,
     Between,
@@ -122,7 +122,7 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
         lookup=lookup,
         label='ladder',
     )
-    scales = {key: request.params['scale'] for key, request in group.items()}
+    scales = {key: request.workflow.params['scale'] for key, request in group.items()}
     assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
     assert scales['pid:pid/2'] == 4.0  # what was pinned over both
     assert scales['run:dream/1'] == 2.0  # the template, matching no entry
@@ -130,7 +130,9 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert origin.pinned == {'scale': 4.0}
     assert origin.entry == 'rest'
     assert origin.template == 'load-defaults/v1'
-    assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
+    # The template's blank is the stage input; the rest is the workflow record.
+    assert as_ref(group['pid:pid/1'].inputs['run']) == dataset_ref(pid='pid/1')
+    assert 'run' not in group['pid:pid/1'].workflow.params
 
 
 def test_apply_without_datasets_is_the_batch_form(
@@ -144,6 +146,8 @@ def test_apply_without_datasets_is_the_batch_form(
         scan, Status.COMPLETED
     )
     assert records['310K'].outputs['total']['value'] == 14.0
+    # Members that agree on everything but the blanks share one workflow record.
+    assert len({r.request.workflow.id for r in records.values()}) == 1
     assert [r.request.member_key for r in client.records(label='scan1')] == [
         '300K',
         '310K',
@@ -157,7 +161,7 @@ def test_apply_accepts_a_frame_indexed_by_member_key(
         {'run': list(scan.values()), 'scale': [1.0, 5.0]}, index=list(scan)
     )
     group = apply(client, template, pinned=frame, label='scan1')
-    assert [r.params['scale'] for r in group.values()] == [1.0, 5.0]
+    assert [r.workflow.params['scale'] for r in group.values()] == [1.0, 5.0]
     assert client.submit_group(group)['310K'].outputs['total']['value'] == 35.0
 
 
@@ -168,7 +172,7 @@ def test_a_blank_cell_of_a_typed_frame_falls_through_to_the_template(
         {'run': list(scan.values()), 'scale': [None, 5.0]}, index=list(scan)
     )
     group = apply(client, template, pinned=frame, label='scan1')
-    assert [r.params['scale'] for r in group.values()] == [2.0, 5.0]
+    assert [r.workflow.params['scale'] for r in group.values()] == [2.0, 5.0]
     assert [list(r.origin.pinned) for r in group.values()] == [
         ['run'],
         ['run', 'scale'],
@@ -233,7 +237,7 @@ def test_reprocess_offers_the_members_an_older_rule_version_made(
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
     assert sorted(group) == ['pid:pid/1', 'pid:pid/2']
-    assert group['pid:pid/1'].params['scale'] == 7.0
+    assert group['pid:pid/1'].workflow.params['scale'] == 7.0
     assert group['pid:pid/1'].origin.rule == 'auto-load/v2'
 
 
@@ -243,8 +247,8 @@ def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) 
     )
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
-    assert group['pid:pid/1'].params['scale'] == 8.0  # pinned, carried forward
-    assert group['pid:pid/2'].params['scale'] == 7.0  # filled again
+    assert group['pid:pid/1'].workflow.params['scale'] == 8.0  # pinned, carried forward
+    assert group['pid:pid/2'].workflow.params['scale'] == 7.0  # filled again
 
 
 def test_an_excluded_member_is_not_reprocessed(client: Client, rule: Rule) -> None:
@@ -482,25 +486,19 @@ def test_the_reservation_does_not_affect_other_labels(
 
 
 def series_rule() -> Rule:
-    """A rule whose members contribute and whose series combines per sample."""
+    """A rule whose members are stages to the intermediates, summed per sample."""
     return Rule(
         name='series',
         template=Template(
             name='normalize',
-            spec=NORMALIZE_CONTRIBUTE.id,
-            params={'floor': 1.5},
+            spec=NORMALIZE.id,
+            params={'floor': 1.5, 'scale': 2.0},
             blanks=('run',),
         ),
         series=Series(
             key='sample',
-            template=Template(
-                name='normalize-combine',
-                spec=NORMALIZE_COMBINE.id,
-                params={'scale': 2.0},
-                blanks=('contributions',),
-            ),
-            output='contribution',
-            parameter='contributions',
+            accumulate=('numerator', 'denominator'),
+            outputs=('normalized',),
         ),
     )
 
@@ -509,36 +507,43 @@ def sample(path: Path, values: list[float], pid: str) -> Dataset:
     return Dataset(path=write_run(path, values), pid=pid, metadata={'sample': 'sio2'})
 
 
-def _contributions(record: RunRecord) -> list[OutputRef]:
-    return [as_ref(r) for r in record.request.params['contributions']]
+def _accumulated(record: StageRecord) -> list[OutputRef]:
+    """What a finalize accumulates; every accumulated input lists the same records."""
+    lists = [
+        [r.record for r in Accumulate.model_validate(value).accumulate]
+        for value in record.request.inputs.values()
+    ]
+    assert all(records == lists[0] for records in lists)
+    return Accumulate.model_validate(record.request.inputs['numerator']).accumulate
 
 
-def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
+def test_each_arrival_of_a_series_submits_a_member_and_a_chained_finalize(
     client: Client, tmp_path: Path
 ) -> None:
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
     client.backend.sources.append(source)
     rule = series_rule()
     loop = TriggerLoop(client, rule)
-    first = loop.run_once()
-    assert [r.spec.name for r in first] == ['normalize-contribute', 'normalize-combine']
+    member, finalize = first = loop.run_once()
     assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
-    assert _contributions(first[1]) == [
-        OutputRef(record=first[0].id, output='contribution')
-    ]
+    assert member.request.outputs == ('numerator', 'denominator')
+    assert finalize.request.outputs == ('numerator', 'denominator', 'normalized')
+    assert finalize.request.workflow == member.request.workflow
+    assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
     client.wait(first)
 
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
-    member, combine = loop.run_once()
-    client.wait([member, combine])
-    assert _contributions(combine) == [
-        OutputRef(record=first[1].id, output='contribution'),
-        OutputRef(record=member.id, output='contribution'),
+    member, chained = client.wait(loop.run_once())
+    # The finalize accumulates onto the previous one, not onto both members.
+    assert _accumulated(chained) == [
+        OutputRef(record=finalize.id, output='numerator'),
+        OutputRef(record=member.id, output='numerator'),
     ]
-    assert combine.status == Status.COMPLETED, combine.failure
-    # Successive combines supersede each other under the series value.
-    assert combine.supersedes == first[1].id
-    assert client.latest('series', 'sio2').id == combine.id
+    assert chained.status == Status.COMPLETED, chained.failure
+    assert client.output(chained, 'denominator').value == 18.0
+    # Successive finalizes supersede each other under the series value.
+    assert chained.supersedes == finalize.id
+    assert client.latest('series', 'sio2').id == chained.id
     assert [r.request.member_key for r in client.batch('series')] == [
         'pid:pid/1',
         'pid:pid/2',
@@ -546,15 +551,44 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_combine(
     ]
 
 
+def test_a_finalize_per_arrival_equals_one_over_all_members(
+    client: Client, tmp_path: Path
+) -> None:
+    source = FakeDatasetSource()
+    client.backend.sources.append(source)
+    loop = TriggerLoop(client, series_rule())
+    members = []
+    for i, values in enumerate([[1.0, 2.0], [2.0, 2.0], [4.0, 3.0]], start=1):
+        source.add(sample(tmp_path / f'{i}.h5', values, f'pid/{i}'))
+        member, chained = client.wait(loop.run_once())
+        members.append(member)
+    wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})
+    (at_once,) = client.wait(
+        [
+            wf.stage(inputs=['numerator', 'denominator']).compute(
+                {
+                    name: Accumulate(accumulate=[m.ref(name) for m in members])
+                    for name in ('numerator', 'denominator')
+                }
+            )
+        ]
+    )
+    assert at_once.status == Status.COMPLETED, at_once.failure
+    assert chained.status == Status.COMPLETED, chained.failure
+    assert sc.identical(
+        client.output(chained, 'normalized'), client.output(at_once, 'normalized')
+    )
+
+
 def test_a_corrected_member_is_not_counted_twice(
     client: Client, tmp_path: Path
 ) -> None:
     """
-    Chaining is valid only while the previous combine covers current members.
+    Chaining is valid only while the previous finalize covers current members.
 
-    The correction gives the member a new record, so the previous combine covers
-    one that is no longer current, and the combine is made over all members
-    instead of adding the correction to a sum that still holds the old value.
+    The correction gives the member a new record, so the previous finalize covers
+    one that is no longer current, and the finalize accumulates all members
+    again instead of adding the correction to a sum that still holds the old value.
     """
     first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')
     source = FakeDatasetSource(first)
@@ -564,29 +598,63 @@ def test_a_corrected_member_is_not_counted_twice(
     client.wait(loop.run_once())
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
     _, chained = client.wait(loop.run_once())
-    assert client.output(chained, 'contribution')['denominator'].value == 18.0
+    assert client.output(chained, 'denominator').value == 18.0
 
     # The first run is acquired again and reduced again under its member key.
     write_run(first.path, [5.0, 5.0, 5.0, 5.0])
     corrected = client.submit_group(apply(client, rule, [first]))
-    combine = corrected['pid:pid/1+combine']
-    assert _contributions(combine) == [
-        OutputRef(record=corrected['pid:pid/1'].id, output='contribution'),
-        OutputRef(
-            record=client.latest('series', 'pid:pid/2').id, output='contribution'
-        ),
+    finalize = corrected['pid:pid/1+finalize']
+    assert _accumulated(finalize) == [
+        OutputRef(record=corrected['pid:pid/1'].id, output='numerator'),
+        OutputRef(record=client.latest('series', 'pid:pid/2').id, output='numerator'),
     ]
-    (done,) = client.wait([combine])
+    (done,) = client.wait([finalize])
     assert done.status == Status.COMPLETED, done.failure
     # The corrected member counts once: 20 from it and 8 from the other member,
     # not 18 from the superseded sum plus 20 again.
-    assert client.output(done, 'contribution')['denominator'].value == 28.0
+    assert client.output(done, 'denominator').value == 28.0
+
+
+def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
+    client: Client, tmp_path: Path
+) -> None:
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
+    client.backend.sources.append(source)
+    rule = series_rule()
+    loop = TriggerLoop(client, rule)
+    client.wait(loop.run_once())
+    rule.exclusions['pid:pid/1'] = 'bad sample alignment'
+
+    source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
+    member, finalize = client.wait(loop.run_once())
+    assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
+    assert client.output(finalize, 'denominator').value == 8.0
+
+
+def test_a_member_under_another_workflow_record_is_refused(
+    client: Client, tmp_path: Path
+) -> None:
+    """
+    A value pinned beyond the template's blanks makes another workflow record,
+    and a finalize accumulates only intermediates cut from its own.
+    """
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
+    client.backend.sources.append(source)
+    rule = series_rule()
+    client.wait(TriggerLoop(client, rule).run_once())
+
+    second = sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2')
+    source.add(second)
+    group = apply(client, rule, [second], {'pid:pid/2': {'floor': 0.0}})
+    with pytest.raises(SubmitError, match='cut from workflow record'):
+        client.submit_group(group)
+    assert client.batch('series')[-1].request.member_key == 'sio2'
 
 
 def test_a_series_recovers_from_a_member_that_failed(
     client: Client, tmp_path: Path
 ) -> None:
-    """A failed member is not a current member, so the next combine leaves it out."""
+    """A failed member is not a current member, so the next finalize leaves it out."""
     client.backend.sources.append(
         FakeDatasetSource(
             Dataset(
@@ -597,19 +665,19 @@ def test_a_series_recovers_from_a_member_that_failed(
     )
     rule = series_rule()
     loop = TriggerLoop(client, rule)
-    member, combine = client.wait(loop.run_once())
+    member, finalize = client.wait(loop.run_once())
     assert member.failure.kind == 'missing-dataset'
-    assert combine.status == Status.FAILED
+    assert finalize.status == Status.FAILED
 
     client.backend.sources.append(
         FakeDatasetSource(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2'))
     )
-    next_member, next_combine = client.wait(loop.run_once())
+    next_member, next_finalize = client.wait(loop.run_once())
     assert next_member.status == Status.COMPLETED, next_member.failure
-    assert _contributions(next_combine) == [
-        OutputRef(record=next_member.id, output='contribution')
+    assert _accumulated(next_finalize) == [
+        OutputRef(record=next_member.id, output='numerator')
     ]
-    assert next_combine.status == Status.COMPLETED, next_combine.failure
+    assert next_finalize.status == Status.COMPLETED, next_finalize.failure
 
 
 # The batch table
@@ -798,8 +866,8 @@ def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
     )
 
 
-def _can(record: RunRecord) -> str:
-    return as_ref(record.request.params['can']).dataset
+def _can(record: StageRecord) -> str:
+    return as_ref(record.request.inputs['can']).dataset
 
 
 def test_an_as_of_fill_is_the_nearest_earlier_matching_dataset(

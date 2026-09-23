@@ -18,7 +18,7 @@ from .backend import Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import Origin, RunRecord, RunRequest, Status
+from .records import Origin, StageRecord, StageRequest, Status, WorkflowRecord
 from .sources import Dataset, DatasetSource
 from .spec import (
     Format,
@@ -63,43 +63,62 @@ class Client:
     def specs(self) -> list[SerializedWorkflowSpec]:
         return self.backend.specs()
 
+    def workflow(
+        self,
+        spec: WorkflowSpec | SpecId,
+        params: BaseModel | Mapping[str, Any] | None = None,
+    ) -> WorkflowHandle:
+        """
+        A pipeline with parameters set, for this instrument and proposal.
+
+        Nothing runs and nothing is stored: the workflow record is a value, and
+        the stage records cut from it carry it.
+        """
+        spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
+        if isinstance(params, BaseModel):
+            params = params.model_dump(mode='json', exclude_unset=True)
+        record = WorkflowRecord(
+            spec=spec_id,
+            params=dict(params or {}),
+            instrument=self.instrument,
+            proposal=self.proposal,
+        )
+        return WorkflowHandle(self, record)
+
     def request(
         self,
         spec: WorkflowSpec | SpecId,
         params: BaseModel | Mapping[str, Any] | None = None,
         *,
+        inputs: Mapping[str, Any] | None = None,
+        outputs: Iterable[str] = (),
         label: str | None = None,
         member_key: str | None = None,
         origin: Origin | None = None,
-    ) -> RunRequest:
-        """A request for this instrument and proposal."""
-        spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
-        if isinstance(params, BaseModel):
-            params = params.model_dump(mode='json')
-        return RunRequest(
-            spec=spec_id,
-            params=dict(params or {}),
-            instrument=self.instrument,
-            proposal=self.proposal,
-            submitter=self.submitter,
+    ) -> StageRequest:
+        """A stage request cut from the workflow record of ``spec`` and ``params``."""
+        return self.workflow(spec, params).request(
+            inputs,
+            outputs=outputs,
             label=label,
             member_key=member_key,
-            origin=origin or Origin(),
+            origin=origin,
         )
 
-    def validate(self, request: RunRequest) -> ValidationReport:
+    def validate(self, request: StageRequest) -> ValidationReport:
         return self.backend.validate(request)
 
-    def submit(self, request: RunRequest) -> RunRecord:
+    def submit(self, request: StageRequest) -> StageRecord:
         return self.backend.submit({'request': request})['request']
 
-    def submit_group(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit_group(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
         """Submit together; ``@name`` in a reference names a member of the group."""
         return self.backend.submit(group)
 
     def run(
         self, spec: WorkflowSpec | SpecId, params: Any = None, **kwargs: Any
-    ) -> RunRecord:
+    ) -> StageRecord:
+        """A plain run: the stage with no inputs, computing the spec's results."""
         return self.submit(self.request(spec, params, **kwargs))
 
     def datasets(self) -> list[Dataset]:
@@ -142,43 +161,43 @@ class Client:
                 display={'name': dataset.path.name} | dataset.metadata,
             )
 
-    def record(self, record_id: str) -> RunRecord:
+    def record(self, record_id: str) -> StageRecord:
         return self.backend.record(record_id)
 
-    def records(self, **filters: Any) -> list[RunRecord]:
+    def records(self, **filters: Any) -> list[StageRecord]:
         return self.backend.records(proposal=self.proposal, **filters)
 
-    def latest(self, label: str, member_key: str | None = None) -> RunRecord | None:
+    def latest(self, label: str, member_key: str | None = None) -> StageRecord | None:
         """The record that supersedes the others under a label (a slot)."""
         return self.backend.latest(label, self.proposal, member_key=member_key)
 
-    def batch(self, label: str) -> list[RunRecord]:
+    def batch(self, label: str) -> list[StageRecord]:
         """The batch table under a label: the latest record per member key."""
         return self.backend.batch(label, self.proposal)
 
-    def members_to_retry(self, label: str) -> list[RunRecord]:
+    def members_to_retry(self, label: str) -> list[StageRecord]:
         """The failed or cancelled latest record of each member that never completed."""
         return self.backend.members_to_retry(label, self.proposal)
 
     def wait(
-        self, records: Iterable[RunRecord | str], timeout: float = 60.0
-    ) -> list[RunRecord]:
+        self, records: Iterable[StageRecord | str], timeout: float = 60.0
+    ) -> list[StageRecord]:
         ids = [r if isinstance(r, str) else r.id for r in records]
         return self.backend.wait(ids, timeout=timeout)
 
-    def cancel(self, record: RunRecord | str) -> None:
+    def cancel(self, record: StageRecord | str) -> None:
         self.backend.cancel(record if isinstance(record, str) else record.id)
 
-    def recompute(self, record: RunRecord | str) -> RunRecord:
+    def recompute(self, record: StageRecord | str) -> StageRecord:
         return self.backend.recompute(record if isinstance(record, str) else record.id)
 
     def output(
         self,
-        ref: OutputRef | RunRecord,
+        ref: OutputRef | StageRecord,
         output: str | None = None,
         key: str | None = None,
     ) -> Any:
-        if isinstance(ref, RunRecord):
+        if isinstance(ref, StageRecord):
             ref = ref.ref(output, key)
         return self.backend.output(ref)
 
@@ -194,8 +213,104 @@ class Client:
     def publish(self, ref: OutputRef, publisher: str, **kwargs: Any) -> str:
         return self.backend.publish(ref, publisher, **kwargs)
 
-    def provenance(self, record: RunRecord | str) -> dict[str, Any]:
+    def provenance(self, record: StageRecord | str) -> dict[str, Any]:
         return self.backend.provenance(record if isinstance(record, str) else record.id)
+
+
+class WorkflowHandle:
+    """A workflow record and the client that cuts stages from it."""
+
+    def __init__(self, client: Client, record: WorkflowRecord) -> None:
+        self.client = client
+        self.record = record
+
+    def with_params(self, **params: Any) -> WorkflowHandle:
+        """Another workflow record: these values changed or added."""
+        # Validated rather than copied, so that the values are held in plain form.
+        record = WorkflowRecord.model_validate(
+            self.record.model_dump(exclude={'id'})
+            | {'params': {**self.record.params, **params}}
+        )
+        return WorkflowHandle(self.client, record)
+
+    def request(
+        self,
+        inputs: Mapping[str, Any] | None = None,
+        *,
+        outputs: Iterable[str] = (),
+        label: str | None = None,
+        member_key: str | None = None,
+        origin: Origin | None = None,
+    ) -> StageRequest:
+        return StageRequest(
+            workflow=self.record,
+            inputs=dict(inputs or {}),
+            outputs=tuple(outputs),
+            submitter=self.client.submitter,
+            label=label,
+            member_key=member_key,
+            origin=origin or Origin(),
+        )
+
+    def stage(
+        self,
+        *,
+        inputs: Iterable[str] = (),
+        outputs: Iterable[str] = (),
+        label: str | None = None,
+    ) -> StageHandle:
+        """
+        The part of the pipeline from ``inputs`` to ``outputs``.
+
+        Inputs are parameters this workflow record leaves unset and
+        intermediates the spec exposes; without ``outputs``, the spec's
+        results. A session holds the stage from the first call on.
+        """
+        return StageHandle(self, tuple(inputs), tuple(outputs), label)
+
+
+class StageHandle:
+    """A stage cut from a workflow record; each call is one stage record."""
+
+    def __init__(
+        self,
+        workflow: WorkflowHandle,
+        inputs: tuple[str, ...],
+        outputs: tuple[str, ...],
+        label: str | None,
+    ) -> None:
+        self.workflow = workflow
+        self.inputs = inputs
+        self.outputs = outputs
+        self.label = label
+
+    def request(
+        self,
+        values: Mapping[str, Any],
+        *,
+        member_key: str | None = None,
+        origin: Origin | None = None,
+    ) -> StageRequest:
+        if set(values) != set(self.inputs):
+            raise ValueError(
+                f'the stage takes {sorted(self.inputs)}, given {sorted(values)}'
+            )
+        return self.workflow.request(
+            values,
+            outputs=self.outputs,
+            label=self.label,
+            member_key=member_key,
+            origin=origin,
+        )
+
+    def compute(
+        self, values: Mapping[str, Any] | None = None, **kwargs: Any
+    ) -> StageRecord:
+        """
+        Submit one call. It runs at once in a session and is dispatched otherwise,
+        and it waits for any pending output among ``values``.
+        """
+        return self.workflow.client.submit(self.request(values or {}, **kwargs))
 
 
 def local_backend(

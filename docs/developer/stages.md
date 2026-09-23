@@ -16,26 +16,36 @@ It must also keep its own promise that every result has a complete record.
 The `loki-session.ipynb` notebook in the skeleton shows both on the esssans tutorial data: a rerun with changed Q bins takes about a quarter of a second instead of three, and each rerun has a record that reproduces it from raw data.
 
 ```python
+wf = client.workflow(IOFQ, params)                   # ess.apps.loki.IOFQ, 'q' left unset
+tune = wf.stage(inputs=['q'], outputs=['iofq'], label='iofq')
 for num_bins in (50, 100, 200):
-    q = QEdges(start=0.01, stop=0.3, num_bins=num_bins)
-    record = client.run(IOFQ, {**params, 'q': q}, label='iofq')     # ess.apps.loki.IOFQ
+    record = tune.compute({'q': QEdges(start=0.01, stop=0.3, num_bins=num_bins)})
     plot(client.view(record.ref('iofq')))
 ```
 
-Every call submits a complete request.
-The first builds what it needs, and the later ones reuse it.
+`wf` is a workflow record, the reduction with every parameter but `q` set.
+`tune` names a stage cut from it, from `q` to `iofq`.
+Every call submits a complete stage request, `{workflow: wf, inputs: {'q': ...}, outputs: ['iofq']}`.
+The first call builds the stage, and the later ones reuse it.
 The rest of this document explains how.
 
 ## What a session holds
 
 A **session** is a runner process that belongs to one client and lives as long as the client wants.
-It holds two things in memory:
+It holds three things in memory:
 
-- the **outputs** of the records it ran, so that a chained request gets its input without a disk read;
-- **stages**, which hold intermediate results of a workflow.
+| Held object | Addressed by |
+|---|---|
+| output of a stage record | the stage record's ID |
+| stage | workflow record, input names, output names, checksums of the datasets it read |
+| accumulator | workflow record, the input it fills, the outputs pushed into it so far |
 
-Both are caches over records, by the two invariants in [records.md](records.md#where-runs-execute-and-where-data-lives): a record never names a session, and everything a session holds can be recomputed from records.
-Closing or losing a session loses time, and nothing else.
+The outputs let a chained request get its input without a disk read.
+A stage holds intermediate results of a workflow.
+An accumulator holds the running accumulation of a growing sum over runs.
+
+All three are caches over records, by the two invariants in [records.md](records.md#where-runs-execute-and-where-data-lives): a record never names a session, and everything a session holds can be recomputed from records.
+Dropping one, or closing or losing the session, costs time and never changes a result.
 
 A workflow holds nothing between calls.
 All state between runs is in the session, where the session can see it, bound it, and drop it.
@@ -55,115 +65,80 @@ flowchart LR
 
 With the Q bins, field `q`, as the only stage input, the frontier holds the converted events.
 A call with new Q bins runs the histogram and the normalisation, and nothing else.
+A stage input may also be an intermediate, such as a beam centre supplied from another stage record; the stage then cuts off whatever would compute it.
 
 A `Stage` recomputes everything downstream of all its inputs on every call.
 A stage whose inputs are `q` and the sample run therefore loads the run again when only `q` changes.
-Which parameters are stage inputs decides what a rerun costs.
+Which values are stage inputs decides what a rerun costs.
 It never decides what a rerun returns.
 
-## The stage offer
+## Who names the stage
 
-The framework does not import sciline, so it sees stages through an interface in field names.
-Beside its callable, a workflow may offer a stage (`ess.apps.binding.StagedWorkflow`):
+**The caller names the stage, before the first call.**
+A client builds a workflow record that leaves the moving parameters unset, and cuts a stage from it with `wf.stage(inputs=..., outputs=...)`.
+The workflow author cannot make this choice, because no fixed choice serves both "tune one parameter" and "the same settings over many runs".
+The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
+The caller knows which parameter will move, and the first call already builds the stage.
 
-```python
-class StagedWorkflow(Protocol):
-    default_stage_inputs: Collection[str]
+**Each stage record names its stage**: the workflow record it is cut from, its input names, and its outputs.
+The session holds the stage it built under that name, together with the checksums of the datasets the workflow record names, so that a file that changed on disk does not find a stage built from its earlier bytes.
+A later stage record that names the same stage computes only what lies downstream of its inputs.
+A stage record without a handle, such as a member that a rule submits, runs the stage it names in the same way.
+Nothing is inferred from earlier requests: a `client.run` that differs from the previous one in a single field is a new workflow record and a plain run.
 
-    def __call__(self, params: BaseModel, inputs: Inputs) -> Mapping[str, Any]: ...
-
-    def stage(self, params: BaseModel, stage_inputs: Set[str], inputs: Inputs) -> Workflow: ...
-```
-
-`stage` returns a callable with the workflow's own signature.
-It accepts every request that equals `params` in all fields outside `stage_inputs`, and for those it must return what the workflow returns:
-
-```python
-wf.stage(p0, stage_inputs, inputs)(p, inputs) == wf(p, inputs)
-```
-
-It may hold whatever the stage inputs cannot affect.
-What it holds is a cache, so dropping a stage is always safe.
-A plain function offers no stage, and the session calls it directly.
-
-## Who chooses the stage inputs
-
-**The session chooses, from what the person changes.**
-The workflow author cannot make the choice, because no fixed choice serves both "tune one parameter" and "the same settings over many runs".
-The Amor reflectometry binding showed this: its author named the sample run, the number of Q bins, and a scale factor as stage inputs, so a change of the Q bins loaded the run again.
-Only the session sees which parameter moves.
-
-The rule has three parts. `ess.apps.stages.Stages.workflow_for` implements it in about forty lines.
+`ess.apps.stages.Stages` holds stages and accumulators:
 
 ```python
-def workflow_for(request):
-    held = [s for s in stages
-            if s.spec == request.spec and s.fixed_values == request.values_outside(s.stage_inputs)]
-    if held:
-        return min(held, key=lambda s: len(s.stage_inputs))     # recomputes least
-
-    predecessor = superseded_request(request) or latest_request_under(request.label)
-    stage_inputs = fields_that_differ(request, predecessor) or workflow.default_stage_inputs
-    if not stage_inputs:
-        return workflow                                          # hold nothing
-    return hold(workflow.stage(request.params, stage_inputs, inputs))
+call, held = stages.stage(name, build)            # name: (workflow ID, inputs, outputs, checksums)
+value, held = stages.accumulate(name, refs, make, load)
 ```
-
-1. **A stage is addressed by what it holds.**
-   The address is the spec, the stage inputs, the values of all other fields, and the checksums of the datasets among them.
-   Values are compared as plain data, so a reference compares as a reference and nothing is loaded for the comparison.
-   The checksums keep a file that changed on disk from finding a stage built from its earlier bytes.
-   A request is routed to a held stage whose fixed values equal its own.
-2. **If no stage matches, the stage inputs are the fields in which the request differs from its predecessor.**
-   The **predecessor** is the request it supersedes under its label, or, for a new member of a batch, the latest request under the label.
-   A slider therefore names its own stage input.
-   A batch over runs names the columns of its table.
-   A correction to one batch member names the corrected field.
-3. **A request without a predecessor has nothing to differ from.**
-   The adapter may name `default_stage_inputs` for that case.
-   The default saves one full computation per series of reruns, and nothing depends on it.
-   Without a default, the session calls the workflow and holds nothing.
 
 A stage belongs to no label.
-Two plots that move the same parameter on the same data are routed to one stage, so the loaded data is held once.
-The label serves only to find the predecessor.
+Two plots that move the same parameter of the same workflow record are served by one stage, so the loaded data is held once.
 
 The session holds a bounded number of stages and drops the least recently used.
-A stage resolves the references among its fixed fields when it is built and holds those objects.
+A stage resolves the references among the workflow record's values when it is built and holds those objects.
 They count towards the session's memory, and they stay valid when the session's output cache drops its own copy.
+
+### Held accumulators
+
+A finalize stage of a sum over runs takes `Accumulate` inputs, each listing the outputs of the member stage records to accumulate ([aggregation.md](aggregation.md)).
+The session holds one accumulator per workflow record and input, with the list of outputs pushed into it so far.
+When a request's list begins with that list, the session pushes only the rest, so adding a third run pushes one value, not three.
+Any other list, such as one in which a corrected member replaces an earlier record, starts a fresh accumulator; nothing is ever taken out.
 
 ### What this costs
 
-The first move of a parameter that is not yet a stage input costs one full computation, because its stage must be built.
-A person who moves two parameters in turn pays that cost on every switch, unless both changed in one request, which builds one stage with both as inputs.
+The first call of a stage costs one full computation, because the stage must be built.
+A person who moves two parameters in turn either names a stage over both, which recomputes everything downstream of either on every call, or two stages over one each, which are cut from different workflow records and are built again whenever the other value changes.
 Making the switch cheap needs values held between two consecutive stages.
 That is the network of stages which scipp/sciline#245 deferred.
 
 ## The sciline adapter
 
-`ess.apps.adapter.PipelineAdapter` implements the stage offer for a sciline pipeline:
+`ess.apps.adapter.PipelineAdapter` builds each stage as a `sciline.Stage`:
 
 ```python
-def stage(self, params, stage_inputs, inputs):
+def stage(self, params, inputs, outputs, data):
     pipeline = self._pipeline.copy()
-    set_on(pipeline, fields_outside(stage_inputs), params)         # resolved once, now
-    stage = sciline.Stage(pipeline, outputs=targets, inputs=keys_of(stage_inputs))
-    return lambda params, inputs: outputs_of(stage.compute(values_of(stage_inputs, params)))
+    set_on(pipeline, params)                                       # resolved once, now
+    stage = sciline.Stage(pipeline, outputs=keys_of(outputs), inputs=keys_of(inputs))
+    return lambda params, intermediates, data: outputs_of(stage.compute(values_of(params, intermediates)))
 ```
 
-A stage input that the targets do not need is held and ignored, although sciline's `Stage` would refuse it.
-Such an input cannot change the result, and a caching choice by the session must not decide whether a run succeeds.
+A parameter input that the outputs do not need is held and ignored, although sciline's `Stage` would refuse it.
+Such an input cannot change the result, and which parameters a caller varies must not decide whether a run succeeds.
 
 Correctness follows from the sciline graph for any choice of stage inputs, provided the providers are pure.
-The test helper `ess.apps.testing.assert_stage_equals_workflow` checks the contract: it drives a workflow through a sequence of requests, once through held stages and once directly, and asserts equal outputs.
-Every workflow that offers a stage runs it.
-`tests/stages_test.py` shows the routing rules one by one.
+The test helper `ess.apps.testing.assert_stage_equals_workflow` checks the contract: it calls one stage with a sequence of values, as a session does, and compares each result with a plain run ([workflow-contract.md](workflow-contract.md#test-helpers)).
+Every workflow bound through an adapter runs it.
+`tests/stages_test.py` shows what a session holds and when it reuses it.
 
 ## Reruns and their records
 
-Every call through a stage is a complete request and writes a complete record.
-From the framework's side there is one kind of rerun.
-Changing a threshold and adding one more run to a sum are both a full parameter set that differs from the previous one in one field.
+Every call through a stage is a complete stage request and writes a complete stage record.
+Changing a threshold is a stage record with a new value of its stage input.
+Adding one more run to a sum is a member stage record plus a finalize stage record whose `Accumulate` lists one more output.
 
 The record carries a `reused` flag, which says that a held stage served it.
 Publication reads the flag and recomputes such a result in a throwaway process first, so that what enters SciCat was computed without held state.
@@ -182,11 +157,11 @@ A **label** is a field on a request, and the latest record under a label superse
 [rules.md](rules.md#labels-batches-and-slots) defines labels, which batches and rules use as well.
 For interactive work this means:
 
-- The client interface supplies a label whenever a request reruns a spec in a session, so a notebook user gets a slot without asking for one.
+- A stage handle carries its label, `wf.stage(..., label='iofq')`, so every call of it lands in the same slot.
 - A plot, a record browser, and a replay tool identify a series of reruns by its slot. The slot is the stable identity across superseded records.
 - Comparing two variants side by side is two slots. The second is assigned when the user forks. Discarding a variant drops its label from the UI and changes nothing else.
-- Cancelling the queued predecessors of a slot is one client call.
-- Inspection shows the latest record with its difference from the record it superseded: "one value changed" for a slider, "one more contribution" for a growing sum.
+- Cancelling the queued earlier records of a slot is one client call.
+- Inspection shows the latest record with its difference from the record it superseded: "one value changed" for a slider, "one more member" for a growing sum.
 - The data store evicts outputs of superseded records first.
 
 A slot adds nothing to the record model.
@@ -220,7 +195,7 @@ Tuning two workflows together, such as vanadium processing and the sample reduct
 The output of the first is a record's output that the session holds in memory, and the second references it.
 No disk access happens between them.
 
-A sum over a growing list of runs needs nothing beyond stages and held outputs.
+A sum over a growing list of runs needs held stages and held accumulators.
 See [aggregation.md](aggregation.md#in-a-session).
 
 ## Where sessions run
@@ -234,7 +209,7 @@ Until they exist, the shared web UI has no interactive loop.
 ## Sessions are one of three models
 
 Sessions are not the only way to give a person fast reruns.
-Two other models meet the same requirement, and all three share the records, the spec vocabulary, the client interface, and the callables.
+Two other models meet the same requirement, and all three share the records, the spec vocabulary, the client interface, and the workflow code.
 They differ in where the interactive state lives.
 
 **The session model** is what this document describes.
@@ -252,8 +227,8 @@ The application may compare that output with what was on screen and warn if they
 Shared interactive use is a hosting question, a process per user as JupyterHub provides, and the framework never sees a session.
 
 **The stateless model with splits** has no state between runs.
-The workflow author cuts the workflow where the expensive part ends, so that its result is a stored output of a record.
-On the first rung, every rerun is a throwaway process that reads that output and runs the cheap part.
+The workflow author exposes the value where the expensive part ends as an intermediate, and a first stage stores it as an output of a stage record.
+On the first rung, every rerun is a throwaway process that runs a second stage, which takes that output as an intermediate input and runs the cheap part.
 On the second rung, runners stay alive and keep their outputs, and the launcher routes a request to the runner that already holds its input.
 A routing miss falls back to the first rung, so the second rung is an addition to the first.
 
@@ -263,18 +238,18 @@ A routing miss falls back to the first rung, so the second rung is an addition t
 | Records created while exploring | one per change, grouped by slots | none | one per change |
 | Provenance of a kept result | complete | complete | complete |
 | What the user saw equals the record | by the stage contract and its test helper | checked once, when the result is kept | by construction |
-| Framework concepts added | session, held stages, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
+| Framework concepts added | session, held stages and accumulators, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
 | Interactive use in the shared web UI | remote sessions owned by the framework | a hosted process per user, owned by infrastructure | works, slowly; on the second rung without a process per user |
 | Disk volume | low | low | high; lower on the second rung |
-| Burden on workflow authors | none beyond the adapter | none beyond the adapter | a cut at every boundary a person tunes across |
+| Burden on workflow authors | none beyond the adapter | none beyond the adapter | an exposed intermediate at every boundary a person tunes across |
 | Losing the process | lose time; every step was recorded | lose the exploration since the last kept result | lose nothing |
 | Exploring a large volume | views from session memory | views from the application's memory | needs a chunked layout on disk |
 | Keeping a result | already a record; recomputed before publication | one full computation per kept result | already a record |
 
 On the first rung of the stateless model, two [user stories](user-stories.md) fail: tuning a SANS reduction with feedback within a second or two, and tuning vanadium and sample together, where each change to the vanadium runs both parts again.
 
-How a growing series is combined does not depend on the model.
-It is a chained combine in all three ([aggregation.md](aggregation.md#when-chaining-is-valid)).
+How a growing series is accumulated does not depend on the model.
+It is a chained finalize in all three ([aggregation.md](aggregation.md#when-chaining-is-valid)).
 
 ### What a rerun costs without held state
 
@@ -320,7 +295,7 @@ The skeleton implements the session model in local mode.
 The model for remote interactive work is not decided ([open-issues.md](open-issues.md#open-questions)).
 Three properties of the core keep all three models possible:
 
-- **The callable may ask for an object, not only a file** ([workflow-contract.md](workflow-contract.md#inputs-a-path-or-an-object)).
+- **Workflow code may ask for an object, not only a file** ([workflow-contract.md](workflow-contract.md#inputs-a-path-or-an-object)).
   A checkpoint application and a session both call workflow code in-process with scipp objects.
 - **A client that can reach the disk tier may turn a reference into an object in its own process.**
   An application can then hold its own state without the framework knowing.
@@ -330,7 +305,7 @@ Three properties of the core keep all three models possible:
 
 ### What sessions cost in concepts
 
-Without sessions the design loses the session itself, held stages and the stage offer, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
+Without sessions the design loses the session itself, held stages and held accumulators, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
 In the skeleton that is about one seventh of the source.
 Records, references, the spec vocabulary, the scheduler, rules, the trigger loop, validation, completion markers, publication, and proposal scoping are unaffected.
 Batch and automatic reduction use none of the session concepts.
@@ -338,6 +313,11 @@ Batch and automatic reduction use none of the session concepts.
 ## Alternatives considered
 
 These concern how stages are chosen and held, given the session model.
+
+**Stage inputs inferred from successive requests.**
+The session compares a request with the one it supersedes under its label and takes the fields that differ as the stage inputs.
+A slider then needs no declaration, but the record cannot say which stage ran, the first call of every slider computes everything and holds nothing, and a supplied intermediate cannot be expressed.
+A caller that knows which parameter will move has no way to say so.
 
 **Stage inputs named by the workflow author.**
 The author fixes which parameters a stage takes.
@@ -348,6 +328,7 @@ A parameter the author did not name costs a full computation on every change.
 The session keeps the workflow callable between runs, and the callable caches what it likes.
 Session state then sits inside workflow code, where the session cannot see, bound, or drop it: a stage with its own rebuild rule, accumulators for a series with their own staleness rule, caches of contributions shared between callables.
 Each workflow author reimplements invalidation, and the framework cannot tell whether a result came from held state.
+A workflow instead builds stages and accumulators, and the session holds them.
 
 **The framework caches sciline intermediates itself.**
 The framework would have to import sciline.
@@ -355,7 +336,8 @@ Caching every intermediate is not affordable with event data, and the graph does
 
 ## Costs
 
-- The first move of a new parameter, and every switch between two parameters, costs a full computation.
+- The first call of a stage, and every switch to a stage over another parameter, costs a full computation.
+- A client that wants a stage writes two calls, `client.workflow(...)` and `wf.stage(...)`; `client.run` covers the plain case.
 - Reuse is exact only if providers are pure. The test helper is the check.
 - A series of N slider moves is N records. Slots keep that from being what a person sees, and superseded outputs are evicted first.
 - A local application in one process shares the interpreter between UI and runs. A long run blocks the UI until sessions can run in another process.

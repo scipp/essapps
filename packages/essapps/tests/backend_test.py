@@ -31,8 +31,23 @@ def test_a_request_holds_plain_params_and_reads_back_equal(
     client: Client, run_ref: DatasetRef
 ) -> None:
     request = client.request(LOAD, {'run': run_ref})
-    assert request.params == {'run': {'dataset': 'run:dream/1'}}
-    assert client.record(client.submit(request).id).request == request
+    assert request.workflow.params == {'run': {'dataset': 'run:dream/1'}}
+    # A request without outputs is recorded with the spec's results.
+    recorded = client.record(client.submit(request).id).request
+    assert recorded == request.model_copy(update={'outputs': ('data', 'total')})
+
+
+def test_equal_workflow_values_name_one_workflow_record(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    first = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
+    second = client.run(LOAD, {'scale': 2.0, 'run': run_ref})
+    other = client.run(LOAD, {'run': run_ref, 'scale': 3.0})
+    assert first.id != second.id
+    assert first.request.workflow.id == second.request.workflow.id
+    assert other.request.workflow.id != first.request.workflow.id
+    changed = client.workflow(LOAD, {'scale': 2.0}).with_params(run=run_ref)
+    assert changed.record == first.request.workflow
 
 
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
@@ -40,11 +55,25 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
 ) -> None:
     record = client.run(LOAD, {'run': run_ref})
     assert record.status == Status.COMPLETED, record.failure
-    assert as_ref(record.request.params['run']) == run_ref
+    assert as_ref(record.request.workflow.params['run']) == run_ref
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
     assert record.resolved_params['run'] == {'dataset': 'run:dream/1'}
-    assert client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
+    provenance = client.provenance(record)
+    assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
+    assert provenance['workflow'] == record.request.workflow.id
+    assert provenance['stage'] == {'inputs': [], 'outputs': ['data', 'total']}
+
+
+def test_a_dataset_in_a_stage_input_is_checksummed(
+    client: Client, run_ref: DatasetRef, run_file: Path
+) -> None:
+    load = client.workflow(LOAD, {'scale': 2.0}).stage(inputs=['run'])
+    record = load.compute({'run': run_ref})
+    assert record.status == Status.COMPLETED, record.failure
+    checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
+    assert record.checksums == {str(run_ref): checksum}
+    assert client.provenance(record)['stage']['inputs'] == ['run']
 
 
 @pytest.fixture
@@ -162,7 +191,7 @@ def test_chaining_through_memory_and_literal_outputs(
         REBIN, {'data': loaded.ref('data'), 'bins': 2, 'offset': loaded.ref('total')}
     )
     assert rebinned.status == Status.COMPLETED, rebinned.failure
-    assert rebinned.request.params['offset'] == {
+    assert rebinned.request.workflow.params['offset'] == {
         'record': loaded.id,
         'output': 'total',
         'key': None,
@@ -176,10 +205,15 @@ def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
-    first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='tune')
-    second = client.run(HISTOGRAM, {'data': data, 'bins': 3}, label='tune')
+    tune = client.workflow(HISTOGRAM, {'data': data}).stage(
+        inputs=['bins'], label='tune'
+    )
+    first = tune.compute({'bins': 2})
+    second = tune.compute({'bins': 3})
     assert not first.reused
     assert second.reused
+    assert second.request.inputs == {'bins': 3}
+    assert 'bins' not in second.request.workflow.params
     assert client.latest('tune').id == second.id
     assert [r.id for r in client.records(label='tune')] == [first.id, second.id]
 
@@ -209,7 +243,7 @@ def test_group_with_pending_outputs_runs_in_dependency_order(
     assert total.sum().value == 36.0 * 3
     per_run = client.output(group['sum'].ref('per_run', '1'))
     assert per_run.sum().value == 72.0
-    assert group['sum'].request.params['runs'][0]['record'] == group['a'].id
+    assert group['sum'].request.workflow.params['runs'][0]['record'] == group['a'].id
 
 
 def test_group_is_refused_whole_when_one_member_is_invalid(
@@ -232,7 +266,6 @@ def test_group_is_refused_whole_when_one_member_is_invalid(
     [
         ({'run': {'record': 'zzz', 'output': 'file'}}, 'no such record'),
         ({'run': 'not-a-ref-or-path-dict', 'scale': 'x'}, 'scale'),
-        ({}, 'run'),
         ({'run': {'instrument': 'dream', 'run': 1}, 'sacle': 2.0}, 'sacle'),
     ],
 )
@@ -245,6 +278,35 @@ def test_validation_reports_errors_before_any_record_exists(
     with pytest.raises(SubmitError):
         client.submit(client.request(LOAD, params))
     assert client.records() == []
+
+
+def test_a_missing_required_parameter_fails_the_run_not_the_validation(
+    client: Client,
+) -> None:
+    """Only the code knows what a stage needs, so this is found out at run time."""
+    assert client.validate(client.request(LOAD, {})).ok
+    record = client.run(LOAD, {})
+    assert record.status == Status.FAILED
+    assert record.failure.kind == 'validation'
+
+
+@pytest.mark.parametrize(
+    ('params', 'inputs', 'outputs', 'message'),
+    [
+        ({'scale': 2.0}, {'scale': 3.0}, (), 'a stage input the workflow record'),
+        ({}, {'bogus': 1}, (), 'neither a parameter nor an intermediate'),
+        ({}, {}, ('nope',), 'not an output'),
+        ({}, {'scale': 'x'}, (), 'scale'),
+    ],
+)
+def test_validation_checks_the_names_of_a_stage(
+    client: Client, run_ref: DatasetRef, params, inputs, outputs, message
+) -> None:
+    request = client.request(
+        LOAD, {'run': run_ref, **params}, inputs=inputs, outputs=outputs
+    )
+    report = client.validate(request)
+    assert any(message in e for e in report.errors), report.errors
 
 
 def test_validation_checks_reference_types(client: Client, run_ref: DatasetRef) -> None:

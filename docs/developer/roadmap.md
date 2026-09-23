@@ -26,11 +26,11 @@ The skeleton was built in the opposite order, local mode and sessions first, bec
 
 | Part of the design | Phase 1 | Phase 2 adds | Phase 3 adds |
 |---|---|---|---|
-| [Records and references](records.md) | requests, records, output references, dataset references by PID | run-number resolution, recompute, dropping a proposal with its export bundle | local files as datasets with checksums |
+| [Records and references](records.md) | workflow records, stage records, output references, dataset references by PID | run-number resolution, recompute, dropping a proposal with its export bundle | local files as datasets with checksums |
 | [Data store](records.md#the-data-store) | disk tier and registry, a quota alarm | retention and drop | private memory caches, the second execution shape, write-out on demand |
 | [Scheduling](records.md#scheduling-pending-outputs-as-inputs) | none required; see below | pending outputs and groups, when a workflow asks | unchanged |
-| [Workflow contract](workflow-contract.md) | the callable, entry points, path or object, three validation layers, typed outputs, collections, code revision | unchanged | the stage offer, in-process binding |
-| [Aggregation](aggregation.md) | member requests and a combine request over all members, for angle series | contribute and combine specs with `carry`, for sums over runs | the fold, only if a series arrives faster than its contribution can be read and written |
+| [Workflow contract](workflow-contract.md) | the workflow protocol, entry points, path or object, three validation layers, typed outputs, collections, code revision | exposed intermediates | in-process binding |
+| [Aggregation](aggregation.md) | member requests and a spec over a list of references to all members, for angle series | member and finalize stages with accumulators and chaining, for sums over runs | held accumulators; the fold, only if a series arrives faster than its accumulated values can be read and written |
 | [Rules](rules.md) | templates from files, lookups, rules, `apply`, labels and member keys, the trigger loop, trigger status, cancel by label, real SciCat dataset source | the batch form, templates saved from requests | unchanged |
 | [Interactive work](stages.md) | views of whole small outputs, dense twins of event outputs | view vocabulary for slicing and overlays, a read cache in the service | sessions, held stages, slots, views from session memory |
 | [Client interface](operations.md#the-client-interface) | in-process, used by the trigger loop and a web page in the backend process | over HTTP, for a client outside the backend process | direct scipp access in notebooks |
@@ -64,7 +64,7 @@ Two simplifications are available in phase 1:
 ## Decisions that fall due in phase 2
 
 - **Pending outputs.**
-  The first need is a user who submits a vanadium reduction and its consumers together, or a temperature scan followed by a combine.
+  The first need is a user who submits a vanadium reduction and its consumers together, or a temperature scan followed by a sum.
   Until then, "submit, wait, submit the batch" costs the user one wait. The skeleton already implements pending outputs.
 - **Local uploads.**
   Refusing files from a user's disk in the shared service removes local files as datasets, checksums, the quota per proposal, and the retention exemption from phases 1 and 2.

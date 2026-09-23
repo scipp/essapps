@@ -3,13 +3,13 @@
 """
 The LoKI session of ``notebooks/loki-session.ipynb``, without the notebook.
 
-Two records chained by a reference, a rebinning under a label, and provenance
-back to the dataset references the requests name.
+Two records chained by a reference, a rebinning through a stage over the Q
+binning under a label, and provenance back to the dataset references the
+requests name.
 """
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -21,8 +21,6 @@ from ess.apps import loki
 from ess.apps.client import Client, local
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
-from ess.apps.stages import Stages
-from ess.apps.testing import LocalInputs
 
 RUNS = {
     'sample_run': 60387,
@@ -65,12 +63,6 @@ def q_edges(num_bins: int) -> QEdges:
     return QEdges(start=0.01, stop=0.3, num_bins=num_bins)
 
 
-def iofq_params(
-    inputs: dict[str, Any], center: Any, **overrides: Any
-) -> dict[str, Any]:
-    return inputs | {'beam_center': center, 'q': q_edges(100)} | overrides
-
-
 def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     client: Client, cache: Path
 ) -> None:
@@ -84,20 +76,27 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert center.failure is None, center.failure
     assert center.outputs['center']['unit'] == 'm'
 
-    first = client.run(loki.IOFQ, iofq_params(refs, center.ref()), label='iofq')
+    wf = client.workflow(loki.IOFQ, refs | {'beam_center': center.ref()})
+    rebin = wf.stage(inputs=['q'], label='iofq')
+    first = rebin.compute({'q': q_edges(100)})
     assert first.failure is None, first.failure
     assert client.output(first, 'iofq').sizes == {'Q': 100}
     # 60392 is both the background transmission and the empty beam: one file.
     assert len(first.checksums) == len(set(RUNS.values())) + 1
 
-    # A rebinning under the same label: a new record that supersedes the first.
-    second = client.run(
-        loki.IOFQ, iofq_params(refs, center.ref(), q=q_edges(50)), label='iofq'
-    )
+    # A rebinning under the same label: a new record that supersedes the first,
+    # served from the stage the first call built.
+    second = rebin.compute({'q': q_edges(50)})
     assert second.reused
     assert client.output(second, 'iofq').sizes == {'Q': 50}
     assert client.latest('iofq').id == second.id
     assert [r.id for r in client.records(label='iofq')] == [first.id, second.id]
+
+    # Another wavelength binning is another workflow record, whose stage is not held.
+    rewavelength = wf.with_params(
+        wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100)
+    ).stage(inputs=['q'])
+    assert not rewavelength.compute({'q': q_edges(50)}).reused
 
     provenance = client.provenance(second)
     (upstream,) = provenance['inputs']
@@ -105,33 +104,3 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert upstream['spec'] == str(loki.BEAM_CENTER.id)
     assert [DatasetRef(**raw) for raw in upstream['raw']] == [sample]
     assert refs['background_run'] in [DatasetRef(**raw) for raw in provenance['raw']]
-
-
-def test_moving_the_q_binning_comes_out_of_the_held_stage(cache: Path) -> None:
-    """
-    The binding names ``q`` as the default stage input, so the first request
-    already stages the reduction over it and a rebinning is served from the
-    stage; a change to any other parameter is not.
-    """
-    paths = {name: next(cache.glob(f'{run}-*')) for name, run in RUNS.items()} | {
-        'direct_beam': cache / DIRECT_BEAM
-    }
-    refs = {name: dataset_ref(path=path) for name, path in paths.items()}
-    inputs = LocalInputs({ref: paths[name] for name, ref in refs.items()})
-    center = loki.beam_center_workflow()(
-        loki.BeamCenterParams(sample_run=refs['sample_run']), inputs
-    )['center']
-    workflow = loki.iofq_workflow()
-    stages = Stages()
-
-    def call(**overrides: Any) -> bool:
-        params = loki.IofQParams(**iofq_params(refs, center, **overrides))
-        called, reused = stages.workflow_for(
-            loki.IOFQ.id, workflow, params, inputs, 'iofq'
-        )
-        called(params, inputs)
-        return reused
-
-    assert not call()
-    assert call(q=q_edges(50))
-    assert not call(wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100))

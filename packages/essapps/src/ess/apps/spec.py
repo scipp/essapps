@@ -5,17 +5,16 @@ The workflow spec of scipp/ess#690, plus what this framework adds.
 
 Everything a spec author sees comes from :mod:`ess.reduce.spec` and is
 re-exported here. The additions are the identity a dataset reference carries,
-the declared additive combine, and the derived models the runner and the
+the exposed intermediates, and the derived models the runner and the
 backend validate against. This module imports neither scipp nor sciline.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from types import UnionType
-from typing import Annotated, Any, Union, get_args, get_origin
+from typing import Any
 
 from ess.reduce.spec import (
     Array,
@@ -151,80 +150,60 @@ class SpecId(BaseModel, frozen=True):
         return cls(name=name, version=int(version))
 
 
-def _is_collection(annotation: Any) -> bool:
-    """Whether the annotation is a ``list`` or a ``dict``, through unions."""
-    origin = get_origin(annotation)
-    if origin is Annotated:
-        return _is_collection(get_args(annotation)[0])
-    if origin in (Union, UnionType):
-        return any(_is_collection(arg) for arg in get_args(annotation))
-    return origin in (list, dict)
-
-
 class SerializedWorkflowSpec(_SerializedWorkflowSpec, frozen=True):
-    """The plain-data form of scipp/ess#690 with the declared additive combine."""
+    """The plain-data form of scipp/ess#690 with the exposed intermediates."""
 
-    carry: Mapping[str, str] = {}
+    intermediates: tuple[str, ...] = ()
 
     @property
     def id(self) -> SpecId:
         return SpecId(name=self.name, version=self.version)
 
+    @property
+    def results(self) -> tuple[str, ...]:
+        """The outputs a plain run computes: those that are not intermediates."""
+        names = self.outputs_schema.get('properties', {})
+        return tuple(n for n in names if n not in self.intermediates)
+
 
 class WorkflowSpec(_WorkflowSpec, frozen=True):
     """
-    The spec of scipp/ess#690 with the declared additive combine.
+    The spec of scipp/ess#690 with the exposed intermediates.
 
-    A spec is the signature of one callable and a record one call of it, so an
-    aggregation over runs is two specs, a contribute spec and a combine spec,
-    and nothing about the split is declared here. What is declared is ``carry``:
-    that an output of one run may be carried back as an element of a collection
-    parameter of a later run of the same spec, where it stands for all the
-    elements it was combined from.
+    A spec is the signature of a pipeline: every parameter and every value a
+    caller may ask for. ``intermediates`` names the outputs that are not results
+    of a plain run but values inside the pipeline: a stage may compute them as
+    outputs, and may take them as inputs in place of what computes them. What
+    depends on what is known only to the binding.
     """
 
-    carry: Mapping[str, str] = Field(
-        default_factory=dict,
-        description="Collection parameter -> output whose value may be carried back "
-        "as one of its elements, where it stands for everything it combined.",
+    intermediates: tuple[str, ...] = Field(
+        default=(),
+        description="Outputs that a plain run does not compute, and that a stage "
+        "may take as inputs.",
     )
 
     @model_validator(mode='after')
-    def _carry_is_a_collection_of_the_output(self) -> WorkflowSpec:
-        """
-        What the spec can check on its own: the shapes at the two ends.
-
-        That the combination does not depend on grouping or order is a property
-        of the code, which no spec can check;
-        :func:`ess.apps.testing.assert_combine_is_associative` checks it.
-        """
-        params = data_fields(self.params)
-        outputs = data_fields(self.outputs)
-        for parameter, output in self.carry.items():
-            if parameter not in self.params.model_fields:
-                raise ValueError(f'no parameter named {parameter!r}')
-            if parameter not in params or not _is_collection(
-                self.params.model_fields[parameter].annotation
-            ):
-                raise ValueError(
-                    f'parameter {parameter!r} is not a collection of data references'
-                )
-            if output not in outputs:
-                raise ValueError(f'no data output named {output!r}')
-            if outputs[output].format is not params[parameter].format:
-                raise ValueError(
-                    f'output {output!r} is {outputs[output].format} and parameter '
-                    f'{parameter!r} takes {params[parameter].format}'
-                )
+    def _intermediates_are_outputs(self) -> WorkflowSpec:
+        unknown = sorted(set(self.intermediates) - set(self.outputs.model_fields))
+        if unknown:
+            raise ValueError(f'intermediates {unknown} are not outputs')
         return self
 
     @property
     def id(self) -> SpecId:
         return SpecId(name=self.name, version=self.version)
 
+    @property
+    def results(self) -> tuple[str, ...]:
+        """The outputs a plain run computes: those that are not intermediates."""
+        return tuple(
+            n for n in self.outputs.model_fields if n not in self.intermediates
+        )
+
     def serialize(self) -> SerializedWorkflowSpec:
         return SerializedWorkflowSpec(
-            **super().serialize().model_dump(), carry=dict(self.carry)
+            **super().serialize().model_dump(), intermediates=self.intermediates
         )
 
 

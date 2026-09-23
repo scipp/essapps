@@ -1,51 +1,60 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-One pipeline as two plain specs: contribute and combine.
+A sum over runs as two stages of one workflow record: a member stage per run to
+the intermediates, and a finalize stage from their accumulation.
 
 See docs/developer/aggregation.md.
 """
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any
 
 import pytest
 import sciline
 import scipp as sc
 
-from ess.apps.aggregation import Aggregation
-from ess.apps.client import Client, local
+from ess.apps.adapter import PipelineAdapter
+from ess.apps.backend import SubmitError
+from ess.apps.client import Client, StageHandle, WorkflowHandle, local
 from ess.apps.examples import (
-    LOAD,
+    ACCUMULATORS,
     NORMALIZE,
-    NORMALIZE_COMBINE,
-    NORMALIZE_CONTRIBUTE,
-    NORMALIZE_WIRING,
-    ContributeParams,
-    Counts,
     Denominator,
     Floor,
     Normalized,
     Numerator,
     RunFile,
     Scale,
-    denominator,
-    load_counts,
+    add,
     normalize_aggregation,
     normalize_pipeline,
-    normalized,
-    numerator,
     registry,
     write_run,
 )
-from ess.apps.records import RunRecord, Status
+from ess.apps.records import Accumulate, StageRecord, Status
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
-from ess.apps.testing import LocalInputs, assert_combine_is_associative, equal
+from ess.apps.spec import DatasetRef, dataset_ref
+from ess.apps.testing import assert_accumulator_is_associative, equal
+
+PARAMS = {'floor': 1.5, 'scale': 2.0}
+
+
+@pytest.fixture
+def runs(datasets: Path) -> list[DatasetRef]:
+    """Three runs of the same experiment: the members of a series."""
+    for i, values in enumerate(
+        [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]], start=1
+    ):
+        write_run(datasets / f'dream_{i}.h5', values)
+    return [dataset_ref(instrument='dream', run=i) for i in (1, 2, 3)]
 
 
 @pytest.fixture(params=[False, True], ids=['session', 'subprocess'])
-def client(request: pytest.FixtureRequest, tmp_path: Path, datasets: Path):
+def client(
+    request: pytest.FixtureRequest, tmp_path: Path, datasets: Path
+) -> Iterator[Client]:
     """The same runs in both execution shapes; the throwaway one names its registry."""
     client = local(
         tmp_path / 'store',
@@ -60,272 +69,165 @@ def client(request: pytest.FixtureRequest, tmp_path: Path, datasets: Path):
     client.close()
 
 
+class CountingAccumulator:
+    """The example's accumulator, recording every value pushed into it."""
+
+    def __init__(self, pushed: list[Any]) -> None:
+        self._accumulator = sciline.Buffered(add)()
+        self._pushed = pushed
+
+    def push(self, value: Any) -> None:
+        self._pushed.append(value)
+        self._accumulator.push(value)
+
+    @property
+    def value(self) -> Any:
+        return self._accumulator.value
+
+
 @pytest.fixture
-def runs(datasets: Path) -> list[DatasetRef]:
-    """Three runs of the same experiment: the members of a series."""
-    for i, values in enumerate(
-        [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]], start=1
-    ):
-        write_run(datasets / f'dream_{i}.h5', values)
-    return [dataset_ref(instrument='dream', run=i) for i in (1, 2, 3)]
+def pushed() -> list[Any]:
+    """Every denominator pushed into an accumulator; its length is the cost."""
+    return []
 
 
-def build(pipeline: sciline.Pipeline | None = None, **changes: Any) -> Aggregation:
-    """The wiring the example ships, with what a test changes."""
-    return Aggregation(
-        pipeline if pipeline is not None else normalize_pipeline(),
-        **(NORMALIZE_WIRING | changes),
-    )
+@pytest.fixture
+def session(tmp_path: Path, datasets: Path, pushed: list[Any]) -> Iterator[Client]:
+    """A session whose denominator accumulator is counted."""
+    counted = registry()
 
-
-Baseline = NewType('Baseline', float)
-
-
-def baseline() -> Baseline:
-    """A value no member affects; an accumulation key it must not be."""
-    return Baseline(1.0)
-
-
-# What the adapter checks against the graph when it is built
-
-
-def test_a_spec_whose_parameters_the_graph_disagrees_with_is_refused() -> None:
-    """``floor`` reaches the accumulation keys, so it is not the combine's."""
-    with pytest.raises(ValueError, match='normalize-combine/v1 declares params'):
-        build(combine=NORMALIZE_COMBINE.model_copy(update={'params': NORMALIZE.params}))
-
-
-def test_a_member_parameter_the_contribution_does_not_depend_on_is_refused() -> None:
-    """``scale`` is read after the accumulation keys, so it cannot be a member's."""
-    with pytest.raises(ValueError, match='are not needed by outputs'):
-        build(members=['run', 'scale'])
-
-
-def test_an_accumulation_key_that_does_not_depend_on_the_members_is_refused() -> None:
-    with pytest.raises(ValueError, match='do not depend on the members'):
-        build(
-            sciline.Pipeline(
-                [load_counts, numerator, denominator, normalized, baseline]
-            ),
-            accumulation_keys=NORMALIZE_WIRING['accumulation_keys']
-            | {'baseline': Baseline},
+    def workflow() -> PipelineAdapter:
+        return PipelineAdapter(
+            normalize_pipeline(),
+            keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
+            resolve={'run': 'path'},
+            targets={
+                'normalized': Normalized,
+                'numerator': Numerator,
+                'denominator': Denominator,
+            },
+            accumulators={
+                Numerator: ACCUMULATORS[Numerator],
+                Denominator: lambda: CountingAccumulator(pushed),
+            },
         )
 
-
-def test_a_combine_spec_must_chain_exactly_one_collection() -> None:
-    with pytest.raises(ValueError, match='exactly one collection parameter'):
-        build(combine=NORMALIZE_COMBINE.model_copy(update={'carry': {}}))
-
-
-# The two callables
-
-
-def test_the_combine_of_the_example_is_associative(datasets: Path) -> None:
-    runs = [
-        write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0]),
-        write_run(datasets / 'b.h5', [2.0, 2.0, 2.0, 2.0]),
-        write_run(datasets / 'c.h5', [4.0, 3.0, 2.0, 1.0]),
-    ]
-    refs = [dataset_ref(path=run) for run in runs]
-    aggregation = normalize_aggregation()
-    assert_combine_is_associative(
-        aggregation.contribute_workflow(),
-        aggregation.combine_workflow(),
-        NORMALIZE_COMBINE,
-        [ContributeParams(run=ref, floor=1.5) for ref in refs],
-        {'scale': 2.0},
-        LocalInputs(dict(zip(refs, runs, strict=True))),
+    counted.bind(NORMALIZE, workflow)
+    client = local(
+        tmp_path / 'session',
+        instrument='dream',
+        proposal='p1',
+        submitter='simon',
+        registry=counted,
+        sources=[FolderSource(datasets, '*.h5')],
     )
+    yield client
+    client.close()
 
 
-def counting_pipeline(loads: list[Path]) -> sciline.Pipeline:
-    """The example's pipeline, recording every read of a member."""
-
-    def counted(path: RunFile) -> Counts:
-        loads.append(path)
-        return load_counts(path)
-
-    return sciline.Pipeline([counted, numerator, denominator, normalized])
+def member_stage(wf: WorkflowHandle) -> StageHandle:
+    return wf.stage(inputs=['run'], outputs=['numerator', 'denominator'])
 
 
-def test_a_stage_over_a_finalize_parameter_does_not_read_the_members_again(
-    datasets: Path,
-) -> None:
-    """The stage combines once and holds the sum; only the scaling is redone."""
-    loads: list[Path] = []
-    run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    ref = dataset_ref(path=run)
-    inputs = LocalInputs({ref: run})
-    aggregation = build(counting_pipeline(loads))
-    contribution = aggregation.contribute_workflow()(
-        ContributeParams(run=ref, floor=1.5), inputs
-    )['contribution']
-    held = OutputRef(record='member', output='contribution')
-    served = _Served(inputs, {held: contribution})
-    combine = aggregation.combine_workflow()
-
-    def params(scale: float) -> Any:
-        return NORMALIZE_COMBINE.params.model_validate(
-            {'contributions': [held], 'scale': scale}
-        )
-
-    stage = combine.stage(params(1.0), {'scale'}, served)
-    first = stage(params(1.0), served)
-    second = stage(params(2.0), served)
-    assert loads == [run]
-    assert equal(second['normalized'], first['normalized'] * 2.0)
+def finalize_stage(wf: WorkflowHandle) -> StageHandle:
+    return wf.stage(inputs=['numerator', 'denominator'], outputs=['normalized'])
 
 
-def test_a_parameter_both_halves_read_reaches_finalize_from_the_contribution(
-    datasets: Path,
-) -> None:
-    """
-    ``floor`` decides what a contribution holds, so it is the contribute spec's
-    alone and the combine request cannot set it; the finalize half reads it back
-    off the contribution with the value the members were reduced with.
-    """
-
-    def normalized_over_floor(
-        num: Numerator, den: Denominator, scale: Scale, floor: Floor
-    ) -> Normalized:
-        return Normalized(num / den * scale + sc.scalar(floor))
-
-    run = write_run(datasets / 'a.h5', [1.0, 2.0, 3.0, 4.0])
-    ref = dataset_ref(path=run)
-    inputs = LocalInputs({ref: run})
-    aggregation = build(
-        sciline.Pipeline([load_counts, numerator, denominator, normalized_over_floor])
-    )
-    contribution = aggregation.contribute_workflow()(
-        ContributeParams(run=ref, floor=1.5), inputs
-    )['contribution']
-    held = OutputRef(record='member', output='contribution')
-    served = _Served(inputs, {held: contribution})
-    params = NORMALIZE_COMBINE.params.model_validate(
-        {'contributions': [held], 'scale': 0.0}
-    )
-    combined = aggregation.combine_workflow()(params, served)
-    assert combined['normalized'].sum().value == pytest.approx(4 * 1.5)
-
-
-class _Served:
-    """Inputs that serve contributions a test made, beside the run files."""
-
-    def __init__(self, inputs: LocalInputs, made: dict[Any, Any]) -> None:
-        self._inputs = inputs
-        self._made = made
-
-    def path(self, ref: Any) -> Path:
-        return self._inputs.path(ref)
-
-    def array(self, ref: Any) -> Any:
-        return self._made[ref] if ref in self._made else self._inputs.array(ref)
-
-
-# Through the framework
-
-
-def contribute(client: Client, run: DatasetRef, **params: Any) -> RunRecord:
-    return client.submit(
-        client.request(NORMALIZE_CONTRIBUTE, {'run': run, 'floor': 1.5, **params})
-    )
-
-
-def combine(client: Client, *of: RunRecord, output: str = 'contribution') -> RunRecord:
-    return client.run(
-        NORMALIZE_COMBINE,
-        {
-            'contributions': [OutputRef(record=r.id, output=output) for r in of],
-            'scale': 2.0,
-        },
-    )
-
-
-def test_a_member_run_produces_the_contribution_and_no_other_output(
-    client: Client, runs: list[DatasetRef]
-) -> None:
-    (member,) = client.wait([contribute(client, runs[0])])
-    assert member.status == Status.COMPLETED, member.failure
-    assert member.output_names() == {'contribution'}
-    assert set(client.output(member, 'contribution')) == {
-        'numerator',
-        'denominator',
-        'shared',
+def accumulated(members: list[StageRecord]) -> dict[str, Accumulate]:
+    """The finalize's inputs: the accumulation of every member's intermediates."""
+    return {
+        name: Accumulate(accumulate=[m.ref(name) for m in members])
+        for name in ('numerator', 'denominator')
     }
 
 
-def test_one_shot_a_batch_and_a_chained_series_agree(
+def by_sciline(datasets: Path) -> sc.DataArray:
+    """The same sum over the three runs, with sciline alone."""
+    runs = [datasets / f'dream_{i}.h5' for i in (1, 2, 3)]
+    pipeline = normalize_pipeline()
+    pipeline[Floor] = PARAMS['floor']
+    pipeline[Scale] = PARAMS['scale']
+    table = {i: {RunFile: run} for i, run in enumerate(runs)}
+    return normalize_aggregation(pipeline).compute(table)[Normalized]
+
+
+def test_a_member_stage_computes_the_intermediates_only(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    one_shot = client.run(NORMALIZE, {'run': runs[0], 'floor': 1.5, 'scale': 2.0})
-
-    # A chained series: one combine record per arrival, over the previous combine.
-    first = contribute(client, runs[0])
-    client.wait([first])
-    chain = combine(client, first)
-    second = contribute(client, runs[1])
-    client.wait([chain, second])
-    chained = combine(client, chain, second)
-
-    # A batch: both members and one combine over them, submitted together.
-    batch = client.submit_group(
-        {
-            'a': client.request(NORMALIZE_CONTRIBUTE, {'run': runs[0], 'floor': 1.5}),
-            'b': client.request(NORMALIZE_CONTRIBUTE, {'run': runs[1], 'floor': 1.5}),
-            'combine': client.request(
-                NORMALIZE_COMBINE,
-                {
-                    'contributions': [
-                        OutputRef(record='@a', output='contribution'),
-                        OutputRef(record='@b', output='contribution'),
-                    ],
-                    'scale': 2.0,
-                },
-            ),
-        }
-    )
-    done = client.wait([one_shot, chain, chained, batch['combine']])
-    assert [r.status for r in done] == [Status.COMPLETED] * 4, [r.failure for r in done]
-    one_shot, chain, chained, batch_combine = done
-    # A series of one member is the one-shot run of that member.
-    assert equal(
-        client.output(chain, 'normalized'), client.output(one_shot, 'normalized')
-    )
-    # Two members combined in one request or one at a time give the same result.
-    assert equal(
-        client.output(chained, 'normalized'),
-        client.output(batch_combine, 'normalized'),
-    )
-    assert client.output(chained, 'contribution')['denominator'].value == 18.0
+    wf = client.workflow(NORMALIZE, PARAMS)
+    (member,) = client.wait([member_stage(wf).compute({'run': runs[0]})])
+    assert member.status == Status.COMPLETED, member.failure
+    assert member.output_names() == {'numerator', 'denominator'}
+    assert client.output(member, 'denominator').value == 10.0
 
 
-def test_members_that_disagree_on_a_shared_parameter_fail_the_combine(
+def test_a_finalize_over_the_members_equals_the_sciline_aggregation(
+    client: Client, runs: list[DatasetRef], datasets: Path
+) -> None:
+    wf = client.workflow(NORMALIZE, PARAMS)
+    members = [member_stage(wf).compute({'run': run}) for run in runs]
+    total = finalize_stage(wf).compute(accumulated(members))
+    (done,) = client.wait([total])
+    assert done.status == Status.COMPLETED, done.failure
+    assert equal(client.output(done, 'normalized'), by_sciline(datasets))
+
+
+def test_a_growing_series_pushes_only_the_new_member(
+    session: Client, runs: list[DatasetRef], pushed: list[Any], datasets: Path
+) -> None:
+    """The session holds the accumulator; every record still lists all members."""
+    wf = session.workflow(NORMALIZE, PARAMS)
+    contribute, finalize = member_stage(wf), finalize_stage(wf)
+    members: list[StageRecord] = []
+    totals = []
+    for run in runs:
+        members.append(contribute.compute({'run': run}))
+        totals.append(finalize.compute(accumulated(members)))
+        assert len(pushed) == len(members)
+    assert [t.reused for t in totals] == [False, True, True]
+    assert len(totals[-1].request.inputs['denominator']['accumulate']) == 3
+    assert equal(session.output(totals[-1], 'normalized'), by_sciline(datasets))
+
+
+def test_a_corrected_member_accumulates_every_member_again(
+    session: Client, runs: list[DatasetRef], pushed: list[Any], datasets: Path
+) -> None:
+    """Nothing is taken out of an accumulator, so a correction starts a fresh one."""
+    wf = session.workflow(NORMALIZE, PARAMS)
+    contribute, finalize = member_stage(wf), finalize_stage(wf)
+    members = [contribute.compute({'run': run}) for run in runs]
+    finalize.compute(accumulated(members))
+    assert len(pushed) == 3
+
+    write_run(datasets / 'dream_2.h5', [5.0, 5.0, 5.0, 5.0])
+    members[1] = contribute.compute({'run': runs[1]})
+    corrected = finalize.compute(accumulated(members))
+    assert len(pushed) == 6
+    assert equal(session.output(corrected, 'normalized'), by_sciline(datasets))
+
+
+def test_an_accumulation_across_workflow_records_is_refused(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    """Which parameters may differ is the adapter's knowledge, so the combine
-    refuses before computing and the backend never sees the question."""
-    a = contribute(client, runs[0], floor=1.5)
-    b = contribute(client, runs[1], floor=0.0)
-    client.wait([a, b])
-    (failed,) = client.wait([combine(client, a, b)])
-    assert failed.status == Status.FAILED
-    assert 'must share' in failed.failure.message
+    """Members and finalize share every parameter by sharing a workflow record."""
+    wf = client.workflow(NORMALIZE, PARAMS)
+    members = client.wait([member_stage(wf).compute({'run': run}) for run in runs[:2]])
+    other = client.workflow(NORMALIZE, PARAMS | {'floor': 0.0})
+    request = finalize_stage(other).request(accumulated(members))
+    report = client.validate(request)
+    assert any('cut from workflow record' in e for e in report.errors)
+    with pytest.raises(SubmitError):
+        client.submit(request)
 
 
-def test_a_contribution_of_another_spec_passes_validation_and_fails_the_combine(
-    client: Client, runs: list[DatasetRef]
+@pytest.mark.parametrize('key', [Numerator, Denominator])
+def test_the_accumulators_of_the_example_are_associative(
+    key: Any, datasets: Path
 ) -> None:
-    """Chaining between specs is checked by format only, an open point of the
-    declared combine."""
-    loaded = client.wait([client.run(LOAD, {'run': runs[0]})])[0]
-    assert client.validate(
-        client.request(
-            NORMALIZE_COMBINE,
-            {
-                'contributions': [OutputRef(record=loaded.id, output='data')],
-                'scale': 2.0,
-            },
-        )
-    ).ok
-    (failed,) = client.wait([combine(client, loaded, output='data')])
-    assert failed.status == Status.FAILED
+    make: Callable[[], Any] = ACCUMULATORS[key]
+    counts = [
+        sc.io.load_hdf5(write_run(datasets / f'{i}.h5', values))
+        for i, values in enumerate([[1.0, 2.0], [2.0, 2.0], [4.0, 3.0]])
+    ]
+    parts = counts if key is Numerator else [c.data.sum() for c in counts]
+    assert_accumulator_is_associative(make, parts)

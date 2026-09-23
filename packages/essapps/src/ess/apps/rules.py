@@ -25,7 +25,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .records import Plain, RunRequest
+from .records import Plain, StageRequest
 from .sources import Dataset
 from .spec import SpecId, WorkflowSpec, data_fields
 
@@ -108,13 +108,13 @@ class Template(BaseModel, frozen=True):
     def from_request(
         cls,
         name: str,
-        request: RunRequest,
+        request: StageRequest,
         spec: WorkflowSpec,
         blank: Iterable[str] = (),
     ) -> Template:
         """Save a request as a template with its data-reference fields blank."""
         blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
-        params = {k: v for k, v in request.params.items() if k not in blanks}
+        params = {k: v for k, v in request.values().items() if k not in blanks}
         return cls(name=name, spec=request.spec, params=params, blanks=blanks)
 
     @property
@@ -281,23 +281,24 @@ class RetryPolicy(BaseModel, frozen=True):
 
 class Series(BaseModel, frozen=True):
     """
-    How a rule combines its members.
+    How a rule sums its members over runs.
 
     ``key`` is the dataset field whose value keys datasets into a series and is
-    the member key of the series' combines. ``template`` is the combine
-    template, versioned with the rule like the member's; ``output`` is the
-    member output each member contributes, and ``parameter`` the collection
-    parameter of the combine template's spec it fills.
+    the member key of the series' finalize records. Each member is the stage
+    from the template's blanks to the intermediates named in ``accumulate``;
+    each arrival adds a finalize, the stage from their accumulation to
+    ``outputs``, cut from the same workflow record as the members. A finalize
+    also outputs the accumulated values, so that the next one can accumulate
+    onto them instead of reading every member again, which is valid because
+    every accumulator is associative.
 
-    Nothing here says whether a combine may chain onto the previous one: that is
-    a property of the combine's code, which the person writing a rule cannot
-    know, and it is declared by ``carry`` on the combine spec.
+    A combination that is not an accumulation, such as a stitch over angles,
+    is a spec of its own over a list of references and not a series.
     """
 
     key: str
-    template: Template
-    output: str
-    parameter: str
+    accumulate: tuple[str, ...]
+    outputs: tuple[str, ...]
 
 
 class Rule(BaseModel):

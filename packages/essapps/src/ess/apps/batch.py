@@ -28,11 +28,11 @@ import pandas as pd
 from pydantic import BaseModel
 
 from .backend import GROUP_PREFIX, SubmitError
-from .client import Client
-from .records import Origin, RunRecord, RunRequest, Status
+from .client import Client, WorkflowHandle
+from .records import Accumulate, Origin, StageRecord, StageRequest, Status
 from .rules import AsOf, Lookup, LookupEntry, Rule, Series, Template, matches, precedes
 from .sources import Dataset
-from .spec import DatasetRef, OutputRef, SpecId, as_ref
+from .spec import DatasetRef, OutputRef, as_ref
 
 
 def apply(
@@ -43,7 +43,7 @@ def apply(
     *,
     lookup: Lookup | None = None,
     label: str | None = None,
-) -> dict[str, RunRequest]:
+) -> dict[str, StageRequest]:
     """
     Make requests from a rule, or from a template with its lookup.
 
@@ -52,12 +52,14 @@ def apply(
     is filled through the precedence ladder, the template, then the lookup entry
     that matched its dataset, then the values the submitter pinned, over the
     dataset itself, which fills the template's dataset field. ``pinned`` may be a
-    frame with the member key as index and the pinned values as columns.
+    frame with the member key as index and the pinned values as columns. The
+    template's blanks are the stage inputs of each member; everything else is
+    the workflow record they are cut from, so members that agree on it share it.
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
-    member's request is followed by a combine request over the series it belongs
-    to.
+    member's request is followed by a finalize request over the series it
+    belongs to.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -72,9 +74,9 @@ def apply(
         if datasets
         else [(key, None) for key in values]
     )
-    group: dict[str, RunRequest] = {}
+    group: dict[str, StageRequest] = {}
     arrived: dict[str, list[str]] = {}
-    combines: dict[str, str] = {}
+    finalizes: dict[str, str] = {}
     for key, dataset in members:
         entry = (
             lookup.entry(dataset)
@@ -82,9 +84,12 @@ def apply(
             else None
         )
         fills = _member_fill(client, template, entry, dataset) | values.get(key, {})
+        filled = template.fill(**fills)
         group[key] = client.request(
             template.spec,
-            template.fill(**fills),
+            {k: v for k, v in filled.items() if k not in template.blanks},
+            inputs={k: v for k, v in filled.items() if k in template.blanks},
+            outputs=series.accumulate if series is not None else (),
             label=label,
             member_key=key,
             origin=Origin(
@@ -102,8 +107,8 @@ def apply(
                 )
             value = str(dataset.fields[series.key])
             arrived.setdefault(value, []).append(key)
-            name = f'{key}+combine'
-            group[name] = _combine(
+            name = f'{key}+finalize'
+            group[name] = _finalize(
                 client,
                 of_rule,
                 series,
@@ -111,56 +116,63 @@ def apply(
                 value,
                 group,
                 arrived[value],
-                combines.get(value),
+                finalizes.get(value),
             )
-            combines[value] = name
+            finalizes[value] = name
     return group
 
 
-def _combine(
+def _finalize(
     client: Client,
     rule: Rule,
     series: Series,
     label: str,
     value: str,
-    group: Mapping[str, RunRequest],
+    group: Mapping[str, StageRequest],
     arrived: Iterable[str],
     previous_name: str | None,
-) -> RunRequest:
+) -> StageRequest:
     """
-    The combine request one arrival of a series submits.
+    The finalize request one arrival of a series submits.
 
-    It references the contribution of every current member of the series. If the
-    combine spec declares that its combined output may come back as an element of
-    the collection, and the previous combine covers only records that are still
-    current members, it references that combine instead of the members it covers.
-    A member that was corrected, excluded, or reprocessed leaves the previous
-    combine covering a record that is no longer current, and then the combine is
-    made over all current members, so that a correction is not counted twice.
+    It accumulates the intermediates of every current member of the series. If
+    the previous finalize covers only records that are still current members, it
+    accumulates onto that finalize's accumulated values instead of the members
+    it covers. A member that was corrected, excluded, or reprocessed leaves the
+    previous finalize covering a record that is no longer current, and then the
+    finalize accumulates all current members, so that a correction is not
+    counted twice.
     """
-    spec = client.spec(series.template.spec)
+    arrived = list(arrived)
     members = _current_members(client, rule, series, label, value)
     members |= {str(group[name].member_key): GROUP_PREFIX + name for name in arrived}
-    contributions = [
-        OutputRef(record=record, output=series.output) for record in members.values()
-    ]
-    chained = spec.carry.get(series.parameter)
-    previous = _previous_combine(client, group, label, value, previous_name)
-    if chained is not None and previous is not None:
+    elements = list(members.values())
+    previous = _previous_finalize(client, group, label, value, previous_name)
+    if previous is not None:
         record, request = previous
-        covered = _covers(client, group, series.parameter, spec.id, request)
-        if covered <= set(members.values()):
-            contributions = [OutputRef(record=record, output=chained)] + [
-                OutputRef(record=r, output=series.output)
-                for r in members.values()
-                if r not in covered
-            ]
-    return client.request(
-        spec.id,
-        series.template.fill(**{series.parameter: contributions}),
+        covered = _covers(client, group, series, request)
+        if covered <= set(elements):
+            elements = [record] + [r for r in elements if r not in covered]
+    workflow = WorkflowHandle(client, group[arrived[-1]].workflow)
+    return workflow.request(
+        {
+            name: Accumulate(
+                accumulate=[OutputRef(record=r, output=name) for r in elements]
+            )
+            for name in series.accumulate
+        },
+        outputs=(*series.accumulate, *series.outputs),
         label=label,
         member_key=value,
-        origin=Origin(template=series.template.id, rule=rule.id),
+        origin=Origin(template=rule.template.id, rule=rule.id),
+    )
+
+
+def _accumulates(request: StageRequest) -> bool:
+    """Whether a request is a finalize: a stage input is an accumulation."""
+    return any(
+        isinstance(v, dict) and set(v) == {'accumulate'}
+        for v in request.inputs.values()
     )
 
 
@@ -179,7 +191,9 @@ def _current_members(
     for record in client.batch(label):
         key = str(record.request.member_key)
         dataset = known.get(key)
-        if record.spec != rule.template.spec or key in rule.exclusions:
+        if record.spec != rule.template.spec or _accumulates(record.request):
+            continue
+        if key in rule.exclusions:
             continue
         if record.status in (Status.FAILED, Status.CANCELLED):
             continue
@@ -189,14 +203,14 @@ def _current_members(
     return members
 
 
-def _previous_combine(
+def _previous_finalize(
     client: Client,
-    group: Mapping[str, RunRequest],
+    group: Mapping[str, StageRequest],
     label: str,
     value: str,
     previous_name: str | None,
-) -> tuple[str, RunRequest] | None:
-    """The combine this arrival may chain onto, by record ID and request."""
+) -> tuple[str, StageRequest] | None:
+    """The finalize this arrival may accumulate onto, by record ID and request."""
     if previous_name is not None:
         return GROUP_PREFIX + previous_name, group[previous_name]
     record = client.latest(label, value)
@@ -207,35 +221,35 @@ def _previous_combine(
 
 def _covers(
     client: Client,
-    group: Mapping[str, RunRequest],
-    parameter: str,
-    spec: SpecId,
-    request: RunRequest,
+    group: Mapping[str, StageRequest],
+    series: Series,
+    request: StageRequest,
 ) -> set[str]:
     """
-    The member records a combine covers, directly or through the combines it
-    chains onto, found by following the chained parameter back.
+    The member records a finalize covers, directly or through the finalizes it
+    accumulates onto, found by following the accumulation back.
 
     The walk reads one record per element of the chain, so a series chained one
     arrival at a time costs a record read per member of it. Keeping the covered
     set on the record instead would make every writer responsible for it.
     """
     covered: set[str] = set()
-    for element in request.params.get(parameter, []):
+    accumulated = request.inputs.get(series.accumulate[0], {})
+    for element in accumulated.get('accumulate', []):
         ref = as_ref(element)
-        if ref is None or not isinstance(ref, OutputRef):
+        if not isinstance(ref, OutputRef):
             continue
         producer = _producer(client, group, ref.record)
-        if producer is not None and producer.spec == spec:
-            covered |= _covers(client, group, parameter, spec, producer)
+        if producer is not None and _accumulates(producer):
+            covered |= _covers(client, group, series, producer)
         else:
             covered.add(ref.record)
     return covered
 
 
 def _producer(
-    client: Client, group: Mapping[str, RunRequest], record: str
-) -> RunRequest | None:
+    client: Client, group: Mapping[str, StageRequest], record: str
+) -> StageRequest | None:
     """The request behind a reference, in this group or in the record store."""
     if record.startswith(GROUP_PREFIX):
         return group.get(record[len(GROUP_PREFIX) :])
@@ -297,7 +311,7 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, float) and value != value)
 
 
-def backlog(client: Client, rule: Rule) -> dict[str, RunRequest]:
+def backlog(client: Client, rule: Rule) -> dict[str, StageRequest]:
     """
     The datasets before the rule's bound that its selector matches.
 
@@ -316,7 +330,7 @@ def backlog(client: Client, rule: Rule) -> dict[str, RunRequest]:
     )
 
 
-def _stale(client: Client, rule: Rule) -> list[RunRecord]:
+def _stale(client: Client, rule: Rule) -> list[StageRecord]:
     """The latest records under the rule's label that another version made."""
     return [
         record
@@ -325,7 +339,7 @@ def _stale(client: Client, rule: Rule) -> list[RunRecord]:
     ]
 
 
-def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
+def reprocess(client: Client, rule: Rule) -> dict[str, StageRequest]:
     """
     The members whose latest record under the label came from an older rule version.
 
@@ -338,7 +352,7 @@ def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
 
 def retry(
     client: Client, rule: Rule | Template, *, label: str | None = None
-) -> dict[str, RunRequest]:
+) -> dict[str, StageRequest]:
     """
     The members under a label whose latest record failed or was cancelled.
 
@@ -350,12 +364,12 @@ def retry(
 
 
 def _selected_members(
-    known: Mapping[str, Dataset], rule: Rule | Template, records: Iterable[RunRecord]
-) -> list[RunRecord]:
+    known: Mapping[str, Dataset], rule: Rule | Template, records: Iterable[StageRecord]
+) -> list[StageRecord]:
     """Records of ``records`` that are members: a known dataset, not excluded.
 
-    A combine of a series is under the same label; it is told from a member by
-    its spec, which is the combine template's and not the member template's.
+    A finalize of a series is under the same label; it is told from a member
+    by its accumulated stage inputs.
     """
     excluded = rule.exclusions if isinstance(rule, Rule) else {}
     spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
@@ -363,6 +377,7 @@ def _selected_members(
         record
         for record in records
         if record.spec == spec
+        and not _accumulates(record.request)
         and record.request.member_key in known
         and record.request.member_key not in excluded
     ]
@@ -371,10 +386,10 @@ def _selected_members(
 def _again(
     client: Client,
     rule: Rule | Template,
-    records: Iterable[RunRecord],
+    records: Iterable[StageRecord],
     *,
     label: str | None = None,
-) -> dict[str, RunRequest]:
+) -> dict[str, StageRequest]:
     """Apply again over the datasets of these records, carrying the pinned values."""
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
     members = _selected_members(known, rule, records)
@@ -495,11 +510,11 @@ class TriggerLoop:
         for rule in self.rules:
             self.client.backend.reserve(rule.name, rule.name)
 
-    def run_once(self) -> list[RunRecord]:
+    def run_once(self) -> list[StageRecord]:
         """Fire every rule on every dataset it should, and return what was made."""
         self.refusals = {}
         datasets = self.client.datasets()
-        fired: list[RunRecord] = []
+        fired: list[StageRecord] = []
         for rule in self.rules:
             for dataset in datasets:
                 if not trigger_status(self.client, rule, dataset).fires:
@@ -535,7 +550,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
     rows: dict[str, dict[str, Any]] = {}
     for record in records:
         origin = record.request.origin
-        params = record.request.params
+        params = record.request.values()
         rows[str(record.request.member_key)] = {
             'record': record.id,
             'status': record.status.value,

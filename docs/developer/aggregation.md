@@ -17,219 +17,188 @@ The ESS workflows combine runs in different places, but the additive cases share
 ```mermaid
 flowchart LR
     subgraph member["per member"]
-        run[run] --> contribute[contribute stage] --> keys(("accumulation keys<br/>numerator, denominator"))
+        run[run] --> contribute[member stage] --> keys(("intermediates<br/>numerator, denominator"))
     end
     keys --> add[accumulators] --> finalize[finalize stage] --> result["I(Q)"]
     params[finalize parameters] --> finalize
 ```
 
-A stage per member produces an intermediate at one or more **accumulation keys**.
-The intermediates of all members are added.
-A finalize stage turns the sum into the outputs.
-Normalisation sits in the finalize stage, so the intermediate usually has two parts, a numerator and a denominator.
-A member's **contribution** is its values at the accumulation keys.
-Dimensionality and event mode do not change the shape: a 4D volume adds like a curve, and concatenation is addition for binned data.
+A stage per member computes one or more intermediates.
+The intermediates of all members are accumulated.
+A finalize stage turns the accumulated values into the outputs.
+Normalisation sits in the finalize stage, so there are usually two intermediates, a numerator and a denominator.
+Dimensionality and event mode do not change the shape: a 4D volume adds like a curve, and concatenation is accumulation for binned data.
 
-sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per accumulation key, and a finalize stage.
-The parameters that differ from member to member are its member keys.
-This documentation calls them **member parameters**, because a member key here is the label of a batch member.
-An `Aggregation` holds nothing between calls, so whoever loops over the members holds the contributions.
+sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per intermediate, which sciline calls an accumulation key, and a finalize stage.
+An `Aggregation` holds nothing between calls, so whoever loops over the members holds the accumulators.
 
-## Inside one callable, or across records
+## Inside one run, or across stage records
 
 An aggregation appears in one of two places, never half in each.
 
-**Inside one callable**, the callable runs `Aggregation.compute` itself, and the framework sees an ordinary spec.
+**Inside one run**, the workflow code runs `Aggregation.compute` itself, and the framework sees an ordinary spec.
 This is for members the framework has no records for: angle groups inside a Bifrost run, chunks of an NMX file.
 
-**Across records**, each member has a record of its own.
+**Across stage records**, each member has a stage record of its own.
 Members then run in parallel, a series grows by one member without reducing the others again, and a member can be removed.
 This is for runs, and the rest of this document is about it.
 
-## Two plain specs
+## Member stages and a finalize stage
 
-[A spec is the signature of one callable, and a record is one call of it](workflow-contract.md#the-callable).
-An `Aggregation` is not a callable but a composition of two, so it has no spec.
-A workflow package publishes two specs cut from one pipeline, and optionally the pipeline's own spec for a single run.
-From `ess.apps.examples`:
-
-```python
-class ContributeParams(BaseModel):      # what the contribute stage reads
-    run: OpaqueFile
-    floor: float = 0.0
-
-class ContributeOutputs(BaseModel):
-    contribution: Array()               # a scipp DataGroup, one entry per accumulation key
-
-class CombineParams(BaseModel):
-    contributions: list[Array()]        # references to contributions
-    scale: float = 1.0                  # what only the finalize stage reads
-
-class CombineOutputs(BaseModel):
-    contribution: Array()               # the combined contribution
-    normalized: Array(ArraySpec(dims=('x',)))
-
-NORMALIZE_CONTRIBUTE = WorkflowSpec(name='normalize-contribute', version=1,
-                                    params=ContributeParams, outputs=ContributeOutputs)
-NORMALIZE_COMBINE = WorkflowSpec(name='normalize-combine', version=1,
-                                 params=CombineParams, outputs=CombineOutputs,
-                                 carry={'contributions': 'contribution'})
-```
-
-- The **contribute spec** has one output, the contribution, so that one reference names everything a member adds.
-  What it holds is the author's choice: a numerator and a denominator, monitor spectra, proton charge.
-- The **combine spec** takes a collection of references to contributions and the parameters that only the finalize stage reads.
-  Its callable adds the contributions and runs the finalize stage on the sum.
-
-Both are plain specs.
-A contribute request and a combine request are validated, shown in a form, saved as templates, recorded, and recomputed like any other request.
-The framework's **aggregation** is a group of requests: one member request per row of a member table, and one combine request that references their contributions.
-The combine request waits for its members as [pending outputs](records.md#scheduling-pending-outputs-as-inputs), and the scheduler needs nothing else.
+An aggregation needs no spec of its own.
+The spec exposes the values that add as intermediates ([workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690)), and the binding gives an accumulator for each.
+A client cuts two stages from one workflow record that leaves the member's parameter unset:
 
 ```python
-members = {f'm{i}': client.request(NORMALIZE_CONTRIBUTE, {'run': run, 'floor': 1.5})
-           for i, run in enumerate(runs)}
-combine = client.request(NORMALIZE_COMBINE, {
-    'contributions': [OutputRef(record=f'@{name}', output='contribution') for name in members],
-    'scale': 2.0,
+wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})     # 'run' left unset
+
+member = wf.stage(inputs=['run'], outputs=['numerator', 'denominator'], label='members')
+members = [member.compute({'run': r}) for r in runs]               # dispatched in parallel
+
+finalize = wf.stage(inputs=['numerator', 'denominator'], outputs=['normalized'], label='total')
+total = finalize.compute({
+    name: Accumulate(accumulate=[m.ref(name) for m in members])
+    for name in ('numerator', 'denominator')
 })
-group = client.submit_group({**members, 'combine': combine})
+client.output(total, 'normalized')
 ```
 
-Whether the contribution holds events or a histogram is the author's choice at the accumulation key.
-Events keep the binning a parameter of the combine spec, and cost memory and disk.
-A histogram fixes the bins in the contribute spec, and is small.
+This is `sciline.Aggregation(pipeline, members=[RunFile])`: `member` is its contribute stage and `finalize` its finalize stage.
+Outside a session each `compute` is dispatched and returns at once, and the finalize stage record waits for its members as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
+
+**`Accumulate` is a stage input whose value is the accumulation of the outputs it lists.**
+The binding resolves it with the accumulator the author gave for that intermediate, in the order listed.
+The framework never adds arrays, never chooses between summation and concatenation, and never places normalisation.
+
+Whether an intermediate holds events or a histogram is the author's choice.
+Events keep the binning a parameter of the finalize stage, and cost memory and disk.
+A histogram fixes the bins in the member stage, and is small.
 The framework does not see the difference.
-It never adds arrays, never chooses between summation and concatenation, and never places normalisation.
 
-## The adapter serves both specs from one pipeline
-
-`ess.apps.aggregation.Aggregation` takes the pipeline, the two specs, the member parameters, the accumulation keys, and the package's combine function, and returns one callable per spec:
+A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is left unset in the workflow record and made an input of the finalize stage:
 
 ```python
-Aggregation(
-    sciline.Pipeline([load_counts, numerator, denominator, normalized]),
-    contribute=NORMALIZE_CONTRIBUTE, combine=NORMALIZE_COMBINE, run=NORMALIZE,
-    keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-    resolve={'run': 'path'},
-    targets={'normalized': Normalized},
-    members=['run'],
-    accumulation_keys={'numerator': Numerator, 'denominator': Denominator},
-    accumulate=add,
-)
+wf = client.workflow(NORMALIZE, {'floor': 1.5})                    # 'run' and 'scale' unset
+finalize = wf.stage(inputs=['numerator', 'denominator', 'scale'], outputs=['normalized'])
 ```
 
-**The adapter checks the specs against the graph when it is built.**
-The parameters of the contribute spec must be those the contribute stage reads.
-The literal parameters of the combine spec must be those only the finalize stage reads.
-An accumulation key that does not depend on the members is an error.
-A wrong spec is then an error at construction, not a wrong result.
+## Members share one workflow record
 
-**Members must share every contribute parameter that is not a member parameter**: the same masks, the same direct beam, the same wavelength bins.
-Only the adapter knows which parameters are member parameters, so the backend cannot make this check.
-The adapter writes the values of the shared parameters into the contribution, as one reserved entry beside the accumulation keys.
-The combine callable refuses contributions that disagree, after loading them and before computing anything.
-The combined contribution carries the same entry, so the check holds along a chain without walking it.
+Every member and the finalize stage record reference the same workflow record, so the members share every parameter they do not take as a stage input: the same masks, the same direct beam, the same wavelength bins.
+**The backend refuses an intermediate from a stage record of the same spec under a different workflow record.**
+That is a comparison of two IDs, made at validation and without workflow code.
 
-A parameter that both stages read reaches the finalize stage the same way.
-ess.sans has one, the uncertainty broadcast mode.
-It is a field of the contribute spec only, the finalize stage takes its value from the contribution, and the combine spec cannot set it differently from the members.
+A correction that changes a shared parameter, such as better masks, is a new workflow record, and all members run again under it.
+sciline does the same: a changed pipeline parameter means a new `Aggregation`.
 
-The adapter imports sciline, so it belongs in ess.reduce beside the spec module.
-It stays in the skeleton until `ess.reduce.spec` of scipp/ess#690 has merged.
-
-## The `carry` declaration
-
-A series that grows by one run per arrival should not read all earlier contributions each time.
-`carry={'contributions': 'contribution'}` on the combine spec says that the output `contribution` of one run may be passed as an element of the parameter `contributions` of a later run, where it stands for everything it was combined from:
+A workflow with two member tables, such as sample runs and background runs in ess.sans, is two member stages over one workflow record and one finalize stage:
 
 ```python
-combine([combine([a, b]), c]) == combine([a, b, c])
+wf = client.workflow(SANS_WITH_BACKGROUND, {'masks': masks, 'direct_beam': db, 'q_bins': 100})
+sample = wf.stage(inputs=['sample_run'], outputs=['sample_numerator', 'sample_denominator'])
+background = wf.stage(inputs=['background_run'],
+                      outputs=['background_numerator', 'background_denominator'])
+finalize = wf.stage(inputs=['sample_numerator', 'sample_denominator',
+                            'background_numerator', 'background_denominator'],
+                    outputs=['iofq'])
 ```
 
-The author may declare this only if the combination does not depend on how the elements are grouped or ordered.
-The framework cannot check that property.
-The test helper `ess.apps.testing.assert_combine_is_associative` does: it runs contribute and combine over a list of members in two groupings and one permutation, passes a combined value in again, and compares.
-Every combine spec that declares `carry` runs it.
-The spec itself validates that the parameter is a collection of references, that the output exists, and that their formats match.
+## When chaining is valid
 
-`carry` is the only declaration an aggregation needs.
-Its one kind of reader is whatever builds the combine request of a series, which is `apply` and the trigger loop ([rules.md](rules.md)), and that reader cannot import workflow code.
-A component that ignores the declaration still validates, runs, records, and recomputes the spec correctly.
-It loses an optimisation only.
-
-### When chaining is valid
-
-The **current members** of a series are a query: the latest record per member key under the label, leaving out failed, cancelled, and excluded ones.
-A combine over the contributions of all current members is always correct.
-A **chained** combine references the previous combine's contribution and every current member that the previous combine does not cover.
-`apply` decides between the two (`ess.apps.batch._combine`):
+A series that grows by one run per arrival should not read every member again.
+A finalize stage may name an accumulated intermediate as an output as well as an input.
+`sciline.Stage` passes such a value through, so the finalize stage record stores the accumulated value, and the next finalize accumulates it with the new member:
 
 ```python
-def contributions_for_next_combine(series):
-    current = current_members(series)                  # records
-    previous = latest_completed_combine(series)
-    if spec.chain and previous and covers(previous) <= current:
-        return [previous.contribution] + [m.contribution for m in current - covers(previous)]
-    return [m.contribution for m in current]
-
-def covers(combine):                                   # follow the chained parameter back
-    return union(covers(producer(ref)) if produced_by_combine_spec(ref) else {producer(ref)}
-                 for ref in combine.params['contributions'])
+finalize = wf.stage(inputs=['numerator', 'denominator'],
+                    outputs=['numerator', 'denominator', 'normalized'])
+finalize.compute({
+    name: Accumulate(accumulate=[previous.ref(name), new.ref(name)])
+    for name in ('numerator', 'denominator')
+})
 ```
 
-- **The comparison is between records, not member keys.**
-  A corrected member has a new record, so the previous combine covers a record that is no longer current.
-  The check fails, and the next combine runs over all current members.
+This is correct if accumulating a pre-accumulated value gives the same result as accumulating its parts.
+That is associativity, a property of the accumulator and not of the spec.
+sciline's `Accumulator` contract already requires it, and `ess.apps.testing.assert_accumulator_is_associative` checks it.
+Commutativity is not required, because a chain keeps the order in which members arrived.
+
+The **current members** of a series are a query: the latest stage record per member key under the label, leaving out failed, cancelled, and excluded ones.
+A finalize over all current members is always correct.
+A **chained** finalize accumulates the previous finalize's values and every current member that the previous finalize does not cover.
+`apply` decides between the two (`ess.apps.batch._finalize`):
+
+```python
+def elements_of_next_finalize(series):
+    current = current_members(series)                  # stage records
+    previous = latest_finalize(series)
+    if previous and covers(previous) <= current:
+        return [previous] + [m for m in current if m not in covers(previous)]
+    return current
+
+def covers(finalize):                                  # follow the Accumulate back
+    return union(covers(producer(ref)) if is_finalize(producer(ref)) else {producer(ref)}
+                 for ref in finalize.inputs[accumulate[0]].accumulate)
+```
+
+- **The comparison is between stage records, not member keys.**
+  A corrected member has a new stage record, so the previous finalize covers a record that is no longer current.
+  The check fails, and the next finalize accumulates all current members.
   The same happens when a member is excluded or reprocessed under a new rule version.
   Removing a member is therefore never a subtraction.
-- **A failed or cancelled combine is never chained onto.**
+- **A failed or cancelled finalize is never chained onto.**
   Otherwise one transient failure would end the series.
 - **Two arrivals close together cannot lose a member.**
-  The later combine references every current member that the previous combine does not cover, not only the newest.
-- **A chained element is recognised without a rule.**
-  It is an output of a run of the combine spec itself, through the output that `carry` names.
-- **The walk reads metadata only**, one record per combine of the chain.
-  The k-th arrival costs k record reads and two contribution reads.
-- **A chained combine is a complete record.**
+  The later finalize accumulates every current member that the previous finalize does not cover, not only the newest.
+- **A chained element is recognised without a declaration.**
+  A finalize is a stage record whose inputs include an `Accumulate`.
+- **The walk reads metadata only**, one record per finalize of the chain.
+  The k-th arrival costs k record reads and two reads of each accumulated value.
+- **A chained finalize is a complete stage record.**
   Its references resolve to records that name the files, and a recompute walks the chain back to the members.
-  If disk copies of contributions were evicted, the contribute requests run again.
+  If disk copies of intermediates were evicted, the member stage records run again.
 
-A superseded combine's contribution is needed only by the combine that superseded it, which has already run.
+A superseded finalize's accumulated values are needed only by the finalize that superseded it, which has already run.
 The data store evicts outputs of superseded records first, and that costs nothing until a recompute walks the chain.
-Chaining through disk is enough for automatic reduction: even a 4D contribution of a few gigabytes is read and written once per arrival, and arrivals are minutes apart.
+Chaining through disk is enough for automatic reduction: even a 4D intermediate of a few gigabytes is read and written once per arrival, and arrivals are minutes apart.
 
-## Combines that are not additive
+## Combinations that are not associative
 
-A combine that is not additive is the same shape without `carry`.
-Reflectometry's stitch is a combine spec with a collection parameter of per-angle curves, and a tomographic reconstruction would be another.
-A rule combines over all members on every arrival, which is affordable because such inputs are small.
-A rule's combine clause has one form for both cases.
-
-A workflow with two member tables, such as sample runs and background runs in ess.sans, has two contribute specs and one combine spec that chains two parameters, each with its own output.
+A combination that is not associative is not an accumulator.
+Reflectometry's stitch over angles, with its global fit of scale factors, is a spec whose parameter is a list of references to per-angle curves (`ess.apps.amor.COMBINE`), and a tomographic reconstruction would be another.
+Recomputing it over all members on every arrival is affordable, because such inputs are small.
+A rule's `Series` accumulates only, and how a rule submits such a spec is an [open question](open-issues.md#open-questions).
 
 ## In a session
 
 In a session an aggregation needs nothing of its own.
 Sessions and stages are explained in [stages.md](stages.md).
 
-- **Contributions are outputs, and a session holds outputs in memory.**
-  A chained combine gets the previous combined contribution and the new member as objects, and combines two values.
-  A push into a held accumulator would compute the same, so the session holds no accumulators.
-- **Contribute requests that differ only in the run are routed to a stage whose stage input is the run.**
+- **Member stage records name one stage**, the same workflow record, input names, and outputs, so the session builds it once.
   What the members share, such as a direct beam, is computed once.
-- **A combine request that changes only a finalize parameter is routed to a stage of the combine spec with the contributions fixed.**
-  The adapter combines the contributions once, sets the sum at the accumulation keys, and builds a `sciline.Stage` from the finalize parameter.
-- **Successive combines of a growing series differ only in their contributions.**
-  The session asks for a stage with `contributions` as stage input, and the adapter makes the accumulation keys the inputs of the `sciline.Stage`.
+- **The session holds one accumulator per workflow record and input**, with the list of outputs pushed so far.
+  A finalize whose `Accumulate` lists every member so far plus a new one pushes only the new one.
+- **A corrected or removed member starts a fresh accumulator**, because the request's list no longer begins with what was pushed.
+  Nothing is subtracted.
+- **A finalize call that changes only a finalize parameter taken as a stage input** reuses the held finalize stage and the held accumulators.
 
-A run reduced through the single-run spec leaves no contribution.
-A person who expects to add runs reduces the first one as a series of one: a contribute request and a combine request.
+A series that grows in a session lists every current member in every finalize, so every stage record is complete as written:
+
+```python
+members = []
+
+def add_run(run):
+    members.append(member.compute({'run': run}))
+    return finalize.compute({
+        name: Accumulate(accumulate=[m.ref(name) for m in members])
+        for name in ('numerator', 'denominator')
+    })
+```
 
 ## The fold
 
-The **fold** is an optional addition for a series that arrives faster than its contribution can be read and written.
-A long-lived runner holds the latest combined contribution of one series, chains in memory, and writes a combine record every n arrivals or when the series goes quiet.
+The **fold** is an optional addition for a series that arrives faster than its accumulated values can be read and written.
+A long-lived runner holds the accumulators of one series, accumulates in memory, and writes a finalize stage record every n arrivals or when the series goes quiet.
 Between records, what it holds is recomputable from the last record and the members since, so held state remains a cache.
 A fold's records carry the `reused` flag, so publication recomputes them along the chain.
 The fold needs a runner that is addressed by its series, which does not exist yet, and nothing requires it before such a series appears.
@@ -238,65 +207,52 @@ The fold needs a runner that is addressed by its series, which does not exist ye
 ## How this maps onto sciline
 
 sciline composes stages and accumulators in one process, with values in memory.
-The framework composes specs across processes, with values as outputs of records.
+The framework records each stage call, with values as outputs of stage records.
 
 | sciline | Framework |
 |---|---|
-| `Pipeline` with parameters set, `compute(targets)` | one spec, one request, one record |
-| `Stage` whose inputs are parameters, kept between calls | the same spec; the session holds the stage |
-| `Stage` whose input is an intermediate result | a second spec that takes an output of the first |
-| `Aggregation.contribute_stage` | the contribute spec |
-| accumulators and `finalize_stage` | the combine spec |
+| `Pipeline` with parameters set | a workflow record |
+| `Stage.compute` | a stage record |
+| `Aggregation.contribute_stage` | a member stage, from the member's parameters to the exposed intermediates |
+| accumulators | the binding's accumulators, which resolve `Accumulate` |
+| `Aggregation.finalize_stage` | a finalize stage, from the intermediates to the outputs |
 | member table | the batch table that `apply` takes |
-| `Aggregation.compute(table)` | a group: one member request per row, one combine request |
-| accumulators held by a loop | the previous combined contribution, passed into the next combine |
+| `Aggregation.compute(table)` | a group: one member stage request per row, one finalize stage request |
+| accumulators held by a loop | accumulators held by a session; on disk, the accumulated values a finalize passes through |
 
 One structure serves adding a run in a notebook, a rule's growing series, a batch summed at once, and a parallel reduction of five hundred runs.
-They differ in where the contributions come from and how often the combined contribution is written as a record.
+They differ in where the intermediates come from and how often the accumulated values are written as outputs of a stage record.
 
 ## Alternatives considered
 
 **The framework sums arrays itself.**
 It would import scipp semantics, decide between summation and concatenation, and still could not place normalisation.
 
-**One spec with three entry points.**
-A spec marks one output as its contribution and lists the parameters that finalize reads, and a request says whether it runs the whole workflow, contribute, or combine.
-One spec then stands for three callables with three signatures, two of them derived.
-Validation, forms, templates, the runner, and rules each branch on the kind of request.
-A combine request carries its contributions beside its parameters instead of as a parameter.
-Every output but the contribution must be optional.
-A workflow with two member tables cannot be declared.
+**Contribute and combine specs with `carry`.**
+Every pipeline that aggregates is published as two or three specs cut at the values that add: a contribute spec whose one output is the member's contribution, and a combine spec over a list of references to contributions.
+A `carry` declaration on the combine spec says that its combined contribution may be passed back into that list.
+Members must agree on shared parameters, which only the adapter knows, so it writes them into every contribution and the combine refuses a mismatch after loading.
+The associativity promise sits on the spec although it is a property of the code, and a rule with a series holds two templates.
 
-**A spec for the pipeline, and a second declaration for the operation on top.**
-A stored object beside the spec mirrors the constructor of `Aggregation`.
-The declaration of which parameters finalize reads only moves, because field names cannot give a property of the graph.
-Every component that reads a record's identity gets a three-part address: workflow, operation, entry point.
-ADR 0001 of scipp/ess#690 decided the opposite: a slice of a pipeline with its own parameter set is a workflow with its own spec.
+**An aggregation spec.**
+A spec whose signature is `Aggregation.compute(table)`, expanded by the backend into member and finalize records.
+It needs no `carry` and no agreement check either, but adds a second kind of spec and records created on behalf of a request, and it does nothing for stages in general.
 
-**Three specs: contribute, combine, finalize.**
-This mirrors sciline exactly.
-The middle spec has no parameters and no workflow code.
-Its benefit is that changing a finalize parameter does not write the combined contribution again.
-An author who needs that can publish a finalize-only spec as a further cut.
-
-**No `carry`: always combine over all members.**
+**No chaining: always accumulate over all members.**
 Correct, and simpler.
-A series of k members then reads k contributions per arrival instead of two, which is too much for event-mode contributions of gigabytes.
+A series of k members then reads k values per intermediate on each arrival instead of two, which is too much for event-mode intermediates of gigabytes.
 
-**`carry` as an annotation on the parameter.**
-It states a property of the callable that relates a parameter to an output, so it belongs on the spec and not on one of its fields.
-
-**`carry` on the rule instead of the spec.**
-The person who writes a rule cannot know whether a combine is additive, and a wrong answer gives a wrong number without an error.
+**Chaining declared on the rule.**
+The person who writes a rule cannot know whether a combination is associative, and a wrong answer gives a wrong number without an error.
+Associativity belongs to the accumulator, which the author tests.
 
 ## Costs
 
-- Up to three specs per pipeline, versioned together by convention of the adapter. A UI that lists workflows shows the two building blocks beside the whole reduction.
-- A rule with a series holds two templates, one for the member and one for the combine.
-- Authors must place normalisation after the accumulation keys. ess.sans does, ess.powder does not yet.
-- Contributions are stored outputs in shared mode, and often large. A chained series of k arrivals writes k combined contributions.
-- Changing a finalize parameter on a combined result, outside a session, is a combine request over the one previous contribution, and writes that contribution again.
-- The check that members share their parameters runs in the combine, not at validation.
-- A value at an accumulation key must be storable in a scipp data group. essreflectometry accumulates a list of ORSO entries beside its events, which the author must convert.
-- The contribution mixes dimensions and types, so its spec can declare a format but no `ArraySpec`.
-- A contribute request in a throwaway process computes again what all members share.
+- Authors must expose the intermediates that add, each with a format, and give an accumulator for each.
+- Authors must place normalisation after those intermediates. ess.sans does, ess.powder does not yet.
+- Every accumulator must be associative, which the framework cannot check and a test helper must.
+- Intermediates are stored outputs in shared mode, and often large. A chained series of k arrivals writes k accumulated values.
+- A member whose workflow record differs from the others', because a lookup or a pinned value set something only for it, cannot be accumulated with them ([open-issues.md](open-issues.md#open-questions)).
+- A correction to a shared parameter runs every member again under a new workflow record.
+- An accumulated value must be storable. essreflectometry accumulates a list of ORSO entries beside its events, which the author must convert.
+- A member stage in a throwaway process computes again what all members share.

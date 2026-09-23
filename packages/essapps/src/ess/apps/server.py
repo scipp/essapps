@@ -34,15 +34,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .backend import LocalBackend, SubmitError, ValidationReport
-from .records import RunRecord, RunRequest, Status
+from .records import StageRecord, StageRequest, Status
 from .sources import Dataset
 from .spec import OutputRef, SerializedWorkflowSpec, SpecId
 from .views import ViewSpec
 
 
 class ValidateRequest(BaseModel):
-    request: RunRequest
-    group: dict[str, RunRequest] | None = None
+    request: StageRequest
+    group: dict[str, StageRequest] | None = None
 
 
 class RecordsQuery(BaseModel):
@@ -163,17 +163,17 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             return backend.validate(body.request, body.group)
 
     @app.post('/submit')
-    def submit(group: dict[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(group: dict[str, StageRequest]) -> dict[str, StageRecord]:
         with lock:
             return backend.submit(group)
 
     @app.get('/records/{record_id}')
-    def get_record(record_id: str) -> RunRecord:
+    def get_record(record_id: str) -> StageRecord:
         with lock:
             return backend.record(record_id)
 
     @app.post('/records/query')
-    def query_records(body: RecordsQuery) -> list[RunRecord]:
+    def query_records(body: RecordsQuery) -> list[StageRecord]:
         with lock:
             return backend.records(
                 proposal=body.proposal,
@@ -186,17 +186,17 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             )
 
     @app.post('/records/latest')
-    def latest(body: LatestQuery) -> RunRecord | None:
+    def latest(body: LatestQuery) -> StageRecord | None:
         with lock:
             return backend.latest(body.label, body.proposal, member_key=body.member_key)
 
     @app.post('/records/batch')
-    def batch(body: LabelQuery) -> list[RunRecord]:
+    def batch(body: LabelQuery) -> list[StageRecord]:
         with lock:
             return backend.batch(body.label, body.proposal)
 
     @app.post('/records/members-to-retry')
-    def members_to_retry(body: LabelQuery) -> list[RunRecord]:
+    def members_to_retry(body: LabelQuery) -> list[StageRecord]:
         with lock:
             return backend.members_to_retry(body.label, body.proposal)
 
@@ -206,12 +206,12 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             backend.cancel(record_id)
 
     @app.post('/records/{record_id}/recompute')
-    def recompute(record_id: str) -> RunRecord:
+    def recompute(record_id: str) -> StageRecord:
         with lock:
             return backend.recompute(record_id)
 
     @app.post('/records/{record_id}/retry')
-    def retry(record_id: str) -> RunRecord:
+    def retry(record_id: str) -> StageRecord:
         with lock:
             return backend.retry(record_id)
 

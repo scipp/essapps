@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Example workflows exercising the contract: a load-and-histogram stage, a
-per-run reduction, a combine step, and one pipeline cut into a contribute spec,
-a combine spec, and its own single-run spec, so map-combine, chaining, and
-a combined series can be tried without instrument code. ``registry`` is
-importable by the subprocess launcher.
+Example workflows exercising the contract: a load-and-histogram pipeline to
+stage, a per-run reduction, a combine step over a list of references, and a
+pipeline whose numerator and denominator are intermediates, so a sum over runs,
+chaining, and a growing series can be tried without instrument code.
+``registry`` is importable by the subprocess launcher.
 
 See docs/developer/aggregation.md.
 """
@@ -22,8 +22,7 @@ import scipp as sc
 from pydantic import BaseModel, Field
 
 from .adapter import PipelineAdapter
-from .aggregation import Aggregation
-from .binding import Inputs, Registry, Workflow
+from .binding import Inputs, Registry
 from .spec import Array, ArraySpec, OpaqueFile, OutputRef, Quantity, WorkflowSpec
 
 
@@ -217,8 +216,6 @@ def registry() -> Registry:
         (FAIL, fail_workflow),
         (HISTOGRAM, histogram_workflow),
         (NORMALIZE, normalize_workflow),
-        (NORMALIZE_CONTRIBUTE, normalize_contribute_workflow),
-        (NORMALIZE_COMBINE, normalize_combine_workflow),
         (EXPORT, export_workflow),
         (SUBTRACT, subtract_workflow),
     ):
@@ -275,7 +272,6 @@ def histogram_workflow() -> PipelineAdapter:
         keys={'data': RawData, 'threshold': Threshold, 'bins': Bins},
         resolve={'data': 'array'},
         targets={'histogram': Histogram},
-        default_stage_inputs=['bins'],
     )
 
 
@@ -289,8 +285,8 @@ HISTOGRAM = WorkflowSpec(
 )
 
 
-# One pipeline, three specs: two accumulation keys, normalisation after
-# them, and the run file as the only member parameter.
+# One pipeline whose numerator and denominator add over runs: normalisation
+# comes after them, and the run file is the only parameter that differs.
 
 RunFile = NewType('RunFile', Path)
 Floor = NewType('Floor', float)
@@ -331,23 +327,8 @@ def add(*parts: Any) -> Any:
     return reduce(operator.add, parts)
 
 
-class ContributeParams(BaseModel):
-    run: OpaqueFile
-    floor: float = 0.0
-
-
-class ContributeOutputs(BaseModel):
-    contribution: Array()
-
-
-class CombineParams(BaseModel):
-    contributions: list[Array()]
-    scale: float = 1.0
-
-
-class CombineOutputs(BaseModel):
-    contribution: Array()
-    normalized: Array(ArraySpec(dims=('x',)))
+ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
+"""One definition for a ``sciline.Aggregation`` in a notebook and for the binding."""
 
 
 class NormalizeParams(BaseModel):
@@ -358,36 +339,20 @@ class NormalizeParams(BaseModel):
 
 class NormalizeOutputs(BaseModel):
     normalized: Array(ArraySpec(dims=('x',)))
+    numerator: Array()
+    denominator: Array()
 
-
-NORMALIZE_CONTRIBUTE = WorkflowSpec(
-    name='normalize-contribute',
-    version=1,
-    title='Normalize: contribute',
-    description='The numerator and denominator of one run, to be summed with '
-    'those of other runs.',
-    params=ContributeParams,
-    outputs=ContributeOutputs,
-)
-
-NORMALIZE_COMBINE = WorkflowSpec(
-    name='normalize-combine',
-    version=1,
-    title='Normalize: combine',
-    description='Sum the contributions of several runs and normalise the sum.',
-    params=CombineParams,
-    outputs=CombineOutputs,
-    carry={'contributions': 'contribution'},
-)
 
 NORMALIZE = WorkflowSpec(
     name='normalize',
     version=1,
     title='Normalize',
-    description='Numerator and denominator of one run, normalised: the whole '
-    'pipeline in one call.',
+    description='Numerator and denominator of a run, normalised. The numerator '
+    'and denominator are intermediates, so a sum over runs is a stage per run '
+    'to them and a stage from their accumulation.',
     params=NormalizeParams,
     outputs=NormalizeOutputs,
+    intermediates=('numerator', 'denominator'),
 )
 
 
@@ -395,32 +360,22 @@ def normalize_pipeline() -> sciline.Pipeline:
     return sciline.Pipeline([load_counts, numerator, denominator, normalized])
 
 
-NORMALIZE_WIRING: dict[str, Any] = {
-    'keys': {'run': RunFile, 'floor': Floor, 'scale': Scale},
-    'resolve': {'run': 'path'},
-    'targets': {'normalized': Normalized},
-    'members': ['run'],
-    'accumulation_keys': {'numerator': Numerator, 'denominator': Denominator},
-    'accumulate': add,
-    'contribute': NORMALIZE_CONTRIBUTE,
-    'combine': NORMALIZE_COMBINE,
-    'run': NORMALIZE,
-}
-"""How the three specs bind to one pipeline: the field-to-key maps, which
-parameters differ between members, and the accumulation keys."""
+def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+    """The sum over runs, for direct use with sciline."""
+    return sciline.Aggregation(
+        pipeline, members=[RunFile], accumulators=ACCUMULATORS, outputs=[Normalized]
+    )
 
 
-def normalize_aggregation() -> Aggregation:
-    return Aggregation(normalize_pipeline(), **NORMALIZE_WIRING)
-
-
-def normalize_contribute_workflow() -> Workflow:
-    return normalize_aggregation().contribute_workflow()
-
-
-def normalize_combine_workflow() -> Workflow:
-    return normalize_aggregation().combine_workflow()
-
-
-def normalize_workflow() -> Workflow:
-    return normalize_aggregation().run_workflow()
+def normalize_workflow() -> PipelineAdapter:
+    return PipelineAdapter(
+        normalize_pipeline(),
+        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
+        resolve={'run': 'path'},
+        targets={
+            'normalized': Normalized,
+            'numerator': Numerator,
+            'denominator': Denominator,
+        },
+        accumulators=ACCUMULATORS,
+    )

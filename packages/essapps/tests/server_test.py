@@ -46,7 +46,7 @@ def test_write_out_downloads_into_a_folder_or_names_the_servers_path(
 def test_validate_reports_errors_and_submit_of_the_same_request_raises(
     remote_client: Client,
 ) -> None:
-    request = remote_client.request(LOAD, {'scale': 2.0})  # missing 'run'
+    request = remote_client.request(LOAD, {'scale': 'x'})
     report = remote_client.validate(request)
     assert not report.ok
     with pytest.raises(SubmitError) as exc_info:

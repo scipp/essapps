@@ -4,20 +4,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import scipp as sc
-from pydantic import BaseModel
 
-from .binding import Factory, Inputs, Workflow
+from .binding import Accumulator, Inputs, Workflow
 from .sources import Dataset
-from .spec import DatasetRef, OutputRef, Ref, SpecId, WorkflowSpec
-from .stages import Stages
-
-CHECKED = SpecId(name='checked', version=1)
-"""Stands in for the spec of the workflow under check; each check has its own store."""
+from .spec import DatasetRef, Ref, WorkflowSpec, submodel
 
 
 def equal(a: Any, b: Any) -> bool:
@@ -55,103 +50,84 @@ class LocalInputs:
 
 
 def assert_stage_equals_workflow(
-    factory: Factory, param_sets: Iterable[BaseModel], inputs: Inputs
-) -> None:
-    """
-    The one check on a stage: for every request a stage accepts it returns
-    what the workflow returns.
-
-    The requests are driven through the session's own stage store under one
-    label, so the stages are the ones a session would build and drop, and each
-    result is compared with a fresh call of the stateless callable.
-    """
-    workflow = factory()
-    stages = Stages()
-    for i, params in enumerate(param_sets):
-        expected = dict(workflow(params, inputs))
-        called, _ = stages.workflow_for(CHECKED, workflow, params, inputs, 'tuning')
-        got = dict(called(params, inputs))
-        if expected.keys() != got.keys():
-            raise AssertionError(
-                f'step {i}: outputs {sorted(got)} != {sorted(expected)}'
-            )
-        for name in expected:
-            if not equal(got[name], expected[name]):
-                raise AssertionError(
-                    f"step {i}: the stage's output {name!r} differs from the workflow's"
-                )
-
-
-class _Contributions:
-    """Inputs that also serve the contributions a check made, by reference."""
-
-    def __init__(self, inputs: Inputs) -> None:
-        self._inputs = inputs
-        self._made: dict[Ref, Any] = {}
-
-    def keep(self, value: Any, output: str) -> OutputRef:
-        ref = OutputRef(record=f'contribution-{len(self._made)}', output=output)
-        self._made[ref] = value
-        return ref
-
-    def path(self, ref: Ref) -> Path:
-        return self._inputs.path(ref)
-
-    def array(self, ref: Ref) -> Any:
-        return self._made[ref] if ref in self._made else self._inputs.array(ref)
-
-
-def assert_combine_is_associative(
-    contribute: Workflow,
-    combine: Workflow,
+    workflow: Workflow,
     spec: WorkflowSpec,
-    member_params: Iterable[BaseModel],
     params: Mapping[str, Any],
+    stage_inputs: Iterable[Mapping[str, Any]],
     inputs: Inputs,
 ) -> None:
     """
-    The one check on a declared combine: grouping and order do not matter.
+    The one check on a stage: it returns what a plain run with the same values
+    returns.
 
-    ``spec`` is the combine spec, whose ``carry`` names the collection parameter
-    the contributions fill and the output that may come back as one of its
-    elements; ``params`` are the combine's other parameters. The contributions of
-    the members are combined in one group, in two groups, one at a time, and in
-    reverse order, and each result is compared with the first. Combining in
-    groups and one at a time pushes combined values back in, which is what a
-    chained series and a fold rely on. Nothing here is specific to a workflow, so
-    every spec that declares a carry runs it.
+    One stage is built over the parameters named in the first of
+    ``stage_inputs``, with ``params`` set, and called with each of
+    ``stage_inputs`` in turn, as a session calls a stage it holds. Each result
+    is compared with a plain run, the stage with no inputs, of the workflow
+    with every value set.
     """
-    ((collection, output),) = spec.carry.items()
-    members = list(member_params)
-    if len(members) < 3:
-        raise ValueError('an associativity check needs at least three members')
-    served = _Contributions(inputs)
-    contributions = [
-        served.keep(next(iter(contribute(p, inputs).values())), output) for p in members
-    ]
-
-    def combined(parts: list[OutputRef]) -> Mapping[str, Any]:
-        return combine(
-            spec.params.model_validate({**params, collection: parts}), served
-        )
-
-    chained = contributions[0]
-    for contribution in contributions[1:]:
-        chained = served.keep(combined([chained, contribution])[output], output)
-    groupings = {
-        'in two groups': [
-            served.keep(combined(contributions[:1])[output], output),
-            served.keep(combined(contributions[1:])[output], output),
+    values = [dict(v) for v in stage_inputs]
+    names = tuple(values[0])
+    outputs = spec.results
+    # As the runner does: the spec's defaults fill what neither sets.
+    fields = spec.params.model_fields
+    fixed = submodel(
+        spec.params,
+        [
+            name
+            for name, info in fields.items()
+            if name not in names and (name in params or not info.is_required())
         ],
-        'one at a time': [chained],
-        'in reverse order': list(reversed(contributions)),
+        'Fixed',
+    ).model_validate(params)
+    staged = submodel(spec.params, names, 'Staged')
+    nothing = submodel(spec.params, (), 'Nothing')()
+    stage = workflow.stage(fixed, names, outputs, inputs)
+    for i, given in enumerate(values):
+        full = spec.params.model_validate({**params, **given})
+        expected = dict(workflow.stage(full, (), outputs, inputs)(nothing, {}, inputs))
+        got = dict(stage(staged.model_validate(given), {}, inputs))
+        for name in outputs:
+            if not equal(got[name], expected[name]):
+                raise AssertionError(
+                    f"step {i}: the stage's output {name!r} differs from a plain run"
+                )
+
+
+def assert_accumulator_is_associative(
+    factory: Callable[[], Accumulator], values: Iterable[Any]
+) -> None:
+    """
+    The one check on an accumulator: grouping the pushes does not matter.
+
+    The values are accumulated at once, in two groups whose accumulations are
+    pushed again, and one at a time onto the accumulation so far, which is what
+    a finalize that accumulates onto the previous one relies on. Order is kept,
+    because a chain keeps the order in which members arrived.
+    """
+    values = list(values)
+    if len(values) < 3:
+        raise ValueError('an associativity check needs at least three values')
+
+    def accumulated(parts: Iterable[Any]) -> Any:
+        accumulator = factory()
+        for part in parts:
+            accumulator.push(part)
+        return accumulator.value
+
+    reference = accumulated(values)
+    chained = values[0]
+    for value in values[1:]:
+        chained = accumulated([chained, value])
+    groupings = {
+        'in two groups': accumulated(
+            [accumulated(values[:1]), accumulated(values[1:])]
+        ),
+        'one at a time': chained,
     }
-    reference = combined(contributions)
-    for how, parts in groupings.items():
-        got = combined(parts)
-        for name, value in reference.items():
-            if not equal(got[name], value):
-                raise AssertionError(f'combining {how} changes output {name!r}')
+    for how, got in groupings.items():
+        if not equal(got, reference):
+            raise AssertionError(f'accumulating {how} changes the result')
 
 
 class FakeDatasetSource:

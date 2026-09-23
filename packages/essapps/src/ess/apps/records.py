@@ -1,19 +1,24 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Run requests and run records: the one way the framework names data.
+Workflow records, stage requests, and stage records: what ran, in sciline's terms.
+
+A workflow record is a pipeline with parameters set; a stage record is one call
+of a stage cut from it, with the stage's inputs and outputs named.
 
 See docs/developer/records.md.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, computed_field
 from pydantic_core import to_jsonable_python
 
 from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
@@ -70,20 +75,65 @@ class Origin(BaseModel, frozen=True):
     )
 
 
-class RunRequest(BaseModel, frozen=True):
+class WorkflowRecord(BaseModel, frozen=True):
     """
-    Everything needed to execute a workflow once.
+    A pipeline with parameters set: what a stage is cut from.
 
-    ``params`` is the plain JSON form of the spec's params model, with data
-    reference fields holding a :class:`OutputRef` or a :class:`DatasetRef`. A request is
-    complete: it never names a session or a process, and the only path it may
-    name is the identity of a local file that carries no run identity.
+    A value, not a run: it has no outputs and never changes, and its ID is a
+    hash of its content, so two clients that configure the same spec with the
+    same values name the same workflow record. Parameters may be left unset; a
+    stage supplies them, or takes an intermediate in place of what needs them.
+    ``params`` holds the values given, not the spec's defaults, which apply at
+    run time to fields that neither this record nor a stage sets.
     """
 
     spec: SpecId
     params: dict[str, Plain] = Field(default_factory=dict)
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> str:
+        # Keys are sorted so that the order in which values were given does not
+        # change the identity.
+        content = json.dumps(
+            self.model_dump(
+                mode='json', include={'spec', 'params', 'instrument', 'proposal'}
+            ),
+            sort_keys=True,
+        )
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class Accumulate(BaseModel, frozen=True):
+    """
+    A stage input that is the accumulation of several outputs.
+
+    The binding accumulates them with the accumulator its author gave for the
+    input, in the order listed; the framework never combines values itself.
+    Every accumulator is associative, so an element may itself be an
+    accumulated value that a finalize stage passed through as an output.
+    """
+
+    accumulate: list[OutputRef]
+
+
+class StageRequest(BaseModel, frozen=True):
+    """
+    One call of a stage cut from a workflow record: everything needed to run it.
+
+    ``inputs`` are the stage inputs by name: parameters the workflow record
+    leaves unset, and intermediates the spec exposes, supplied as a reference or
+    an :class:`Accumulate`. ``outputs`` are the outputs to compute, empty for the
+    spec's results. A request is complete: it never names a session or a
+    process, and the only path it may name is the identity of a local file that
+    carries no run identity.
+    """
+
+    workflow: WorkflowRecord
+    inputs: dict[str, Plain] = Field(default_factory=dict)
+    outputs: tuple[str, ...] = ()
     submitter: str = Field(min_length=1)
     label: str | None = Field(
         default=None,
@@ -99,13 +149,29 @@ class RunRequest(BaseModel, frozen=True):
         "and the values the submitter pinned.",
     )
 
+    @property
+    def spec(self) -> SpecId:
+        return self.workflow.spec
+
+    @property
+    def proposal(self) -> str:
+        return self.workflow.proposal
+
+    @property
+    def instrument(self) -> str:
+        return self.workflow.instrument
+
+    def values(self) -> dict[str, Any]:
+        """Workflow parameters and stage inputs together, as plain data."""
+        return {**self.workflow.params, **self.inputs}
+
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""
-        return [r for _, r in walk_refs(self.params) if isinstance(r, OutputRef)]
+        return [r for _, r in walk_refs(self.values()) if isinstance(r, OutputRef)]
 
     def datasets(self) -> list[DatasetRef]:
         """Distinct references to data the framework did not compute."""
-        return dataset_refs(self.params)
+        return dataset_refs(self.values())
 
 
 class Derivation(BaseModel, frozen=True):
@@ -142,9 +208,9 @@ class RunResult(BaseModel):
     failure: Failure | None = None
 
 
-class RunRecord(BaseModel):
+class StageRecord(BaseModel):
     """
-    A run request plus what happened to it.
+    A stage request plus what happened to it.
 
     Immutable once the run completes, except for status, and never deleted on its
     own. Small output values live in ``outputs``; data-reference outputs are listed
@@ -155,7 +221,7 @@ class RunRecord(BaseModel):
     """
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    request: RunRequest
+    request: StageRequest
     status: Status = Status.SUBMITTED
     created: datetime = Field(default_factory=lambda: datetime.now(UTC))
     started: datetime | None = None

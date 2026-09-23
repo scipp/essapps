@@ -12,10 +12,9 @@ to a server that holds a ``LocalBackend``.
 
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
-and is cancelled if any is cancelled. Recompute is explicit. The contributions a
-combine request combines are an ordinary collection parameter of data
-references, so they are scheduled, resolved, and checked like any other input,
-and nothing here reads what a spec means by them.
+and is cancelled if any is cancelled. Recompute is explicit. The outputs an accumulated
+stage input names are references like any other, so they are scheduled,
+resolved, and checked like any other input, and nothing here combines them.
 """
 
 from __future__ import annotations
@@ -32,7 +31,15 @@ from pydantic import BaseModel, ValidationError
 from .binding import Registry
 from .datastore import DataStore
 from .launcher import Launcher
-from .records import Derivation, Failure, RunRecord, RunRequest, Status
+from .records import (
+    Accumulate,
+    Derivation,
+    Failure,
+    StageRecord,
+    StageRequest,
+    Status,
+)
+from .runner import Job
 from .sources import Dataset, DatasetSource
 from .spec import (
     DataField,
@@ -42,10 +49,12 @@ from .spec import (
     Ref,
     SerializedWorkflowSpec,
     SpecId,
+    WorkflowSpec,
     as_ref,
     data_fields,
     dataset_path,
     field_of,
+    submodel,
     walk_refs,
 )
 from .store import RecordStore
@@ -108,16 +117,16 @@ class Backend(Protocol):
         ...
 
     def validate(
-        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
+        self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
     ) -> ValidationReport:
         """Whether a request would be accepted, without submitting it."""
         ...
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
         """Submit requests atomically; ``@name`` refs point at members of the group."""
         ...
 
-    def record(self, record_id: str) -> RunRecord:
+    def record(self, record_id: str) -> StageRecord:
         """A record by id."""
         ...
 
@@ -131,25 +140,27 @@ class Backend(Protocol):
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[RunRecord]:
+    ) -> list[StageRecord]:
         """Records matching every given filter, oldest first."""
         ...
 
     def latest(
         self, label: str, proposal: str, member_key: str | None = None
-    ) -> RunRecord | None:
+    ) -> StageRecord | None:
         """The record that supersedes the others under a label (a slot)."""
         ...
 
-    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+    def batch(self, label: str, proposal: str) -> list[StageRecord]:
         """The batch table under a label: the latest record per member key."""
         ...
 
-    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
         """The failed or cancelled latest record of each member that never completed."""
         ...
 
-    def wait(self, record_ids: list[str], *, timeout: float = 60.0) -> list[RunRecord]:
+    def wait(
+        self, record_ids: list[str], *, timeout: float = 60.0
+    ) -> list[StageRecord]:
         """Block until every record is terminal, or raise past the timeout."""
         ...
 
@@ -157,11 +168,11 @@ class Backend(Protocol):
         """Cancel a record; a no-op once it is terminal."""
         ...
 
-    def recompute(self, record_id: str) -> RunRecord:
+    def recompute(self, record_id: str) -> StageRecord:
         """Run a record's request again as a new record linked to the old one."""
         ...
 
-    def retry(self, record_id: str) -> RunRecord:
+    def retry(self, record_id: str) -> StageRecord:
         """Like ``recompute``, marked as a retry rather than a deliberate rerun."""
         ...
 
@@ -265,39 +276,37 @@ class LocalBackend:
     # Validation
 
     def validate(
-        self, request: RunRequest, group: Mapping[str, RunRequest] | None = None
+        self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
     ) -> ValidationReport:
-        """Three layers: shape and spec, the params model, runnability."""
-        errors: list[str] = []
+        """
+        Three layers: shape and spec, the values given, runnability.
+
+        Whether the stage's inputs and the workflow record's values suffice for
+        its outputs is known only to the workflow code, so a stage that leaves a
+        needed parameter unset fails when it runs, not here.
+        """
         if request.spec not in self.registry:
             return ValidationReport(
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
             )
         spec = self.registry.spec(request.spec)
-        # A params model ignores fields it does not declare unless its author
-        # forbids them, and a reduction parameter dropped in silence gives a wrong
-        # number without an error.
-        declared = {
-            name
-            for field, info in spec.params.model_fields.items()
-            for name in (field, info.alias)
-        }
-        errors += [
-            f'{name}: not a parameter of {spec.id}'
-            for name in sorted(set(request.params) - declared)
-        ]
-        try:
-            spec.params.model_validate(request.params)
-        except ValidationError as e:
-            errors += [
-                f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
-            ]
+        errors = _shape_errors(spec, request)
         if errors:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
-        refs = data_fields(spec.params)
-        for path, ref in walk_refs(request.params):
-            consumer = refs.get(field_of(path))
-            errors += self._check_ref(ref, consumer, request, group or {})
+        params = data_fields(spec.params)
+        intermediates = data_fields(spec.outputs)
+        for path, ref in walk_refs(request.values()):
+            name = field_of(path)
+            if name in spec.params.model_fields:
+                errors += self._check_ref(ref, params.get(name), request, group or {})
+            else:
+                errors += self._check_ref(
+                    ref,
+                    intermediates.get(name),
+                    request,
+                    group or {},
+                    same_workflow=True,
+                )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
                 request.origin.rule.rsplit('/v', 1)[0]
@@ -319,25 +328,43 @@ class LocalBackend:
         self,
         ref: Ref,
         consumer: DataField | None,
-        request: RunRequest,
-        group: Mapping[str, RunRequest],
+        request: StageRequest,
+        group: Mapping[str, StageRequest],
+        *,
+        same_workflow: bool = False,
     ) -> list[str]:
+        """
+        Whether a reference may fill the field it is in.
+
+        An intermediate supplied from a record of the same spec must come from a
+        record cut from the same workflow record, so that every parameter both
+        sides read has one value.
+        """
         if isinstance(ref, DatasetRef):
             return self._check_dataset(ref, consumer)
         if ref.record.startswith(GROUP_PREFIX):
             name = ref.record[len(GROUP_PREFIX) :]
             if name not in group:
                 return [f'{ref}: no group member named {name!r}']
-            producer_spec, producer_proposal = group[name].spec, group[name].proposal
+            producer_request = group[name]
         else:
             if ref.record not in self.record_store:
                 return [f'{ref}: no such record']
-            producer = self.record_store.get(ref.record)
-            producer_spec, producer_proposal = producer.spec, producer.request.proposal
-        if producer_proposal != request.proposal:
-            return [f'{ref}: belongs to proposal {producer_proposal}']
+            producer_request = self.record_store.get(ref.record).request
+        producer_spec = producer_request.spec
+        if producer_request.proposal != request.proposal:
+            return [f'{ref}: belongs to proposal {producer_request.proposal}']
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
+        if (
+            same_workflow
+            and producer_spec == request.spec
+            and producer_request.workflow.id != request.workflow.id
+        ):
+            return [
+                f'{ref}: cut from workflow record {producer_request.workflow.id}, '
+                f'not {request.workflow.id}; a parameter both read may differ'
+            ]
         outputs = self.registry.spec(producer_spec).outputs
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
@@ -368,7 +395,7 @@ class LocalBackend:
 
     # Origin
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(self, group: Mapping[str, StageRequest]) -> dict[str, StageRecord]:
         """
         Submit requests atomically; ``@name`` refs point at members of the group.
 
@@ -383,14 +410,14 @@ class LocalBackend:
             )
         if any(not r.ok for r in reports.values()):
             raise SubmitError({n: r for n, r in reports.items() if not r.ok})
-        ids = {name: RunRecord(request=req).id for name, req in group.items()}
+        ids = {name: StageRecord(request=req).id for name, req in group.items()}
         records = {}
         latest: dict[tuple[str, str | None], str] = {}
+        named = {GROUP_PREFIX + n: i for n, i in ids.items()}
         for name, req in group.items():
-            params = _rewrite(req.params, {GROUP_PREFIX + n: i for n, i in ids.items()})
-            record = RunRecord(
+            record = StageRecord(
                 id=ids[name],
-                request=req.model_copy(update={'params': params}),
+                request=self._complete(req, named),
                 supersedes=self._supersedes(req, latest),
             )
             records[name] = record
@@ -400,8 +427,28 @@ class LocalBackend:
         self._pump()
         return {name: self.record_store.get(r.id) for name, r in records.items()}
 
+    def _complete(
+        self, request: StageRequest, named: Mapping[str, str]
+    ) -> StageRequest:
+        """
+        The request as recorded: group references by ID, outputs named.
+
+        A request without outputs asks for the spec's results, and its record
+        names them, so that what a record computed never depends on the spec.
+        """
+        workflow = request.workflow.model_copy(
+            update={'params': _rewrite(request.workflow.params, named)}
+        )
+        return request.model_copy(
+            update={
+                'workflow': workflow,
+                'inputs': _rewrite(request.inputs, named),
+                'outputs': request.outputs or self.registry.spec(request.spec).results,
+            }
+        )
+
     def _supersedes(
-        self, request: RunRequest, latest: Mapping[tuple[str, str | None], str]
+        self, request: StageRequest, latest: Mapping[tuple[str, str | None], str]
     ) -> str | None:
         """
         The latest record this request's record supersedes, or None without a label.
@@ -421,19 +468,19 @@ class LocalBackend:
         )
         return None if record is None else record.id
 
-    def recompute(self, record_id: str) -> RunRecord:
+    def recompute(self, record_id: str) -> StageRecord:
         """Run a record's request again as a new record linked to the old one."""
         return self._derive(record_id, 'recompute')
 
-    def retry(self, record_id: str) -> RunRecord:
+    def retry(self, record_id: str) -> StageRecord:
         return self._derive(record_id, 'retry')
 
-    def _derive(self, record_id: str, reason: Any) -> RunRecord:
+    def _derive(self, record_id: str, reason: Any) -> StageRecord:
         old = self.record_store.get(record_id)
         report = self.validate(old.request)
         if not report.ok:
             raise SubmitError({record_id: report})
-        new = RunRecord(
+        new = StageRecord(
             request=old.request,
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
@@ -442,7 +489,7 @@ class LocalBackend:
         self._pump()
         return self.record_store.get(new.id)
 
-    def record(self, record_id: str) -> RunRecord:
+    def record(self, record_id: str) -> StageRecord:
         return self.record_store.get(record_id)
 
     def records(
@@ -455,7 +502,7 @@ class LocalBackend:
         member_key: str | None = None,
         since: datetime | None = None,
         limit: int | None = None,
-    ) -> list[RunRecord]:
+    ) -> list[StageRecord]:
         return self.record_store.list(
             proposal=proposal,
             spec=spec,
@@ -468,13 +515,13 @@ class LocalBackend:
 
     def latest(
         self, label: str, proposal: str, member_key: str | None = None
-    ) -> RunRecord | None:
+    ) -> StageRecord | None:
         return self.record_store.latest(label, proposal, member_key=member_key)
 
-    def batch(self, label: str, proposal: str) -> list[RunRecord]:
+    def batch(self, label: str, proposal: str) -> list[StageRecord]:
         return self.record_store.batch(label, proposal)
 
-    def members_to_retry(self, label: str, proposal: str) -> list[RunRecord]:
+    def members_to_retry(self, label: str, proposal: str) -> list[StageRecord]:
         return self.record_store.members_to_retry(label, proposal)
 
     def cancel(self, record_id: str) -> None:
@@ -501,7 +548,7 @@ class LocalBackend:
 
     def wait(
         self, record_ids: list[str], *, timeout: float = 60.0, interval: float = 0.05
-    ) -> list[RunRecord]:
+    ) -> list[StageRecord]:
         deadline = time.monotonic() + timeout
         while True:
             self.poll()
@@ -539,7 +586,7 @@ class LocalBackend:
                     record.status = Status.WAITING
                     self.record_store.update(record)
 
-    def _propagate(self, record: RunRecord) -> None:
+    def _propagate(self, record: StageRecord) -> None:
         """Failure and cancellation flow to every record waiting on this one."""
         if record.status == Status.COMPLETED:
             return
@@ -548,7 +595,7 @@ class LocalBackend:
             if not dependent.status.terminal:
                 self._inherit(dependent, record)
 
-    def _inherit(self, record: RunRecord, producer: RunRecord) -> None:
+    def _inherit(self, record: StageRecord, producer: StageRecord) -> None:
         """End a record because an input of it failed or was cancelled."""
         if producer.status == Status.CANCELLED:
             self._finish(record, Status.CANCELLED)
@@ -561,21 +608,23 @@ class LocalBackend:
         self._propagate(record)
 
     def _finish(
-        self, record: RunRecord, status: Status, failure: Failure | None = None
+        self, record: StageRecord, status: Status, failure: Failure | None = None
     ) -> None:
         record.status = status
         record.failure = failure
         record.finished = datetime.now(UTC)
         self.record_store.update(record)
 
-    def _dispatch(self, record: RunRecord) -> None:
-        data = data_fields(self.registry.spec(record.spec).params)
+    def _dispatch(self, record: StageRecord) -> None:
+        spec = self.registry.spec(record.spec)
+        params, outputs = data_fields(spec.params), data_fields(spec.outputs)
         locations: dict[Ref, Path] = {}
         literals: dict[str, Any] = {}
-        named = [
-            (ref, field_of(path) in data)
-            for path, ref in walk_refs(record.request.params)
-        ]
+        named = []
+        for path, ref in walk_refs(record.request.values()):
+            name = field_of(path)
+            data = params if name in spec.params.model_fields else outputs
+            named.append((ref, name in data))
         # A reference named by two parameters is one thing to resolve, and
         # locating a dataset means asking every source.
         for ref, into_data_field in dict.fromkeys(named):
@@ -584,8 +633,14 @@ class LocalBackend:
                 self._finish(record, Status.FAILED, failure)
                 self._propagate(record)
                 return
-        params = _inline(record.request.params, literals)
-        done = self.launcher.start(record, params, locations)
+        request = record.request
+        job = Job(
+            workflow=request.workflow.id,
+            params=_inline(request.workflow.params, literals),
+            inputs=_inline(request.inputs, literals),
+            outputs=request.outputs,
+        )
+        done = self.launcher.start(record, job, locations)
         self.record_store.update(done)
         if done.status.terminal:
             self._propagate(done)
@@ -670,6 +725,11 @@ class LocalBackend:
         return {
             'record': record.id,
             'spec': str(record.spec),
+            'workflow': record.request.workflow.id,
+            'stage': {
+                'inputs': sorted(record.request.inputs),
+                'outputs': list(record.request.outputs),
+            },
             'params': record.resolved_params,
             'package_versions': record.package_versions,
             'environment': record.environment,
@@ -720,7 +780,7 @@ class LocalBackend:
         return pid
 
 
-def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:
+def _dead(producers: Iterable[StageRecord]) -> StageRecord | None:
     """The first producer that ended without completing, if there is one."""
     return next(
         (p for p in producers if p.status.terminal and p.status != Status.COMPLETED),
@@ -728,7 +788,7 @@ def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:
     )
 
 
-def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
+def _cycle(group: Mapping[str, StageRequest]) -> set[str]:
     """Members of the group that lie on a cycle of ``@name`` references."""
     edges = {
         name: {
@@ -774,3 +834,53 @@ def _inline(value: Any, literals: Mapping[str, Any]) -> Any:
     if isinstance(value, list):
         return [_inline(v, literals) for v in value]
     return value
+
+
+def _shape_errors(spec: WorkflowSpec, request: StageRequest) -> list[str]:
+    """
+    What is wrong with the names and values of a request, without workflow code.
+
+    A params model ignores fields it does not declare unless its author forbids
+    them, and a reduction parameter dropped in silence gives a wrong number
+    without an error, so every name is checked against the spec. A stage input
+    is a parameter the workflow record leaves unset or an intermediate; a data
+    intermediate is supplied as a reference or an accumulation of references.
+    """
+    fields = spec.params.model_fields
+    errors = [
+        f'{name}: not a parameter of {spec.id}'
+        for name in sorted(set(request.workflow.params) - set(fields))
+    ]
+    for name in sorted(request.inputs):
+        if name in request.workflow.params:
+            errors.append(f'{name}: a stage input the workflow record also sets')
+        elif name not in fields and name not in spec.intermediates:
+            errors.append(
+                f'{name}: neither a parameter nor an intermediate of {spec.id}'
+            )
+    errors += [
+        f'{name}: not an output of {spec.id}'
+        for name in request.outputs
+        if name not in spec.outputs.model_fields
+    ]
+    if errors:
+        return errors
+    given = {name: value for name, value in request.values().items() if name in fields}
+    try:
+        submodel(spec.params, given, 'Given').model_validate(given)
+    except ValidationError as e:
+        errors += [
+            f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
+        ]
+    data = data_fields(spec.outputs)
+    for name, value in request.inputs.items():
+        if name not in data:
+            continue
+        if as_ref(value) is None:
+            try:
+                Accumulate.model_validate(value)
+            except ValidationError:
+                errors.append(
+                    f'{name}: an intermediate takes a reference or an accumulation'
+                )
+    return errors

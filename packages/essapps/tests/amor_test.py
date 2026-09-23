@@ -17,11 +17,9 @@ pytest.importorskip('ess.amor')
 
 from ess.apps import amor
 from ess.apps.client import Client, local
-from ess.apps.records import RunRecord
+from ess.apps.records import StageRecord
 from ess.apps.sources import FolderSource
 from ess.apps.spec import dataset_ref
-from ess.apps.stages import Stages
-from ess.apps.testing import LocalInputs
 
 SAMPLE_RUNS = (608, 609, 610, 611)
 REFERENCE_RUN = 614
@@ -77,19 +75,22 @@ def reflectivity_params(run: int, **overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
-def members(client: Client, **overrides: Any) -> dict[int, RunRecord]:
+def members(client: Client, **overrides: Any) -> dict[int, StageRecord]:
     """
     One reduced sample run per rotation: one batch, as ``apply`` would submit it.
 
-    All four share the label and are told apart by their member key, so each one
-    after the first has the previous member as its predecessor.
+    All four are one stage over the sample run, cut from one workflow record,
+    share the label, and are told apart by their member key.
     """
+    params = reflectivity_params(SAMPLE_RUNS[0], **overrides)
+    del params['sample_run']
+    stage = client.workflow(amor.REFLECTIVITY, params).stage(
+        inputs=['sample_run'], label=LABEL
+    )
     records = {}
     for run in SAMPLE_RUNS:
-        record = client.run(
-            amor.REFLECTIVITY,
-            reflectivity_params(run, **overrides),
-            label=LABEL,
+        record = stage.compute(
+            {'sample_run': dataset_ref(instrument='amor', run=run)},
             member_key=str(run),
         )
         assert record.failure is None, record.failure
@@ -101,9 +102,8 @@ def test_curves_of_four_rotations_stitch_into_one(client: Client) -> None:
     curves = members(client)
     for run, record in curves.items():
         assert client.output(record, 'reflectivity').sizes == {'Q': 200}, run
-    # The binding names the sample run as the default stage input, so the first
-    # member builds a stage over it and the other three, which differ from their
-    # predecessor in nothing else, are served from it.
+    # The first member builds the stage over the sample run and the other three
+    # are served from it.
     assert [r.reused for r in curves.values()] == [False, True, True, True]
 
     combined = client.run(
@@ -188,9 +188,9 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
         member_key='608',
     )
     assert rescaled.failure is None, rescaled.failure
-    # The rerun supersedes the member it corrects, so its predecessor is that
-    # member and the field they differ in is the scale factor. The members' stage
-    # fixes that field, so this request does not fit it and builds its own.
+    # The rerun supersedes the member it corrects. Its scale factor makes it a
+    # workflow record of its own, so no held stage fits it.
+    assert rescaled.supersedes == curves[608].id
     assert not rescaled.reused
     assert rescaled.resolved_params['scale_factor'] == factor
     expected = client.output(combined, 'scaled', key='608')
@@ -199,77 +199,14 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
     )
 
 
-def local_inputs(cache: Path) -> LocalInputs:
-    """The tutorial files by the reference the dataset source gives them."""
-    return LocalInputs(
-        {
-            dataset_ref(instrument='amor', run=run): next(cache.glob(f'*{run}.hdf'))
-            for run in (*SAMPLE_RUNS, REFERENCE_RUN)
-        }
-    )
-
-
-def test_without_the_bindings_hint_the_second_member_names_the_stage_input(
-    cache: Path,
+def test_a_stage_over_the_bin_count_is_served_after_its_first_call(
+    client: Client,
 ) -> None:
-    """
-    A new member of a batch has the previous member as its predecessor.
-
-    The first member has no predecessor and, without a default, nothing to build
-    a stage from: it computes everything and holds nothing. The second differs
-    from it in the sample run alone, which names the stage input, and the rest of
-    the batch is served from that stage.
-    """
-    inputs = local_inputs(cache)
-    workflow = amor.reflectivity_workflow()
-    workflow.default_stage_inputs = frozenset()
-    stages = Stages()
-    reused = []
-    for run in SAMPLE_RUNS:
-        params = amor.ReflectivityParams(**reflectivity_params(run))
-        called, hit = stages.workflow_for(
-            amor.REFLECTIVITY.id,
-            workflow,
-            params,
-            inputs,
-            label=LABEL,
-            member_key=str(run),
-        )
-        called(params, inputs)
-        reused.append(hit)
-    assert reused == [False, False, True, True]
-
-
-def test_a_moved_binning_parameter_builds_a_stage_of_its_own(cache: Path) -> None:
-    """
-    The first request stages over the sample run, which is the binding's hint.
-    Moving the bin count fits no held stage, so the session stages over that
-    instead, and a further move is served from it.
-    """
-    paths = {
-        run: next(cache.glob(f'*{run}.hdf')) for run in (SAMPLE_RUNS[0], REFERENCE_RUN)
-    }
-    refs = {name: dataset_ref(path=path) for name, path in paths.items()}
-    inputs = LocalInputs({ref: paths[name] for name, ref in refs.items()})
-    workflow = amor.reflectivity_workflow()
-    stages = Stages()
-
-    def call(**overrides: Any) -> bool:
-        params = amor.ReflectivityParams(
-            **{
-                'sample_run': refs[SAMPLE_RUNS[0]],
-                'reference_run': refs[REFERENCE_RUN],
-                'q_num_bins': 200,
-                **overrides,
-            }
-        )
-        called, reused = stages.workflow_for(
-            amor.REFLECTIVITY.id, workflow, params, inputs, 'reflectivity'
-        )
-        called(params, inputs)
-        return reused
-
-    assert not call()
-    assert not call(q_num_bins=100)
-    assert call(q_num_bins=50)
-    assert call()
+    params = reflectivity_params(SAMPLE_RUNS[0])
+    del params['q_num_bins']
+    rebin = client.workflow(amor.REFLECTIVITY, params).stage(
+        inputs=['q_num_bins'], label='rebin'
+    )
+    first, second, third = (rebin.compute({'q_num_bins': n}) for n in (200, 100, 50))
+    assert [r.reused for r in (first, second, third)] == [False, True, True]
+    assert client.output(third, 'reflectivity').sizes == {'Q': 50}

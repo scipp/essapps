@@ -122,69 +122,45 @@ def test_a_data_field_holds_either_form_of_reference() -> None:
     ]
 
 
-class CombineParams(BaseModel):
-    contributions: list[Array()]
-    one: Array()
-    files: list[NexusFile] = []
+class ReduceParams(BaseModel):
+    run: NexusFile
     scale: float = 1.0
 
 
-class CombineOutputs(BaseModel):
-    contribution: Array()
+class ReduceOutputs(BaseModel):
     result: Array()
+    numerator: Array()
     count: int = 0
 
 
 def spec(**fields: object) -> WorkflowSpec:
     return WorkflowSpec(
-        name='combine',
+        name='reduce',
         version=1,
-        title='Combine',
-        description='A workflow that declares a carry.',
-        params=CombineParams,
-        outputs=CombineOutputs,
+        title='Reduce',
+        description='A workflow that exposes an intermediate.',
+        params=ReduceParams,
+        outputs=ReduceOutputs,
         **fields,
     )
 
 
-def test_a_chain_declares_a_collection_parameter_and_the_output_it_takes() -> None:
-    assert spec(carry={'contributions': 'contribution'}).carry == {
-        'contributions': 'contribution'
-    }
-    assert spec().carry == {}
+def test_the_results_are_the_outputs_that_are_not_intermediates() -> None:
+    assert spec().results == ('result', 'numerator', 'count')
+    assert spec(intermediates=('numerator',)).results == ('result', 'count')
 
 
-@pytest.mark.parametrize(
-    ('carry', 'message'),
-    [
-        ({'absent': 'contribution'}, 'no parameter named'),
-        ({'scale': 'contribution'}, 'not a collection of data references'),
-        ({'one': 'contribution'}, 'not a collection of data references'),
-        ({'contributions': 'absent'}, 'no data output named'),
-        ({'contributions': 'count'}, 'no data output named'),
-        ({'files': 'contribution'}, 'takes'),
-    ],
-    ids=[
-        'no-parameter',
-        'literal',
-        'not-a-collection',
-        'no-output',
-        'literal-output',
-        'format',
-    ],
-)
-def test_the_two_ends_of_a_chain_are_checked_on_the_spec_alone(
-    carry: dict[str, str], message: str
-) -> None:
-    with pytest.raises(ValidationError, match=message):
-        spec(carry=carry)
+def test_an_intermediate_must_be_an_output() -> None:
+    with pytest.raises(ValidationError, match='are not outputs'):
+        spec(intermediates=('run',))
 
 
-def test_serialized_spec_carries_the_chain_declaration() -> None:
+def test_serialized_spec_carries_the_intermediates() -> None:
     serialized = SerializedWorkflowSpec.model_validate_json(
-        spec(carry={'contributions': 'contribution'}).serialize().model_dump_json()
+        spec(intermediates=('numerator',)).serialize().model_dump_json()
     )
-    assert serialized.carry == {'contributions': 'contribution'}
+    assert serialized.intermediates == ('numerator',)
+    assert serialized.results == ('result', 'count')
     assert 'scale' in serialized.params_schema['properties']
 
 

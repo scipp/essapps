@@ -11,14 +11,14 @@ Over HTTP: the same client against a backend served from another process.
 from pathlib import Path
 
 from ess.apps.client import local
-from ess.apps.examples import (
-    HISTOGRAM, LOAD, NORMALIZE_COMBINE, NORMALIZE_CONTRIBUTE, SUM, registry, write_run
-)
+from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
+from ess.apps.records import Accumulate
 from ess.apps.sources import FolderSource
 from ess.apps.spec import OutputRef, dataset_ref
 
 Path('/tmp/runs').mkdir(exist_ok=True)
 write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])
+write_run('/tmp/runs/dream_2.h5', [3.0, 1.0, 4.0, 2.0])
 
 client = local(
     '/tmp/essapps',
@@ -40,12 +40,14 @@ assert run in [candidate.ref for candidate in client.pick()]
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
 
-# Interactive reruns of a sciline pipeline: the session stages it over 'bins',
-# so the second run comes out of the stage it is already holding.
+# Interactive reruns of a sciline pipeline: the workflow record leaves 'bins'
+# unset, and the stage over 'bins' is the part of the pipeline a rerun needs.
+# The session holds it from the first call, so the second comes out of it.
 # Both carry the label 'hist', the slot the plot owns, so the second supersedes
 # the first.
-first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
-second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
+hist = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'], label='hist')
+first = hist.compute({'bins': 2})
+second = hist.compute({'bins': 8})
 assert second.reused and client.latest('hist').id == second.id
 client.view(second.ref('histogram'))  # plain numpy arrays
 
@@ -57,12 +59,19 @@ group = client.submit_group({
 })
 client.output(group['sum'], 'total')
 
-# One pipeline cut into two specs: a member run produces a contribution, and a
-# combine run sums contributions and normalises the sum. A series grows by
-# passing the previous combine's contribution back in beside the new member.
-member = client.run(NORMALIZE_CONTRIBUTE, {'run': run, 'floor': 1.5})
-total = client.run(NORMALIZE_COMBINE, {
-    'contributions': [member.ref('contribution')], 'scale': 2.0,
+# A sum over runs, cut from one workflow record that leaves 'run' unset. NORMALIZE
+# exposes the numerator and denominator as intermediates: a member stage per run
+# computes them, and a finalize stage normalises their accumulation. The binding
+# accumulates; the framework never adds.
+wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})
+member = wf.stage(inputs=['run'], outputs=['numerator', 'denominator'])
+finalize = wf.stage(inputs=['numerator', 'denominator'], outputs=['normalized'])
+members = [
+    member.compute({'run': dataset_ref(instrument='dream', run=n)}) for n in (1, 2)
+]
+total = finalize.compute({
+    name: Accumulate(accumulate=[m.ref(name) for m in members])
+    for name in ('numerator', 'denominator')
 })
 client.output(total, 'normalized')
 ```
@@ -107,12 +116,12 @@ essapps publish <record> data --via fake --allow-reused   # prints the PID; allo
 
 | To see | Read | Design document |
 |---|---|---|
-| requests, records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
+| workflow records, stage records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
 | the transport boundary, the server, the CLI | `backend.py`, `server.py`, `remote.py`, `cli.py` | [operations.md](../../docs/developer/operations.md#the-client-interface) |
-| the callable, `Inputs`, the stage offer, entry points | `binding.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md) |
+| the workflow protocol, `Inputs`, stages, entry points | `binding.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md) |
 | a sciline pipeline as a callable and as a stage | `adapter.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#the-sciline-adapter) |
-| how a session chooses and holds stages | `stages.py`, `tests/stages_test.py` | [stages.md](../../docs/developer/stages.md) |
-| contribute and combine specs, `chain` | `aggregation.py`, `examples.py` | [aggregation.md](../../docs/developer/aggregation.md) |
+| how a session holds stages | `stages.py`, `tests/stages_test.py` | [stages.md](../../docs/developer/stages.md) |
+| a sum over runs: member and finalize stages, accumulators | `examples.py`, `batch.py` | [aggregation.md](../../docs/developer/aggregation.md) |
 | templates, lookups, rules | `rules.py` | [rules.md](../../docs/developer/rules.md) |
 | `apply`, backlog, reprocess, retry, the trigger loop, the batch table | `batch.py`, `tests/batch_test.py` | [rules.md](../../docs/developer/rules.md) |
 | both execution shapes, the data store | `launcher.py`, `runner.py`, `datastore.py` | [records.md](../../docs/developer/records.md#where-runs-execute-and-where-data-lives) |
@@ -121,7 +130,7 @@ essapps publish <record> data --via fake --allow-reused   # prints the PID; allo
 
 ## A session on real data
 
-`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider under the label `iofq` so that the session stages the reduction over it and a rerun takes a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. `notebooks/loki-batch.ipynb` reduces four samples from the same files as a batch, and each half starts with a `for` loop over `client.run` and breaks it. By hand: the loop cannot say which values a person chose once the default changes, so the batch becomes a template and a pandas frame of pinned values, as an ISIS batch file would. Automatically: the loop's memory of what it fired on is lost on a restart, so the loop becomes a query over the records, and what is left of it becomes a rule that selects sample runs by a journal's run role, fills each one's transmission run as the nearest before it, and fires as runs arrive. It shows the backlog, a correction of one member, and a reprocess under a new template version that keeps the pinned value.
+`notebooks/loki-session.ipynb` tells one LoKI@Larmor session on the esssans tutorial files: pick a background run from a folder dataset source, compute the beam centre as its own record, feed it to the I(Q) reduction as a reference, move the Q binning on a slider through a stage over `q` under the label `iofq`, so that the session holds the rest of the reduction and a rerun takes a quarter of a second rather than three, fork the plot into a second label, and read the provenance back to the dataset references. `notebooks/loki-batch.ipynb` reduces four samples from the same files as a batch, and each half starts with a `for` loop over `client.run` and breaks it. By hand: the loop cannot say which values a person chose once the default changes, so the batch becomes a template and a pandas frame of pinned values, as an ISIS batch file would. Automatically: the loop's memory of what it fired on is lost on a restart, so the loop becomes a query over the records, and what is left of it becomes a rule that selects sample runs by a journal's run role, fills each one's transmission run as the nearest before it, and fires as runs arrive. It shows the backlog, a correction of one member, and a reprocess under a new template version that keeps the pinned value.
 
 The specs are in `ess.apps.loki`, which needs the tutorial files and the `loki` extra (`pip install -e "packages/essapps[loki]"`), which brings in esssans.
 

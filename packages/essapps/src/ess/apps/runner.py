@@ -30,12 +30,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from .binding import Binding, Factory, Inputs, Workflow, import_object
-from .records import Failure, RunResult, Status
+from .binding import (
+    Binding,
+    Factory,
+    FunctionWorkflow,
+    Inputs,
+    StageCall,
+    Workflow,
+    as_workflow,
+    import_object,
+)
+from .records import Accumulate, Failure, RunResult, Status
 from .spec import (
     ArraySpec,
+    Format,
     OutputRef,
     Ref,
     SpecId,
@@ -43,7 +53,7 @@ from .spec import (
     as_ref,
     data_fields,
     dataset_refs,
-    literal_model,
+    submodel,
 )
 from .stages import Stages
 
@@ -65,6 +75,20 @@ def package_versions() -> dict[str, str]:
 
 def environment_name() -> str | None:
     return os.environ.get('CONDA_DEFAULT_ENV') or os.environ.get('VIRTUAL_ENV')
+
+
+class Job(BaseModel, frozen=True):
+    """
+    What a runner is given: a stage request with its literal references inlined.
+
+    ``workflow`` is the workflow record's ID, which names the stage a session
+    holds; ``params`` are its values and ``inputs`` the stage inputs.
+    """
+
+    workflow: str
+    params: dict[str, Any]
+    inputs: dict[str, Any]
+    outputs: tuple[str, ...]
 
 
 class OutputShapeError(Exception):
@@ -153,9 +177,9 @@ class Runner:
     """
     Executes runs; with ``keep`` it is a session and holds stages between runs.
 
-    ``stages`` caps how many it holds at once. A runner without ``keep`` never
-    asks a workflow for a stage, so a throwaway process computes everything it
-    needs and holds nothing.
+    ``stages`` caps how many stages, and how many accumulators, it holds at once.
+    A runner without ``keep`` builds the stage a request names, calls it once,
+    and holds nothing.
 
     Checksums survive between runs as well: a file is hashed once per (path,
     size, mtime). A session that reruns a workflow over the same hundreds of
@@ -176,7 +200,7 @@ class Runner:
             self._digests[key] = file_checksum(path)
         return self._digests[key]
 
-    def _checksums(self, params: dict[str, Any], inputs: Inputs) -> dict[str, str]:
+    def _checksums(self, values: dict[str, Any], inputs: Inputs) -> dict[str, str]:
         """
         The checksum of every local file the run reads, by reference.
 
@@ -187,17 +211,17 @@ class Runner:
         ``resolved_params``.
         """
         checksums = {}
-        for ref in dataset_refs(params):
+        for ref in dataset_refs(values):
             located = inputs.path(ref)
             if located.is_file():
                 checksums[str(ref)] = self._checksum(located)
         return checksums
 
-    def _callable(self, spec: WorkflowSpec, factory: Factory) -> Workflow:
+    def _workflow(self, spec: WorkflowSpec, factory: Factory) -> Workflow:
         """The workflow; kept in a session only to save building it again."""
         if spec.id in self._workflows:
             return self._workflows[spec.id]
-        workflow = factory()
+        workflow = as_workflow(factory(), spec)
         if self._keep:
             self._workflows[spec.id] = workflow
         return workflow
@@ -205,26 +229,17 @@ class Runner:
     def forget(self, spec_id: SpecId) -> None:
         self._workflows.pop(spec_id, None)
         if self._stages is not None:
-            self._stages.forget(spec_id)
+            self._stages.clear()
 
     def run(
         self,
         record_id: str,
-        params: dict[str, Any],
+        job: Job,
         binding: Binding,
         inputs: Inputs,
         outputs: Outputs,
-        *,
-        label: str | None = None,
-        member_key: str | None = None,
     ) -> RunResult:
-        """
-        Execute the request ``params`` of ``record_id`` and report what happened.
-
-        ``label`` and ``member_key`` say where the request sits in a label's
-        history. A session reads them to find the request's predecessor and
-        with it the parameters a person is moving; nothing else here uses them.
-        """
+        """Execute the stage ``job`` names and report what happened."""
         if binding.factory is None:
             raise ValueError(f'{binding.spec.id} has no workflow to run')
         spec = binding.spec
@@ -237,22 +252,57 @@ class Runner:
             binding=binding.how,
         )
         try:
-            validated = spec.params.model_validate(params)
-            result.resolved_params = _resolved(validated.model_dump(mode='json'))
-            result.checksums = self._checksums(params, inputs)
-            called = workflow = self._callable(spec, binding.factory)
-            if self._stages is not None:
-                called, result.reused = self._stages.workflow_for(
-                    spec.id,
-                    workflow,
-                    validated,
-                    inputs,
-                    label=label,
-                    member_key=member_key,
-                    checksums=result.checksums,
+            fields = spec.params.model_fields
+            staged = [name for name in job.inputs if name in fields]
+            intermediates = [name for name in job.inputs if name not in fields]
+            fixed = submodel(
+                spec.params,
+                [
+                    name
+                    for name, info in fields.items()
+                    if name not in staged
+                    and (name in job.params or not info.is_required())
+                ],
+                'Fixed',
+            ).model_validate(job.params)
+            fed = submodel(spec.params, staged, 'Staged').model_validate(
+                {name: job.inputs[name] for name in staged}
+            )
+            result.resolved_params = _resolved(
+                fixed.model_dump(mode='json') | fed.model_dump(mode='json')
+            )
+            result.checksums = self._checksums({**job.params, **job.inputs}, inputs)
+            workflow = self._workflow(spec, binding.factory)
+            outputs_ = tuple(job.outputs)
+
+            def build() -> StageCall:
+                return workflow.stage(fixed, tuple(job.inputs), outputs_, inputs)
+
+            if self._stages is None or isinstance(workflow, FunctionWorkflow):
+                # A plain function has no graph to cut, so its stage holds nothing.
+                call = build()
+            else:
+                held = {str(ref) for ref in dataset_refs(job.params)}
+                name = (
+                    job.workflow,
+                    tuple(sorted(job.inputs)),
+                    outputs_,
+                    tuple(sorted(c for c in result.checksums.items() if c[0] in held)),
                 )
+                call, result.reused = self._stages.stage(name, build)
+            values = {}
+            for name in intermediates:
+                values[name], reused = self._intermediate(
+                    spec, workflow, job.workflow, name, job.inputs[name], inputs
+                )
+                result.reused |= reused
             self._store(
-                record_id, result, spec, dict(called(validated, inputs)), outputs
+                record_id,
+                result,
+                spec,
+                outputs_,
+                dict(call(fed, values, inputs)),
+                outputs,
             )
             result.status = Status.COMPLETED
         except Exception as e:
@@ -261,27 +311,69 @@ class Runner:
         result.finished = datetime.now(UTC)
         return result
 
+    def _intermediate(
+        self,
+        spec: WorkflowSpec,
+        workflow: Workflow,
+        workflow_id: str,
+        name: str,
+        value: Any,
+        inputs: Inputs,
+    ) -> tuple[Any, bool]:
+        """
+        The object an intermediate input stands for, and whether held state served it.
+
+        A reference is loaded in the form the intermediate's format says; a
+        literal was put in place of its reference at dispatch; an
+        :class:`Accumulate` is loaded element by element and accumulated with
+        the workflow's accumulator for the input, which a session may hold.
+        """
+        field = data_fields(spec.outputs).get(name)
+        if field is None:
+            return value, False
+
+        def load(ref: Ref) -> Any:
+            if field.format is Format.SCIPP:
+                return inputs.array(ref)
+            return inputs.path(ref)
+
+        if (ref := as_ref(value)) is not None:
+            return load(ref), False
+        refs = Accumulate.model_validate(value).accumulate
+        if self._stages is None:
+            accumulator = workflow.accumulator(name)
+            for element in refs:
+                accumulator.push(load(element))
+            return accumulator.value, False
+        return self._stages.accumulate(
+            (workflow_id, name), refs, lambda: workflow.accumulator(name), load
+        )
+
     def _store(
         self,
         record_id: str,
         result: RunResult,
         spec: WorkflowSpec,
+        selected: tuple[str, ...],
         values: dict[str, Any],
         outputs: Outputs,
     ) -> None:
         """
-        Check each output against its declared structure, then store it.
+        Check each selected output against its declared structure, then store it.
 
         Literal outputs are validated through the outputs model and kept inline;
         data outputs come back as objects, are checked against their declared
         structure, and go to the data store. An optional output may be absent.
         """
         data = data_fields(spec.outputs)
-        literals = literal_model(spec.outputs).model_validate(
-            {name: value for name, value in values.items() if name not in data}
+        literal_names = [name for name in selected if name not in data]
+        literals = submodel(spec.outputs, literal_names, 'Literals').model_validate(
+            {name: values.get(name) for name in literal_names if name in values}
         )
         result.outputs = literals.model_dump(mode='json', exclude_none=True)
-        for name, ref in data.items():
+        for name in selected:
+            if (ref := data.get(name)) is None:
+                continue
             value = values.get(name)
             if value is None:
                 if spec.outputs.model_fields[name].is_required():
@@ -332,7 +424,7 @@ def main(workdir: Path) -> None:
     )
     outputs = WorkdirOutputs(workdir, serializers.save)
     result = Runner(keep=False).run(
-        job['record'], job['params'], binding, inputs, outputs
+        job['record'], Job.model_validate(job['job']), binding, inputs, outputs
     )
     marker = {
         'result': result.model_dump(mode='json'),

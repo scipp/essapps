@@ -277,7 +277,6 @@ def reflectivity_workflow() -> PipelineAdapter:
         },
         resolve={'sample_run': 'path', 'reference_run': 'path'},
         targets={'reflectivity': ReflectivityCurve},
-        default_stage_inputs=['sample_run'],
     )
 
 

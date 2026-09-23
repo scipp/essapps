@@ -1,39 +1,36 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A sciline pipeline as a workflow, and as a stage over some of its parameters.
+A sciline pipeline as a workflow: every stage record is a ``sciline.Stage``.
 
-The callable is stateless: it sets every parameter on a copy of the pipeline and
-computes the targets, so no call can affect a later one.
+The workflow record's values are resolved and set on a copy of the pipeline.
+The stage's inputs become the inputs of a :py:class:`sciline.Stage`: parameters
+the workflow record left unset, and intermediates the spec exposes, whose
+providers and ancestors the stage cuts off. Everything the outputs need that no
+input can affect is computed once and held at the frontier, and each call
+computes only what lies downstream of the inputs. A stage over no inputs is a
+plain run of the pipeline.
 
-``stage`` is the offer a session takes up when it expects a parameter to move.
-The fields outside ``stage_inputs`` are resolved and set on a copy of the
-pipeline, and the keys of the stage inputs become the inputs of a
-:py:class:`sciline.Stage`: everything the targets need that no stage input can
-affect is computed once and held at the frontier, and each call recomputes only
-what lies downstream of the inputs. Correctness follows from the graph for any
-choice of inputs, so the choice decides only where the frontier sits and with it
-what a rerun costs. Which fields to feed is therefore the session's to decide
-and not the binding author's; ``default_stage_inputs`` is the author's hint for
-a request the session has nothing better to go on.
+References in the workflow record's values are resolved once, when the stage is
+built; references in the stage inputs on every call.
 
-References in the fixed fields are resolved once, when the stage is built;
-references in the stage inputs are resolved on every call.
+The accumulators are those a ``sciline.Aggregation`` over the same pipeline
+takes, by sciline key, so a package defines them once for notebooks and for the
+binding.
 
 See docs/developer/workflow-contract.md.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from collections.abc import Set as AbstractSet
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import sciline
 from pydantic import BaseModel
 
-from .binding import Form, Inputs, Workflow, resolve
+from .binding import Accumulator, Form, Inputs, StageCall, resolve
 
 Key = Any
 
@@ -67,17 +64,17 @@ class Wiring:
 
 class PipelineAdapter:
     """
-    The callable contract over a sciline pipeline.
+    The workflow contract over a sciline pipeline.
 
     ``keys`` maps parameter field names to sciline keys, ``targets`` output field
-    names to the keys to compute, and ``resolve`` names the form, a path or a
-    scipp object, in which each data-reference parameter is set on the pipeline.
-    ``default_stage_inputs`` names the fields to feed a stage when the session
-    has not yet seen which parameter moves.
+    names, intermediates included, to the keys they compute, and ``resolve``
+    names the form, a path or a scipp object, in which each data-reference
+    parameter is set on the pipeline. ``accumulators`` gives, by sciline key, a
+    factory for the accumulator of each intermediate that may be accumulated.
 
-    A stage input whose key the targets do not need is held rather than fed. It
-    cannot change what the stage returns, and which fields the session feeds is a
-    caching choice, which must not decide whether a run succeeds.
+    A parameter input whose key the outputs do not need is held rather than fed.
+    It cannot change what the stage returns, and which parameters a caller
+    varies must not decide whether a run succeeds.
     """
 
     def __init__(
@@ -87,50 +84,61 @@ class PipelineAdapter:
         keys: Mapping[str, Key],
         targets: Mapping[str, Key],
         resolve: Mapping[str, Form] = {},
-        default_stage_inputs: Iterable[str] = (),
+        accumulators: Mapping[Key, Callable[[], Accumulator]] = {},
     ) -> None:
         self._pipeline = pipeline
         self._keys = dict(keys)
         self._targets = dict(targets)
         self._wiring = Wiring(self._keys, dict(resolve))
-        self.default_stage_inputs = frozenset(default_stage_inputs)
-        unknown = (
-            self.default_stage_inputs | self._wiring.resolve.keys()
-        ) - self._keys.keys()
+        self._accumulators = {
+            name: accumulators[key]
+            for name, key in self._targets.items()
+            if key in accumulators
+        }
+        unknown = self._wiring.resolve.keys() - self._keys.keys()
         if unknown:
             raise ValueError(f'parameters without a key: {sorted(unknown)}')
-
-    def _outputs(self, results: Mapping[Key, Any]) -> dict[str, Any]:
-        return {name: results[key] for name, key in self._targets.items()}
-
-    def __call__(self, params: BaseModel, inputs: Inputs) -> dict[str, Any]:
-        pipeline = self._pipeline.copy()
-        for key, value in self._wiring.values(params, inputs, self._keys).items():
-            pipeline[key] = value
-        return self._outputs(pipeline.compute(tuple(self._targets.values())))
+        stray = set(accumulators) - set(self._targets.values())
+        if stray:
+            raise ValueError(f'accumulators for keys that are no output: {stray}')
 
     def stage(
-        self, params: BaseModel, stage_inputs: AbstractSet[str], inputs: Inputs
-    ) -> Workflow:
-        """A callable over the pipeline with ``stage_inputs`` fed on every call."""
+        self,
+        params: BaseModel,
+        inputs: Collection[str],
+        outputs: Collection[str],
+        data: Inputs,
+    ) -> StageCall:
+        """A ``sciline.Stage`` from ``inputs`` to ``outputs`` over the set values."""
         pipeline = self._pipeline.copy()
-        fixed = [name for name in self._keys if name not in stage_inputs]
-        for key, value in self._wiring.values(params, inputs, fixed).items():
+        fixed = [name for name in type(params).model_fields if name in self._keys]
+        for key, value in self._wiring.values(params, data, fixed).items():
             pipeline[key] = value
-        targets = list(self._targets.values())
-        needed = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
+        targets = [self._targets[name] for name in outputs]
+        intermediates = [name for name in inputs if name in self._targets]
+        cut = [self._targets[name] for name in intermediates]
+        needed = sciline.Stage(pipeline, outputs=targets, inputs=cut).keys
         fed = [
-            name
-            for name, key in self._keys.items()
-            if name in stage_inputs and key in needed
+            name for name in inputs if name in self._keys and self._keys[name] in needed
         ]
         stage = sciline.Stage(
-            pipeline, outputs=targets, inputs=[self._keys[name] for name in fed]
+            pipeline,
+            outputs=targets,
+            inputs=[*cut, *(self._keys[name] for name in fed)],
         )
 
-        def call(params: BaseModel, inputs: Inputs) -> dict[str, Any]:
-            return self._outputs(
-                stage.compute(self._wiring.values(params, inputs, fed))
-            )
+        def call(
+            params: BaseModel, intermediates: Mapping[str, Any], inputs: Inputs
+        ) -> dict[str, Any]:
+            values = self._wiring.values(params, inputs, fed)
+            values |= {self._targets[n]: v for n, v in intermediates.items()}
+            results = stage.compute(values)
+            return {name: results[self._targets[name]] for name in outputs}
 
         return call
+
+    def accumulator(self, name: str) -> Accumulator:
+        try:
+            return self._accumulators[name]()
+        except KeyError:
+            raise ValueError(f'{name!r} has no accumulator') from None
