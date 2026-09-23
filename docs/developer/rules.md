@@ -23,8 +23,8 @@ batch_table(client, 'scan')
 ```
 
 `apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
-Each member is a stage request: the template's blanks, here `run`, are its stage inputs, and every other value is its workflow record.
-The two members above agree on everything but their blanks, so they share one workflow record, and in a session one held stage.
+Each member is a stage request: the template's blanks, here `run`, are its stage inputs, and every other value is its `params`.
+The two members above agree on everything but their blanks, so they share one workflow ID, and in a session one held stage.
 `batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
 Each shows the value the request was made with, whoever supplied it, and the `pinned` column names the fields of the row a person pinned.
@@ -55,8 +55,8 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
-The filled values of the template's blanks become the member's stage inputs, and all other filled values its workflow record.
-A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a workflow record of its own.
+The filled values of the template's blanks become the member's stage inputs, and all other filled values its `params`.
+A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a workflow ID of its own.
 The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
@@ -177,15 +177,15 @@ rule = Rule(
 `Series(key, accumulate, outputs)` names the dataset field whose value keys datasets into a series, the intermediates to accumulate, and the outputs of the finalize.
 The rule holds one template.
 Each member is the stage from the template's blanks to the intermediates in `accumulate`.
-Each finalize is cut from the arriving member's workflow record, takes one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
+Each finalize has the values the arriving member was given as its `params`, takes one `Accumulate` per intermediate, and outputs the intermediates as well as `outputs`, so that the next finalize can chain onto the accumulated values.
 It accumulates the intermediates of every current member of the series, or the previous finalize's values plus what that finalize does not cover when chaining is valid, for which the condition is in [aggregation.md](aggregation.md#when-chaining-is-valid).
 Nothing on the rule says whether chaining is allowed, because that is a property of the accumulator, which the person writing a rule cannot know.
 Successive finalizes of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.
 A series of k runs therefore costs k finalizes, and the superseded ones are the first evicted.
 
-**Members under different workflow records are not accumulated together.**
-A member whose workflow record differs from the others', because a lookup entry or a pinned value set something only for it, cannot be accumulated with them.
-The backend refuses such a finalize, and the trigger loop logs the refusal.
+**Members that disagree on a parameter are not accumulated together.**
+A member made with another value than the arriving member, because a lookup entry or a pinned value set something only for it, cannot be accumulated with the others.
+The backend refuses such a finalize and names the parameter, and the trigger loop logs the refusal.
 
 **A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
 A series of fixed roles, a scatter and its transmission, is the same rule with the finalize fired only when every role is present.
@@ -272,7 +272,7 @@ Each arrival therefore accumulates what exists.
 **A combine template on the series.**
 The series names a second template, for a combine spec over a list of references to the members' contributions, with the output that is the contribution and the parameter that takes it.
 The rule then holds two templates that share most of their values and can disagree.
-With exposed intermediates, the finalize is cut from the member's own workflow record, so the rule holds one template.
+With exposed intermediates, the finalize has the member's own parameters, so the rule holds one template.
 
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.

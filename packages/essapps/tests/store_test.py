@@ -6,13 +6,7 @@ from typing import Any
 
 import pytest
 
-from ess.apps.records import (
-    Accumulate,
-    StageRecord,
-    StageRequest,
-    Status,
-    WorkflowRecord,
-)
+from ess.apps.records import Accumulate, StageRecord, StageRequest, Status
 from ess.apps.spec import OutputRef, SpecId, dataset_ref
 from ess.apps.store import RecordStore, StoreLockedError
 
@@ -26,10 +20,14 @@ def request(
     params: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> StageRequest:
-    workflow = WorkflowRecord(
-        spec=spec, params=params or {}, instrument='dream', proposal=proposal
+    return StageRequest(
+        spec=spec,
+        params=params or {},
+        instrument='dream',
+        proposal=proposal,
+        submitter='simon',
+        **kwargs,
     )
-    return StageRequest(workflow=workflow, submitter='simon', **kwargs)
 
 
 @pytest.fixture

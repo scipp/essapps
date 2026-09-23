@@ -279,17 +279,21 @@ class LocalBackend:
         self, request: StageRequest, group: Mapping[str, StageRequest] | None = None
     ) -> ValidationReport:
         """
-        Three layers: shape and spec, the values given, runnability.
+        Three layers: shape and spec, the values, runnability.
 
-        Whether the stage's inputs and the workflow record's values suffice for
-        its outputs is known only to the workflow code, so a stage that leaves a
-        needed parameter unset fails when it runs, not here.
+        The request is checked as it would be recorded, the spec's defaults
+        filled. A stage without intermediate inputs is checked against the whole
+        params model, so a missing parameter is refused here. Whether a stage
+        that takes an intermediate has what its outputs need is known only to
+        the workflow code, so such a stage that leaves a needed parameter unset
+        fails when it runs.
         """
         if request.spec not in self.registry:
             return ValidationReport(
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
             )
         spec = self.registry.spec(request.spec)
+        request = self._with_defaults(request)
         errors = _shape_errors(spec, request)
         if errors:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
@@ -305,7 +309,7 @@ class LocalBackend:
                     intermediates.get(name),
                     request,
                     group or {},
-                    same_workflow=True,
+                    intermediate=True,
                 )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
@@ -331,14 +335,16 @@ class LocalBackend:
         request: StageRequest,
         group: Mapping[str, StageRequest],
         *,
-        same_workflow: bool = False,
+        intermediate: bool = False,
     ) -> list[str]:
         """
         Whether a reference may fill the field it is in.
 
-        An intermediate supplied from a record of the same spec must come from a
-        record cut from the same workflow record, so that every parameter both
-        sides read has one value.
+        An intermediate supplied from a record of the same spec must agree with
+        it on every parameter both requests set, so that a parameter both sides
+        read has one value. A parameter one of them takes as a stage input, or
+        leaves unset, is not compared: the finalize of a sum over runs leaves
+        unset the run each member takes.
         """
         if isinstance(ref, DatasetRef):
             return self._check_dataset(ref, consumer)
@@ -347,6 +353,8 @@ class LocalBackend:
             if name not in group:
                 return [f'{ref}: no group member named {name!r}']
             producer_request = group[name]
+            if producer_request.spec in self.registry:
+                producer_request = self._with_defaults(producer_request)
         else:
             if ref.record not in self.record_store:
                 return [f'{ref}: no such record']
@@ -356,15 +364,14 @@ class LocalBackend:
             return [f'{ref}: belongs to proposal {producer_request.proposal}']
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
-        if (
-            same_workflow
-            and producer_spec == request.spec
-            and producer_request.workflow.id != request.workflow.id
-        ):
-            return [
-                f'{ref}: cut from workflow record {producer_request.workflow.id}, '
-                f'not {request.workflow.id}; a parameter both read may differ'
-            ]
+        if intermediate and producer_spec == request.spec:
+            theirs, ours = producer_request.params, request.params
+            for name in sorted(theirs.keys() & ours.keys()):
+                if theirs[name] != ours[name]:
+                    return [
+                        f'{ref}: made with {name}={theirs[name]!r}, '
+                        f'this request sets {name}={ours[name]!r}'
+                    ]
         outputs = self.registry.spec(producer_spec).outputs
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
@@ -431,21 +438,44 @@ class LocalBackend:
         self, request: StageRequest, named: Mapping[str, str]
     ) -> StageRequest:
         """
-        The request as recorded: group references by ID, outputs named.
+        The request as recorded: defaults filled, group references by ID,
+        outputs named.
 
         A request without outputs asks for the spec's results, and its record
         names them, so that what a record computed never depends on the spec.
         """
-        workflow = request.workflow.model_copy(
-            update={'params': _rewrite(request.workflow.params, named)}
-        )
+        request = self._with_defaults(request)
         return request.model_copy(
             update={
-                'workflow': workflow,
+                'params': _rewrite(request.params, named),
                 'inputs': _rewrite(request.inputs, named),
                 'outputs': request.outputs or self.registry.spec(request.spec).results,
             }
         )
+
+    def _with_defaults(self, request: StageRequest) -> StageRequest:
+        """
+        The request with the spec's default in ``params`` for every parameter
+        that has one and is neither given nor a stage input.
+
+        The record then says which value every parameter had, so that two
+        requests that differ only in giving a default name the same pipeline,
+        and a recompute runs with the values of the first run even when the
+        spec's defaults have changed since. A required parameter without a
+        default stays unset.
+        """
+        params = self.registry.spec(request.spec).params
+        missing = [
+            name
+            for name, info in params.model_fields.items()
+            if not info.is_required()
+            and name not in request.params
+            and name not in request.inputs
+        ]
+        if not missing:
+            return request
+        defaults = submodel(params, missing, 'Defaults')().model_dump(mode='json')
+        return request.model_copy(update={'params': {**request.params, **defaults}})
 
     def _supersedes(
         self, request: StageRequest, latest: Mapping[tuple[str, str | None], str]
@@ -481,7 +511,7 @@ class LocalBackend:
         if not report.ok:
             raise SubmitError({record_id: report})
         new = StageRecord(
-            request=old.request,
+            request=self._with_defaults(old.request),
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
         )
@@ -635,8 +665,8 @@ class LocalBackend:
                 return
         request = record.request
         job = Job(
-            workflow=request.workflow.id,
-            params=_inline(request.workflow.params, literals),
+            workflow=request.workflow_id,
+            params=_inline(request.params, literals),
             inputs=_inline(request.inputs, literals),
             outputs=request.outputs,
         )
@@ -725,7 +755,7 @@ class LocalBackend:
         return {
             'record': record.id,
             'spec': str(record.spec),
-            'workflow': record.request.workflow.id,
+            'workflow': record.request.workflow_id,
             'stage': {
                 'inputs': sorted(record.request.inputs),
                 'outputs': list(record.request.outputs),
@@ -843,17 +873,21 @@ def _shape_errors(spec: WorkflowSpec, request: StageRequest) -> list[str]:
     A params model ignores fields it does not declare unless its author forbids
     them, and a reduction parameter dropped in silence gives a wrong number
     without an error, so every name is checked against the spec. A stage input
-    is a parameter the workflow record leaves unset or an intermediate; a data
+    is a parameter ``params`` leaves unset or an intermediate; a data
     intermediate is supplied as a reference or an accumulation of references.
+    A stage without intermediate inputs gets every parameter from the request,
+    so it is checked against the whole params model; a stage that takes an
+    intermediate is checked field by field, since which parameters it needs is
+    known only to the workflow code.
     """
     fields = spec.params.model_fields
     errors = [
         f'{name}: not a parameter of {spec.id}'
-        for name in sorted(set(request.workflow.params) - set(fields))
+        for name in sorted(set(request.params) - set(fields))
     ]
     for name in sorted(request.inputs):
-        if name in request.workflow.params:
-            errors.append(f'{name}: a stage input the workflow record also sets')
+        if name in request.params:
+            errors.append(f'{name}: a stage input that params also sets')
         elif name not in fields and name not in spec.intermediates:
             errors.append(
                 f'{name}: neither a parameter nor an intermediate of {spec.id}'
@@ -866,8 +900,10 @@ def _shape_errors(spec: WorkflowSpec, request: StageRequest) -> list[str]:
     if errors:
         return errors
     given = {name: value for name, value in request.values().items() if name in fields}
+    whole = all(name in fields for name in request.inputs)
+    model = spec.params if whole else submodel(spec.params, given, 'Given')
     try:
-        submodel(spec.params, given, 'Given').model_validate(given)
+        model.model_validate(given)
     except ValidationError as e:
         errors += [
             f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()

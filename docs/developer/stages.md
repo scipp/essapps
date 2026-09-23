@@ -23,9 +23,9 @@ for num_bins in (50, 100, 200):
     plot(client.view(record.ref('iofq')))
 ```
 
-`wf` is a workflow record, the reduction with every parameter but `q` set.
+`wf` is the reduction with every parameter but `q` set, held on the client side only.
 `tune` names a stage cut from it, from `q` to `iofq`.
-Every call submits a complete stage request, `{workflow: wf, inputs: {'q': ...}, outputs: ['iofq']}`.
+Every call submits a complete stage request, `{spec: ..., params: {...}, inputs: {'q': ...}, outputs: ['iofq']}`, and the backend fills the spec's defaults into `params`.
 The first call builds the stage, and the later ones reuse it.
 The rest of this document explains how.
 
@@ -37,8 +37,8 @@ It holds three things in memory:
 | Held object | Addressed by |
 |---|---|
 | output of a stage record | the stage record's ID |
-| stage | workflow record, input names, output names, checksums of the datasets it read |
-| accumulator | workflow record, the input it fills, the outputs pushed into it so far |
+| stage | workflow ID, input names, output names, checksums of the datasets `params` names |
+| accumulator | workflow ID, the input it fills, the outputs pushed into it so far |
 
 The outputs let a chained request get its input without a disk read.
 A stage holds intermediate results of a workflow.
@@ -75,16 +75,17 @@ It never decides what a rerun returns.
 ## Who names the stage
 
 **The caller names the stage, before the first call.**
-A client builds a workflow record that leaves the moving parameters unset, and cuts a stage from it with `wf.stage(inputs=..., outputs=...)`.
+A client sets every parameter but the moving ones with `client.workflow(spec, params)`, and cuts a stage from it with `wf.stage(inputs=..., outputs=...)`.
 The workflow author cannot make this choice, because no fixed choice serves both "tune one parameter" and "the same settings over many runs".
 The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
 The caller knows which parameter will move, and the first call already builds the stage.
 
-**Each stage record names its stage**: the workflow record it is cut from, its input names, and its outputs.
-The session holds the stage it built under that name, together with the checksums of the datasets the workflow record names, so that a file that changed on disk does not find a stage built from its earlier bytes.
+**Each stage record names its stage**: the workflow ID of its request, a hash of spec, params, instrument, and proposal, its input names, and its outputs.
+Because `params` holds the defaults filled at submit, a request that omits a default and one that gives it name the same stage.
+The session holds the stage it built under that name, together with the checksums of the datasets `params` names, so that a file that changed on disk does not find a stage built from its earlier bytes.
 A later stage record that names the same stage computes only what lies downstream of its inputs.
 A stage record without a handle, such as a member that a rule submits, runs the stage it names in the same way.
-Nothing is inferred from earlier requests: a `client.run` that differs from the previous one in a single field is a new workflow record and a plain run.
+Nothing is inferred from earlier requests: a `client.run` that differs from the previous one in a single field has another workflow ID and is a plain run.
 
 `ess.apps.stages.Stages` holds stages and accumulators:
 
@@ -94,23 +95,23 @@ value, held = stages.accumulate(name, refs, make, load)
 ```
 
 A stage belongs to no label.
-Two plots that move the same parameter of the same workflow record are served by one stage, so the loaded data is held once.
+Two plots that move the same parameter with the same `params` are served by one stage, so the loaded data is held once.
 
 The session holds a bounded number of stages and drops the least recently used.
-A stage resolves the references among the workflow record's values when it is built and holds those objects.
+A stage resolves the references in `params` when it is built and holds those objects.
 They count towards the session's memory, and they stay valid when the session's output cache drops its own copy.
 
 ### Held accumulators
 
 A finalize stage of a sum over runs takes `Accumulate` inputs, each listing the outputs of the member stage records to accumulate ([aggregation.md](aggregation.md)).
-The session holds one accumulator per workflow record and input, with the list of outputs pushed into it so far.
+The session holds one accumulator per workflow ID and input, with the list of outputs pushed into it so far.
 When a request's list begins with that list, the session pushes only the rest, so adding a third run pushes one value, not three.
 Any other list, such as one in which a corrected member replaces an earlier record, starts a fresh accumulator; nothing is ever taken out.
 
 ### What this costs
 
 The first call of a stage costs one full computation, because the stage must be built.
-A person who moves two parameters in turn either names a stage over both, which recomputes everything downstream of either on every call, or two stages over one each, which are cut from different workflow records and are built again whenever the other value changes.
+A person who moves two parameters in turn either names a stage over both, which recomputes everything downstream of either on every call, or two stages over one each, which have different workflow IDs and are built again whenever the other value changes.
 Making the switch cheap needs values held between two consecutive stages.
 That is the network of stages which scipp/sciline#245 deferred.
 

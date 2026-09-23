@@ -3,15 +3,15 @@
 """
 A sciline pipeline as a workflow: every stage record is a ``sciline.Stage``.
 
-The workflow record's values are resolved and set on a copy of the pipeline.
+The request's parameters are resolved and set on a copy of the pipeline.
 The stage's inputs become the inputs of a :py:class:`sciline.Stage`: parameters
-the workflow record left unset, and intermediates the spec exposes, whose
+the request's params leave unset, and intermediates the spec exposes, whose
 providers and ancestors the stage cuts off. Everything the outputs need that no
 input can affect is computed once and held at the frontier, and each call
 computes only what lies downstream of the inputs. A stage over no inputs is a
 plain run of the pipeline.
 
-References in the workflow record's values are resolved once, when the stage is
+References in the request's params are resolved once, when the stage is
 built; references in the stage inputs on every call.
 
 The accumulators are those a ``sciline.Aggregation`` over the same pipeline

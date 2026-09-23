@@ -1,21 +1,19 @@
-# Workflow records and stage records
+# Stage records
 
 **Status: implemented in the skeleton.** The code under `packages/essapps/src/ess/apps` follows this document; the open questions at the end are still open.
 It changes [records.md](../records.md), [workflow-contract.md](../workflow-contract.md), [stages.md](../stages.md), [aggregation.md](../aggregation.md), and the series part of [rules.md](../rules.md).
 
 ## Summary
 
-A record today is one call of a spec with all its parameters.
-What actually runs is often a piece of the pipeline: a `sciline.Stage` over the parameters that move, or the contribute or finalize half of a `sciline.Aggregation`.
-Because the record cannot say which piece ran, the design needs extra machinery around it: specs cut into contribute and combine, the `carry` declaration, the `SHARED` entry in contributions, and a session that infers stage inputs from successive requests.
+What runs is often a piece of a pipeline: a `sciline.Stage` over the parameters that move, or the contribute or finalize half of a `sciline.Aggregation`.
+A record of one call of a spec with all its parameters cannot say which piece ran, and then needs extra machinery around it: specs cut into contribute and combine, a `carry` declaration, a `SHARED` entry in contributions, and a session that infers stage inputs from successive requests.
 
-This proposal records what runs, in the terms sciline already uses:
-
-- a **workflow record** is a pipeline with parameters set, like a configured `sciline.Pipeline`;
-- a **stage record** is one call of a stage cut from it, like one `sciline.Stage.compute`.
+This proposal records what runs, in the terms sciline uses.
+A **stage record** is one call of a stage, like one `sciline.Stage.compute`.
+Its request holds the spec and its parameters, which together are a configured pipeline, like a `sciline.Pipeline` with parameters set, and the stage's inputs and outputs.
 
 A stage names its inputs and its outputs.
-An input is either a parameter left unset in the workflow record or an intermediate supplied from outside.
+An input is either a parameter that `params` leaves unset or an intermediate supplied from outside.
 An output is any value the spec exposes, including intermediates.
 With that, an aggregation over runs needs no specs of its own and no declaration on the spec.
 
@@ -36,26 +34,25 @@ finalize = sciline.Stage(pipeline, inputs=[Numerator, Denominator], outputs=[Iof
 finalize.compute({Numerator: n, Denominator: d})   # a stage whose inputs are intermediates
 ```
 
-Everything below is this, with each `compute` call written down as a stage record, and each configured pipeline as a workflow record.
+Everything below is this, with each `compute` call written down as a stage record that carries the configured pipeline it was cut from.
 
-## The two records
+## The record
 
 ```python
-class WorkflowRecord(BaseModel, frozen=True):
-    id: str                          # hash of the fields below: equal content, equal record
+class StageRequest(BaseModel, frozen=True):
     spec: SpecId
-    params: dict[str, Plain]         # the values given; fields may be left unset
+    params: dict[str, Plain]         # every parameter that is not a stage input, defaults filled at submit
+    inputs: dict[str, Plain]         # parameters params leaves unset, and supplied intermediates, by name
+    outputs: tuple[str, ...]         # which exposed values to compute; recorded explicitly
     instrument: str
     proposal: str
-
-class StageRequest(BaseModel, frozen=True):
-    workflow: WorkflowRecord         # the value itself; the store indexes by its ID
-    inputs: dict[str, Plain]         # unset parameters and supplied intermediates, by name
-    outputs: tuple[str, ...]         # which exposed values to compute; recorded explicitly
     submitter: str
     label: str | None
     member_key: str | None
     origin: Origin
+
+    @property
+    def workflow_id(self) -> str: ...  # hash of spec, params, instrument, proposal
 
 class StageRecord(BaseModel):
     id: str                          # UUID
@@ -69,25 +66,21 @@ class StageRecord(BaseModel):
 ```
 
 In `ess.apps.records`.
-A stage request carries its workflow record by value, so a record is complete on its own; the record store indexes stage records by the workflow record's ID.
 
-| | Workflow record | Stage record |
-|---|---|---|
-| sciline counterpart | `Pipeline` with parameters set | one `Stage.compute` call |
-| identity | its content | a UUID |
-| mutable | never | status and publication, as today |
-| has outputs | no | yes |
-| label, member key, supersedes | no | yes |
-| created | on first use, reused thereafter | per call |
+**Defaults are filled at submit.**
+When the backend accepts a request, it adds to `params` the spec's default for every parameter that is neither given nor a stage input.
+A plain run therefore records the whole params model.
+Only a required parameter without a default may stay unset, and only a stage that takes an intermediate in place of what needs it can do without it.
+The record says which value every parameter had, so a recompute runs with the values of the first run even after the spec's defaults change.
 
-A workflow record is a value, not a run.
-It holds the values given, not the spec's defaults, which apply at run time to fields that neither it nor the stage sets.
-Two clients that configure the same spec with the same values get the same workflow record.
-All of today's run-level fields move to the stage record.
+**The workflow ID names the configured pipeline.**
+It is a hash of spec, params, instrument, and proposal, derived from the request and never stored as a record of its own.
+Two requests that set the same values have the same workflow ID, whether a value was given or filled as the default.
+A session names the stages it holds by it, and the record store indexes stage records by it.
 
 **Provenance stays the graph of references.**
-A stage record references its workflow record, and both may hold references to outputs of other stage records.
-To recompute a stage record, the runner rebuilds the pipeline from the workflow record, builds the stage from the input names and the outputs, resolves the inputs, and computes.
+`params` and `inputs` may hold references to outputs of other stage records.
+To recompute a stage record, the runner sets `params` on the pipeline, builds the stage from the input names and the outputs, resolves the inputs, and computes.
 
 ## Using it from a client
 
@@ -98,7 +91,7 @@ result = client.run(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db,
 result.ref('iofq')
 ```
 
-This is shorthand for a workflow record and one stage with no inputs:
+This is shorthand for a configured pipeline and one stage with no inputs:
 
 ```python
 wf = client.workflow(SANS, {'sample_run': run, 'masks': masks, 'direct_beam': db, 'q_bins': 100})
@@ -106,6 +99,7 @@ result = wf.stage().compute()                   # no outputs named: the spec's r
 ```
 
 `compute` always takes the values of the stage's inputs, and a stage with no inputs takes none.
+`client.workflow(spec, params)` holds the spec and the values given on the client side only, like `functools.partial`; nothing is stored until a stage request is submitted.
 
 Scripts that run a workflow once never need more than this.
 
@@ -124,7 +118,7 @@ for q in (50, 100, 200):
 
 The session builds one `sciline.Stage` on the first call and holds it.
 The load, the conversion to wavelength, and the masking run once.
-Each call writes a stage record `{workflow: wf, inputs: {'q_bins': q}, outputs: ['iofq']}`, which is complete: recomputing it needs nothing from the session.
+Each call writes a stage record `{spec: SANS, params: {...}, inputs: {'q_bins': q}, outputs: ['iofq']}`, which is complete: recomputing it needs nothing from the session.
 
 The handle is the declaration the session needs.
 There is no inference from successive requests, and the first call already builds the stage.
@@ -176,15 +170,17 @@ client.output(total, 'iofq')
 ```
 
 This is `sciline.Aggregation(pipeline, members=[SampleRun])`: the first stage is its `contribute_stage`, the second its `finalize_stage`.
-Outside a session each `compute` is dispatched and returns at once, and the finalize record waits for its members as pending outputs, the scheduling primitive that exists today.
+Outside a session each `compute` is dispatched and returns at once, and the finalize record waits for its members as pending outputs, the one scheduling primitive.
 
 `Accumulate` is the one new reference form.
 It says: the value of this input is the accumulation of these outputs.
 The framework never adds anything; the binding resolves `Accumulate` with the accumulator the author gave for that value.
 
 **Members cannot disagree on shared parameters.**
-Every member and the finalize record reference the same workflow record, so masks and direct beam have one value by construction.
-The backend refuses an `Accumulate` whose elements come from stage records of the same spec under a different workflow record, which is a comparison of two IDs and needs no workflow code.
+The backend refuses an intermediate supplied from a stage record of the same spec that disagrees with the consuming request on a parameter both set in `params`, and names that parameter.
+Members and finalize made from one `wf` agree by construction, so masks and direct beam have one value.
+The members' `sample_run` is a stage input, which the finalize leaves unset, so it is not compared.
+The check compares recorded values and needs no workflow code.
 This replaces the `SHARED` entry and the check inside the combine callable.
 
 ### A series that grows, in a session
@@ -205,7 +201,7 @@ total = add_run(r3)
 ```
 
 Every finalize record lists all current members, so every record is complete as written.
-The session holds, beside the finalize stage, one accumulator per accumulated value, addressed by the workflow record, the value's name, and the stage records already pushed.
+The session holds, beside the finalize stage, one accumulator per accumulated value, addressed by the workflow ID, the value's name, and the stage records already pushed.
 When a request's elements include everything pushed so far, the session pushes only the new ones.
 Adding r3 pushes one contribution, not three.
 
@@ -219,11 +215,11 @@ total = finalize.compute({
 })
 ```
 
-The held accumulator contains the old record for r2, which the request no longer lists.
+The held accumulator contains the old record for r2, which the request does not list.
 The session therefore accumulates all three from scratch.
 Removing a member works the same way, and nothing is ever subtracted.
 
-A correction that changes a shared parameter, such as better masks, is a new workflow record, and all members run again under it.
+A correction that changes a shared parameter, such as better masks, gives another workflow ID, and all members run again with it.
 That is what sciline does too: a changed pipeline parameter means a new `Aggregation`.
 
 ### Two member tables
@@ -251,7 +247,7 @@ finalize.compute({
 })
 ```
 
-Nothing special is needed: two member stages over one workflow record, one finalize stage.
+Nothing special is needed: two member stages cut from one `wf`, one finalize stage.
 
 ## The spec and the binding
 
@@ -293,7 +289,7 @@ class StageCall(Protocol):
                  data: Inputs) -> Mapping[str, Any]: ...
 ```
 
-`stage` gets the workflow record's values (with the spec's defaults for fields nobody set) and the stage record's names.
+`stage` gets the request's `params`, defaults filled, and the stage record's names.
 Each call gets the parameters among the stage inputs, and the intermediates among them already as objects, with `Accumulate` resolved through `accumulator`.
 A plain function `(params, inputs) -> outputs` remains a valid workflow; its stages take parameters only and hold nothing (`FunctionWorkflow`).
 
@@ -325,28 +321,28 @@ The binding reuses the same accumulators, and there is no second adapter for agg
 | Held object | Addressed by |
 |---|---|
 | output of a stage record | the stage record's ID |
-| `sciline.Stage` | workflow record, input names, output names, checksums of the datasets it read |
-| accumulator | workflow record, value name, the stage records pushed so far |
+| `sciline.Stage` | workflow ID, input names, output names, checksums of the datasets `params` names |
+| accumulator | workflow ID, value name, the stage records pushed so far |
 
 All three are caches over records: dropping one costs time and never changes a result.
-The session no longer infers stage inputs from the request a new one supersedes.
+The session does not infer stage inputs from the request a later one supersedes.
 The handle a client builds with `wf.stage(...)` names the stage, and a stage record without a handle, for example one submitted from a rule, runs the stage it names.
 
 ## Batches and rules
 
-`apply` cuts every member from a template: the template's blanks become the member's stage inputs, and everything else, template values, lookup fills, and pinned values, is the workflow record:
+`apply` cuts every member from a template: the template's blanks become the member's stage inputs, and everything else, template values, lookup fills, and pinned values, is its `params`:
 
 ```python
 template = Template(name='sans-defaults', spec=SANS.id,
                     params={'masks': ..., 'direct_beam': ..., 'q_bins': 100},
                     blanks=('sample_run',))
-# each member: workflow record {masks, direct_beam, q_bins}, stage inputs {sample_run: <dataset>}
+# each member: params {masks, direct_beam, q_bins}, stage inputs {sample_run: <dataset>}
 ```
 
-Members that agree on everything but their blanks share one workflow record, and in a session they share one held stage.
-A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, gives that member a workflow record of its own.
+Members that agree on everything but their blanks share one workflow ID, and in a session they share one held stage.
+A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, gives that member a workflow ID of its own.
 
-A rule with a series submits, on each arrival, one member stage record and one finalize stage record, both cut from the arriving member's workflow record:
+A rule with a series submits, on each arrival, one member stage record and one finalize stage record, the finalize with the values the arriving member was given:
 
 ```python
 rule = Rule(
@@ -359,7 +355,7 @@ rule = Rule(
 
 The member stage goes from the blanks to the accumulated intermediates; the finalize stage from their accumulation to the outputs.
 The rule holds one template instead of two, and `Series` names no combine spec, contribution output, or collection parameter.
-A member whose workflow record differs from the others', because a lookup or a pinned value set something only for it, cannot be accumulated with them: the finalize is refused and the trigger loop logs the refusal.
+A member made with another value than the arriving member, because a lookup or a pinned value set something only for it, cannot be accumulated with the others: the finalize is refused and the trigger loop logs the refusal.
 
 ## Chaining without a session
 
@@ -397,19 +393,24 @@ The conditions for chaining are unchanged: the previous finalize completed, and 
 
 ## Validation and identity
 
-- **A stage input that is a parameter must be unset in the workflow record.**
-  The stage record's effective parameters are then the workflow record's values plus the stage inputs, with no overlap and no ambiguity about which value was used.
+- **Validation sees the request as it will be recorded, defaults filled.**
+  The workflow ID of the recorded request is the one a session names its stage by.
+- **A stage input that is a parameter must not be given in `params`.**
+  The stage record's effective parameters are then `params` plus the stage inputs, with no overlap and no ambiguity about which value was used.
+  Defaults are filled only for parameters that are not stage inputs, so a stage over a parameter that has a default works.
 - **A stage input that is an intermediate must be exposed by the spec, and its value is a reference or an `Accumulate`.**
-  Parameters upstream of it may stay set in the workflow record; the record does not claim they affected the result.
-- **An intermediate of spec S supplied from a stage record of S must come from the same workflow record.**
-  This is an ID comparison and runs at validation, before anything is computed.
+  Parameters upstream of it may stay set in `params`; the record does not claim they affected the result.
+- **An intermediate of spec S supplied from a stage record of S must agree with it on every parameter both requests set in `params`.**
+  This compares recorded values and runs at validation, before anything is computed; a member of the same group is completed with its defaults first.
   It makes one value of every shared parameter a property of the records, not of the binding.
-- **Whether a stage's inputs suffice for its outputs is known only when the binding builds the stage.**
-  A stage that leaves a needed parameter unset fails at the start of its run, not at validation.
+- **A stage without intermediate inputs is checked against the whole params model.**
+  A plain run or a batch member that leaves a required parameter unset is refused at submit.
+- **Whether a stage cut at an intermediate has what its outputs need is known only when the binding builds the stage.**
+  Such a stage is checked field by field, and a needed parameter it leaves unset fails at the start of its run.
 
 ## What goes away, what stays
 
-Removed from the current design:
+Needed where a record is one call of a spec with all its parameters, and not here:
 
 - the contribute and combine specs per pipeline, and the rule "cut a workflow into specs where an aggregation adds";
 - `carry` on `WorkflowSpec`, and the associativity helper for it (replaced by one for accumulators);
@@ -426,21 +427,20 @@ Unchanged:
 - the framework never adds arrays and never imports sciline.
 
 The reuse rule in [records.md](../records.md#reuse-means-a-workflow-boundary) changes from "a value other requests reference must be an output of a run of its own" to "must be an output of a stage record".
-Exposed intermediates can be such outputs, so reuse no longer forces a spec boundary; separate pipelines remain separate specs.
+Exposed intermediates can be such outputs, so reuse does not force a spec boundary; separate pipelines remain separate specs.
 
 ## Open questions
 
 1. **Exposed intermediates in ess.reduce.spec.** The skeleton adds `intermediates` to the spec of scipp/ess#690. Whether that belongs upstream, and in which form, is open.
-2. **Per-dataset lookup fills in a series.** The skeleton puts them into the workflow record, so members that a lookup fills differently are not accumulated together. The alternative is to make such fields stage inputs, which keeps one workflow record per series but lets members differ in a value the finalize may also read.
-3. **Validation before running.** Can a GUI learn that a stage leaves a needed parameter unset before submitting? In local mode the backend imports the registry and could ask the binding; in shared mode it does not.
+2. **Per-dataset lookup fills in a series.** The skeleton puts them into `params`, so members that a lookup fills differently are not accumulated together. The alternative is to make such fields stage inputs, which the agreement rule does not compare, but which lets members differ in a value the finalize may also read.
+3. **Validation of a stage cut at an intermediate.** Can a GUI learn that such a stage leaves a needed parameter unset before submitting? In local mode the backend imports the registry and could ask the binding; in shared mode it does not.
 4. **Chaining on disk.** The skeleton writes the chain into the finalize request, as sketched above. The alternative is for a stateless runner to find the previous finalize itself, a cache lookup invisible in the request, so that every request lists all members.
 5. **A rule over a combination that is not an accumulation.** `Series` only accumulates. A rule that stitches reflectometry angles, a spec over a list of references such as `amor.COMBINE`, has no clause for it, although the design allows the stitch itself as an ordinary request.
 6. **An aggregation helper on the client.** `wf.aggregation(members=..., accumulate=..., outputs=...)` could write the member and finalize stages for a notebook. It adds no concept, and nothing needs it yet.
 
 ## Alternatives considered
 
-**One record kind, with the session inferring stages.**
-The current design.
+**A record of one call of a spec, with the session inferring stages.**
 It cannot record which piece of a pipeline ran, so aggregation needs specs cut at the accumulation keys, and supplied intermediates are not expressible at all.
 A GUI cannot declare the stage it needs, and the first call of every slider computes everything and holds nothing.
 
@@ -453,15 +453,21 @@ A spec whose signature is `Aggregation.compute(table)`, expanded by the backend 
 It removes `carry` and `SHARED` too, but adds a second kind of spec and records created on behalf of a request, and it does nothing for stages in general.
 
 **Contribute and combine specs with `carry`.**
-The current design for aggregation.
 Every pipeline that aggregates is published as two or three specs, the adapter re-derives the member parameters to check that members agree, and the associativity declaration lives on the spec although it is a property of the code.
+
+**A stored workflow record holding only given values.**
+A record kind of its own, `WorkflowRecord(spec, params, instrument, proposal)`, embedded in each stage request with the values given and no defaults, where an intermediate from a stage record of the same spec must come from the same workflow record.
+It gives two identities per configuration: omitting a parameter and giving it at its default are two workflow records, with no shared held stage and no accumulation across them.
+A recompute is unsafe against changed defaults, because the defaults apply at run time, so a spec whose default changed recomputes another result from the same record.
+Filling defaults at submit makes the stage request hold every value that ran, and the identity of the configured pipeline follows from it.
 
 ## Costs
 
-- Two record kinds. The record store, recompute, the UI, and publication handle the pair; a stage record always joins to exactly one workflow record.
-- A stage that leaves a needed parameter unset fails when it runs, not when it is submitted.
+- A stage cut at an intermediate that leaves a needed parameter unset fails when it runs, not when it is submitted.
+- A default is recorded on every request, so after a spec's default changes, a request with the same given values has another workflow ID: a held stage and an accumulation do not span the change.
+- The agreement rule compares only parameters both requests set in `params`; a value one of them takes as a stage input is not checked against the other.
 - Authors must expose the intermediates that apps and aggregations use, with formats.
-- `Accumulate` is a new reference form, resolved by the binding.
+- `Accumulate` is a reference form of its own, resolved by the binding.
 - Every accumulator must be associative, which the framework cannot check and a test helper must.
 - Clients that want a stage write two calls, `client.workflow(...)` and `wf.stage(...)`, instead of relying on the session to infer it. `client.run` stays for the plain case.
 - A rule cannot run a combination that is not an accumulation, such as a stitch over angles.

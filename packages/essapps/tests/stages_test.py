@@ -275,7 +275,7 @@ def test_a_named_stage_is_held_from_its_first_call(
 def test_plain_runs_that_differ_in_one_value_share_no_stage(
     client: Client, data: OutputRef
 ) -> None:
-    """Each is a workflow record of its own; no stage is inferred from the pair."""
+    """Each has a workflow ID of its own; no stage is inferred from the pair."""
     first = client.run(HISTOGRAM, {'data': data, 'bins': 2}, label='hist')
     second = client.run(HISTOGRAM, {'data': data, 'bins': 8}, label='hist')
     assert not first.reused
@@ -302,7 +302,7 @@ def test_a_file_that_changed_on_disk_does_not_find_the_stage_built_from_its_byte
 ) -> None:
     """
     A dataset reference is the same when the bytes behind it are not, so the
-    checksums of the datasets a workflow record names are part of a stage's name.
+    checksums of the datasets a request's params name are part of a stage's name.
     """
     run = dataset_ref(instrument='dream', run=1)
     tune = client.workflow(HISTOGRAM, {'data': run}).stage(inputs=['bins'])

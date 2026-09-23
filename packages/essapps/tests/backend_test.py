@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import scipp as sc
+from pydantic import BaseModel
 
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
@@ -18,36 +19,114 @@ from ess.apps.examples import (
     LOAD,
     REBIN,
     SUM,
+    load_workflow,
     registry,
     write_run,
 )
 from ess.apps.records import Status
-from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, Format, OutputRef, SpecId, as_ref, dataset_ref
+from ess.apps.sources import Dataset, FolderSource
+from ess.apps.spec import (
+    DatasetRef,
+    Format,
+    OpaqueFile,
+    OutputRef,
+    SpecId,
+    as_ref,
+    dataset_ref,
+)
 from ess.apps.testing import FakeDatasetSource
+
+from .conftest import make_client
+
+
+class ScaledByFive(BaseModel):
+    """The params of ``LOAD`` with another default for ``scale``."""
+
+    run: OpaqueFile
+    scale: float = 5.0
 
 
 def test_a_request_holds_plain_params_and_reads_back_equal(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    request = client.request(LOAD, {'run': run_ref})
-    assert request.workflow.params == {'run': {'dataset': 'run:dream/1'}}
+    request = client.request(LOAD, {'run': run_ref, 'scale': 2.0})
+    assert request.params == {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0}
     # A request without outputs is recorded with the spec's results.
     recorded = client.record(client.submit(request).id).request
     assert recorded == request.model_copy(update={'outputs': ('data', 'total')})
 
 
-def test_equal_workflow_values_name_one_workflow_record(
+def test_a_plain_run_records_every_parameter_its_default_filled(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    record = client.run(LOAD, {'run': run_ref})
+    assert record.request.params == {'run': {'dataset': 'run:dream/1'}, 'scale': 1.0}
+    assert client.record(record.id).request.params == record.request.params
+
+
+def test_a_default_given_or_omitted_names_one_workflow_and_shares_its_stage(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    data = client.run(LOAD, {'run': run_ref}).ref('data')
+    omitted = client.workflow(HISTOGRAM, {'data': data}).stage(inputs=['bins'])
+    given = client.workflow(HISTOGRAM, {'data': data, 'threshold': 0.0}).stage(
+        inputs=['bins']
+    )
+    first = omitted.compute({'bins': 2})
+    second = given.compute({'bins': 3})
+    assert first.request.workflow_id == second.request.workflow_id
+    assert second.reused
+
+
+def test_a_stage_over_a_parameter_with_a_default_leaves_it_out_of_params(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    stage = client.workflow(LOAD, {'run': run_ref}).stage(inputs=['scale'])
+    record = stage.compute({'scale': 2.0})
+    assert record.status == Status.COMPLETED, record.failure
+    assert 'scale' not in record.request.params
+    assert record.request.inputs == {'scale': 2.0}
+    assert record.resolved_params['scale'] == 2.0
+
+
+def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
+    tmp_path: Path, datasets: Path, run_ref: DatasetRef
+) -> None:
+    """A spec whose default changed does not change what a recompute runs."""
+    first = make_client(tmp_path / 'store', datasets)
+    record = first.run(LOAD, {'run': run_ref})
+    first.close()
+    reg = registry()
+    reg.bind(LOAD.model_copy(update={'params': ScaledByFive}), load_workflow)
+    client = local(
+        tmp_path / 'store',
+        instrument='dream',
+        proposal='p1',
+        submitter='simon',
+        registry=reg,
+        sources=[FolderSource(datasets, '*.h5')],
+    )
+    again = client.recompute(record)
+    fresh = client.run(LOAD, {'run': run_ref})
+    client.close()
+    assert again.request == record.request
+    assert again.resolved_params['scale'] == 1.0
+    assert fresh.resolved_params['scale'] == 5.0
+
+
+def test_equal_workflow_values_name_one_workflow(
     client: Client, run_ref: DatasetRef
 ) -> None:
     first = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     second = client.run(LOAD, {'scale': 2.0, 'run': run_ref})
     other = client.run(LOAD, {'run': run_ref, 'scale': 3.0})
     assert first.id != second.id
-    assert first.request.workflow.id == second.request.workflow.id
-    assert other.request.workflow.id != first.request.workflow.id
+    assert first.request.workflow_id == second.request.workflow_id
+    assert other.request.workflow_id != first.request.workflow_id
     changed = client.workflow(LOAD, {'scale': 2.0}).with_params(run=run_ref)
-    assert changed.record == first.request.workflow
+    assert client.submit(changed.request()).request.workflow_id == (
+        first.request.workflow_id
+    )
 
 
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
@@ -55,13 +134,13 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
 ) -> None:
     record = client.run(LOAD, {'run': run_ref})
     assert record.status == Status.COMPLETED, record.failure
-    assert as_ref(record.request.workflow.params['run']) == run_ref
+    assert as_ref(record.request.params['run']) == run_ref
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
     assert record.resolved_params['run'] == {'dataset': 'run:dream/1'}
     provenance = client.provenance(record)
     assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
-    assert provenance['workflow'] == record.request.workflow.id
+    assert provenance['workflow'] == record.request.workflow_id
     assert provenance['stage'] == {'inputs': [], 'outputs': ['data', 'total']}
 
 
@@ -191,7 +270,7 @@ def test_chaining_through_memory_and_literal_outputs(
         REBIN, {'data': loaded.ref('data'), 'bins': 2, 'offset': loaded.ref('total')}
     )
     assert rebinned.status == Status.COMPLETED, rebinned.failure
-    assert rebinned.request.workflow.params['offset'] == {
+    assert rebinned.request.params['offset'] == {
         'record': loaded.id,
         'output': 'total',
         'key': None,
@@ -213,7 +292,7 @@ def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     assert not first.reused
     assert second.reused
     assert second.request.inputs == {'bins': 3}
-    assert 'bins' not in second.request.workflow.params
+    assert 'bins' not in second.request.params
     assert client.latest('tune').id == second.id
     assert [r.id for r in client.records(label='tune')] == [first.id, second.id]
 
@@ -243,7 +322,7 @@ def test_group_with_pending_outputs_runs_in_dependency_order(
     assert total.sum().value == 36.0 * 3
     per_run = client.output(group['sum'].ref('per_run', '1'))
     assert per_run.sum().value == 72.0
-    assert group['sum'].request.workflow.params['runs'][0]['record'] == group['a'].id
+    assert group['sum'].request.params['runs'][0]['record'] == group['a'].id
 
 
 def test_group_is_refused_whole_when_one_member_is_invalid(
@@ -280,20 +359,18 @@ def test_validation_reports_errors_before_any_record_exists(
     assert client.records() == []
 
 
-def test_a_missing_required_parameter_fails_the_run_not_the_validation(
-    client: Client,
-) -> None:
-    """Only the code knows what a stage needs, so this is found out at run time."""
-    assert client.validate(client.request(LOAD, {})).ok
-    record = client.run(LOAD, {})
-    assert record.status == Status.FAILED
-    assert record.failure.kind == 'validation'
+def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> None:
+    """A stage without intermediate inputs is checked against the whole model."""
+    report = client.validate(client.request(LOAD, {}))
+    assert report.errors == ('run: Field required',)
+    with pytest.raises(SubmitError, match='run: Field required'):
+        client.run(LOAD, {})
 
 
 @pytest.mark.parametrize(
     ('params', 'inputs', 'outputs', 'message'),
     [
-        ({'scale': 2.0}, {'scale': 3.0}, (), 'a stage input the workflow record'),
+        ({'scale': 2.0}, {'scale': 3.0}, (), 'a stage input that params also sets'),
         ({}, {'bogus': 1}, (), 'neither a parameter nor an intermediate'),
         ({}, {}, ('nope',), 'not an output'),
         ({}, {'scale': 'x'}, (), 'scale'),

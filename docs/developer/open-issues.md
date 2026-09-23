@@ -38,16 +38,16 @@ The recommendation in brackets is mine.
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
 - **Per-dataset lookup fills in a series.**
-  `apply` puts every filled value except the template's blanks into the workflow record, so members that a lookup fills differently are not accumulated together.
-  The alternative is to make such fields stage inputs, which keeps one workflow record per series but lets members differ in a value the finalize may also read.
-- **Validation before running.**
-  A stage that leaves a needed parameter unset fails when it runs.
+  `apply` puts every filled value except the template's blanks into `params`, so members that a lookup fills differently are not accumulated together.
+  The alternative is to make such fields stage inputs, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
+- **Validation of a stage cut at an intermediate.**
+  Such a stage that leaves a needed parameter unset fails when it runs; a stage without intermediate inputs is checked against the whole parameter model at submit.
   Whether a GUI can learn this before submitting is open: in local mode the backend imports the registry and could ask the workflow, in shared mode it does not.
 - **Chaining on disk.**
   The skeleton writes the chain into the finalize request: its `Accumulate` lists the previous finalize and the members it does not cover.
   The alternative is for a runner without a session to find the previous finalize itself, a cache lookup invisible in the request, so that every request lists all members.
 - **A rule over a combination that is not associative.**
-  `Series` names the intermediates to accumulate and the outputs of a finalize cut from the members' own workflow record.
+  `Series` names the intermediates to accumulate and the outputs of a finalize with the members' own parameters.
   A stitch over angles is a separate spec over a list of references to the members' outputs, and a rule has no field that names it.
   A second template on the series, or a second rule whose candidates are the completed member records of the first, would each express it.
 - **An aggregation helper on the client.**
@@ -102,7 +102,7 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 See [aggregation.md](aggregation.md).
 
 - **A combination that is not associative has no consistency check over its members.**
-  The members of an accumulation share one workflow record, which the backend checks.
+  The members of an accumulation agree with the finalize on every parameter both set, which the backend checks.
   A stitch takes references to stage records of another spec, which the check does not cover, so a stitch over curves reduced with different detector limits passes silently.
 
 ### Rules
@@ -184,12 +184,12 @@ Resource hints on the spec for the cluster launcher, such as memory as a functio
 These are changes to scipp/sciline#245, the proposal this design's stages and aggregations build on.
 
 - **The design document of the proposal describes essapps as one spec with a declared contribution and three entry points**, and says that the spec declares which parameters the finalize stage reads.
-  It should instead say that essapps records each `Stage.compute` as a stage record over a workflow record, that a spec exposes the intermediates a stage may take or return, and that the binding reuses the accumulators an `Aggregation` takes.
+  It should instead say that essapps records each `Stage.compute` as a stage record holding the pipeline's parameters, that a spec exposes the intermediates a stage may take or return, and that the binding reuses the accumulators an `Aggregation` takes.
 - **Finalize inputs need no change to sciline.**
   `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a finalize parameter cannot be given per call.
   The adapter does not use that stage: a finalize stage record is a plain `Stage` whose inputs are the intermediates and any finalize parameter the caller names.
   An argument for naming finalize inputs is therefore not needed.
 - **A parameter read by both stages must reach the finalize stage with the value the members were made with.**
   Within one process the snapshot guarantees this.
-  Across processes the members and the finalize share one workflow record, which the backend checks.
+  Across processes the backend checks that the members and the finalize agree on every parameter both set.
   The proposal could name this as the consumer's responsibility.

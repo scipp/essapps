@@ -92,7 +92,7 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     assert client.latest('iofq').id == second.id
     assert [r.id for r in client.records(label='iofq')] == [first.id, second.id]
 
-    # Another wavelength binning is another workflow record, whose stage is not held.
+    # Another wavelength binning is another workflow ID, whose stage is not held.
     rewavelength = wf.with_params(
         wavelength=WavelengthEdges(start=1.0, stop=13.0, num_bins=100)
     ).stage(inputs=['q'])

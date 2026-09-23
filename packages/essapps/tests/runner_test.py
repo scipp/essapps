@@ -119,7 +119,7 @@ def test_a_dataset_in_a_stage_input_is_checksummed_but_does_not_name_the_stage(
     tmp_path: Path,
 ) -> None:
     """
-    The held stage is named by the datasets the workflow record fixes; a
+    The held stage is named by the datasets the request's params fix; a
     dataset the stage takes as input changes per call and only its checksum is
     recorded.
     """

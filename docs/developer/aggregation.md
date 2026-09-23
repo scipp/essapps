@@ -47,7 +47,7 @@ This is for runs, and the rest of this document is about it.
 
 An aggregation needs no spec of its own.
 The spec exposes the values that add as intermediates ([workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690)), and the binding gives an accumulator for each.
-A client cuts two stages from one workflow record that leaves the member's parameter unset:
+A client sets every parameter but the member's with `client.workflow`, and cuts two stages from it:
 
 ```python
 wf = client.workflow(NORMALIZE, {'floor': 1.5, 'scale': 2.0})     # 'run' left unset
@@ -75,23 +75,28 @@ Events keep the binning a parameter of the finalize stage, and cost memory and d
 A histogram fixes the bins in the member stage, and is small.
 The framework does not see the difference.
 
-A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is left unset in the workflow record and made an input of the finalize stage:
+A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is left out of `wf` and made an input of the finalize stage:
 
 ```python
-wf = client.workflow(NORMALIZE, {'floor': 1.5})                    # 'run' and 'scale' unset
+wf = client.workflow(NORMALIZE, {'floor': 1.5})                    # 'run' and 'scale' not given
 finalize = wf.stage(inputs=['numerator', 'denominator', 'scale'], outputs=['normalized'])
 ```
 
-## Members share one workflow record
+The members' records hold the default of `scale`, filled at submit, which their stage does not read.
+The finalize takes `scale` as a stage input, so the agreement below does not compare it.
 
-Every member and the finalize stage record reference the same workflow record, so the members share every parameter they do not take as a stage input: the same masks, the same direct beam, the same wavelength bins.
-**The backend refuses an intermediate from a stage record of the same spec under a different workflow record.**
-That is a comparison of two IDs, made at validation and without workflow code.
+## Members agree on their parameters
 
-A correction that changes a shared parameter, such as better masks, is a new workflow record, and all members run again under it.
+Members and finalize made from one `wf` share every parameter they do not take as a stage input: the same masks, the same direct beam, the same wavelength bins.
+**The backend refuses an intermediate from a stage record of the same spec that disagrees with the consuming request on a parameter both set in `params`,** and names that parameter.
+Both sides are compared as recorded, defaults filled, so a member that omitted a default agrees with a finalize that gives it.
+A parameter one side takes as a stage input, such as the members' `run`, is not compared.
+The check is made at validation and without workflow code.
+
+A correction that changes a shared parameter, such as better masks, gives another workflow ID, and all members run again with it.
 sciline does the same: a changed pipeline parameter means a new `Aggregation`.
 
-A workflow with two member tables, such as sample runs and background runs in ess.sans, is two member stages over one workflow record and one finalize stage:
+A workflow with two member tables, such as sample runs and background runs in ess.sans, is two member stages cut from one `wf` and one finalize stage:
 
 ```python
 wf = client.workflow(SANS_WITH_BACKGROUND, {'masks': masks, 'direct_beam': db, 'q_bins': 100})
@@ -174,11 +179,11 @@ A rule's `Series` accumulates only, and how a rule submits such a spec is an [op
 In a session an aggregation needs nothing of its own.
 Sessions and stages are explained in [stages.md](stages.md).
 
-- **Member stage records name one stage**, the same workflow record, input names, and outputs, so the session builds it once.
+- **Member stage records name one stage**, the same workflow ID, input names, and outputs, so the session builds it once.
   What the members share, such as a direct beam, is computed once.
-- **The session holds one accumulator per workflow record and input**, with the list of outputs pushed so far.
+- **The session holds one accumulator per workflow ID and input**, with the list of outputs pushed so far.
   A finalize whose `Accumulate` lists every member so far plus a new one pushes only the new one.
-- **A corrected or removed member starts a fresh accumulator**, because the request's list no longer begins with what was pushed.
+- **A corrected or removed member starts a fresh accumulator**, because the request's list does not begin with what was pushed.
   Nothing is subtracted.
 - **A finalize call that changes only a finalize parameter taken as a stage input** reuses the held finalize stage and the held accumulators.
 
@@ -211,7 +216,7 @@ The framework records each stage call, with values as outputs of stage records.
 
 | sciline | Framework |
 |---|---|
-| `Pipeline` with parameters set | a workflow record |
+| `Pipeline` with parameters set | spec and `params` of a stage request, named by its workflow ID |
 | `Stage.compute` | a stage record |
 | `Aggregation.contribute_stage` | a member stage, from the member's parameters to the exposed intermediates |
 | accumulators | the binding's accumulators, which resolve `Accumulate` |
@@ -238,6 +243,10 @@ The associativity promise sits on the spec although it is a property of the code
 A spec whose signature is `Aggregation.compute(table)`, expanded by the backend into member and finalize records.
 It needs no `carry` and no agreement check either, but adds a second kind of spec and records created on behalf of a request, and it does nothing for stages in general.
 
+**Members and finalize share a stored workflow record.**
+A record of the values given, without defaults, which members and finalize must share by ID.
+A member that omitted a default and a finalize that gives it then cannot be accumulated together, although they ran with the same values, and a recompute applies whatever the spec's defaults are at that time.
+
 **No chaining: always accumulate over all members.**
 Correct, and simpler.
 A series of k members then reads k values per intermediate on each arrival instead of two, which is too much for event-mode intermediates of gigabytes.
@@ -252,7 +261,8 @@ Associativity belongs to the accumulator, which the author tests.
 - Authors must place normalisation after those intermediates. ess.sans does, ess.powder does not yet.
 - Every accumulator must be associative, which the framework cannot check and a test helper must.
 - Intermediates are stored outputs in shared mode, and often large. A chained series of k arrivals writes k accumulated values.
-- A member whose workflow record differs from the others', because a lookup or a pinned value set something only for it, cannot be accumulated with them ([open-issues.md](open-issues.md#open-questions)).
-- A correction to a shared parameter runs every member again under a new workflow record.
+- A member made with another value than the others, because a lookup or a pinned value set something only for it, cannot be accumulated with them ([open-issues.md](open-issues.md#open-questions)).
+- A correction to a shared parameter runs every member again.
+- A parameter one side takes as a stage input is not compared, so a member stage that takes a value the finalize also sets is not checked against it.
 - An accumulated value must be storable. essreflectometry accumulates a list of ORSO entries beside its events, which the author must convert.
 - A member stage in a throwaway process computes again what all members share.

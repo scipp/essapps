@@ -122,7 +122,7 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
         lookup=lookup,
         label='ladder',
     )
-    scales = {key: request.workflow.params['scale'] for key, request in group.items()}
+    scales = {key: request.params['scale'] for key, request in group.items()}
     assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
     assert scales['pid:pid/2'] == 4.0  # what was pinned over both
     assert scales['run:dream/1'] == 2.0  # the template, matching no entry
@@ -130,9 +130,9 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert origin.pinned == {'scale': 4.0}
     assert origin.entry == 'rest'
     assert origin.template == 'load-defaults/v1'
-    # The template's blank is the stage input; the rest is the workflow record.
+    # The template's blank is the stage input; the rest is params.
     assert as_ref(group['pid:pid/1'].inputs['run']) == dataset_ref(pid='pid/1')
-    assert 'run' not in group['pid:pid/1'].workflow.params
+    assert 'run' not in group['pid:pid/1'].params
 
 
 def test_apply_without_datasets_is_the_batch_form(
@@ -146,8 +146,8 @@ def test_apply_without_datasets_is_the_batch_form(
         scan, Status.COMPLETED
     )
     assert records['310K'].outputs['total']['value'] == 14.0
-    # Members that agree on everything but the blanks share one workflow record.
-    assert len({r.request.workflow.id for r in records.values()}) == 1
+    # Members that agree on everything but the blanks share one workflow ID.
+    assert len({r.request.workflow_id for r in records.values()}) == 1
     assert [r.request.member_key for r in client.records(label='scan1')] == [
         '300K',
         '310K',
@@ -161,7 +161,7 @@ def test_apply_accepts_a_frame_indexed_by_member_key(
         {'run': list(scan.values()), 'scale': [1.0, 5.0]}, index=list(scan)
     )
     group = apply(client, template, pinned=frame, label='scan1')
-    assert [r.workflow.params['scale'] for r in group.values()] == [1.0, 5.0]
+    assert [r.params['scale'] for r in group.values()] == [1.0, 5.0]
     assert client.submit_group(group)['310K'].outputs['total']['value'] == 35.0
 
 
@@ -172,7 +172,7 @@ def test_a_blank_cell_of_a_typed_frame_falls_through_to_the_template(
         {'run': list(scan.values()), 'scale': [None, 5.0]}, index=list(scan)
     )
     group = apply(client, template, pinned=frame, label='scan1')
-    assert [r.workflow.params['scale'] for r in group.values()] == [2.0, 5.0]
+    assert [r.params['scale'] for r in group.values()] == [2.0, 5.0]
     assert [list(r.origin.pinned) for r in group.values()] == [
         ['run'],
         ['run', 'scale'],
@@ -237,7 +237,7 @@ def test_reprocess_offers_the_members_an_older_rule_version_made(
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
     assert sorted(group) == ['pid:pid/1', 'pid:pid/2']
-    assert group['pid:pid/1'].workflow.params['scale'] == 7.0
+    assert group['pid:pid/1'].params['scale'] == 7.0
     assert group['pid:pid/1'].origin.rule == 'auto-load/v2'
 
 
@@ -247,8 +247,8 @@ def test_reprocess_carries_the_typed_values_forward(client: Client, rule: Rule) 
     )
     moved = rule.revise(template=rule.template.revise(scale=7.0))
     group = reprocess(client, moved)
-    assert group['pid:pid/1'].workflow.params['scale'] == 8.0  # pinned, carried forward
-    assert group['pid:pid/2'].workflow.params['scale'] == 7.0  # filled again
+    assert group['pid:pid/1'].params['scale'] == 8.0  # pinned, carried forward
+    assert group['pid:pid/2'].params['scale'] == 7.0  # filled again
 
 
 def test_an_excluded_member_is_not_reprocessed(client: Client, rule: Rule) -> None:
@@ -528,7 +528,7 @@ def test_each_arrival_of_a_series_submits_a_member_and_a_chained_finalize(
     assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
     assert member.request.outputs == ('numerator', 'denominator')
     assert finalize.request.outputs == ('numerator', 'denominator', 'normalized')
-    assert finalize.request.workflow == member.request.workflow
+    assert finalize.request.workflow_id == member.request.workflow_id
     assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
     client.wait(first)
 
@@ -631,12 +631,12 @@ def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
     assert client.output(finalize, 'denominator').value == 8.0
 
 
-def test_a_member_under_another_workflow_record_is_refused(
+def test_a_member_pinned_to_another_value_refuses_the_series(
     client: Client, tmp_path: Path
 ) -> None:
     """
-    A value pinned beyond the template's blanks makes another workflow record,
-    and a finalize accumulates only intermediates cut from its own.
+    A finalize has the arriving member's values, and a member made with another
+    value for a parameter it sets cannot be accumulated with the others.
     """
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
     client.backend.sources.append(source)
@@ -646,7 +646,7 @@ def test_a_member_under_another_workflow_record_is_refused(
     second = sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2')
     source.add(second)
     group = apply(client, rule, [second], {'pid:pid/2': {'floor': 0.0}})
-    with pytest.raises(SubmitError, match='cut from workflow record'):
+    with pytest.raises(SubmitError, match=r'made with floor=1\.5'):
         client.submit_group(group)
     assert client.batch('series')[-1].request.member_key == 'sio2'
 

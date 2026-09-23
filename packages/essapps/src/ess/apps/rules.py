@@ -287,10 +287,10 @@ class Series(BaseModel, frozen=True):
     the member key of the series' finalize records. Each member is the stage
     from the template's blanks to the intermediates named in ``accumulate``;
     each arrival adds a finalize, the stage from their accumulation to
-    ``outputs``, cut from the same workflow record as the members. A finalize
-    also outputs the accumulated values, so that the next one can accumulate
-    onto them instead of reading every member again, which is valid because
-    every accumulator is associative.
+    ``outputs``, with the parameters of the arriving member, on which every
+    member it accumulates must agree. A finalize also outputs the accumulated
+    values, so that the next one can accumulate onto them instead of reading
+    every member again, which is valid because every accumulator is associative.
 
     A combination that is not an accumulation, such as a stitch over angles,
     is a spec of its own over a list of references and not a series.

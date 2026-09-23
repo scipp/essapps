@@ -40,8 +40,8 @@ assert run in [candidate.ref for candidate in client.pick()]
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
 
-# Interactive reruns of a sciline pipeline: the workflow record leaves 'bins'
-# unset, and the stage over 'bins' is the part of the pipeline a rerun needs.
+# Interactive reruns of a sciline pipeline: client.workflow sets every parameter
+# but 'bins', and the stage over 'bins' is the part of the pipeline a rerun needs.
 # The session holds it from the first call, so the second comes out of it.
 # Both carry the label 'hist', the slot the plot owns, so the second supersedes
 # the first.
@@ -59,7 +59,7 @@ group = client.submit_group({
 })
 client.output(group['sum'], 'total')
 
-# A sum over runs, cut from one workflow record that leaves 'run' unset. NORMALIZE
+# A sum over runs, cut from one client.workflow without 'run'. NORMALIZE
 # exposes the numerator and denominator as intermediates: a member stage per run
 # computes them, and a finalize stage normalises their accumulation. The binding
 # accumulates; the framework never adds.
@@ -116,7 +116,7 @@ essapps publish <record> data --via fake --allow-reused   # prints the PID; allo
 
 | To see | Read | Design document |
 |---|---|---|
-| workflow records, stage records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
+| stage requests, stage records, references | `records.py`, `spec.py`, `backend.py` | [records.md](../../docs/developer/records.md) |
 | the transport boundary, the server, the CLI | `backend.py`, `server.py`, `remote.py`, `cli.py` | [operations.md](../../docs/developer/operations.md#the-client-interface) |
 | the workflow protocol, `Inputs`, stages, entry points | `binding.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md) |
 | a sciline pipeline as a callable and as a stage | `adapter.py` | [workflow-contract.md](../../docs/developer/workflow-contract.md#the-sciline-adapter) |

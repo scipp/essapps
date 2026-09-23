@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A sum over runs as two stages of one workflow record: a member stage per run to
+A sum over runs as two stages with the same params: a member stage per run to
 the intermediates, and a finalize stage from their accumulation.
 
 See docs/developer/aggregation.md.
@@ -206,18 +206,68 @@ def test_a_corrected_member_accumulates_every_member_again(
     assert equal(session.output(corrected, 'normalized'), by_sciline(datasets))
 
 
-def test_an_accumulation_across_workflow_records_is_refused(
+def test_an_accumulation_disagreeing_on_a_parameter_is_refused(
     client: Client, runs: list[DatasetRef]
 ) -> None:
-    """Members and finalize share every parameter by sharing a workflow record."""
+    """Members and finalize must agree on every parameter both set."""
     wf = client.workflow(NORMALIZE, PARAMS)
     members = client.wait([member_stage(wf).compute({'run': run}) for run in runs[:2]])
     other = client.workflow(NORMALIZE, PARAMS | {'floor': 0.0})
     request = finalize_stage(other).request(accumulated(members))
     report = client.validate(request)
-    assert any('cut from workflow record' in e for e in report.errors)
+    message = 'made with floor=1.5, this request sets floor=0.0'
+    assert any(message in e for e in report.errors)
     with pytest.raises(SubmitError):
         client.submit(request)
+
+
+def test_a_default_members_omit_disagrees_with_another_value_on_the_finalize(
+    client: Client, runs: list[DatasetRef]
+) -> None:
+    """The members' records hold the default they were not given."""
+    wf = client.workflow(NORMALIZE, {'scale': 2.0})
+    members = client.wait([member_stage(wf).compute({'run': run}) for run in runs[:2]])
+    agreeing = wf.with_params(floor=0.0)
+    assert client.validate(finalize_stage(agreeing).request(accumulated(members))).ok
+    other = wf.with_params(floor=1.5)
+    report = client.validate(finalize_stage(other).request(accumulated(members)))
+    assert any('made with floor=0.0' in e for e in report.errors)
+
+
+def test_a_parameter_only_the_finalize_reads_may_be_its_stage_input(
+    client: Client, runs: list[DatasetRef], datasets: Path
+) -> None:
+    """
+    The members record the default of ``scale``, which their stage does not
+    read; the finalize takes ``scale`` as a stage input, so it is not compared.
+    """
+    wf = client.workflow(NORMALIZE, {'floor': PARAMS['floor']})
+    members = client.wait([member_stage(wf).compute({'run': run}) for run in runs])
+    assert members[0].request.params['scale'] == 1.0
+    finalize = wf.stage(
+        inputs=['numerator', 'denominator', 'scale'], outputs=['normalized']
+    )
+    values = accumulated(members) | {'scale': PARAMS['scale']}
+    (total,) = client.wait([finalize.compute(values)])
+    assert total.status == Status.COMPLETED, total.failure
+    assert equal(client.output(total, 'normalized'), by_sciline(datasets))
+
+
+def test_a_finalize_leaving_the_members_run_unset_is_accepted_at_submit(
+    client: Client, runs: list[DatasetRef]
+) -> None:
+    """
+    ``run`` is a required parameter the members take as a stage input; the
+    finalize takes the intermediates in its place, so it never needs it.
+    """
+    wf = client.workflow(NORMALIZE, PARAMS)
+    members = client.wait([member_stage(wf).compute({'run': run}) for run in runs])
+    request = finalize_stage(wf).request(accumulated(members))
+    assert client.validate(request).ok
+    (finalize,) = client.wait([client.submit(request)])
+    assert finalize.status == Status.COMPLETED, finalize.failure
+    assert 'run' not in finalize.request.params
+    assert finalize.request.workflow_id == members[0].request.workflow_id
 
 
 @pytest.mark.parametrize('key', [Numerator, Denominator])

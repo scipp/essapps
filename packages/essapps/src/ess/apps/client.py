@@ -18,7 +18,7 @@ from .backend import Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import Origin, StageRecord, StageRequest, Status, WorkflowRecord
+from .records import Origin, StageRecord, StageRequest, Status
 from .sources import Dataset, DatasetSource
 from .spec import (
     Format,
@@ -71,19 +71,13 @@ class Client:
         """
         A pipeline with parameters set, for this instrument and proposal.
 
-        Nothing runs and nothing is stored: the workflow record is a value, and
-        the stage records cut from it carry it.
+        Nothing runs and nothing is stored: the handle only makes stage
+        requests, each of which carries ``spec`` and ``params``.
         """
         spec_id = spec.id if isinstance(spec, WorkflowSpec) else spec
         if isinstance(params, BaseModel):
             params = params.model_dump(mode='json', exclude_unset=True)
-        record = WorkflowRecord(
-            spec=spec_id,
-            params=dict(params or {}),
-            instrument=self.instrument,
-            proposal=self.proposal,
-        )
-        return WorkflowHandle(self, record)
+        return WorkflowHandle(self, spec_id, dict(params or {}))
 
     def request(
         self,
@@ -96,7 +90,7 @@ class Client:
         member_key: str | None = None,
         origin: Origin | None = None,
     ) -> StageRequest:
-        """A stage request cut from the workflow record of ``spec`` and ``params``."""
+        """A stage request cut from the pipeline of ``spec`` and ``params``."""
         return self.workflow(spec, params).request(
             inputs,
             outputs=outputs,
@@ -218,20 +212,23 @@ class Client:
 
 
 class WorkflowHandle:
-    """A workflow record and the client that cuts stages from it."""
+    """
+    A pipeline with parameters set, and the client that cuts stages from it.
 
-    def __init__(self, client: Client, record: WorkflowRecord) -> None:
+    Held on the client side only, like :func:`functools.partial`: every request it
+    makes carries ``spec`` and ``params``, and the backend records nothing else
+    of it. ``params`` are the values given; the backend fills the spec's defaults
+    when it accepts a request.
+    """
+
+    def __init__(self, client: Client, spec: SpecId, params: dict[str, Any]) -> None:
         self.client = client
-        self.record = record
+        self.spec = spec
+        self.params = params
 
     def with_params(self, **params: Any) -> WorkflowHandle:
-        """Another workflow record: these values changed or added."""
-        # Validated rather than copied, so that the values are held in plain form.
-        record = WorkflowRecord.model_validate(
-            self.record.model_dump(exclude={'id'})
-            | {'params': {**self.record.params, **params}}
-        )
-        return WorkflowHandle(self.client, record)
+        """Another pipeline: these values changed or added."""
+        return WorkflowHandle(self.client, self.spec, {**self.params, **params})
 
     def request(
         self,
@@ -243,9 +240,12 @@ class WorkflowHandle:
         origin: Origin | None = None,
     ) -> StageRequest:
         return StageRequest(
-            workflow=self.record,
+            spec=self.spec,
+            params=self.params,
             inputs=dict(inputs or {}),
             outputs=tuple(outputs),
+            instrument=self.client.instrument,
+            proposal=self.client.proposal,
             submitter=self.client.submitter,
             label=label,
             member_key=member_key,
@@ -262,15 +262,15 @@ class WorkflowHandle:
         """
         The part of the pipeline from ``inputs`` to ``outputs``.
 
-        Inputs are parameters this workflow record leaves unset and
-        intermediates the spec exposes; without ``outputs``, the spec's
-        results. A session holds the stage from the first call on.
+        Inputs are parameters this handle leaves unset and intermediates the
+        spec exposes; without ``outputs``, the spec's results. A session holds
+        the stage from the first call on.
         """
         return StageHandle(self, tuple(inputs), tuple(outputs), label)
 
 
 class StageHandle:
-    """A stage cut from a workflow record; each call is one stage record."""
+    """A stage cut from a pipeline with parameters set; a call is a stage record."""
 
     def __init__(
         self,

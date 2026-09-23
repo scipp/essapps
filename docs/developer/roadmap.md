@@ -26,7 +26,7 @@ The skeleton was built in the opposite order, local mode and sessions first, bec
 
 | Part of the design | Phase 1 | Phase 2 adds | Phase 3 adds |
 |---|---|---|---|
-| [Records and references](records.md) | workflow records, stage records, output references, dataset references by PID | run-number resolution, recompute, dropping a proposal with its export bundle | local files as datasets with checksums |
+| [Records and references](records.md) | stage records, output references, dataset references by PID | run-number resolution, recompute, dropping a proposal with its export bundle | local files as datasets with checksums |
 | [Data store](records.md#the-data-store) | disk tier and registry, a quota alarm | retention and drop | private memory caches, the second execution shape, write-out on demand |
 | [Scheduling](records.md#scheduling-pending-outputs-as-inputs) | none required; see below | pending outputs and groups, when a workflow asks | unchanged |
 | [Workflow contract](workflow-contract.md) | the workflow protocol, entry points, path or object, three validation layers, typed outputs, collections, code revision | exposed intermediates | in-process binding |

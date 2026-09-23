@@ -79,7 +79,7 @@ def members(client: Client, **overrides: Any) -> dict[int, StageRecord]:
     """
     One reduced sample run per rotation: one batch, as ``apply`` would submit it.
 
-    All four are one stage over the sample run, cut from one workflow record,
+    All four are one stage over the sample run with the same params,
     share the label, and are told apart by their member key.
     """
     params = reflectivity_params(SAMPLE_RUNS[0], **overrides)
@@ -188,8 +188,8 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
         member_key='608',
     )
     assert rescaled.failure is None, rescaled.failure
-    # The rerun supersedes the member it corrects. Its scale factor makes it a
-    # workflow record of its own, so no held stage fits it.
+    # The rerun supersedes the member it corrects. Its scale factor gives it a
+    # workflow ID of its own, so no held stage fits it.
     assert rescaled.supersedes == curves[608].id
     assert not rescaled.reused
     assert rescaled.resolved_params['scale_factor'] == factor

@@ -1,6 +1,6 @@
 # Records, references, and where data lives
 
-This document covers the workflow record, the stage request and the stage record, the two forms of reference by which a request names data, where a run executes, and where its outputs live.
+This document covers the stage request and the stage record, the two forms of reference by which a request names data, where a run executes, and where its outputs live.
 It is the detail behind [Requests, records, references](architecture.md#requests-records-references) and [Where a run executes](architecture.md#where-a-run-executes).
 
 ## Requests and records
@@ -18,23 +18,9 @@ tune.compute({'bins': 16})
 ```
 
 The records mirror sciline.
-A **workflow record** is a pipeline with parameters set, like a configured `sciline.Pipeline`.
-A **stage record** is one call of a stage cut from it, like one `sciline.Stage.compute`.
-`client.run` is shorthand for a workflow record with every value set and one stage record with no inputs.
-
-`WorkflowRecord` in `ess.apps.records`:
-
-| Field | Purpose |
-|---|---|
-| `spec` | name and version of the workflow interface |
-| `params` | the parameter values given, with data fields holding references; fields may be left unset |
-| `instrument`, `proposal` | the scope, both mandatory |
-| `id` | a hash of the fields above |
-
-**A workflow record is a value, not a run.**
-It has no outputs and never changes, and equal content gives an equal ID, so two clients that set the same values name the same workflow record.
-It holds the values given, not the spec's defaults, which apply at run time to fields that neither it nor the stage sets.
-It is created on first use and reused thereafter.
+A **stage record** is one call of a stage, like one `sciline.Stage.compute`, cut from a spec with its parameters set, like a configured `sciline.Pipeline`.
+`client.workflow(spec, params)` holds such a spec and the values given on the client side only, like `functools.partial`, and makes stage requests; nothing of it is stored beyond the requests.
+`client.run` is shorthand for one stage record with no inputs.
 
 A **stage request** is everything needed to run one stage once, and its values alone reproduce the outputs.
 It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
@@ -44,9 +30,11 @@ The only path it may name is the identity of a local file that carries no run id
 
 | Field | Purpose |
 |---|---|
-| `workflow` | the workflow record, by value, so that a record is complete on its own |
-| `inputs` | the stage inputs by name: parameters the workflow record leaves unset, and intermediates the spec exposes |
+| `spec` | name and version of the workflow interface |
+| `params` | every parameter that is not a stage input, with data fields holding references; the backend fills the spec's defaults at submit |
+| `inputs` | the stage inputs by name: parameters `params` leaves unset, and intermediates the spec exposes |
 | `outputs` | the outputs to compute; empty means the spec's results, and the record lists them explicitly |
+| `instrument`, `proposal` | the scope, both mandatory |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
 | `origin` | template version, rule version, lookup version and entry, and what was pinned beyond them |
@@ -54,7 +42,7 @@ The only path it may name is the identity of a local file that carries no run id
 A **stage input** is either a parameter or an intermediate.
 A parameter input holds a literal or a reference, like any parameter.
 An intermediate input holds a reference to an output of another stage record, or an **`Accumulate`**, which lists several such references and stands for their accumulation ([aggregation.md](aggregation.md)).
-`StageRequest.values()` is the workflow record's values plus the parameter inputs, the effective parameters of the call.
+`StageRequest.values()` is `params` plus the parameter inputs, the effective parameters of the call.
 The last two fields serve batches and rules ([rules.md](rules.md)).
 The origin is explanation and not provenance, because the resolved request alone reproduces the run.
 
@@ -76,19 +64,20 @@ A **stage record** is the stage request plus what happened to it.
 | `failure` | structured reason a run failed, so a user sees why without reading logs |
 | `published` | PID per published output |
 
-| | Workflow record | Stage record |
-|---|---|---|
-| sciline counterpart | `Pipeline` with parameters set | one `Stage.compute` call |
-| identity | its content | a UUID |
-| mutable | never | status and publication |
-| has outputs | no | yes |
-| label, member key, supersedes | no | yes |
-| created | on first use, reused thereafter | per call |
-
 Which of the two output fields a value lands in is decided by its type and is invisible to clients.
 A stage record is immutable once the run completes, except for its status and the publication state of its outputs.
-The record store indexes stage records by the ID of their workflow record.
-To recompute a stage record, the runner rebuilds the pipeline from the workflow record, builds the stage from the input names and the outputs, resolves the inputs, and computes.
+
+**Defaults are filled at submit.**
+When the backend accepts a request, submitted or re-submitted by a recompute or retry, it adds to `params` the spec's default for every parameter that is neither given nor a stage input.
+A plain run therefore records the whole params model.
+Only a required parameter without a default may stay unset, which a stage that takes an intermediate in place of what needs it can afford.
+A recompute runs with the recorded values, so a spec whose default changed since does not change what the record means.
+
+**The workflow ID names the configured pipeline.**
+`StageRequest.workflow_id` is a hash of spec, params, instrument, and proposal as sorted JSON.
+Two requests that set the same values have the same workflow ID, whether a value was given or filled as the default.
+It is derived from the request, never stored as a record of its own; a session names the stages it holds by it ([stages.md](stages.md)), and the record store indexes stage records by it.
+To recompute a stage record, the runner sets `params` on the pipeline, builds the stage from the input names and the outputs, resolves the inputs, and computes.
 
 **Resolved values, package versions, and the environment are what make "recompute this record" true.**
 Without them a changed default or an upgraded package silently changes what a record means.
@@ -104,22 +93,25 @@ They are outside provenance, may change at any time, and nothing in the framewor
 
 ### What the backend checks
 
-The backend checks a stage request against the spec, without workflow code:
+The backend checks a stage request against the spec, without workflow code, in the form it will be recorded, defaults filled:
 
 - **Every name is known.**
-  A workflow record's parameter must be a parameter of the spec, and an output must be an output of it.
-  A stage input must be a parameter the workflow record leaves unset, or an intermediate the spec exposes.
-  A stage input that the workflow record also sets is refused, so the effective parameters have no overlap and no doubt about which value was used.
-- **Every value given is valid for its field**, field by field through the parameter model, and an intermediate input holds a reference or an `Accumulate`.
-- **An intermediate from a stage record of the same spec must come from the same workflow record.**
-  This is a comparison of two IDs, made before anything is computed.
+  A parameter in `params` must be a parameter of the spec, and an output must be an output of it.
+  A stage input must be a parameter `params` leaves unset, or an intermediate the spec exposes.
+  A stage input that is also given in `params` is refused, so the effective parameters have no overlap and no doubt about which value was used.
+  Defaults are filled only for parameters that are not stage inputs, so a stage over a parameter that has a default works.
+- **Every value is valid for its field**, and an intermediate input holds a reference or an `Accumulate`.
+- **A stage without intermediate inputs is checked against the whole params model**, so a plain run or a batch member that leaves a required parameter unset is refused at submit.
+- **An intermediate from a stage record of the same spec must agree with it on every parameter both requests set in `params`.**
+  The refusal names the first parameter that differs.
+  A member of the same group is completed with its defaults before the comparison.
   It makes one value of every shared parameter a property of the records, not of the binding.
 - **References resolve**, as in [workflow-contract.md](workflow-contract.md#validation).
 
-**A missing parameter fails at run time, not at validation.**
-Whether a stage's inputs and the workflow record's values suffice for its outputs depends on the graph, which only the workflow code knows.
+**A stage cut at an intermediate is checked field by field, and a parameter it misses fails at run time.**
+Whether such a stage's inputs and `params` suffice for its outputs depends on the graph, which only the workflow code knows.
 A stage that leaves a needed parameter unset fails at the start of its run, with a structured reason.
-A supplied intermediate makes the parameters upstream of it irrelevant, and those may stay set in the workflow record; the stage record does not claim they affected the result.
+A supplied intermediate makes the parameters upstream of it irrelevant, and those may stay set in `params`; the stage record does not claim they affected the result.
 
 ## References
 
@@ -137,8 +129,8 @@ A reference may name a **pending output**, one whose stage record has not comple
 Only an output reference can be pending, so the scheduler has one kind of dependency.
 
 **Provenance is the graph obtained by following references backwards**, from a result to the parameters, datasets, and software versions of every run that contributed.
-A stage record references its workflow record, and both may hold references to outputs of other stage records.
-`Backend.provenance` walks it into a self-contained snapshot, which names the workflow record and the stage's inputs and outputs of every stage record on the way.
+A stage record's `params` and `inputs` may hold references to outputs of other stage records.
+`Backend.provenance` walks it into a self-contained snapshot, which names the workflow ID and the stage's inputs and outputs of every stage record on the way.
 There is no separate provenance model and no "which record produced this" query, because the reference names the record.
 
 ## Datasets
@@ -357,9 +349,14 @@ Reliable command delivery over Kafka was a long struggle in esslivedata (scipp/e
 *Every dataset as a record of a built-in `file` spec*, so that a reference has one form.
 It buys a UUID over an identity SciCat already keeps, a spec with no workflow, and a rule to stop the record store from becoming a catalogue, and gives nothing the two forms do not, because "which records used this dataset" is the same index over references either way.
 
-*One record kind*: a record is one call of a spec with all its parameters set, and a session infers the stage from successive requests.
+*A record per call of a spec with all its parameters*, with a session that infers the stage from successive requests.
 The record cannot say which part of a pipeline ran, so aggregation needs specs cut at the values that add, and a supplied intermediate cannot be expressed at all.
 A caller cannot declare the stage it needs, so the first call of every slider computes everything and holds nothing.
+
+*A stored workflow record holding only given values*: a record kind of its own, `WorkflowRecord(spec, params, instrument, proposal)`, embedded in each stage request with the values given and no defaults, identified by a hash of its content.
+It gives two identities per configuration: omitting a parameter and giving it at its default are two workflow records, with no shared held stage and no accumulation across them.
+A recompute is unsafe against changed defaults, because the defaults apply at run time.
+Filling defaults at submit makes the stage request hold every value that ran, and the workflow ID follows from it.
 
 *References to values that no stage record outputs*, so that any node of a pipeline can be reused without exposing it.
 Such a value has no record, no parameters, and no versions, so provenance and recompute would stop at it.
@@ -371,8 +368,8 @@ Remote sessions need a session launcher, an idle timeout, and a cap on the numbe
 Shared mode pays one disk write and one read per output, plus a process start per run.
 Whether a chained consumer exists is known only for requests submitted together as a group, so placement cannot be inferred for a request submitted on its own.
 
-Two record kinds: the record store, recompute, the UI, and publication handle the pair, and a stage record always joins to exactly one workflow record.
-A stage that leaves a needed parameter unset fails when it runs, not when it is submitted.
+A stage cut at an intermediate that leaves a needed parameter unset fails when it runs, not when it is submitted.
+A default is recorded on every request, so after a spec's default changes, a request with the same given values has another workflow ID, and a held stage or an accumulation does not span the change.
 
 The author chooses which intermediates to expose, with their formats, and the choice is not always clean.
 Processed vanadium in diffraction is rebinned onto the sample's edges without interpolation, so a stored dense vanadium is usable only for compatible binning, and the alternative is to keep it as events.

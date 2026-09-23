@@ -81,8 +81,9 @@ class Job(BaseModel, frozen=True):
     """
     What a runner is given: a stage request with its literal references inlined.
 
-    ``workflow`` is the workflow record's ID, which names the stage a session
-    holds; ``params`` are its values and ``inputs`` the stage inputs.
+    ``workflow`` is the request's workflow ID, which names the stage a session
+    holds; ``params`` are the request's parameters, defaults filled, and
+    ``inputs`` the stage inputs.
     """
 
     workflow: str

@@ -28,7 +28,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from .backend import GROUP_PREFIX, SubmitError
-from .client import Client, WorkflowHandle
+from .client import Client
 from .records import Accumulate, Origin, StageRecord, StageRequest, Status
 from .rules import AsOf, Lookup, LookupEntry, Rule, Series, Template, matches, precedes
 from .sources import Dataset
@@ -54,7 +54,7 @@ def apply(
     dataset itself, which fills the template's dataset field. ``pinned`` may be a
     frame with the member key as index and the pinned values as columns. The
     template's blanks are the stage inputs of each member; everything else is
-    the workflow record they are cut from, so members that agree on it share it.
+    its params, so members that agree on it share a workflow ID and a held stage.
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. For a rule with a series, each
@@ -141,7 +141,8 @@ def _finalize(
     it covers. A member that was corrected, excluded, or reprocessed leaves the
     previous finalize covering a record that is no longer current, and then the
     finalize accumulates all current members, so that a correction is not
-    counted twice.
+    counted twice. Its params are the values the arriving member was given, and
+    the backend refuses it if a record it accumulates set any of them otherwise.
     """
     arrived = list(arrived)
     members = _current_members(client, rule, series, label, value)
@@ -153,8 +154,8 @@ def _finalize(
         covered = _covers(client, group, series, request)
         if covered <= set(elements):
             elements = [record] + [r for r in elements if r not in covered]
-    workflow = WorkflowHandle(client, group[arrived[-1]].workflow)
-    return workflow.request(
+    member = group[arrived[-1]]
+    return client.workflow(member.spec, member.params).request(
         {
             name: Accumulate(
                 accumulate=[OutputRef(record=r, output=name) for r in elements]

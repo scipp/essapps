@@ -3,10 +3,10 @@
 """
 The record store: SQLite, one writer, schema-versioned.
 
-Holds stage records, each with the workflow record it is cut from and indexed
-by that record's ID, the reference edges between them, and the registry of disk
-copies (the part of the data store that knows where bytes are), keyed by
-reference in either form. Records are never deleted one at a time.
+Holds stage records, indexed by the workflow ID of their request (a hash of
+spec, params, instrument, and proposal), the reference edges between them, and
+the registry of disk copies (the part of the data store that knows where bytes
+are), keyed by reference in either form. Records are never deleted one at a time.
 
 See docs/developer/records.md.
 """
@@ -23,7 +23,7 @@ from typing import IO, Self
 from .records import StageRecord, Status
 from .spec import Ref, SpecId
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -123,7 +123,7 @@ class RecordStore:
                     'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         record.id,
-                        req.workflow.id,
+                        req.workflow_id,
                         req.spec.name,
                         req.spec.version,
                         record.status.value,

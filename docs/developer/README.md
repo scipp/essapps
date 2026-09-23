@@ -27,7 +27,7 @@ client.provenance(iofq)                                  # back to the dataset r
 ## The ideas
 
 1. **A run is a stage request, and the request is plain data.**
-   It names a workflow record, a spec with parameter values set, and the inputs and outputs of the stage to compute.
+   It names a spec with parameter values set and the inputs and outputs of the stage to compute; the backend fills the spec's defaults, so the record holds every value the run used.
    The backend writes it down as a stage record, together with what happened: status, outputs, resolved parameters, package versions.
    A notebook, a UI, and an automatic trigger all submit the same kind of request.
 2. **Data is named by reference.**
@@ -45,7 +45,7 @@ client.provenance(iofq)                                  # back to the dataset r
 5. **Chaining is a reference to an output that does not exist yet.**
    Requests submitted together may reference each other's outputs, and the backend holds each one until its inputs have completed.
    That is the only scheduling mechanism.
-6. **A sum over runs is a stage per run and a finalize stage, cut from one workflow record.**
+6. **A sum over runs is a stage per run and a finalize stage that agree on their parameters.**
    The spec exposes the intermediates that add, such as a numerator and a denominator.
    A member stage per run computes them, and a finalize stage accumulates them with the binding's accumulators and normalises.
    A growing series accumulates onto the previous finalize's values, and the framework never adds arrays.
@@ -67,7 +67,7 @@ client.provenance(iofq)                                  # back to the dataset r
 |---|---|---|
 | 30 minutes | [architecture.md](architecture.md) | the whole design in teaching order, with code, a components table, and a table of decisions |
 | as needed | [stages.md](stages.md) | interactive work: sessions, stages, slots, views |
-| | [records.md](records.md) | workflow records, stage requests and stage records, references, datasets, the data store, scheduling |
+| | [records.md](records.md) | stage requests and stage records, references, datasets, the data store, scheduling |
 | | [workflow-contract.md](workflow-contract.md) | spec, the workflow protocol, inputs and outputs, validation, changes needed in scipp/ess#690 |
 | | [aggregation.md](aggregation.md) | member and finalize stages, `Accumulate`, chaining |
 | | [rules.md](rules.md) | templates, lookups, rules, `apply`, the trigger loop |

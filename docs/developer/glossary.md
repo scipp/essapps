@@ -16,7 +16,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Adapter**: the code, in ess.reduce, that turns a sciline pipeline into a workflow, and each stage record into a `sciline.Stage`.
   It maps fields to keys, names the form of each data reference, and gives the accumulators by sciline key, the same dictionary a `sciline.Aggregation` takes.
   See [workflow-contract.md](workflow-contract.md#the-sciline-adapter).
-- **Aggregation**: in the framework, member stage records cut from one workflow record plus a finalize stage record that accumulates their intermediates.
+- **Aggregation**: in the framework, member stage records plus a finalize stage record that accumulates their intermediates, all agreeing on the parameters they set.
   In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process.
   It has no spec of its own.
   See [aggregation.md](aggregation.md).
@@ -112,22 +112,23 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Spec**: the declared interface of a workflow: name, version, parameters, outputs, and which outputs are intermediates.
   The signature of a pipeline: every parameter and every value a caller may ask for.
   Defined in scipp/ess#690 with the extensions in [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
-- **Stage**: the part of a pipeline from named stage inputs to named outputs, cut from a workflow record, like `sciline.Stage`.
+- **Stage**: the part of a pipeline from named stage inputs to named outputs, cut from a spec with parameters set, like `sciline.Stage`.
   It may hold whatever its inputs cannot affect.
   The caller names it; the workflow builds it; the session holds it under the name its stage records give it.
   See [stages.md](stages.md).
-- **Stage inputs**: the values a stage takes on each call: parameters the workflow record leaves unset, and intermediates supplied from outside.
+- **Stage inputs**: the values a stage takes on each call: parameters `params` leaves unset, and intermediates supplied from outside.
   The caller names them with `wf.stage(inputs=...)`, and a rule's template names them as its blanks.
   See [stages.md](stages.md#who-names-the-stage).
 - **Stage record**: a stage request plus what happened to it: status, outputs, resolved parameters, versions.
   Its execution is called a run, never a job, except for the launcher's own job IDs.
   In esslivedata a job is a running streaming workflow.
   See [records.md](records.md#requests-and-records).
-- **Stage request**: one call of a stage cut from a workflow record: the workflow record, the stage inputs with their values, and the outputs to compute.
+- **Stage request**: one call of a stage: the spec, its `params`, the stage inputs with their values, and the outputs to compute.
   Everything needed to run it.
+  The backend fills the spec's defaults into `params` at submit, for every parameter that is not a stage input.
   See [records.md](records.md#requests-and-records).
 - **Template**: a saved, versioned request with some fields left blank.
-  `apply` makes the blanks a member's stage inputs and the other values its workflow record.
+  `apply` makes the blanks a member's stage inputs and the other values its `params`.
   See [rules.md](rules.md).
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits.
   The execution shape of shared mode.
@@ -142,7 +143,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   A plain function `(params, inputs) -> outputs` is one.
   Typically a sciline pipeline behind an adapter; the framework does not care.
   See [workflow-contract.md](workflow-contract.md#the-workflow-protocol).
-- **Workflow record**: a spec with parameter values set, like a configured `sciline.Pipeline`; parameters may be left unset.
-  A value, not a run: its ID is a hash of its content, and it has no outputs.
+- **Workflow ID**: a hash of a stage request's spec, `params`, instrument, and proposal, which names the configured pipeline the stage is cut from, like a `sciline.Pipeline` with parameters set.
+  Derived from the request, never stored as a record of its own; a session names held stages by it.
   See [records.md](records.md#requests-and-records).
 - Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).

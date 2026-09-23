@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Workflow records, stage requests, and stage records: what ran, in sciline's terms.
+Stage requests and stage records: what ran, in sciline's terms.
 
-A workflow record is a pipeline with parameters set; a stage record is one call
-of a stage cut from it, with the stage's inputs and outputs named.
+A stage request is one call of a stage cut from a pipeline with parameters set,
+with the stage's inputs and outputs named; a stage record is the request plus
+what happened to it.
 
 See docs/developer/records.md.
 """
@@ -18,7 +19,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, Field, computed_field
+from pydantic import AfterValidator, BaseModel, Field
 from pydantic_core import to_jsonable_python
 
 from .spec import DatasetRef, OutputRef, SpecId, dataset_refs, walk_refs
@@ -75,37 +76,6 @@ class Origin(BaseModel, frozen=True):
     )
 
 
-class WorkflowRecord(BaseModel, frozen=True):
-    """
-    A pipeline with parameters set: what a stage is cut from.
-
-    A value, not a run: it has no outputs and never changes, and its ID is a
-    hash of its content, so two clients that configure the same spec with the
-    same values name the same workflow record. Parameters may be left unset; a
-    stage supplies them, or takes an intermediate in place of what needs them.
-    ``params`` holds the values given, not the spec's defaults, which apply at
-    run time to fields that neither this record nor a stage sets.
-    """
-
-    spec: SpecId
-    params: dict[str, Plain] = Field(default_factory=dict)
-    instrument: str = Field(min_length=1)
-    proposal: str = Field(min_length=1)
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def id(self) -> str:
-        # Keys are sorted so that the order in which values were given does not
-        # change the identity.
-        content = json.dumps(
-            self.model_dump(
-                mode='json', include={'spec', 'params', 'instrument', 'proposal'}
-            ),
-            sort_keys=True,
-        )
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
-
-
 class Accumulate(BaseModel, frozen=True):
     """
     A stage input that is the accumulation of several outputs.
@@ -121,19 +91,27 @@ class Accumulate(BaseModel, frozen=True):
 
 class StageRequest(BaseModel, frozen=True):
     """
-    One call of a stage cut from a workflow record: everything needed to run it.
+    One call of a stage cut from a pipeline with parameters set: everything
+    needed to run it.
 
-    ``inputs`` are the stage inputs by name: parameters the workflow record
-    leaves unset, and intermediates the spec exposes, supplied as a reference or
-    an :class:`Accumulate`. ``outputs`` are the outputs to compute, empty for the
-    spec's results. A request is complete: it never names a session or a
-    process, and the only path it may name is the identity of a local file that
-    carries no run identity.
+    ``params`` are the pipeline's parameters and ``inputs`` the stage inputs by
+    name: parameters ``params`` leaves unset, and intermediates the spec exposes,
+    supplied as a reference or an :class:`Accumulate`. ``outputs`` are the
+    outputs to compute, empty for the spec's results. As recorded, ``params``
+    holds every parameter that is not a stage input, the spec's default filled in
+    for each one not given; only a required parameter without a default may stay
+    unset, when the stage takes an intermediate in place of what needs it. A
+    request is complete: it never names a session or a process, and the only
+    path it may name is the identity of a local file that carries no run
+    identity.
     """
 
-    workflow: WorkflowRecord
+    spec: SpecId
+    params: dict[str, Plain] = Field(default_factory=dict)
     inputs: dict[str, Plain] = Field(default_factory=dict)
     outputs: tuple[str, ...] = ()
+    instrument: str = Field(min_length=1)
+    proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)
     label: str | None = Field(
         default=None,
@@ -150,20 +128,26 @@ class StageRequest(BaseModel, frozen=True):
     )
 
     @property
-    def spec(self) -> SpecId:
-        return self.workflow.spec
+    def workflow_id(self) -> str:
+        """
+        A hash of spec, params, instrument, and proposal: the pipeline this
+        request's stage is cut from, which names the stage a session holds.
 
-    @property
-    def proposal(self) -> str:
-        return self.workflow.proposal
-
-    @property
-    def instrument(self) -> str:
-        return self.workflow.instrument
+        Two requests that configure the same spec with the same values name the
+        same pipeline, whatever their stages. Keys are sorted so that the order in
+        which values were given does not change the identity.
+        """
+        content = json.dumps(
+            self.model_dump(
+                mode='json', include={'spec', 'params', 'instrument', 'proposal'}
+            ),
+            sort_keys=True,
+        )
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     def values(self) -> dict[str, Any]:
-        """Workflow parameters and stage inputs together, as plain data."""
-        return {**self.workflow.params, **self.inputs}
+        """Parameters and stage inputs together, as plain data."""
+        return {**self.params, **self.inputs}
 
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""

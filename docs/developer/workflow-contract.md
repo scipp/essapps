@@ -60,7 +60,7 @@ class StageCall(Protocol):
                  inputs: Inputs) -> Mapping[str, Any]: ...
 ```
 
-`stage` gets the workflow record's values, with the spec's defaults for the fields that neither the workflow record nor the stage sets, and the stage's input and output names.
+`stage` gets the request's `params`, which hold the spec's defaults for every field that is not a stage input, filled at submit, and the stage's input and output names.
 Each call of the returned `StageCall` gets the parameters among the stage inputs, and the intermediates among them already as objects.
 It returns the stage's outputs by field name.
 A plain run is the stage with no inputs, whose outputs are the spec's results.
@@ -154,10 +154,10 @@ def normalize_workflow() -> PipelineAdapter:
 `accumulators` gives, by sciline key, a factory for the accumulator of each intermediate that may be accumulated.
 It is the same dictionary a `sciline.Aggregation` takes, so a package defines it once for notebooks and for the binding.
 
-For `stage` the adapter sets the workflow record's values on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
+For `stage` the adapter sets the request's `params` on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
 An intermediate input cuts off its providers and everything upstream of them.
 A `Stage` computes once everything the inputs cannot affect, holds it at its **frontier**, and on each call recomputes only what lies downstream of the inputs.
-References in the workflow record's values are resolved once, when the stage is built; references in the stage inputs on every call.
+References in `params` are resolved once, when the stage is built; references in the stage inputs on every call.
 Correctness follows from the graph for any choice of stage inputs, so the choice decides only where the frontier sits and what a rerun costs.
 A parameter input that the outputs do not need, which `sciline.Stage` refuses, is held and ignored, because it cannot change the result and which parameters a caller varies must not decide whether a run succeeds.
 
@@ -244,15 +244,15 @@ This is an extension of this design rather than a field of scipp/ess#690.
 A parameter the spec does not declare is refused, because a pydantic model ignores unknown fields unless its author forbids them, and a reduction parameter dropped in silence gives a wrong number without an error.
 scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the top-level fields itself.
 Requiring a closed parameter model in the spec would be the better place.
-The same check covers the stage's names: a stage input must be a parameter the workflow record leaves unset or an exposed intermediate, and an output must be an output of the spec.
-The values given are validated field by field, because a workflow record and a stage may each leave fields unset.
-**A missing parameter is therefore not a validation error.**
-Whether a stage's inputs suffice for its outputs depends on the graph, so a stage that leaves a needed parameter unset fails when it runs ([records.md](records.md#what-the-backend-checks)).
+The same check covers the stage's names: a stage input must be a parameter `params` leaves unset or an exposed intermediate, and an output must be an output of the spec.
+The check sees the request with the spec's defaults filled, as it will be recorded.
+A stage without intermediate inputs is validated against the whole parameter model, so a missing required parameter is refused.
+A stage that takes an intermediate is validated field by field, because whether its inputs suffice for its outputs depends on the graph: such a stage that leaves a needed parameter unset fails when it runs ([records.md](records.md#what-the-backend-checks)).
 The backend runs this layer by importing the spec module alone, never a factory.
 esslivedata keeps the spec separate from the workflow factory precisely so that specs can be validated without importing workflow code, and scipp/ess#690 must keep that separation.
 
 **Runnability**: every reference resolves to a record the submitter may read and, for a collection element, to a key the producer declares.
-An intermediate supplied from a stage record of the same spec comes from the same workflow record.
+An intermediate supplied from a stage record of the same spec agrees with it on every parameter both requests set in `params`.
 Files exist where the launcher would look, and the launcher's environment has the spec.
 Anything past that, such as a file that opens but lacks a monitor, is a run that fails fast, not a validation error.
 

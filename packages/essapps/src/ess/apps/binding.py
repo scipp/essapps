@@ -3,7 +3,7 @@
 """
 Binding specs to code.
 
-A workflow is the code behind a spec: given the values of a workflow record,
+A workflow is the code behind a spec: given the parameters of a stage request,
 it builds the stage a stage record names, from the stage's inputs to its
 outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
 references where the request does; the code asks the runner's :class:`Inputs`
@@ -90,7 +90,7 @@ class Workflow(Protocol):
     """
     The code behind a spec: builds the stages that stage records name.
 
-    ``params`` holds the workflow record's values, with the spec's defaults for
+    ``params`` holds the request's parameters, with the spec's defaults for
     the fields neither it nor the stage sets; ``inputs`` and ``outputs`` are the
     stage's names. What a stage holds between calls is what its inputs cannot
     affect, so holding it is a cache and dropping it always safe. A stage that

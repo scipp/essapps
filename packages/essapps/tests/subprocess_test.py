@@ -140,7 +140,7 @@ def test_persisted_request_keeps_reference_form(
     )
     (done,) = client.wait([rebinned])
     assert done.status == Status.COMPLETED, done.failure
-    assert done.request.workflow.params['offset'] == {
+    assert done.request.params['offset'] == {
         'record': loaded.id,
         'output': 'total',
         'key': None,
