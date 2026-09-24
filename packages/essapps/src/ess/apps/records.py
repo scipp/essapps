@@ -3,10 +3,9 @@
 """
 Templates, run requests, and run records: what to run, and what ran.
 
-A run request is one run of a workflow, every parameter value set, with any
-intermediates supplied in place of what computes them and the outputs to
-compute named; a run record is the request plus what happened to it. A
-template is a partial request: the values set and the blanks a use fills.
+A run request is one run of a workflow: every parameter value set, and the
+outputs to compute named. A run record is the request plus what happened to
+it. A template is a partial request: the values set and the blanks a use fills.
 
 See docs/developer/records.md.
 """
@@ -86,33 +85,19 @@ class Origin(BaseModel, frozen=True):
     )
 
 
-class Accumulate(BaseModel, frozen=True):
-    """
-    A supplied intermediate that is the accumulation of several outputs.
-
-    The binding accumulates them with the accumulator its author gave for the
-    input, in the order listed; the framework never combines values itself.
-    """
-
-    accumulate: list[OutputRef]
-
-
 class RunRequest(BaseModel, frozen=True):
     """
     One run of a workflow: everything needed to run it.
 
-    ``params`` holds every parameter value, the ones a caller varies included;
-    as recorded, the spec's default is filled in for each parameter not given.
-    ``supplied`` holds intermediates the spec exposes, each a reference or an
-    :class:`Accumulate`, supplied in place of what computes them. Only a
-    required parameter without a default may stay unset, and only when the
-    request supplies an intermediate in place of what needs it. ``outputs`` are
-    the outputs to compute, empty for the spec's results.
+    ``params`` holds every parameter value of the spec, which together are a
+    configured pipeline; as recorded, the spec's default is filled in for each
+    parameter not given. A sum over runs is one request whose run parameter
+    holds the list of runs. ``outputs`` are the outputs to compute, empty for
+    the spec's results.
 
     ``vary`` names the parameters a caller varies from run to run, so that a
     session holds the stage cut at them. Like ``label``, it is a hint: it does
-    not change the result, it is not part of the workflow ID, and provenance
-    does not rely on it.
+    not change the result, and nothing but a session reads it.
 
     A request is complete: it never names a session or a process, and the only
     path it may name is the identity of a local file that carries no run
@@ -121,12 +106,10 @@ class RunRequest(BaseModel, frozen=True):
 
     spec: SpecId
     params: dict[str, Plain] = Field(default_factory=dict)
-    supplied: dict[str, Plain] = Field(default_factory=dict)
     outputs: tuple[str, ...] = ()
     vary: tuple[str, ...] = Field(
         default=(),
-        description="Parameters a caller varies; a hint for the session, not "
-        "part of the workflow ID.",
+        description="Parameters a caller varies; a hint for the session.",
     )
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
@@ -154,11 +137,10 @@ class RunRequest(BaseModel, frozen=True):
     def workflow_id(self) -> str:
         """
         A hash of spec, the parameters not varied, instrument, and proposal:
-        the pipeline from which a session cuts the stage it holds.
+        the name under which a session holds the stage cut at the varied ones.
 
-        Two requests that set the same values name the same pipeline, whatever
-        they vary or supply. Keys are sorted so that the order in which values
-        were given does not change the identity.
+        Keys are sorted so that the order in which values were given does not
+        change the name.
         """
         content = json.dumps(
             {
@@ -171,36 +153,32 @@ class RunRequest(BaseModel, frozen=True):
         )
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def values(self) -> dict[str, Any]:
-        """Parameters and supplied intermediates together, as plain data."""
-        return {**self.params, **self.supplied}
-
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""
-        return [r for _, r in walk_refs(self.values()) if isinstance(r, OutputRef)]
+        return [r for _, r in walk_refs(self.params) if isinstance(r, OutputRef)]
 
     def datasets(self) -> list[DatasetRef]:
         """Distinct references to data the framework did not compute."""
-        return dataset_refs(self.values())
+        return dataset_refs(self.params)
 
 
 class Template(BaseModel, frozen=True):
     """
     A partial request: a spec, the values set, and the blanks a use fills.
 
-    A blank is a parameter the use varies from request to request, or an
-    intermediate it supplies in place of what computes it: the stage's inputs.
-    Every request made from one template names the same stage, which a session
-    holds. Records made from a template carry its name as their label. The
-    templates of batches and rules are stored and versioned; a slider's
-    template lives on the client for as long as the slider does.
+    A blank is a parameter the use varies from request to request: the input
+    of the stage a session holds for every request made from one template.
+    Records made from a template carry its name as their label. The templates
+    of batches and rules are stored and versioned; a slider's template lives on
+    the client for as long as the slider does.
 
     ``params`` holds the plain JSON form a request's params have, whatever
     objects the author passed, so a template read back from storage equals the
     one that was stored. ``outputs`` names the outputs to compute, empty for
     the spec's results. ``dataset_field`` is the blank a dataset fills when a
     rule or :func:`ess.apps.batch.apply` supplies one, which is the sole blank
-    unless a template has several.
+    unless a template has several; in a rule with a series it holds the list
+    of the series' datasets.
     """
 
     spec: SpecId
@@ -226,17 +204,11 @@ class Template(BaseModel, frozen=True):
         blank: Iterable[str] = (),
     ) -> Template:
         """
-        Save a request as a template: its data-reference fields, what it varied,
-        and what it supplied are the blanks.
+        Save a request as a template: its data-reference fields, and those
+        named in ``blank``, are the blanks; every other value is kept, the ones
+        the request varied included.
         """
-        blanks = tuple(
-            sorted(
-                set(data_fields(spec.params))
-                | set(blank)
-                | set(request.vary)
-                | set(request.supplied)
-            )
-        )
+        blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
         params = {k: v for k, v in request.params.items() if k not in blanks}
         return cls(
             name=name,

@@ -2,9 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Example workflows exercising the contract: a load-and-histogram pipeline to
-stage, a per-run reduction, a combine step over a list of references, and a
-pipeline whose numerator and denominator are intermediates, so a sum over runs,
-chaining, and a growing series can be tried without instrument code.
+stage, a per-run reduction, a combine step over a list of references, and
+pipelines that take a list of runs and sum what each contributes, so a sum over
+runs, chaining, and a growing series can be tried without instrument code.
 ``registry`` is importable by the subprocess launcher.
 
 See docs/developer/aggregation.md.
@@ -287,7 +287,7 @@ HISTOGRAM = WorkflowSpec(
 
 
 # One pipeline whose numerator and denominator add over runs: normalisation
-# comes after them, and the run file is the only parameter that differs.
+# comes after them, and the run file is the key each member sets.
 
 RunFile = NewType('RunFile', Path)
 Floor = NewType('Floor', float)
@@ -333,7 +333,7 @@ ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(
 
 
 class NormalizeParams(BaseModel):
-    run: OpaqueFile
+    runs: list[OpaqueFile] = Field(min_length=1)
     floor: float = 0.0
     scale: float = 1.0
 
@@ -348,9 +348,8 @@ NORMALIZE = WorkflowSpec(
     name='normalize',
     version=1,
     title='Normalize',
-    description='Numerator and denominator of a run, normalised. The numerator '
-    'and denominator are intermediates, so a sum over runs is a stage per run '
-    'to them and a stage from their accumulation.',
+    description='Numerator and denominator summed over runs, then normalised. '
+    'The numerator and denominator are intermediates a request may ask for.',
     params=NormalizeParams,
     outputs=NormalizeOutputs,
     intermediates=('numerator', 'denominator'),
@@ -371,13 +370,14 @@ def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
 def normalize_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         normalize_pipeline(),
-        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-        resolve={'run': 'path'},
+        keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
+        resolve={'runs': 'path'},
         targets={
             'normalized': Normalized,
             'numerator': Numerator,
             'denominator': Denominator,
         },
+        members=('runs',),
         accumulators=ACCUMULATORS,
     )
 
@@ -405,14 +405,12 @@ def subtracted(sample: SampleCounts, background: BackgroundCounts) -> Subtracted
 
 
 class BackgroundParams(BaseModel):
-    sample_run: OpaqueFile
-    background_run: OpaqueFile
+    sample_runs: list[OpaqueFile] = Field(min_length=1)
+    background_runs: list[OpaqueFile] = Field(min_length=1)
 
 
 class BackgroundOutputs(BaseModel):
     subtracted: Array(ArraySpec(dims=('x',), unit='counts'))
-    sample_counts: Array()
-    background_counts: Array()
 
 
 BACKGROUND = WorkflowSpec(
@@ -423,20 +421,16 @@ BACKGROUND = WorkflowSpec(
     'runs with two member tables.',
     params=BackgroundParams,
     outputs=BackgroundOutputs,
-    intermediates=('sample_counts', 'background_counts'),
 )
 
 
 def background_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         sciline.Pipeline([sample_counts, background_counts, subtracted]),
-        keys={'sample_run': SampleFile, 'background_run': BackgroundFile},
-        resolve={'sample_run': 'path', 'background_run': 'path'},
-        targets={
-            'subtracted': Subtracted,
-            'sample_counts': SampleCounts,
-            'background_counts': BackgroundCounts,
-        },
+        keys={'sample_runs': SampleFile, 'background_runs': BackgroundFile},
+        resolve={'sample_runs': 'path', 'background_runs': 'path'},
+        targets={'subtracted': Subtracted},
+        members=('sample_runs', 'background_runs'),
         accumulators={
             SampleCounts: sciline.Buffered(add),
             BackgroundCounts: sciline.Buffered(add),

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ess.apps.client import local
 from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, SUM, registry, write_run
-from ess.apps.records import Accumulate, Template
+from ess.apps.records import Template
 from ess.apps.sources import FolderSource
 from ess.apps.spec import OutputRef, dataset_ref
 
@@ -59,21 +59,18 @@ group = client.submit_group({
 })
 client.output(group['sum'], 'total')
 
-# A sum over runs, cut from one template without 'run'. NORMALIZE exposes the
-# numerator and denominator as intermediates: a member stage per run computes
-# them, and a finalize stage normalises their accumulation. The binding
-# accumulates; the framework never adds.
-normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})
-member = normalize.cut(blanks=('run',), outputs=('numerator', 'denominator'))
-finalize = normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',))
-members = [
-    client.run(member, {'run': dataset_ref(instrument='dream', run=n)}) for n in (1, 2)
-]
-total = client.run(finalize, {
-    name: Accumulate(accumulate=[m.ref(name) for m in members])
-    for name in ('numerator', 'denominator')
-})
+# A sum over runs is one run whose 'runs' parameter lists them. The binding
+# contributes each run and accumulates at the numerator and denominator, as
+# sciline.Aggregation does; the framework never adds. A template whose blank is
+# the list holds the accumulation in the session, so adding a run reduces only
+# the new one, and each record still names every run it sums.
+runs = [dataset_ref(instrument='dream', run=n) for n in (1, 2)]
+total = client.run(NORMALIZE, {'runs': runs, 'floor': 1.5, 'scale': 2.0})
 client.output(total, 'normalized')
+
+growing = Template(spec=NORMALIZE, params={'floor': 1.5}, blanks=('runs',), name='sum')
+client.run(growing, {'runs': runs[:1]})
+assert client.run(growing, {'runs': runs}).reused
 ```
 
 Every run through `throwaway=True` instead executes in a subprocess that writes its outputs and a completion marker to disk; the backend reconciles from the marker, so `client.wait([...])` is needed before reading outputs. The registry must then be importable by name, for example `registry='ess.apps.examples:registry'`.

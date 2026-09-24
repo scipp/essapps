@@ -12,10 +12,10 @@ to a server that holds a ``LocalBackend``.
 
 Single writer to the record store. One scheduling primitive: a request whose
 inputs are pending outputs waits until they complete, fails if any of them fails,
-and is cancelled if any is cancelled. Recompute is explicit. The outputs an
-accumulated intermediate names are references like any other, so they are
-scheduled, resolved, and checked like any other input, and nothing here combines
-them.
+and is cancelled if any is cancelled. Recompute is explicit. Nothing here
+knows the workflow graph: every request is a whole configured pipeline, checked
+against the spec's params model, and a sum over runs is one request whose run
+parameter is a list, which the workflow code sums.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ from .binding import Registry
 from .datastore import DataStore
 from .launcher import Launcher
 from .records import (
-    Accumulate,
     Derivation,
     Failure,
     RunRecord,
@@ -280,14 +279,10 @@ class LocalBackend:
         """
         Three layers: shape and spec, the values, runnability.
 
-        The request is checked as it would be recorded: the spec's defaults
-        filled, and once its values validate, each in the form the params
-        model gives it, so that the agreement check compares like with like. A
-        request that supplies no intermediate is checked against the whole
-        params model, so a missing parameter is refused here. Whether a
-        request that supplies an intermediate has what its outputs need is
-        known only to the workflow code, so such a request that leaves a
-        needed parameter unset fails when it runs.
+        The request is checked as it would be recorded, the spec's defaults
+        filled, against the whole params model: a request is a configured
+        pipeline, whichever outputs it asks for, so a missing parameter is
+        refused here and never found when the run starts.
         """
         if request.spec not in self.registry:
             return ValidationReport(
@@ -300,18 +295,9 @@ class LocalBackend:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
         request = self._as_recorded(request)
         params = data_fields(spec.params)
-        intermediates = data_fields(spec.outputs)
         for path, ref in walk_refs(request.params):
             errors += self._check_ref(
                 ref, params.get(field_of(path)), request, group or {}
-            )
-        for path, ref in walk_refs(request.supplied):
-            errors += self._check_ref(
-                ref,
-                intermediates.get(field_of(path)),
-                request,
-                group or {},
-                intermediate=True,
             )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
@@ -336,18 +322,8 @@ class LocalBackend:
         consumer: DataField | None,
         request: RunRequest,
         group: Mapping[str, RunRequest],
-        *,
-        intermediate: bool = False,
     ) -> list[str]:
-        """
-        Whether a reference may fill the field it is in.
-
-        An intermediate supplied from a record of the same spec must agree with
-        it on every parameter both requests set, so that a parameter both sides
-        read has one value. A parameter either request varies, or leaves unset,
-        is not compared: each member of a sum over runs varies its run, and the
-        finalize leaves the run unset.
-        """
+        """Whether a reference may fill the field it is in."""
         if isinstance(ref, DatasetRef):
             return self._check_dataset(ref, consumer)
         if ref.record.startswith(GROUP_PREFIX):
@@ -355,11 +331,6 @@ class LocalBackend:
             if name not in group:
                 return [f'{ref}: no group member named {name!r}']
             producer_request = group[name]
-            if producer_request.spec in self.registry:
-                try:
-                    producer_request = self._as_recorded(producer_request)
-                except ValidationError:  # its own report refuses the group
-                    producer_request = self._with_defaults(producer_request)
         else:
             if ref.record not in self.record_store:
                 return [f'{ref}: no such record']
@@ -369,14 +340,6 @@ class LocalBackend:
             return [f'{ref}: belongs to proposal {producer_request.proposal}']
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
-        if intermediate and producer_spec == request.spec:
-            theirs, ours = producer_request.fixed, request.fixed
-            for name in sorted(theirs.keys() & ours.keys()):
-                if theirs[name] != ours[name]:
-                    return [
-                        f'{ref}: made with {name}={theirs[name]!r}, '
-                        f'this request sets {name}={ours[name]!r}'
-                    ]
         outputs = self.registry.spec(producer_spec).outputs
         if ref.output not in outputs.model_fields:
             return [f'{ref}: {producer_spec} has no output {ref.output!r}']
@@ -451,7 +414,6 @@ class LocalBackend:
         return request.model_copy(
             update={
                 'params': _rewrite(request.params, named),
-                'supplied': _rewrite(request.supplied, named),
                 'outputs': request.outputs or self.registry.spec(request.spec).results,
             }
         )
@@ -465,12 +427,9 @@ class LocalBackend:
         """
         request = self._with_defaults(request)
         params = self.registry.spec(request.spec).params
-        model = (
-            submodel(params, request.params, 'Given') if request.supplied else params
-        )
         return request.model_copy(
             update={
-                'params': model.model_validate(request.params).model_dump(mode='json')
+                'params': params.model_validate(request.params).model_dump(mode='json')
             }
         )
 
@@ -665,15 +624,13 @@ class LocalBackend:
         self.record_store.update(record)
 
     def _dispatch(self, record: RunRecord) -> None:
-        spec = self.registry.spec(record.spec)
-        params, outputs = data_fields(spec.params), data_fields(spec.outputs)
+        params = data_fields(self.registry.spec(record.spec).params)
         locations: dict[Ref, Path] = {}
         literals: dict[str, Any] = {}
-        named = []
-        for path, ref in walk_refs(record.request.values()):
-            name = field_of(path)
-            data = params if name in spec.params.model_fields else outputs
-            named.append((ref, name in data))
+        named = [
+            (ref, field_of(path) in params)
+            for path, ref in walk_refs(record.request.params)
+        ]
         # A reference named by two parameters is one thing to resolve, and
         # locating a dataset means asking every source.
         for ref, into_data_field in dict.fromkeys(named):
@@ -686,7 +643,6 @@ class LocalBackend:
         job = Job(
             workflow=request.workflow_id,
             params=_inline(request.params, literals),
-            supplied=_inline(request.supplied, literals),
             vary=request.vary,
             outputs=request.outputs,
         )
@@ -780,7 +736,6 @@ class LocalBackend:
         return {
             'record': record.id,
             'spec': str(record.spec),
-            'supplied': sorted(record.request.supplied),
             'outputs': list(record.request.outputs),
             'params': record.request.params,
             'literals': record.outputs,
@@ -899,12 +854,8 @@ def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
     A params model ignores fields it does not declare unless its author forbids
     them, and a reduction parameter dropped in silence gives a wrong number
     without an error, so every name is checked against the spec. A varied
-    parameter is a parameter with a value; a supplied intermediate is one the
-    spec exposes, and a data intermediate is supplied as a reference or an
-    accumulation of references. A request that supplies no intermediate gets
-    every parameter from ``params``, so it is checked against the whole params
-    model; one that supplies an intermediate is checked field by field, since
-    which parameters it needs is known only to the workflow code.
+    parameter is a parameter with a value. The values are checked against the
+    whole params model.
     """
     fields = spec.params.model_fields
     errors = [
@@ -917,37 +868,16 @@ def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
         elif name not in request.params:
             errors.append(f'{name}: varied but given no value')
     errors += [
-        f'{name}: not an intermediate of {spec.id}'
-        for name in sorted(request.supplied)
-        if name not in spec.intermediates
-    ]
-    errors += [
         f'{name}: not an output of {spec.id}'
         for name in request.outputs
         if name not in spec.outputs.model_fields
     ]
     if errors:
         return errors
-    model = (
-        submodel(spec.params, request.params, 'Given')
-        if request.supplied
-        else spec.params
-    )
     try:
-        model.model_validate(request.params)
+        spec.params.model_validate(request.params)
     except ValidationError as e:
         errors += [
             f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
         ]
-    data = data_fields(spec.outputs)
-    for name, value in request.supplied.items():
-        if name not in data:
-            continue
-        if as_ref(value) is None:
-            try:
-                Accumulate.model_validate(value)
-            except ValidationError:
-                errors.append(
-                    f'{name}: an intermediate takes a reference or an accumulation'
-                )
     return errors

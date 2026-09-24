@@ -12,26 +12,12 @@ import pytest
 from ess.apps.client import Client, local
 from ess.apps.datastore import MissingCopyError
 from ess.apps.examples import HISTOGRAM, LOAD, NORMALIZE, registry
-from ess.apps.records import Accumulate, RunRecord, Template
+from ess.apps.records import Template
 from ess.apps.testing import FakeDatasetSource, equal
 
 from .conftest import Measure
 
 
-def summed(members: list[RunRecord]) -> dict[str, Accumulate]:
-    """A finalize's inputs: the accumulation of every member's intermediates."""
-    return {
-        name: Accumulate(accumulate=[m.ref(name) for m in members])
-        for name in ('numerator', 'denominator')
-    }
-
-
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason='from_request blanks what the request varied, so the tuned bin count '
-    'is not in the saved template',
-)
 def test_b1_tune_a_sans_reduction_in_a_notebook(
     client: Client, measure: Measure
 ) -> None:
@@ -61,16 +47,13 @@ def test_b1_tune_a_sans_reduction_in_a_notebook(
 def test_b2_add_a_run_to_a_sum_then_remove_one(
     client: Client, measure: Measure
 ) -> None:
-    normalize = Template(spec=NORMALIZE)
-    member = normalize.cut(blanks=('run',), outputs=('numerator', 'denominator'))
-    finalize = normalize.cut(blanks=('numerator', 'denominator'), name='sum')
-    run611 = client.run(member, {'run': measure(611, [1.0, 3.0])})
-    run612 = client.run(member, {'run': measure(612, [2.0, 6.0])})
-    first = client.run(finalize, summed([run611, run612]))
+    total = Template(spec=NORMALIZE, blanks=('runs',), name='sum')
+    run611, run612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
+    first = client.run(total, {'runs': [run611, run612]})
 
-    run613 = client.run(member, {'run': measure(613, [3.0, 1.0])})
-    added = client.run(finalize, summed([run611, run612, run613]))
-    removed = client.run(finalize, summed([run611, run613]))
+    run613 = measure(613, [3.0, 1.0])
+    added = client.run(total, {'runs': [run611, run612, run613]})
+    removed = client.run(total, {'runs': [run611, run613]})
 
     states = client.records(label='sum')
     assert states == [first, added, removed]
@@ -79,11 +62,13 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
         [0.375, 0.625],
         [0.5, 0.5],
     ]
-    assert [{ref.record for ref in s.request.refs()} for s in states] == [
-        {run611.id, run612.id},
-        {run611.id, run612.id, run613.id},
-        {run611.id, run613.id},
+    assert [s.request.datasets() for s in states] == [
+        [run611, run612],
+        [run611, run612, run613],
+        [run611, run613],
     ]
+    # The held stage contributed only 613 when it was added.
+    assert [s.reused for s in states] == [False, True, True]
 
 
 def test_b3_compare_two_parameter_sets_side_by_side(

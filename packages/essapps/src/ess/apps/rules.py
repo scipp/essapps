@@ -215,23 +215,17 @@ class RetryPolicy(BaseModel, frozen=True):
 
 class Series(BaseModel, frozen=True):
     """
-    How a rule sums its members over runs.
+    How a rule makes one request over several datasets.
 
-    ``key`` is the dataset field whose value keys datasets into a series and is
-    the member key of the series' finalize records. Each member is the stage
-    from the template's blanks to the intermediates named in ``accumulate``;
-    each arrival adds a finalize, the stage from their accumulation to
-    ``outputs``, with the template's values, on which every member it
-    accumulates must agree. Every finalize lists every current member of the
-    series, so the sum a record stands for is read off its request alone.
-
-    A combination that is not an accumulation, such as a stitch over angles,
-    is a spec of its own over a list of references and not a series.
+    ``key`` is the dataset field whose value keys datasets into a series, and
+    is the member key of the series' requests. On each arrival the rule
+    submits one request whose dataset field lists every current member of the
+    series, so successive requests supersede each other, and the result a
+    record stands for is read off its request alone. Whether the workflow sums
+    the members or stitches them is the workflow's.
     """
 
     key: str
-    accumulate: tuple[str, ...]
-    outputs: tuple[str, ...]
 
 
 class Rule(BaseModel):

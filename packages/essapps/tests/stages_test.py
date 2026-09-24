@@ -101,7 +101,7 @@ def test_a_stage_computes_only_what_its_inputs_affect(
     stage = counted.stage(
         values(data=DATA_REF, threshold=1.5), ['bins'], ['histogram'], inputs
     )
-    results = [stage(values(bins=bins), {}, inputs) for bins in (2, 4, 8)]
+    results = [stage(values(bins=bins), inputs) for bins in (2, 4, 8)]
     assert filtered == [1.5]
     assert [r['histogram'].sizes for r in results] == [{'x': 2}, {'x': 4}, {'x': 8}]
 
@@ -121,8 +121,8 @@ def test_a_stage_input_the_outputs_do_not_need_is_held(inputs: ArrayInputs) -> N
         values(data=DATA_REF, threshold=1.5, bins=99), [], ['filtered'], inputs
     )
     assert equal(
-        stage(values(bins=99), {}, inputs)['filtered'],
-        plain(values(), {}, inputs)['filtered'],
+        stage(values(bins=99), inputs)['filtered'],
+        plain(values(), inputs)['filtered'],
     )
 
 
@@ -141,8 +141,8 @@ def test_a_stage_holds_an_output_that_no_input_feeds(inputs: ArrayInputs) -> Non
     stage = workflow.stage(
         values(data=DATA_REF, threshold=1.5), ['bins'], ['histogram', 'total'], inputs
     )
-    assert stage(values(bins=2), {}, inputs)['total'] == 14.0
-    assert stage(values(bins=4), {}, inputs)['total'] == 14.0
+    assert stage(values(bins=2), inputs)['total'] == 14.0
+    assert stage(values(bins=4), inputs)['total'] == 14.0
 
 
 @pytest.mark.parametrize(
@@ -210,7 +210,7 @@ def test_the_expensive_part_runs_once_per_stage(inputs: ArrayInputs) -> None:
         inputs,
     )
     for sample in ('a', 'b', 'c'):
-        members(values(CurveParams, sample_run=sample), {}, inputs)
+        members(values(CurveParams, sample_run=sample), inputs)
     assert reductions == ['ref']
 
     slider = workflow.stage(
@@ -220,7 +220,7 @@ def test_the_expensive_part_runs_once_per_stage(inputs: ArrayInputs) -> None:
         inputs,
     )
     results = [
-        slider(values(CurveParams, q_num_bins=bins), {}, inputs)
+        slider(values(CurveParams, q_num_bins=bins), inputs)
         for bins in (100, 50, 25)
     ]
     assert reductions == ['ref', 'ref']
@@ -332,24 +332,15 @@ def test_a_file_that_changed_on_disk_does_not_find_the_stage_built_from_its_byte
     assert client.output(again).sum().value == 54.0
 
 
-def test_an_intermediate_is_a_stage_output_and_a_stage_input(
+def test_an_intermediate_is_an_output_a_request_names(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    """Cutting the pipeline at the intermediates gives what a plain run gives."""
-    normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})
-    member = client.run(
-        normalize.cut(blanks=('run',), outputs=('numerator', 'denominator')),
-        {'run': run_ref},
+    """A plain run computes the results; a request names an intermediate to get it."""
+    normalize = Template(
+        spec=NORMALIZE, params={'runs': [run_ref], 'floor': 1.5, 'scale': 2.0}
     )
-    assert member.output_names() == {'numerator', 'denominator'}
-    finalize = client.run(
-        normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',)),
-        {
-            'numerator': member.ref('numerator'),
-            'denominator': member.ref('denominator'),
-        },
-    )
-    plain = client.run(normalize, {'run': run_ref})
-    assert [r.status for r in (member, finalize, plain)] == [Status.COMPLETED] * 3
+    plain = client.run(normalize)
+    inside = client.run(normalize.cut(outputs=('numerator', 'denominator')))
+    assert [r.status for r in (plain, inside)] == [Status.COMPLETED] * 2
     assert plain.output_names() == {'normalized'}
-    assert equal(client.output(finalize), client.output(plain))
+    assert inside.output_names() == {'numerator', 'denominator'}

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from ess.apps.records import Accumulate, RunRecord, RunRequest, Status
+from ess.apps.records import RunRecord, RunRequest, Status
 from ess.apps.spec import OutputRef, SpecId, dataset_ref
 from ess.apps.store import RecordStore, StoreLockedError
 
@@ -169,28 +169,22 @@ def test_referencing_finds_records_by_output_of_producer(store: RecordStore) -> 
     assert store.referencing(other.id) == []
 
 
-def test_referencing_finds_references_in_supplied_intermediates_and_accumulations(
-    store: RecordStore,
-) -> None:
+def test_referencing_finds_references_inside_a_list(store: RecordStore) -> None:
     a, b = RunRecord(request=request()), RunRecord(request=request())
-    finalize = RunRecord(
+    stitch = RunRecord(
         request=request(
-            supplied={
-                'numerator': Accumulate(
-                    accumulate=[
-                        OutputRef(record=a.id, output='numerator'),
-                        OutputRef(record=b.id, output='numerator'),
-                    ]
-                ),
-                'denominator': OutputRef(record=a.id, output='denominator'),
+            params={
+                'curves': [
+                    OutputRef(record=a.id, output='curve'),
+                    OutputRef(record=b.id, output='curve'),
+                ]
             }
         )
     )
-    store.add(a, b, finalize)
-    assert store.referencing(a.id) == [finalize.id]
-    assert store.referencing(a.id, 'denominator') == [finalize.id]
-    assert store.referencing(b.id, 'numerator') == [finalize.id]
-    assert store.get(finalize.id) == finalize
+    store.add(a, b, stitch)
+    assert store.referencing(a.id) == [stitch.id]
+    assert store.referencing(b.id, 'curve') == [stitch.id]
+    assert store.get(stitch.id) == stitch
 
 
 def test_registry_records_where_copies_are(store: RecordStore, tmp_path: Path) -> None:

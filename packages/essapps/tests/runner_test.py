@@ -74,7 +74,7 @@ def job(
     params: dict[str, Any], outputs: tuple[str, ...], vary: tuple[str, ...] = ()
 ) -> Job:
     """A job as the backend makes it; the workflow ID only names a held stage."""
-    return Job(workflow='wf', params=params, supplied={}, vary=vary, outputs=outputs)
+    return Job(workflow='wf', params=params, vary=vary, outputs=outputs)
 
 
 def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(
@@ -132,7 +132,9 @@ def test_a_dataset_in_a_varied_parameter_is_checksummed_but_does_not_name_the_st
     first, second = (
         session.run(
             f'r{i}',
-            job({'run': ref.model_dump(mode='json')}, ('normalized',), vary=('run',)),
+            job(
+                {'runs': [ref.model_dump(mode='json')]}, ('normalized',), vary=('runs',)
+            ),
             binding,
             inputs,
             Collected(),

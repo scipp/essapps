@@ -70,7 +70,8 @@ Actor: user in a notebook.
 
 Checks: the result equals the reduction of the summed counts; each run is reduced on its own; the result names the runs it sums.
 
-Outcome: fits ([aggregation.md](aggregation.md)).
+Outcome: fits.
+The sum is one run whose run parameter lists the runs; the binding reduces each run and accumulates ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#a-sum)).
 
 ### S6. Sum sample runs and background runs
 
@@ -81,8 +82,8 @@ Actor: user in a notebook.
 
 Checks: each sample run and each background run is reduced on its own; the result names every run.
 
-Outcome: gap.
-The stage of a sample run leaves the background run unset, and the backend refuses it, because a request that supplies no intermediate is checked against every parameter of the spec ([open-issues.md](open-issues.md#open-questions)).
+Outcome: fits.
+Sample runs and background runs are two list parameters of one plain run ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#two-lists)).
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -184,7 +185,7 @@ Actor: user in a notebook.
 Checks: which changes rerun only the post-processing and who decides that; what the record listing shows afterwards, one entry or fifty; the template captures what was tuned.
 
 Outcome: fits.
-The client names a stage as a template whose blanks are the fields a person changes, and the session holds it, so only the post-processing runs again ([stages.md](stages.md#who-names-the-stage)); and saving a request as a template blanks the data-reference fields and what the request varied, and keeps every other field literal ([rules.md](rules.md#templates-and-lookups)).
+The client names a stage as a template whose blanks are the fields a person changes, and the session holds it, so only the post-processing runs again ([stages.md](stages.md#who-names-the-stage)); and saving a request as a template blanks the data-reference fields and keeps every other field literal, the tuned ones included ([rules.md](rules.md#templates-and-lookups)).
 
 ### B2. Add a run to a sum, then remove one
 
@@ -197,7 +198,7 @@ Actor: user in a notebook.
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
 Outcome: fits.
-Adding a run is a member run record plus a finalize over every current member, of which a held accumulator pushes only the new one, and removing one is a finalize over the remaining members ([aggregation.md](aggregation.md#a-growing-series)).
+Each state is a run over the list of runs; the stage the session holds contributes only an added run, and a shorter list is accumulated again ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#adding-a-run-removing-a-run)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -402,10 +403,9 @@ Actor: reflectometry user during a beamtime.
 
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combination; the UI shows one curve per sample, not one per arrival.
 
-Outcome: question.
-A rule with a series submits a member run request and a finalize run request on every arrival, and successive finalizes supersede each other under the series value as member key ([rules.md](rules.md#series)).
-That covers the sum of same-angle runs, which is an accumulation.
-The stitch over angles is not an accumulation, so it is a spec over a list of references and not a finalize, and a rule has no field for such a spec ([open-issues.md](open-issues.md#open-questions)).
+Outcome: fits.
+A rule with a series submits one run request per arrival whose dataset field lists every run of the series so far, and successive requests supersede each other under the series value as member key ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#a-series-under-a-rule)).
+A sum and a stitch look the same to the rule; the stitch needs a spec over a list of runs, which the skeleton's Amor binding does not have yet.
 
 ### E2. Automatic reduction goes quiet
 
@@ -599,7 +599,7 @@ A proposal's records and disk copies are dropped together after an export, refer
 
 ## Summary
 
-Of the 46 stories, 39 fit, five raise a question, and two are gaps.
+Of the 46 stories, 41 fit, four raise a question, and one is a gap.
 
 | Story | Title | Outcome |
 |---|---|---|
@@ -608,7 +608,7 @@ Of the 46 stories, 39 fit, five raise a question, and two are gaps.
 | S3 | Look at a value inside a reduction | fits |
 | S4 | Submit a chain in one go | fits |
 | S5 | Sum runs | fits |
-| S6 | Sum sample runs and background runs | gap |
+| S6 | Sum sample runs and background runs | fits |
 | S7 | Reduce each sample with the can measured before it | fits |
 | S8 | Trace a result to raw data | fits |
 | A1 | Browse a local folder next to a catalogue reference | fits |
@@ -633,7 +633,7 @@ Of the 46 stories, 39 fit, five raise a question, and two are gaps.
 | D4 | Typo caught before 500 failures | fits |
 | D5 | Understand why a run failed | fits |
 | D6 | Rerun last year's batch with a new workflow version | fits |
-| E1 | Series grows, reduction follows | question |
+| E1 | Series grows, reduction follows | fits |
 | E2 | Automatic reduction goes quiet | fits |
 | E3 | Reduction of our own output | fits |
 | E4 | Template improved during a beamtime | fits |

@@ -36,7 +36,7 @@ from ess.apps.examples import (
     load_workflow,
     write_run,
 )
-from ess.apps.records import Accumulate, RunRecord, Status, Template
+from ess.apps.records import RunRecord, Status, Template
 from ess.apps.rules import (
     AsOf,
     Between,
@@ -50,7 +50,7 @@ from ess.apps.rules import (
     Series,
 )
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, dataset_ref
+from ess.apps.spec import DatasetRef, WorkflowSpec, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -484,111 +484,76 @@ def test_the_reservation_does_not_affect_other_labels(
 # A series
 
 
-def series_rule() -> Rule:
-    """A rule whose members are stages to the intermediates, summed per sample."""
+def series_rule(lookup: Lookup | None = None) -> Rule:
+    """A rule whose request per sample sums every run of that sample."""
     return Rule(
         name='series',
         template=Template(
             name='normalize',
             spec=NORMALIZE.id,
             params={'floor': 1.5, 'scale': 2.0},
-            blanks=('run',),
+            blanks=('runs',),
         ),
-        series=Series(
-            key='sample',
-            accumulate=('numerator', 'denominator'),
-            outputs=('normalized',),
-        ),
+        lookup=lookup,
+        series=Series(key='sample'),
     )
 
 
-def sample(path: Path, values: list[float], pid: str) -> Dataset:
-    return Dataset(path=write_run(path, values), pid=pid, metadata={'sample': 'sio2'})
+def sample(path: Path, values: list[float], pid: str, **metadata: str) -> Dataset:
+    return Dataset(
+        path=write_run(path, values),
+        pid=pid,
+        metadata={'sample': 'sio2'} | metadata,
+    )
 
 
-def _accumulated(record: RunRecord) -> list[OutputRef]:
-    """What a finalize accumulates; every accumulated input lists the same records."""
-    lists = [
-        [r.record for r in Accumulate.model_validate(value).accumulate]
-        for value in record.request.supplied.values()
-    ]
-    assert all(records == lists[0] for records in lists)
-    return Accumulate.model_validate(record.request.supplied['numerator']).accumulate
+def listed(record: RunRecord) -> list[str]:
+    """The runs a series request names."""
+    return [str(as_ref(run)) for run in record.request.params['runs']]
 
 
-def test_each_arrival_of_a_series_submits_a_member_and_a_finalize_over_all_members(
+def test_each_arrival_submits_one_request_over_every_run_of_its_series(
     client: Client, tmp_path: Path
 ) -> None:
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
     client.backend.sources.append(source)
-    rule = series_rule()
-    loop = TriggerLoop(client, rule)
-    member, finalize = first = loop.run_once()
-    assert [r.request.member_key for r in first] == ['pid:pid/1', 'sio2']
-    assert member.request.outputs == ('numerator', 'denominator')
-    assert finalize.request.outputs == ('normalized',)
-    assert finalize.request.workflow_id == member.request.workflow_id
-    assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
-    client.wait(first)
+    loop = TriggerLoop(client, series_rule())
+    (first,) = client.wait(loop.run_once())
+    assert first.request.member_key == 'sio2'
+    assert listed(first) == ['pid:pid/1']
+    assert first.request.outputs == ('normalized',)
 
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
-    second, next_finalize = client.wait(loop.run_once())
-    assert _accumulated(next_finalize) == [
-        OutputRef(record=member.id, output='numerator'),
-        OutputRef(record=second.id, output='numerator'),
-    ]
-    assert next_finalize.status == Status.COMPLETED, next_finalize.failure
-    # Successive finalizes supersede each other under the series value.
-    assert next_finalize.supersedes == finalize.id
-    assert client.latest('series', 'sio2').id == next_finalize.id
-    assert [r.request.member_key for r in client.batch('series')] == [
-        'pid:pid/1',
-        'pid:pid/2',
-        'sio2',
-    ]
+    (second,) = client.wait(loop.run_once())
+    assert second.status == Status.COMPLETED, second.failure
+    assert listed(second) == ['pid:pid/1', 'pid:pid/2']
+    # Successive requests supersede each other under the series value.
+    assert second.supersedes == first.id
+    assert [r.id for r in client.batch('series')] == [second.id]
+    assert loop.run_once() == []
 
 
-def test_a_finalize_per_arrival_equals_one_over_all_members(
+def test_a_series_request_equals_a_sum_over_its_runs(
     client: Client, tmp_path: Path
 ) -> None:
     source = FakeDatasetSource()
     client.backend.sources.append(source)
     loop = TriggerLoop(client, series_rule())
-    members = []
     for i, values in enumerate([[1.0, 2.0], [2.0, 2.0], [4.0, 3.0]], start=1):
         source.add(sample(tmp_path / f'{i}.h5', values, f'pid/{i}'))
-        member, finalize = client.wait(loop.run_once())
-        members.append(member)
-    over_all = Template(
-        spec=NORMALIZE,
-        params={'floor': 1.5, 'scale': 2.0},
-        blanks=('numerator', 'denominator'),
-    )
+        (latest,) = client.wait(loop.run_once())
+    runs = [dataset_ref(pid=f'pid/{i}') for i in (1, 2, 3)]
     (at_once,) = client.wait(
-        [
-            client.run(
-                over_all,
-                {
-                    name: Accumulate(accumulate=[m.ref(name) for m in members])
-                    for name in ('numerator', 'denominator')
-                },
-            )
-        ]
+        [client.run(NORMALIZE, {'runs': runs, 'floor': 1.5, 'scale': 2.0})]
     )
-    assert at_once.status == Status.COMPLETED, at_once.failure
-    assert finalize.status == Status.COMPLETED, finalize.failure
+    assert latest.status == Status.COMPLETED, latest.failure
     assert sc.identical(
-        client.output(finalize, 'normalized'), client.output(at_once, 'normalized')
+        client.output(latest, 'normalized'), client.output(at_once, 'normalized')
     )
 
 
-def test_a_corrected_member_is_not_counted_twice(
-    client: Client, tmp_path: Path
-) -> None:
-    """
-    Every finalize lists all current members, so a corrected member replaces its
-    old record in the next sum.
-    """
+def test_a_run_acquired_again_is_counted_once(client: Client, tmp_path: Path) -> None:
+    """A series request lists each run once, so applying the rule again is safe."""
     first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')
     source = FakeDatasetSource(first)
     client.backend.sources.append(source)
@@ -598,25 +563,16 @@ def test_a_corrected_member_is_not_counted_twice(
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
     client.wait(loop.run_once())
 
-    # The first run is acquired again and reduced again under its member key.
     write_run(first.path, [5.0, 5.0, 5.0, 5.0])
-    corrected = client.submit_group(apply(client, rule, [first]))
-    finalize = corrected['pid:pid/1+finalize']
-    assert _accumulated(finalize) == [
-        OutputRef(record=corrected['pid:pid/1'].id, output='numerator'),
-        OutputRef(record=client.latest('series', 'pid:pid/2').id, output='numerator'),
-    ]
-    (done,) = client.wait([finalize])
-    assert done.status == Status.COMPLETED, done.failure
-    # The corrected member counts once: 5 + 2 counts per point over a denominator
-    # of 20 from it and 8 from the other member, scaled by 2.
-    normalized = client.output(done, 'normalized')
+    (again,) = client.wait(client.submit_group(apply(client, rule, [first])).values())
+    assert listed(again) == ['pid:pid/1', 'pid:pid/2']
+    assert again.status == Status.COMPLETED, again.failure
+    # 5 + 2 counts per point over a denominator of 20 + 8, scaled by 2.
+    normalized = client.output(again, 'normalized')
     assert list(normalized.values) == [(5.0 + 2.0) / 28.0 * 2.0] * 4
 
 
-def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
-    client: Client, tmp_path: Path
-) -> None:
+def test_an_excluded_run_leaves_the_series(client: Client, tmp_path: Path) -> None:
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
     client.backend.sources.append(source)
     rule = series_rule()
@@ -625,38 +581,41 @@ def test_an_excluded_member_leaves_the_next_finalize_over_the_rest(
     rule.exclusions['pid:pid/1'] = 'bad sample alignment'
 
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2'))
-    member, finalize = client.wait(loop.run_once())
-    assert _accumulated(finalize) == [OutputRef(record=member.id, output='numerator')]
-    # 2 counts per point over the remaining member's total of 8, scaled by 2.
-    normalized = client.output(finalize, 'normalized')
+    (latest,) = client.wait(loop.run_once())
+    assert listed(latest) == ['pid:pid/2']
+    # 2 counts per point over the remaining run's total of 8, scaled by 2.
+    normalized = client.output(latest, 'normalized')
     assert list(normalized.values) == [2.0 / 8.0 * 2.0] * 4
 
 
-def test_a_member_pinned_to_another_value_refuses_the_series(
+def test_runs_a_lookup_fills_otherwise_refuse_the_series(
     client: Client, tmp_path: Path
 ) -> None:
-    """
-    A finalize has the template's values, and a member made with another value
-    for a parameter it sets cannot be accumulated with the others.
-    """
-    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1'))
+    """One request has one value per parameter, so every run is filled alike."""
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1'))
     client.backend.sources.append(source)
-    rule = series_rule()
-    client.wait(TriggerLoop(client, rule).run_once())
+    floors = Lookup(
+        name='floors',
+        entries=(
+            LookupEntry(
+                name='noisy',
+                match={'mode': Like(pattern='noisy')},
+                fills={'floor': 3.0},
+            ),
+        ),
+    )
+    loop = TriggerLoop(client, series_rule(floors))
+    client.wait(loop.run_once())
 
-    second = sample(tmp_path / 'b.h5', [2.0, 2.0, 2.0, 2.0], 'pid/2')
-    source.add(second)
-    group = apply(client, rule, [second], {'pid:pid/2': {'floor': 0.0}})
-    message = r'made with floor=0\.0, this request sets floor=1\.5'
-    with pytest.raises(SubmitError, match=message):
-        client.submit_group(group)
-    assert client.batch('series')[-1].request.member_key == 'sio2'
+    source.add(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2', mode='noisy'))
+    assert loop.run_once() == []
+    assert 'filled otherwise' in loop.refusals['series pid:pid/2']
 
 
-def test_a_series_recovers_from_a_member_that_failed(
+def test_a_series_with_a_failed_run_is_retried_without_it_once_excluded(
     client: Client, tmp_path: Path
 ) -> None:
-    """A failed member is not a current member, so the next finalize leaves it out."""
+    """A run that cannot be read fails the sum, visibly, until someone excludes it."""
     client.backend.sources.append(
         FakeDatasetSource(
             Dataset(
@@ -667,19 +626,20 @@ def test_a_series_recovers_from_a_member_that_failed(
     )
     rule = series_rule()
     loop = TriggerLoop(client, rule)
-    member, finalize = client.wait(loop.run_once())
-    assert member.failure.kind == 'missing-dataset'
-    assert finalize.status == Status.FAILED
+    (failed,) = client.wait(loop.run_once())
+    assert failed.failure.kind == 'missing-dataset'
 
     client.backend.sources.append(
         FakeDatasetSource(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2'))
     )
-    next_member, next_finalize = client.wait(loop.run_once())
-    assert next_member.status == Status.COMPLETED, next_member.failure
-    assert _accumulated(next_finalize) == [
-        OutputRef(record=next_member.id, output='numerator')
-    ]
-    assert next_finalize.status == Status.COMPLETED, next_finalize.failure
+    (still,) = client.wait(loop.run_once())
+    assert listed(still) == ['pid:pid/1', 'pid:pid/2']
+    assert still.failure.kind == 'missing-dataset'
+
+    rule.exclusions['pid:pid/1'] = 'file lost'
+    (recovered,) = client.wait(client.submit_group(retry(client, rule)).values())
+    assert listed(recovered) == ['pid:pid/2']
+    assert recovered.status == Status.COMPLETED, recovered.failure
 
 
 # The batch table

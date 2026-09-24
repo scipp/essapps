@@ -172,15 +172,15 @@ class WorkflowSpec(_WorkflowSpec, frozen=True):
 
     A spec is the signature of a pipeline: every parameter and every value a
     caller may ask for. ``intermediates`` names the outputs that are not results
-    of a plain run but values inside the pipeline: a stage may compute them as
-    outputs, and may take them as inputs in place of what computes them. What
-    depends on what is known only to the binding.
+    of a plain run but values inside the pipeline, such as a detector image,
+    which a request computes only when it names them. What depends on what is
+    known only to the binding.
     """
 
     intermediates: tuple[str, ...] = Field(
         default=(),
-        description="Outputs that a plain run does not compute, and that a stage "
-        "may take as inputs.",
+        description="Outputs that a plain run does not compute; a request "
+        "computes them when it names them.",
     )
 
     @model_validator(mode='after')

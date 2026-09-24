@@ -70,23 +70,16 @@ def assert_stage_equals_workflow(
     names = tuple(values[0])
     outputs = spec.results
     # As the runner does: the spec's defaults fill what neither sets.
-    fields = spec.params.model_fields
     fixed = submodel(
-        spec.params,
-        [
-            name
-            for name, info in fields.items()
-            if name not in names and (name in params or not info.is_required())
-        ],
-        'Fixed',
+        spec.params, [n for n in spec.params.model_fields if n not in names], 'Fixed'
     ).model_validate(params)
     staged = submodel(spec.params, names, 'Staged')
     nothing = submodel(spec.params, (), 'Nothing')()
     stage = workflow.stage(fixed, names, outputs, inputs)
     for i, given in enumerate(values):
         full = spec.params.model_validate({**params, **given})
-        expected = dict(workflow.stage(full, (), outputs, inputs)(nothing, {}, inputs))
-        got = dict(stage(staged.model_validate(given), {}, inputs))
+        expected = dict(workflow.stage(full, (), outputs, inputs)(nothing, inputs))
+        got = dict(stage(staged.model_validate(given), inputs))
         for name in outputs:
             if not equal(got[name], expected[name]):
                 raise AssertionError(

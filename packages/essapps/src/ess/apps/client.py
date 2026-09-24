@@ -76,25 +76,18 @@ class Client:
         A run request from a template, its blanks filled with ``values``.
 
         A spec stands for a template with nothing set and no blanks, so
-        ``values`` are then the parameters of a plain run. A value named among
-        the spec's intermediates is supplied; the rest are parameters, and the
-        blanks among them are what the request varies. Nothing is stored until
-        the request is submitted.
+        ``values`` are then the parameters of a plain run. The template's blanks
+        are what the request varies. Nothing is stored until the request is
+        submitted.
         """
         if not isinstance(template, Template):
             template = Template(spec=template)
         if isinstance(values, BaseModel):
             values = values.model_dump(mode='json', exclude_unset=True)
-        try:
-            intermediates = self.spec(template.spec).intermediates
-        except KeyError:  # validation reports the unknown spec
-            intermediates = ()
-        filled = template.fill(**dict(values or {}))
         return RunRequest(
             spec=template.spec,
-            params={k: v for k, v in filled.items() if k not in intermediates},
-            supplied={k: v for k, v in filled.items() if k in intermediates},
-            vary=tuple(b for b in template.blanks if b not in intermediates),
+            params=template.fill(**dict(values or {})),
+            vary=template.blanks,
             outputs=template.outputs,
             instrument=self.instrument,
             proposal=self.proposal,

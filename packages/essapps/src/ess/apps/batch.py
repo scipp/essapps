@@ -27,12 +27,12 @@ from typing import Any
 import pandas as pd
 from pydantic import BaseModel
 
-from .backend import GROUP_PREFIX, SubmitError
+from .backend import SubmitError
 from .client import Client
-from .records import Accumulate, Origin, RunRecord, RunRequest, Status, Template
-from .rules import AsOf, Lookup, LookupEntry, Rule, Series, matches, precedes
+from .records import Origin, RunRecord, RunRequest, Template
+from .rules import AsOf, Lookup, LookupEntry, Rule, matches, precedes
 from .sources import Dataset
-from .spec import DatasetRef, OutputRef, as_ref
+from .spec import DatasetRef, as_ref, dataset_refs
 
 
 def apply(
@@ -56,36 +56,34 @@ def apply(
     member varies the template's blanks, so members that agree on everything
     else share a workflow ID and a held stage.
 
+    For a rule with a series, a member is a series: the given datasets name the
+    series they belong to, keyed by the series value, and the template's
+    dataset field holds every current member of each, those given included.
+
     The group is returned, not submitted, so that it can be previewed through
-    :meth:`Client.validate` and submitted whole. For a rule with a series, each
-    member's request is followed by a finalize request over every current
-    member of the series it belongs to.
+    :meth:`Client.validate` and submitted whole.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
     )
-    series = of_rule.series if of_rule is not None else None
     lookup = lookup or (of_rule.lookup if of_rule is not None else None)
     label = label or rule.name
     values = _pinned(pinned)
     datasets = list(datasets)
-    members: list[tuple[str, Dataset | None]] = (
-        [(str(d.ref), d) for d in datasets]
-        if datasets
-        else [(key, None) for key in values]
-    )
-    member = template if series is None else template.cut(outputs=series.accumulate)
+    series = of_rule.series if of_rule is not None else None
+    members: dict[str, list[Dataset]]
+    if series is not None and of_rule is not None and datasets:
+        members = _series(client, of_rule, series.key, datasets)
+    elif datasets:
+        members = {str(d.ref): [d] for d in datasets}
+    else:
+        members = {key: [] for key in values}
     group: dict[str, RunRequest] = {}
-    arrived: dict[str, list[str]] = {}
-    for key, dataset in members:
-        entry = (
-            lookup.entry(dataset)
-            if lookup is not None and dataset is not None
-            else None
-        )
+    for key, member in members.items():
+        fill, entry = _fill(client, template, lookup, member, series=series is not None)
         group[key] = client.request(
-            member,
-            _member_fill(client, template, entry, dataset) | values.get(key, {}),
+            template,
+            fill | values.get(key, {}),
             label=label,
             member_key=key,
             origin=Origin(
@@ -96,105 +94,75 @@ def apply(
                 pinned=dict(values.get(key, {})),
             ),
         )
-        if of_rule is not None and series is not None and dataset is not None:
-            if series.key not in dataset.fields:
-                raise ValueError(
-                    f'{dataset.ref} has no field {series.key!r} to key a series'
-                )
-            value = str(dataset.fields[series.key])
-            arrived.setdefault(value, []).append(key)
-            group[f'{key}+finalize'] = _finalize(
-                client, of_rule, series, label, value, group, arrived[value]
-            )
     return group
 
 
-def _finalize(
-    client: Client,
-    rule: Rule,
-    series: Series,
-    label: str,
-    value: str,
-    group: Mapping[str, RunRequest],
-    arrived: Iterable[str],
-) -> RunRequest:
+def _series(
+    client: Client, rule: Rule, key: str, datasets: Iterable[Dataset]
+) -> dict[str, list[Dataset]]:
     """
-    The finalize request one arrival of a series submits: the accumulation of
-    every current member of the series, those in this group included.
+    The current members of each series the datasets belong to, by series value.
 
-    It is the rule's template cut from the accumulated intermediates to the
-    series' outputs, so it has the template's values, and the backend refuses
-    it if a member it accumulates set any of them otherwise. Because every
-    finalize lists every current member, a corrected, excluded, or failed
-    member is simply not among them. Serving part of the sum from a previous
-    finalize is a cache a runner may keep, and never in the request.
+    The members of a series are the datasets with its value of the series key
+    that the rule's selector matches and that are not excluded, in the order the
+    sources list them. The bound does not apply: a series that began before it
+    is one series.
     """
-    members = _current_members(client, rule, series, label, value)
-    members |= {str(group[name].member_key): GROUP_PREFIX + name for name in arrived}
-    return client.request(
-        rule.template.cut(blanks=series.accumulate, outputs=series.outputs),
-        {
-            name: Accumulate(
-                accumulate=[OutputRef(record=r, output=name) for r in members.values()]
-            )
-            for name in series.accumulate
-        },
-        label=label,
-        member_key=value,
-        origin=Origin(template=rule.template.id, rule=rule.id),
-    )
+    given: dict[str, list[Dataset]] = {}
+    for dataset in datasets:
+        if key not in dataset.fields:
+            raise ValueError(f'{dataset.ref} has no field {key!r} to key a series')
+        given.setdefault(str(dataset.fields[key]), []).append(dataset)
+    members: dict[str, dict[str, Dataset]] = {value: {} for value in given}
+    for dataset in [*client.datasets(), *(d for g in given.values() for d in g)]:
+        value = str(dataset.fields.get(key))
+        if (
+            value in members
+            and rule.selector.selects(dataset)
+            and str(dataset.ref) not in rule.exclusions
+        ):
+            members[value].setdefault(str(dataset.ref), dataset)
+    return {value: list(found.values()) for value, found in members.items()}
 
 
-def _accumulates(request: RunRequest) -> bool:
-    """Whether a request is a finalize: a supplied intermediate is an accumulation."""
-    return any(
-        isinstance(v, dict) and set(v) == {'accumulate'}
-        for v in request.supplied.values()
-    )
-
-
-def _current_members(
-    client: Client, rule: Rule, series: Series, label: str, value: str
-) -> dict[str, str]:
-    """
-    The current members of one series: record ID by member key.
-
-    The latest record per member key under the label that is a member of this
-    rule's template, is not excluded, did not fail or get cancelled, and whose
-    dataset still carries this series value.
-    """
-    known = {str(dataset.ref): dataset for dataset in client.datasets()}
-    members: dict[str, str] = {}
-    for record in client.batch(label):
-        key = str(record.request.member_key)
-        dataset = known.get(key)
-        if record.spec != rule.template.spec or _accumulates(record.request):
-            continue
-        if key in rule.exclusions:
-            continue
-        if record.status in (Status.FAILED, Status.CANCELLED):
-            continue
-        if dataset is None or str(dataset.fields.get(series.key)) != value:
-            continue
-        members[key] = record.id
-    return members
-
-
-def _member_fill(
+def _fill(
     client: Client,
     template: Template,
-    entry: LookupEntry | None,
-    dataset: Dataset | None,
-) -> dict[str, Any]:
-    """The dataset's own field plus the lookup entry's, an as-of fill resolved."""
-    if dataset is None:
-        return {}
-    fills = {template.field_for_dataset(): dataset.ref}
-    for field, value in (entry.fills if entry is not None else {}).items():
-        fills[field] = (
-            _as_of(client, dataset, field, value) if isinstance(value, AsOf) else value
-        )
-    return fills
+    lookup: Lookup | None,
+    datasets: list[Dataset],
+    *,
+    series: bool,
+) -> tuple[dict[str, Any], LookupEntry | None]:
+    """
+    What datasets fill, and the lookup entry they matched.
+
+    The template's dataset field gets the dataset, or for a series the list of
+    them, and the fields of the matched lookup entry their values, an as-of
+    fill resolved. A series is one request, so its members must match one entry
+    that fills the same values for each of them.
+    """
+    if not datasets:
+        return {}, None
+    fills = []
+    for dataset in datasets:
+        entry = lookup.entry(dataset) if lookup is not None else None
+        values = {
+            field: _as_of(client, dataset, field, value)
+            if isinstance(value, AsOf)
+            else value
+            for field, value in (entry.fills if entry is not None else {}).items()
+        }
+        fills.append((entry, values))
+    for dataset, fill in zip(datasets[1:], fills[1:], strict=True):
+        if fill != fills[0]:
+            raise ValueError(
+                f'{dataset.ref} is filled otherwise than {datasets[0].ref}, '
+                'and a series is filled alike for every member'
+            )
+    refs = [dataset.ref for dataset in datasets]
+    entry, values = fills[0]
+    field = template.field_for_dataset()
+    return {field: refs if series else refs[0]} | values, entry
 
 
 def _as_of(client: Client, dataset: Dataset, field: str, as_of: AsOf) -> DatasetRef:
@@ -287,24 +255,22 @@ def retry(
     return _again(client, rule, client.members_to_retry(label), label=label)
 
 
-def _selected_members(
-    known: Mapping[str, Dataset], rule: Rule | Template, records: Iterable[RunRecord]
-) -> list[RunRecord]:
-    """Records of ``records`` that are members: a known dataset, not excluded.
-
-    A finalize of a series is under the same label; it is told from a member
-    by its accumulated intermediates.
+def _datasets(
+    known: Mapping[str, Dataset], rule: Rule | Template, record: RunRecord
+) -> list[Dataset]:
     """
-    excluded = rule.exclusions if isinstance(rule, Rule) else {}
-    spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
-    return [
-        record
-        for record in records
-        if record.spec == spec
-        and not _accumulates(record.request)
-        and record.request.member_key in known
-        and record.request.member_key not in excluded
-    ]
+    The known datasets a record was made from.
+
+    That is its member key, or for a rule with a series every dataset its
+    dataset field lists. A batch made by hand is keyed by names that are no
+    dataset, and has none.
+    """
+    if isinstance(rule, Rule) and rule.series is not None:
+        listed = record.request.params.get(rule.template.field_for_dataset())
+        keys = [str(ref) for ref in dataset_refs(listed)]
+    else:
+        keys = [str(record.request.member_key)]
+    return [known[key] for key in keys if key in known]
 
 
 def _again(
@@ -316,21 +282,30 @@ def _again(
 ) -> dict[str, RunRequest]:
     """Apply again over the datasets of these records, carrying the pinned values."""
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
-    members = _selected_members(known, rule, records)
-    return apply(
-        client,
-        rule,
-        [known[str(r.request.member_key)] for r in members],
-        {str(r.request.member_key): r.request.origin.pinned for r in members},
-        label=label,
+    excluded = rule.exclusions if isinstance(rule, Rule) else {}
+    spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
+    datasets: dict[str, Dataset] = {}
+    pinned: dict[str, dict[str, Any]] = {}
+    for record in records:
+        found = [
+            d
+            for d in _datasets(known, rule, record)
+            if record.spec == spec and str(d.ref) not in excluded
+        ]
+        datasets |= {str(d.ref): d for d in found}
+        if found:
+            pinned[str(record.request.member_key)] = record.request.origin.pinned
+    return apply(client, rule, datasets.values(), pinned, label=label)
+
+
+def _without_pinned(
+    client: Client, rule: Rule, datasets: list[Dataset]
+) -> dict[str, Any]:
+    """The template and lookup fill for datasets, before what a person pinned."""
+    fill, _ = _fill(
+        client, rule.template, rule.lookup, datasets, series=rule.series is not None
     )
-
-
-def _without_pinned(client: Client, rule: Rule, dataset: Dataset) -> dict[str, Any]:
-    """The template and lookup fill for a dataset, before what a person pinned."""
-    template = rule.template
-    entry = rule.lookup.entry(dataset) if rule.lookup is not None else None
-    return template.params | _member_fill(client, template, entry, dataset)
+    return rule.template.params | fill
 
 
 def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
@@ -349,12 +324,13 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
     in :func:`batch_table`: the leaves of a pinned field whose fill changed.
     """
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
-    members = _selected_members(known, rule, _stale(client, rule))
     rows: list[dict[str, Any]] = []
-    for record in members:
-        dataset = known[str(record.request.member_key)]
-        was = _without_pinned(client, previous, dataset)
-        now = _without_pinned(client, rule, dataset)
+    for record in _stale(client, rule):
+        datasets = _datasets(known, rule, record)
+        if record.spec != rule.template.spec or not datasets:
+            continue
+        was = _without_pinned(client, previous, datasets)
+        now = _without_pinned(client, rule, datasets)
         for field, value in record.request.origin.pinned.items():
             pinned = _leaves(field, value)
             before = _leaves(field, was.get(field))
@@ -387,8 +363,9 @@ def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatu
 
     The clauses are the loop's: the rule is active, the selector matches, the
     dataset lies after the rule's bound, it is not excluded, and no record
-    exists under the rule's label with it as member key, unless the retry policy
-    names the failure of the records that do. A facility adds one clause here,
+    exists under the rule's label with it as member key, or for a series no
+    record of its series that lists it, unless the retry policy names the
+    failure of the records that do. A facility adds one clause here,
     that the dataset's catalogue entry does not carry our provenance snapshot,
     which the local application has no catalogue for.
     """
@@ -401,7 +378,16 @@ def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatu
         return TriggerStatus(fires=False, reason="before the rule's bound")
     if (reason := rule.exclusions.get(member)) is not None:
         return TriggerStatus(fires=False, reason=f'excluded: {reason}')
-    records = client.records(label=rule.name, member_key=member)
+    if rule.series is None:
+        records = client.records(label=rule.name, member_key=member)
+    else:
+        value = str(dataset.fields.get(rule.series.key))
+        field = rule.template.field_for_dataset()
+        records = [
+            record
+            for record in client.records(label=rule.name, member_key=value)
+            if dataset.ref in dataset_refs(record.request.params.get(field))
+        ]
     if not records:
         return TriggerStatus(fires=True, reason='no record under the label yet')
     failure = records[-1].failure

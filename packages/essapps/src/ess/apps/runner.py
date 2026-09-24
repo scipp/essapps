@@ -42,15 +42,13 @@ from .binding import (
     as_workflow,
     import_object,
 )
-from .records import Accumulate, Failure, RunResult, Status
+from .records import Failure, RunResult, Status
 from .spec import (
     ArraySpec,
-    Format,
     OutputRef,
     Ref,
     SpecId,
     WorkflowSpec,
-    as_ref,
     data_fields,
     dataset_refs,
     submodel,
@@ -82,14 +80,12 @@ class Job(BaseModel, frozen=True):
     What a runner is given: a run request with its literal references inlined.
 
     ``workflow`` is the request's workflow ID, which names the stage a session
-    holds; ``params`` are the request's parameters, defaults filled, ``vary``
-    the ones the stage takes as inputs, and ``supplied`` the intermediates
-    supplied in place of what computes them.
+    holds; ``params`` are the request's parameters, defaults filled, and
+    ``vary`` the ones the stage takes as inputs.
     """
 
     workflow: str
     params: dict[str, Any]
-    supplied: dict[str, Any]
     vary: tuple[str, ...]
     outputs: tuple[str, ...]
 
@@ -164,7 +160,7 @@ class Runner:
     """
     Executes runs; with ``keep`` it is a session and holds stages between runs.
 
-    ``stages`` caps how many stages, and how many accumulators, it holds at once.
+    ``stages`` caps how many stages it holds at once.
     A runner without ``keep`` builds the stage a request names, calls it once,
     and holds nothing.
 
@@ -172,6 +168,9 @@ class Runner:
     size, mtime). A session that reruns a workflow over the same hundreds of
     megabytes therefore spends the sha256 once rather than on every rerun. A
     throwaway runner runs once, so it hashes each file it reads once either way.
+    A session also keeps the checksum each dataset had when it read it, and a
+    dataset whose bytes changed since drops every stage it holds: a held stage
+    knows its datasets, the runs of a sum included, by identity alone.
     """
 
     def __init__(self, *, keep: bool, stages: int = 4) -> None:
@@ -179,6 +178,7 @@ class Runner:
         self._workflows: dict[SpecId, Workflow] = {}
         self._stages = Stages(limit=stages) if keep else None
         self._digests: dict[tuple[Path, int, int], str] = {}
+        self._read: dict[str, str] = {}
 
     def _checksum(self, path: Path) -> str:
         stat = path.stat()
@@ -242,51 +242,34 @@ class Runner:
             fixed_values = {k: v for k, v in job.params.items() if k not in job.vary}
             fixed = submodel(
                 spec.params,
-                [
-                    name
-                    for name, info in spec.params.model_fields.items()
-                    if name not in job.vary
-                    and (name in fixed_values or not info.is_required())
-                ],
+                [name for name in spec.params.model_fields if name not in job.vary],
                 'Fixed',
             ).model_validate(fixed_values)
             varied = submodel(spec.params, job.vary, 'Varied').model_validate(
                 {name: job.params[name] for name in job.vary}
             )
-            result.checksums = self._checksums({**job.params, **job.supplied}, inputs)
+            result.checksums = self._checksums(job.params, inputs)
             workflow = self._workflow(spec, binding.factory)
             outputs_ = tuple(job.outputs)
-            stage_inputs = (*job.vary, *job.supplied)
 
             def build() -> StageCall:
-                return workflow.stage(fixed, stage_inputs, outputs_, inputs)
+                return workflow.stage(fixed, job.vary, outputs_, inputs)
 
             if self._stages is None or isinstance(workflow, FunctionWorkflow):
                 # A plain function has no graph to cut, so its stage holds nothing.
                 call = build()
             else:
-                held = {str(ref) for ref in dataset_refs(fixed_values)}
-                name = (
-                    job.workflow,
-                    tuple(sorted(job.vary)),
-                    tuple(sorted(job.supplied)),
-                    outputs_,
-                    tuple(sorted(c for c in result.checksums.items() if c[0] in held)),
+                changed = any(
+                    self._read.get(ref, checksum) != checksum
+                    for ref, checksum in result.checksums.items()
                 )
+                if changed:
+                    self._stages.clear()
+                self._read |= result.checksums
+                name = (job.workflow, tuple(sorted(job.vary)), outputs_)
                 call, result.reused = self._stages.stage(name, build)
-            values = {}
-            for name, value in job.supplied.items():
-                values[name], reused = self._intermediate(
-                    spec, workflow, job.workflow, name, value, inputs
-                )
-                result.reused |= reused
             self._store(
-                record_id,
-                result,
-                spec,
-                outputs_,
-                dict(call(varied, values, inputs)),
-                outputs,
+                record_id, result, spec, outputs_, dict(call(varied, inputs)), outputs
             )
             result.status = Status.COMPLETED
         except Exception as e:
@@ -294,44 +277,6 @@ class Runner:
             result.failure = _failure(e)
         result.finished = datetime.now(UTC)
         return result
-
-    def _intermediate(
-        self,
-        spec: WorkflowSpec,
-        workflow: Workflow,
-        workflow_id: str,
-        name: str,
-        value: Any,
-        inputs: Inputs,
-    ) -> tuple[Any, bool]:
-        """
-        The object an intermediate input stands for, and whether held state served it.
-
-        A reference is loaded in the form the intermediate's format says; a
-        literal was put in place of its reference at dispatch; an
-        :class:`Accumulate` is loaded element by element and accumulated with
-        the workflow's accumulator for the input, which a session may hold.
-        """
-        field = data_fields(spec.outputs).get(name)
-        if field is None:
-            return value, False
-
-        def load(ref: Ref) -> Any:
-            if field.format is Format.SCIPP:
-                return inputs.array(ref)
-            return inputs.path(ref)
-
-        if (ref := as_ref(value)) is not None:
-            return load(ref), False
-        refs = Accumulate.model_validate(value).accumulate
-        if self._stages is None:
-            accumulator = workflow.accumulator(name)
-            for element in refs:
-                accumulator.push(load(element))
-            return accumulator.value, False
-        return self._stages.accumulate(
-            (workflow_id, name), refs, lambda: workflow.accumulator(name), load
-        )
 
     def _store(
         self,

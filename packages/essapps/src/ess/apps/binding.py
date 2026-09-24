@@ -4,8 +4,8 @@
 Binding specs to code.
 
 A workflow is the code behind a spec: given the parameters of a run request
-that it does not vary, it builds the stage the request cuts, from the stage's
-inputs to its outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
+that it does not vary, it builds the stage from the varied ones to the
+outputs, as ``sciline.Stage`` does for a pipeline. The params model holds
 references where the request does; the code asks the runner's :class:`Inputs`
 for the form it wants, a local path or a scipp object, so which form each
 parameter takes is decided here, next to the sciline key it maps to, and never
@@ -67,39 +67,23 @@ class StageCall(Protocol):
     """
     One stage of a workflow, called once per run record.
 
-    ``params`` holds the parameters the request varies, ``intermediates`` the
-    intermediates it supplies, already as objects, and the result
-    holds the stage's outputs by field name.
+    ``params`` holds the parameters the request varies, and the result holds
+    the stage's outputs by field name.
     """
 
-    def __call__(
-        self, params: BaseModel, intermediates: Mapping[str, Any], inputs: Inputs
-    ) -> Mapping[str, Any]: ...
-
-
-class Accumulator(Protocol):
-    """sciline's accumulator: push values, read their accumulation."""
-
-    def push(self, value: Any) -> None: ...
-
-    @property
-    def value(self) -> Any: ...
+    def __call__(self, params: BaseModel, inputs: Inputs) -> Mapping[str, Any]: ...
 
 
 class Workflow(Protocol):
     """
-    The code behind a spec: builds the stages that run requests cut.
+    The code behind a spec: builds the stages a session holds.
 
-    ``params`` holds the request's parameters that it does not vary, with the
-    spec's defaults for the fields it does not set; ``inputs`` names the
-    parameters it varies and the intermediates it supplies, and ``outputs`` the
-    outputs to compute. What a stage holds between calls is what its inputs cannot
-    affect, so holding it is a cache and dropping it always safe. A stage that
-    leaves a needed parameter unset fails here or when called, since only the
-    code knows what depends on what.
-
-    ``accumulator`` gives a fresh accumulator for an intermediate that an
-    :class:`ess.apps.records.Accumulate` may fill.
+    ``params`` holds the request's parameters that it does not vary, ``inputs``
+    names the parameters it varies, and ``outputs`` the outputs to compute.
+    What a stage holds between calls is what its inputs cannot affect, so
+    holding it is a cache and dropping it always safe. A sum over runs is a
+    parameter that holds a list of runs, and the stage sums them; which
+    parameters a caller varies never decides whether a run succeeds.
     """
 
     def stage(
@@ -110,16 +94,13 @@ class Workflow(Protocol):
         data: Inputs,
     ) -> StageCall: ...
 
-    def accumulator(self, name: str) -> Accumulator: ...
-
 
 class FunctionWorkflow:
     """
     A plain function ``(params, inputs) -> outputs`` as a workflow.
 
-    A function has no graph to cut, so its only stages are those whose inputs
-    are parameters; they compute everything and hold nothing, and the outputs
-    not asked for are dropped. Nothing it computes can be accumulated.
+    A function has no graph to cut, so its stages compute everything and hold
+    nothing, and the outputs not asked for are dropped.
     """
 
     def __init__(
@@ -137,25 +118,14 @@ class FunctionWorkflow:
         outputs: Collection[str],
         data: Inputs,
     ) -> StageCall:
-        intermediates = set(inputs) - set(self._spec.params.model_fields)
-        if intermediates:
-            raise ValueError(
-                f'{self._spec.id} is a plain function and takes no intermediates; '
-                f'asked for {sorted(intermediates)}'
-            )
         fixed = params.model_dump()
 
-        def call(
-            params: BaseModel, intermediates: Mapping[str, Any], inputs: Inputs
-        ) -> dict[str, Any]:
+        def call(params: BaseModel, inputs: Inputs) -> dict[str, Any]:
             full = self._spec.params.model_validate({**fixed, **params.model_dump()})
             computed = self._function(full, inputs)
             return {name: computed[name] for name in outputs if name in computed}
 
         return call
-
-    def accumulator(self, name: str) -> Accumulator:
-        raise ValueError(f'{self._spec.id} is a plain function and accumulates nothing')
 
 
 def as_workflow(code: Any, spec: WorkflowSpec) -> Workflow:

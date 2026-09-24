@@ -28,13 +28,9 @@ def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> 
     """NORMALIZE's sum over runs stands in for the stitch over angles."""
     rule = Rule(
         name='reflectivity',
-        template=Template(name='normalize-defaults', spec=NORMALIZE, blanks=('run',)),
+        template=Template(name='normalize-defaults', spec=NORMALIZE, blanks=('runs',)),
         selector=Selector(match={'role': Like(pattern='sample')}),
-        series=Series(
-            key='sample',
-            accumulate=('numerator', 'denominator'),
-            outputs=('normalized',),
-        ),
+        series=Series(key='sample'),
     )
     loop = TriggerLoop(client, rule)
 
@@ -47,13 +43,11 @@ def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> 
     loop.run_once()
     curve = client.latest('reflectivity', 'si')
 
-    assert batch_table(client, rule).index.tolist() == [
-        'run:dream/2',
-        'run:dream/3',
-        'run:dream/4',
-        'si',
+    assert batch_table(client, rule).index.tolist() == ['si']
+    assert len(client.records(label='reflectivity', member_key='si')) == 2
+    assert curve.request.datasets() == [
+        dataset.ref for dataset in client.datasets() if dataset.fields.get('sample')
     ]
-    assert len(client.records(label='reflectivity', member_key='si')) == 3
     assert client.output(curve, 'normalized').values.tolist() == [4.0 / 9.0, 5.0 / 9.0]
 
 

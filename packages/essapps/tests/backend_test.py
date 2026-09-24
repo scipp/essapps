@@ -100,19 +100,17 @@ def test_a_varied_parameter_is_recorded_in_params_and_named_in_vary(
     assert record.status == Status.COMPLETED, record.failure
     assert record.request.params['scale'] == 2.0
     assert record.request.vary == ('scale',)
-    assert record.request.supplied == {}
 
 
-def test_a_plain_run_records_what_it_would_without_vary_and_supplied(
+def test_a_plain_run_records_what_it_would_without_vary(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    """A plain run's record is the record of a run with nothing varied or supplied."""
+    """A plain run's record is the record of a run with nothing varied."""
     record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     dumped = client.record(record.id).request.model_dump(mode='json')
     assert dumped == {
         'spec': {'name': 'load', 'version': 1},
         'params': {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0},
-        'supplied': {},
         'outputs': ['data', 'total'],
         'vary': [],
         'instrument': 'dream',
@@ -184,7 +182,6 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert record.request.params['run'] == {'dataset': 'run:dream/1'}
     provenance = client.provenance(record)
     assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
-    assert provenance['supplied'] == []
     assert provenance['outputs'] == ['data', 'total']
 
 
@@ -414,7 +411,7 @@ def test_validation_reports_errors_before_any_record_exists(
 
 
 def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> None:
-    """A request that supplies no intermediate is checked against the whole model."""
+    """Every request is checked against the whole params model."""
     report = client.validate(client.request(LOAD, {}))
     assert report.errors == ('run: Field required',)
     with pytest.raises(SubmitError, match='run: Field required'):
@@ -422,22 +419,19 @@ def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> No
 
 
 @pytest.mark.parametrize(
-    ('params', 'supplied', 'vary', 'outputs', 'message'),
+    ('params', 'vary', 'outputs', 'message'),
     [
-        ({}, {'bogus': 1}, (), (), 'bogus: not an intermediate'),
-        ({}, {'scale': 3.0}, (), (), 'scale: not an intermediate'),
-        ({}, {}, ('bogus',), (), 'bogus: varied but not a parameter'),
-        ({}, {}, (), ('nope',), 'not an output'),
-        ({'scale': 'x'}, {}, ('scale',), (), 'scale'),
+        ({}, ('bogus',), (), 'bogus: varied but not a parameter'),
+        ({}, (), ('nope',), 'not an output'),
+        ({'scale': 'x'}, ('scale',), (), 'scale'),
     ],
 )
 def test_validation_checks_the_names_of_a_request(
-    client: Client, run_ref: DatasetRef, params, supplied, vary, outputs, message
+    client: Client, run_ref: DatasetRef, params, vary, outputs, message
 ) -> None:
     request = RunRequest(
         spec=LOAD.id,
         params={'run': run_ref, **params},
-        supplied=supplied,
         vary=vary,
         outputs=outputs,
         instrument=client.instrument,
