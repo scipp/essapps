@@ -198,6 +198,41 @@ A beam centre found in one view and used in the next is a parameter whose value 
 In sciline terms, setting a key replaces its provider, so no separate notion of a supplied intermediate is needed.
 If the author wants the finder to run when no value is given, the parameter is optional and the binding sets the key only when a value is present.
 
+### Reducing the runs of a sum on separate nodes
+
+A sum inside one request runs in one process.
+To spread the runs over nodes, compose two specs over references, as `SUM` and the amor stitch already do:
+
+```python
+# CONTRIBUTE and COMBINE are illustrative: one run to numerator and denominator,
+# and a list of numerators and denominators to I(Q).
+member = Template(spec=CONTRIBUTE, params={'floor': 1.5}, blanks=('run',))
+parts = [client.run(member, {'run': r}) for r in runs]    # independent requests
+total = client.run(COMBINE, {
+    'numerators': [p.ref('numerator') for p in parts],
+    'denominators': [p.ref('denominator') for p in parts],
+    'scale': 2.0,
+})
+```
+
+Each record describes only its own computation.
+`COMBINE`'s record says which outputs it combined and with which `scale`, and claims nothing about the masks of the members.
+The members are one reference away.
+
+This costs three things compared with one request over a list:
+
+- **The intermediates become outputs.**
+  `CONTRIBUTE` must expose the numerator and denominator with a format the store can write, because they leave the run.
+- **Nothing checks that the pieces fit.**
+  A combine over members reduced with different masks is accepted.
+  A parameter read on both sides, such as a wavelength band, is set twice and never compared.
+  Making every member from one template, as above, makes them agree by construction.
+- **Members in other processes reach the combine through disk.**
+  Only in one process can the intermediates stay in memory.
+
+A rule cannot drive this.
+`Series` fills a dataset field with the current runs of the series, not a list of references to the records of another rule.
+
 ## The binding
 
 A sciline binding names its member parameters and gives an accumulator per accumulation key:
@@ -273,8 +308,10 @@ All 246 tests pass, and the stories S6 and B1 move from expected failures to pas
 
 ## Costs
 
-- **The runs of one sum no longer reduce in parallel across processes.**
+- **The runs of one request over a list do not reduce in parallel across processes.**
   Inside one run, the scheduler of the stages can still run them in parallel.
+  Across processes, a client composes two specs over references ([above](#reducing-the-runs-of-a-sum-on-separate-nodes)), with its intermediates as outputs and no check that the pieces fit.
+  A rule cannot do that composition.
   No user story needs one sum spread over several nodes: the large-batch stories (D1, D2) are independent runs, which stay one request each.
 - **A series under a rule, without a session, reduces all k runs on the k-th arrival.**
   With member records, the k-th finalize read k stored contributions.
@@ -299,7 +336,7 @@ All 246 tests pass, and the stories S6 and B1 move from expected failures to pas
 
 ## Open questions
 
-1. Is there a real case of one sum whose runs must be reduced on separate nodes?
+1. Is there a real case of a sum under a rule whose runs must be reduced on separate nodes? Interactively, composing two specs covers it.
 2. Do scientists want a sum with one unreadable run to fail visibly, rather than be summed without it?
 3. Should `vary` stay on the record at all? Only the session reads it.
 4. When is the disk cache of contributions needed? A measurement of a real SANS series under a rule would tell.
