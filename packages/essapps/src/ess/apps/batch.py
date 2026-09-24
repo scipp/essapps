@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from .backend import SubmitError
 from .client import Client
-from .records import Origin, RunRecord, RunRequest, Template
+from .records import Group, Origin, RunRecord, RunRequest, Template
 from .rules import AsOf, Lookup, LookupEntry, Rule, matches, precedes
 from .sources import Dataset
 from .spec import DatasetRef, as_ref, dataset_refs
@@ -43,7 +43,7 @@ def apply(
     *,
     lookup: Lookup | None = None,
     label: str | None = None,
-) -> dict[str, RunRequest]:
+) -> Group:
     """
     Make requests from a rule, or from a template with its lookup.
 
@@ -59,9 +59,9 @@ def apply(
     dataset field holds every current member of each, those given included.
 
     The group is returned, not submitted, so that it can be previewed through
-    :meth:`Client.validate` and submitted whole. Submitted with the template's
-    blanks as ``vary``, members that agree on everything else share a held
-    stage in a session.
+    :meth:`Client.validate` and submitted whole. It carries the template's
+    blanks as what its members vary, so that members that agree on everything
+    else share a held stage in a session.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -94,7 +94,7 @@ def apply(
                 pinned=dict(values.get(key, {})),
             ),
         )
-    return group
+    return Group(group, template.blanks)
 
 
 def _series(
@@ -203,7 +203,7 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, float) and value != value)
 
 
-def backlog(client: Client, rule: Rule) -> dict[str, RunRequest]:
+def backlog(client: Client, rule: Rule) -> Group:
     """
     The datasets before the rule's bound that its selector matches.
 
@@ -231,7 +231,7 @@ def _stale(client: Client, rule: Rule) -> list[RunRecord]:
     ]
 
 
-def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
+def reprocess(client: Client, rule: Rule) -> Group:
     """
     The members whose latest record under the label came from an older rule version.
 
@@ -244,7 +244,7 @@ def reprocess(client: Client, rule: Rule) -> dict[str, RunRequest]:
 
 def retry(
     client: Client, rule: Rule | Template, *, label: str | None = None
-) -> dict[str, RunRequest]:
+) -> Group:
     """
     The members under a label whose latest record failed or was cancelled.
 
@@ -279,7 +279,7 @@ def _again(
     records: Iterable[RunRecord],
     *,
     label: str | None = None,
-) -> dict[str, RunRequest]:
+) -> Group:
     """Apply again over the datasets of these records, carrying the pinned values."""
     known = {str(dataset.ref): dataset for dataset in client.datasets()}
     excluded = rule.exclusions if isinstance(rule, Rule) else {}
@@ -431,9 +431,7 @@ class TriggerLoop:
                     continue
                 try:
                     group = apply(self.client, rule, [dataset])
-                    fired += self.client.submit_group(
-                        group, rule.template.blanks
-                    ).values()
+                    fired += self.client.submit_group(group).values()
                 except (SubmitError, ValueError) as e:
                     self.refusals[f'{rule.name} {dataset.ref}'] = str(e)
         return fired

@@ -13,7 +13,7 @@ See docs/developer/records.md.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
@@ -238,6 +238,36 @@ class Template(BaseModel, frozen=True):
             f'{self} has blanks {list(self.blanks)}; name the one a dataset '
             'fills in dataset_field'
         )
+
+
+class Group(Mapping[str, RunRequest]):
+    """
+    Requests made from one template, by member key, and what they vary.
+
+    ``vary`` is the template's blanks, the hint a session needs to hold one
+    stage for members that agree on everything else. The group carries it so
+    that whoever submits the group need not name the template again. A plain
+    mapping of requests submits with nothing varied. Read-only, so that no copy
+    or merge drops ``vary`` in silence.
+    """
+
+    def __init__(
+        self, requests: Mapping[str, RunRequest], vary: Iterable[str]
+    ) -> None:
+        self._requests = dict(requests)
+        self.vary = tuple(vary)
+
+    def __getitem__(self, key: str) -> RunRequest:
+        return self._requests[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._requests)
+
+    def __len__(self) -> int:
+        return len(self._requests)
+
+    def __repr__(self) -> str:
+        return f'Group({self._requests!r}, vary={self.vary!r})'
 
 
 class Derivation(BaseModel, frozen=True):

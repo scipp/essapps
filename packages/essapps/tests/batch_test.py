@@ -150,6 +150,23 @@ def test_apply_without_datasets_is_the_batch_form(
     ]
 
 
+def test_a_group_from_apply_shares_a_held_stage_and_a_plain_mapping_does_not(
+    client: Client, scan: dict[str, DatasetRef]
+) -> None:
+    sums = Template(
+        spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0}, blanks=('runs',)
+    )
+    runs = list(scan.values())
+    pinned = {'one': {'runs': runs[:1]}, 'both': {'runs': runs}}
+    group = apply(client, sums, pinned=pinned, label='sums')
+    assert group.vary == ('runs',)
+    held = client.submit_group(group)
+    assert held['both'].reused
+    plain = client.submit_group(dict(apply(client, sums, pinned=pinned, label='p')))
+    assert not any(r.reused for r in plain.values())
+    assert held['both'].request.params == plain['both'].request.params
+
+
 def test_apply_accepts_a_frame_indexed_by_member_key(
     client: Client, template: Template, scan: dict[str, DatasetRef]
 ) -> None:

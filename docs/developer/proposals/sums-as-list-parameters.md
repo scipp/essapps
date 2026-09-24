@@ -166,10 +166,14 @@ Where a session cuts the pipeline does not change the result, so the record does
 The names a caller varies travel with the submission, not with the request:
 
 ```python
-client.run(tune, {'scale': 2.0})                        # submitted with tune.blanks
-client.submit(request, vary=('scale',))                 # the same, by hand
-client.submit_group(apply(client, rule, datasets), rule.template.blanks)
+client.run(tune, {'scale': 2.0})                 # submitted with tune.blanks
+client.submit(request, vary=('scale',))          # the same, by hand
+group = apply(client, rule, datasets)            # a Group: the requests, and
+group.vary                                       # the rule template's blanks
+client.submit_group(group)                       # submitted with group.vary
 ```
+
+A plain mapping of requests submits with nothing varied.
 
 The record of a call through a held stage equals the record of a plain run with the same values.
 Whether a held stage served it is in `reused`, which publication checks.
@@ -318,13 +322,13 @@ Unchanged:
 New:
 
 - `PipelineAdapter(members=...)`;
-- `vary` on `Backend.submit`, `Client.submit`, and `Client.submit_group`;
+- `vary` on `Backend.submit` and `Client.submit`, and `Group`, the requests `apply` makes with the template's blanks, which `Client.submit_group` passes on;
 - a session keeps the checksum each dataset had when it read it, and drops every held stage when a dataset's bytes change.
   A held stage knows the runs of a sum by identity, and a run acquired again keeps its identity.
   This replaces the checksums in the name of a held stage.
 
 In the skeleton, the source is about 150 lines shorter.
-All 248 tests pass, and the stories S6 and B1 move from expected failures to passes.
+All 249 tests pass, and the stories S6 and B1 move from expected failures to passes.
 
 ## Costs
 
@@ -344,8 +348,8 @@ All 248 tests pass, and the stories S6 and B1 move from expected failures to pas
 - **A changed dataset empties the session's whole store**, not only the stages that read it.
   Datasets change rarely, and the rule is simple.
 - **`sciline.Buffered` still holds every contribution in memory**, as before.
-- **A caller who submits a group from `apply` passes the template's blanks**, or its members share no held stage.
-  The trigger loop does this itself; a notebook or form that calls `submit_group` must too.
+- **A group assembled by hand varies nothing**, so its members share no held stage.
+  A form that picks requests one by one calls `apply` once over all of them instead, as `loki-batch-ui.ipynb` does.
 
 ## Upstream
 

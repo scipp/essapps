@@ -18,7 +18,7 @@ from .backend import Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
-from .records import Origin, RunRecord, RunRequest, Status, Template
+from .records import Group, Origin, RunRecord, RunRequest, Status, Template
 from .sources import Dataset, DatasetSource
 from .spec import (
     Format,
@@ -103,10 +103,14 @@ class Client:
         """Submit one request; ``vary`` is the hint of :meth:`Backend.submit`."""
         return self.backend.submit({'request': request}, vary)['request']
 
-    def submit_group(
-        self, group: Mapping[str, RunRequest], vary: Collection[str] = ()
-    ) -> dict[str, RunRecord]:
-        """Submit together; ``@name`` in a reference names a member of the group."""
+    def submit_group(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+        """
+        Submit together; ``@name`` in a reference names a member of the group.
+
+        A :class:`Group` made from a template varies the template's blanks; any
+        other mapping varies nothing.
+        """
+        vary = group.vary if isinstance(group, Group) else ()
         return self.backend.submit(group, vary)
 
     def run(
