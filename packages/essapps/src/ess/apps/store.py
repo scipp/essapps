@@ -3,11 +3,9 @@
 """
 The record store: SQLite, one writer, schema-versioned.
 
-Holds run records, indexed by the workflow ID of their request (a hash of
-spec, the parameters not varied, instrument, and proposal), the reference edges
-between them, and the registry of disk copies (the part of the data store that
-knows where bytes are), keyed by reference in either form. Records are never
-deleted one at a time.
+Holds run records, the reference edges between them, and the registry of disk
+copies (the part of the data store that knows where bytes are), keyed by
+reference in either form. Records are never deleted one at a time.
 
 See docs/developer/records.md.
 """
@@ -24,13 +22,12 @@ from typing import IO, Self
 from .records import RunRecord, Status
 from .spec import Ref, SpecId
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS records (
     id TEXT PRIMARY KEY,
-    workflow TEXT NOT NULL,
     spec_name TEXT NOT NULL,
     spec_version INTEGER NOT NULL,
     status TEXT NOT NULL,
@@ -45,7 +42,6 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE INDEX IF NOT EXISTS records_proposal ON records (proposal, created);
 CREATE INDEX IF NOT EXISTS records_label ON records (proposal, label, member_key);
 CREATE INDEX IF NOT EXISTS records_supersedes ON records (supersedes);
-CREATE INDEX IF NOT EXISTS records_workflow ON records (workflow);
 CREATE TABLE IF NOT EXISTS refs (
     from_id TEXT NOT NULL,
     to_id TEXT NOT NULL,
@@ -121,10 +117,9 @@ class RecordStore:
             for record in records:
                 req = record.request
                 self._db.execute(
-                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         record.id,
-                        req.workflow_id,
                         req.spec.name,
                         req.spec.version,
                         record.status.value,

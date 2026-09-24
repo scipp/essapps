@@ -189,8 +189,8 @@ def test_a_fitted_scale_factor_feeds_back_into_the_member_that_produced_it(
         member_key='608',
     )
     assert rescaled.failure is None, rescaled.failure
-    # The rerun supersedes the member it corrects. Its scale factor gives it a
-    # workflow ID of its own, so no held stage fits it.
+    # The rerun supersedes the member it corrects. Its scale factor is a value
+    # not varied that no held stage has, so none fits it.
     assert rescaled.supersedes == curves[608].id
     assert not rescaled.reused
     expected = client.output(combined, 'scaled', key='608')

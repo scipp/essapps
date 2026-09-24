@@ -3,11 +3,11 @@
 """
 What a session holds between runs: stages.
 
-A run request names the stage a session holds for it: the workflow ID of the
-request (a hash of spec, the parameters not varied, instrument, and proposal),
-the names of the parameters it varies, and its outputs. The session holds the
-stage it built for that name, so a later request naming the same stage computes
-only what lies downstream of the stage's inputs. A stage over a list of runs
+A run request and the parameters it was submitted as varying name the stage a
+session holds for it: the spec, the values of the parameters not varied, the
+names of those varied, and the outputs. The session holds the stage it built for
+that name, so a later request naming the same stage computes only what lies
+downstream of the stage's inputs. A stage over a list of runs
 holds the accumulation of the runs it has seen, which is how adding a run to a
 sum reduces only the new run. A file that changed on disk empties the store
 (:class:`ess.apps.runner.Runner`), so no stage serves it from its earlier bytes.

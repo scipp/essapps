@@ -15,7 +15,7 @@ import email.message
 import shutil
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -109,8 +109,13 @@ class RemoteBackend:
         r = _checked(self._client.post('/validate', json=body))
         return ValidationReport.model_validate(r.json())
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
-        body = {name: r.model_dump(mode='json') for name, r in group.items()}
+    def submit(
+        self, group: Mapping[str, RunRequest], vary: Collection[str] = ()
+    ) -> dict[str, RunRecord]:
+        body = {
+            'group': {name: r.model_dump(mode='json') for name, r in group.items()},
+            'vary': list(vary),
+        }
         r = _checked(self._client.post('/submit', json=body))
         return {name: RunRecord.model_validate(v) for name, v in r.json().items()}
 

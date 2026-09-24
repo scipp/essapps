@@ -283,7 +283,7 @@ def test_plain_runs_that_differ_in_one_value_share_no_stage(
     assert second.supersedes == first.id
 
 
-def test_a_varied_value_replaces_the_templates_and_stays_out_of_the_workflow_id(
+def test_a_varied_value_replaces_the_templates_and_names_the_same_held_stage(
     client: Client, data: OutputRef
 ) -> None:
     first = client.run(
@@ -294,7 +294,6 @@ def test_a_varied_value_replaces_the_templates_and_stays_out_of_the_workflow_id(
     second = client.run(
         Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',)), {'bins': 8}
     )
-    assert second.request.workflow_id == first.request.workflow_id
     assert second.reused
 
 

@@ -8,7 +8,7 @@ See docs/developer/operations.md.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -76,9 +76,9 @@ class Client:
         A run request from a template, its blanks filled with ``values``.
 
         A spec stands for a template with nothing set and no blanks, so
-        ``values`` are then the parameters of a plain run. The template's blanks
-        are what the request varies. Nothing is stored until the request is
-        submitted.
+        ``values`` are then the parameters of a plain run. Nothing is stored
+        until the request is submitted, with the template's blanks as what it
+        varies.
         """
         if not isinstance(template, Template):
             template = Template(spec=template)
@@ -87,7 +87,6 @@ class Client:
         return RunRequest(
             spec=template.spec,
             params=template.fill(**dict(values or {})),
-            vary=template.blanks,
             outputs=template.outputs,
             instrument=self.instrument,
             proposal=self.proposal,
@@ -100,12 +99,15 @@ class Client:
     def validate(self, request: RunRequest) -> ValidationReport:
         return self.backend.validate(request)
 
-    def submit(self, request: RunRequest) -> RunRecord:
-        return self.backend.submit({'request': request})['request']
+    def submit(self, request: RunRequest, vary: Collection[str] = ()) -> RunRecord:
+        """Submit one request; ``vary`` is the hint of :meth:`Backend.submit`."""
+        return self.backend.submit({'request': request}, vary)['request']
 
-    def submit_group(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit_group(
+        self, group: Mapping[str, RunRequest], vary: Collection[str] = ()
+    ) -> dict[str, RunRecord]:
         """Submit together; ``@name`` in a reference names a member of the group."""
-        return self.backend.submit(group)
+        return self.backend.submit(group, vary)
 
     def run(
         self,
@@ -116,9 +118,11 @@ class Client:
         """
         Submit one request made from ``template``. It runs at once in a session
         and is dispatched otherwise, and it waits for any pending output among
-        ``values``. Given a spec, this is a plain run.
+        ``values``. The template's blanks are what the request varies; given a
+        spec, this is a plain run.
         """
-        return self.submit(self.request(template, values, **kwargs))
+        vary = template.blanks if isinstance(template, Template) else ()
+        return self.submit(self.request(template, values, **kwargs), vary)
 
     def datasets(self) -> list[Dataset]:
         """Every dataset the backend's sources know for this proposal, by identity."""

@@ -79,12 +79,10 @@ class Job(BaseModel, frozen=True):
     """
     What a runner is given: a run request with its literal references inlined.
 
-    ``workflow`` is the request's workflow ID, which names the stage a session
-    holds; ``params`` are the request's parameters, defaults filled, and
-    ``vary`` the ones the stage takes as inputs.
+    ``params`` are the request's parameters, defaults filled, and ``vary`` the
+    ones the stage takes as inputs, the hint the request was submitted with.
     """
 
-    workflow: str
     params: dict[str, Any]
     vary: tuple[str, ...]
     outputs: tuple[str, ...]
@@ -266,7 +264,12 @@ class Runner:
                 if changed:
                     self._stages.clear()
                 self._read |= result.checksums
-                name = (job.workflow, tuple(sorted(job.vary)), outputs_)
+                name = (
+                    spec.id,
+                    json.dumps(fixed_values, sort_keys=True),
+                    tuple(sorted(job.vary)),
+                    outputs_,
+                )
                 call, result.reused = self._stages.stage(name, build)
             self._store(
                 record_id, result, spec, outputs_, dict(call(varied, inputs)), outputs

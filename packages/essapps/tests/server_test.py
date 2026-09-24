@@ -54,6 +54,14 @@ def test_validate_reports_errors_and_submit_of_the_same_request_raises(
     assert exc_info.value.reports
 
 
+def test_the_varied_names_reach_the_server(
+    remote_client: Client, run_ref: DatasetRef
+) -> None:
+    request = remote_client.request(LOAD, {'run': run_ref})
+    with pytest.raises(SubmitError, match='bogus: varied but not a parameter'):
+        remote_client.submit(request, vary=('bogus',))
+
+
 def test_record_of_an_unknown_id_raises_key_error(remote_client: Client) -> None:
     with pytest.raises(KeyError):
         remote_client.record('no-such-record')

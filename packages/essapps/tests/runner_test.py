@@ -73,8 +73,8 @@ def two_run_workflow() -> Any:
 def job(
     params: dict[str, Any], outputs: tuple[str, ...], vary: tuple[str, ...] = ()
 ) -> Job:
-    """A job as the backend makes it; the workflow ID only names a held stage."""
-    return Job(workflow='wf', params=params, vary=vary, outputs=outputs)
+    """A job as the backend makes it."""
+    return Job(params=params, vary=vary, outputs=outputs)
 
 
 def test_a_dataset_two_parameters_name_is_checksummed_under_one_key(

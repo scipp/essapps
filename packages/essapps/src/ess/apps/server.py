@@ -45,6 +45,11 @@ class ValidateRequest(BaseModel):
     group: dict[str, RunRequest] | None = None
 
 
+class SubmitRequest(BaseModel):
+    group: dict[str, RunRequest]
+    vary: tuple[str, ...] = ()
+
+
 class RecordsQuery(BaseModel):
     proposal: str | None = None
     spec: SpecId | None = None
@@ -163,9 +168,9 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             return backend.validate(body.request, body.group)
 
     @app.post('/submit')
-    def submit(group: dict[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(body: SubmitRequest) -> dict[str, RunRecord]:
         with lock:
-            return backend.submit(group)
+            return backend.submit(body.group, body.vary)
 
     @app.get('/records/{record_id}')
     def get_record(record_id: str) -> RunRecord:

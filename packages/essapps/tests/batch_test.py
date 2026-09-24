@@ -129,9 +129,8 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert origin.pinned == {'scale': 4.0}
     assert origin.entry == 'rest'
     assert origin.template == 'load-defaults/v1'
-    # Each member varies the template's blank, whose value is in params.
+    # The template's blank is filled in params.
     assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
-    assert group['pid:pid/1'].vary == ('run',)
 
 
 def test_apply_without_datasets_is_the_batch_form(
@@ -145,8 +144,6 @@ def test_apply_without_datasets_is_the_batch_form(
         scan, Status.COMPLETED
     )
     assert records['310K'].outputs['total']['value'] == 14.0
-    # Members that agree on everything but the blanks share one workflow ID.
-    assert len({r.request.workflow_id for r in records.values()}) == 1
     assert [r.request.member_key for r in client.records(label='scan1')] == [
         '300K',
         '310K',
@@ -527,6 +524,9 @@ def test_each_arrival_submits_one_request_over_every_run_of_its_series(
     (second,) = client.wait(loop.run_once())
     assert second.status == Status.COMPLETED, second.failure
     assert listed(second) == ['pid:pid/1', 'pid:pid/2']
+    # The loop submits with the template's blanks as the hint, so the session's
+    # stage over the list contributes only the new run.
+    assert second.reused
     # Successive requests supersede each other under the series value.
     assert second.supersedes == first.id
     assert [r.id for r in client.batch('series')] == [second.id]

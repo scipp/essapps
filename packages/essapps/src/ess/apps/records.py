@@ -12,8 +12,6 @@ See docs/developer/records.md.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -95,22 +93,17 @@ class RunRequest(BaseModel, frozen=True):
     holds the list of runs. ``outputs`` are the outputs to compute, empty for
     the spec's results.
 
-    ``vary`` names the parameters a caller varies from run to run, so that a
-    session holds the stage cut at them. Like ``label``, it is a hint: it does
-    not change the result, and nothing but a session reads it.
-
     A request is complete: it never names a session or a process, and the only
     path it may name is the identity of a local file that carries no run
-    identity.
+    identity. Nor does it say how a session computes it: the parameters a
+    caller varies from run to run are a hint given with the submission
+    (:meth:`ess.apps.backend.Backend.submit`), since the stage a session cuts
+    at them does not change the result.
     """
 
     spec: SpecId
     params: dict[str, Plain] = Field(default_factory=dict)
     outputs: tuple[str, ...] = ()
-    vary: tuple[str, ...] = Field(
-        default=(),
-        description="Parameters a caller varies; a hint for the session.",
-    )
     instrument: str = Field(min_length=1)
     proposal: str = Field(min_length=1)
     submitter: str = Field(min_length=1)
@@ -127,31 +120,6 @@ class RunRequest(BaseModel, frozen=True):
         description="How the request was made: template, rule, lookup entry, "
         "and the values the submitter pinned.",
     )
-
-    @property
-    def fixed(self) -> dict[str, Any]:
-        """The parameters the request does not vary."""
-        return {k: v for k, v in self.params.items() if k not in self.vary}
-
-    @property
-    def workflow_id(self) -> str:
-        """
-        A hash of spec, the parameters not varied, instrument, and proposal:
-        the name under which a session holds the stage cut at the varied ones.
-
-        Keys are sorted so that the order in which values were given does not
-        change the name.
-        """
-        content = json.dumps(
-            {
-                'spec': self.spec.model_dump(mode='json'),
-                'params': self.fixed,
-                'instrument': self.instrument,
-                'proposal': self.proposal,
-            },
-            sort_keys=True,
-        )
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
 
     def refs(self) -> list[OutputRef]:
         """References to outputs of records: the edges the scheduler waits on."""

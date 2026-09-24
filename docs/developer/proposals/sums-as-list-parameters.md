@@ -9,7 +9,7 @@ The topic docs ([architecture.md](../architecture.md), [aggregation.md](../aggre
 - A run request is always a whole configured pipeline: the spec, every parameter value, and the outputs to compute. It never holds a piece of a pipeline.
 - A sum over runs is one run request whose run parameter is a list. The workflow code computes the sum, as `sciline.Aggregation` does, inside one run.
 - Stages and accumulations are caches. A session holds them, next to the workflow code and its dependency graph.
-- As a result, the backend never needs to know the graph. The spec gets no `reads` table, and `vary` is only a hint for the session.
+- As a result, the backend never needs to know the graph. The spec gets no `reads` table, and what a caller varies is a hint given with the submission, not part of the record.
 
 ```python
 # Before: a member stage per run, a finalize stage, and an Accumulate reference
@@ -160,6 +160,24 @@ client.run(tune, {'floor': 0.0})     # each run's numerator reads floor: accumul
 The binding decides which of the two applies, from the graph.
 The caller only says what varies.
 
+### What varies is not recorded
+
+Where a session cuts the pipeline does not change the result, so the record does not say.
+The names a caller varies travel with the submission, not with the request:
+
+```python
+client.run(tune, {'scale': 2.0})                        # submitted with tune.blanks
+client.submit(request, vary=('scale',))                 # the same, by hand
+client.submit_group(apply(client, rule, datasets), rule.template.blanks)
+```
+
+The record of a call through a held stage equals the record of a plain run with the same values.
+Whether a held stage served it is in `reused`, which publication checks.
+The backend keeps the names in memory from submission to dispatch.
+A record dispatched after a restart runs without them: it holds nothing and gives the same result.
+The session names a held stage by the spec, the values not varied, the names varied, and the outputs.
+No workflow ID exists outside the session.
+
 ### A series under a rule
 
 ```python
@@ -286,7 +304,8 @@ Gone:
 - member and finalize requests of a series, `_finalize`, `_current_members`, and `Series.accumulate` and `Series.outputs`;
 - held accumulators in the session store (`Stages.accumulate`): a stage over a list holds its own accumulation;
 - field-by-field validation of requests that supply an intermediate: every request is checked against the whole params model;
-- `vary` as input to any check: `Template.from_request` keeps a varied value, so a saved template keeps what was tuned (user story B1 passes).
+- `vary` as input to any check: `Template.from_request` keeps a varied value, so a saved template keeps what was tuned (user story B1 passes);
+- `RunRequest.vary`, `RunRequest.fixed`, and the workflow ID, with its column in the record store.
 
 Unchanged:
 
@@ -299,12 +318,13 @@ Unchanged:
 New:
 
 - `PipelineAdapter(members=...)`;
+- `vary` on `Backend.submit`, `Client.submit`, and `Client.submit_group`;
 - a session keeps the checksum each dataset had when it read it, and drops every held stage when a dataset's bytes change.
   A held stage knows the runs of a sum by identity, and a run acquired again keeps its identity.
   This replaces the checksums in the name of a held stage.
 
-In the skeleton, the source is about 160 lines shorter.
-All 246 tests pass, and the stories S6 and B1 move from expected failures to passes.
+In the skeleton, the source is about 150 lines shorter.
+All 248 tests pass, and the stories S6 and B1 move from expected failures to passes.
 
 ## Costs
 
@@ -324,6 +344,8 @@ All 246 tests pass, and the stories S6 and B1 move from expected failures to pas
 - **A changed dataset empties the session's whole store**, not only the stages that read it.
   Datasets change rarely, and the rule is simple.
 - **`sciline.Buffered` still holds every contribution in memory**, as before.
+- **A caller who submits a group from `apply` passes the template's blanks**, or its members share no held stage.
+  The trigger loop does this itself; a notebook or form that calls `submit_group` must too.
 
 ## Upstream
 
@@ -338,6 +360,5 @@ All 246 tests pass, and the stories S6 and B1 move from expected failures to pas
 
 1. Is there a real case of a sum under a rule whose runs must be reduced on separate nodes? Interactively, composing two specs covers it.
 2. Do scientists want a sum with one unreadable run to fail visibly, rather than be summed without it?
-3. Should `vary` stay on the record at all? Only the session reads it.
-4. When is the disk cache of contributions needed? A measurement of a real SANS series under a rule would tell.
-5. Once agreed: update the topic docs, and delete this proposal together with [run-records.md](run-records.md).
+3. When is the disk cache of contributions needed? A measurement of a real SANS series under a rule would tell.
+4. Once agreed: update the topic docs, and delete this proposal together with [run-records.md](run-records.md).

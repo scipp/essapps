@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import shutil
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -122,8 +122,16 @@ class Backend(Protocol):
         """Whether a request would be accepted, without submitting it."""
         ...
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
-        """Submit requests atomically; ``@name`` refs point at members of the group."""
+    def submit(
+        self, group: Mapping[str, RunRequest], vary: Collection[str] = ()
+    ) -> dict[str, RunRecord]:
+        """
+        Submit requests atomically; ``@name`` refs point at members of the group.
+
+        ``vary`` names the parameters the caller varies from run to run, so that
+        a session holds the stage cut at them. Like ``label``, it is a hint: it
+        does not change the result, and it is not recorded.
+        """
         ...
 
     def record(self, record_id: str) -> RunRecord:
@@ -225,6 +233,7 @@ class LocalBackend:
         self.sources = list(sources)
         self.publishers = dict(publishers)
         self._reserved: dict[str, str] = {}
+        self._vary: dict[str, tuple[str, ...]] = {}
 
     def close(self) -> None:
         self.record_store.close()
@@ -370,14 +379,25 @@ class LocalBackend:
 
     # Origin
 
-    def submit(self, group: Mapping[str, RunRequest]) -> dict[str, RunRecord]:
+    def submit(
+        self, group: Mapping[str, RunRequest], vary: Collection[str] = ()
+    ) -> dict[str, RunRecord]:
         """
         Submit requests atomically; ``@name`` refs point at members of the group.
 
         Every request is validated before any record exists; one refusal refuses
-        the group.
+        the group. ``vary`` applies to every member, so each must have its
+        names as parameters. It is kept in memory until dispatch: a record
+        dispatched after a restart runs without it, which holds nothing and
+        gives the same result.
         """
         reports = {name: self.validate(req, group) for name, req in group.items()}
+        for name, req in group.items():
+            if errors := _vary_errors(req, vary, self.registry):
+                reports[name] = ValidationReport(
+                    layers=reports[name].layers,
+                    errors=(*reports[name].errors, *errors),
+                )
         for name in _cycle(group):
             reports[name] = ValidationReport(
                 layers=reports[name].layers,
@@ -399,6 +419,8 @@ class LocalBackend:
             if req.label is not None:
                 latest[(req.label, req.member_key)] = record.id
         self.record_store.add(*records.values())
+        if vary:
+            self._vary |= {r.id: tuple(vary) for r in records.values()}
         self._pump()
         return {name: self.record_store.get(r.id) for name, r in records.items()}
 
@@ -422,8 +444,8 @@ class LocalBackend:
         """
         The request with defaults filled and every value in the form the params
         model gives it, so that ``0`` and ``0.0`` given for one float field are
-        one value and one workflow ID. Raises for a request whose values do not
-        validate.
+        one recorded value and one held stage. Raises for a request whose values
+        do not validate.
         """
         request = self._with_defaults(request)
         params = self.registry.spec(request.spec).params
@@ -641,9 +663,8 @@ class LocalBackend:
                 return
         request = record.request
         job = Job(
-            workflow=request.workflow_id,
             params=_inline(request.params, literals),
-            vary=request.vary,
+            vary=self._vary.pop(record.id, ()),
             outputs=request.outputs,
         )
         done = self.launcher.start(record, job, locations)
@@ -847,26 +868,34 @@ def _inline(value: Any, literals: Mapping[str, Any]) -> Any:
     return value
 
 
+def _vary_errors(
+    request: RunRequest, vary: Collection[str], registry: Registry
+) -> list[str]:
+    """A varied name that is not a parameter would cut the stage at nothing."""
+    if request.spec not in registry:
+        return []
+    fields = registry.spec(request.spec).params.model_fields
+    return [
+        f'{name}: varied but not a parameter of {request.spec}'
+        for name in vary
+        if name not in fields
+    ]
+
+
 def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
     """
     What is wrong with the names and values of a request, without workflow code.
 
     A params model ignores fields it does not declare unless its author forbids
     them, and a reduction parameter dropped in silence gives a wrong number
-    without an error, so every name is checked against the spec. A varied
-    parameter is a parameter with a value. The values are checked against the
-    whole params model.
+    without an error, so every name is checked against the spec. The values are
+    checked against the whole params model.
     """
     fields = spec.params.model_fields
     errors = [
         f'{name}: not a parameter of {spec.id}'
         for name in sorted(set(request.params) - set(fields))
     ]
-    for name in request.vary:
-        if name not in fields:
-            errors.append(f'{name}: varied but not a parameter of {spec.id}')
-        elif name not in request.params:
-            errors.append(f'{name}: varied but given no value')
     errors += [
         f'{name}: not an output of {spec.id}'
         for name in request.outputs

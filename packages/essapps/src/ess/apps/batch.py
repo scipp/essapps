@@ -52,16 +52,16 @@ def apply(
     is filled through the precedence ladder, the template, then the lookup entry
     that matched its dataset, then the values the submitter pinned, over the
     dataset itself, which fills the template's dataset field. ``pinned`` may be a
-    frame with the member key as index and the pinned values as columns. Each
-    member varies the template's blanks, so members that agree on everything
-    else share a workflow ID and a held stage.
+    frame with the member key as index and the pinned values as columns.
 
     For a rule with a series, a member is a series: the given datasets name the
     series they belong to, keyed by the series value, and the template's
     dataset field holds every current member of each, those given included.
 
     The group is returned, not submitted, so that it can be previewed through
-    :meth:`Client.validate` and submitted whole.
+    :meth:`Client.validate` and submitted whole. Submitted with the template's
+    blanks as ``vary``, members that agree on everything else share a held
+    stage in a session.
     """
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
@@ -431,7 +431,9 @@ class TriggerLoop:
                     continue
                 try:
                     group = apply(self.client, rule, [dataset])
-                    fired += self.client.submit_group(group).values()
+                    fired += self.client.submit_group(
+                        group, rule.template.blanks
+                    ).values()
                 except (SubmitError, ValueError) as e:
                     self.refusals[f'{rule.name} {dataset.ref}'] = str(e)
         return fired

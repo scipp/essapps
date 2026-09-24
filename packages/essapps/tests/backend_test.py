@@ -3,7 +3,6 @@
 """The session shape: everything in one process, outputs staying in memory."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
@@ -65,7 +64,7 @@ def test_a_plain_run_records_every_parameter_its_default_filled(
     assert client.record(record.id).request.params == record.request.params
 
 
-def test_a_default_given_or_omitted_names_one_workflow_and_shares_its_stage(
+def test_a_default_given_or_omitted_shares_one_held_stage(
     client: Client, run_ref: DatasetRef
 ) -> None:
     data = client.run(LOAD, {'run': run_ref}).ref('data')
@@ -73,46 +72,46 @@ def test_a_default_given_or_omitted_names_one_workflow_and_shares_its_stage(
     given = Template(
         spec=HISTOGRAM, params={'data': data, 'threshold': 0.0}, blanks=('bins',)
     )
-    first = client.run(omitted, {'bins': 2})
-    second = client.run(given, {'bins': 3})
-    assert first.request.workflow_id == second.request.workflow_id
-    assert second.reused
+    client.run(omitted, {'bins': 2})
+    assert client.run(given, {'bins': 3}).reused
 
 
 def test_a_value_is_recorded_in_the_form_its_field_gives_it(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    """``1`` given for a float field is ``1.0``: one value and one workflow."""
+    """``1`` given for a float field is ``1.0``: one recorded value."""
     records = [
         client.run(LOAD, {'run': run_ref, 'scale': 1}),
         client.run(LOAD, {'run': run_ref, 'scale': 1.0}),
         client.run(LOAD, {'run': run_ref}),
     ]
     assert all(type(r.request.params['scale']) is float for r in records)
-    assert len({r.request.workflow_id for r in records}) == 1
+    assert all(r.request.params == records[0].request.params for r in records)
 
 
-def test_a_varied_parameter_is_recorded_in_params_and_named_in_vary(
+def test_a_call_of_a_held_stage_records_what_a_plain_run_records(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    stage = Template(spec=LOAD, params={'run': run_ref}, blanks=('scale',))
-    record = client.run(stage, {'scale': 2.0})
-    assert record.status == Status.COMPLETED, record.failure
-    assert record.request.params['scale'] == 2.0
-    assert record.request.vary == ('scale',)
+    """Where a session cuts the pipeline is not part of what ran."""
+    data = client.run(LOAD, {'run': run_ref}).ref('data')
+    tune = Template(spec=HISTOGRAM, params={'data': data}, blanks=('bins',))
+    client.run(tune, {'bins': 2})
+    held = client.run(tune, {'bins': 3})
+    plain = client.run(HISTOGRAM, {'data': data, 'bins': 3})
+    assert held.reused
+    assert not plain.reused
+    assert held.request == plain.request
 
 
-def test_a_plain_run_records_what_it_would_without_vary(
+def test_a_plain_run_records_every_field_of_its_request(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    """A plain run's record is the record of a run with nothing varied."""
     record = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
     dumped = client.record(record.id).request.model_dump(mode='json')
     assert dumped == {
         'spec': {'name': 'load', 'version': 1},
         'params': {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0},
         'outputs': ['data', 'total'],
-        'vary': [],
         'instrument': 'dream',
         'proposal': 'p1',
         'submitter': 'simon',
@@ -126,9 +125,6 @@ def test_a_plain_run_records_what_it_would_without_vary(
             'pinned': {},
         },
     }
-    hashed = {k: dumped[k] for k in ('spec', 'params', 'instrument', 'proposal')}
-    content = json.dumps(hashed, sort_keys=True).encode()
-    assert record.request.workflow_id == hashlib.sha256(content).hexdigest()[:16]
 
 
 def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
@@ -156,19 +152,20 @@ def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
     assert fresh.request.params['scale'] == 5.0
 
 
-def test_equal_workflow_values_name_one_workflow(
+def test_a_held_stage_is_named_by_the_values_not_varied_in_any_order(
     client: Client, run_ref: DatasetRef
 ) -> None:
-    first = client.run(LOAD, {'run': run_ref, 'scale': 2.0})
-    second = client.run(LOAD, {'scale': 2.0, 'run': run_ref})
-    other = client.run(LOAD, {'run': run_ref, 'scale': 3.0})
+    data = client.run(LOAD, {'run': run_ref}).ref('data')
+
+    def tune(**params: object) -> Template:
+        return Template(spec=HISTOGRAM, params=params, blanks=('bins',))
+
+    first = client.run(tune(data=data, threshold=1.0), {'bins': 2})
+    second = client.run(tune(threshold=1.0, data=data), {'bins': 3})
+    other = client.run(tune(data=data, threshold=2.0), {'bins': 3})
     assert first.id != second.id
-    assert first.request.workflow_id == second.request.workflow_id
-    assert other.request.workflow_id != first.request.workflow_id
-    from_template = client.run(
-        Template(spec=LOAD, params={'scale': 2.0}), {'run': run_ref}
-    )
-    assert from_template.request.workflow_id == first.request.workflow_id
+    assert second.reused
+    assert not other.reused
 
 
 def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
@@ -342,8 +339,6 @@ def test_a_tuned_parameter_comes_out_of_a_held_stage_within_a_session(
     assert second.reused
     assert first.request.params['bins'] == 2
     assert second.request.params['bins'] == 3
-    assert second.request.vary == ('bins',)
-    assert first.request.workflow_id == second.request.workflow_id
     assert client.latest('tune').id == second.id
     assert [r.id for r in client.records(label='tune')] == [first.id, second.id]
 
@@ -419,20 +414,19 @@ def test_a_missing_required_parameter_is_refused_at_submit(client: Client) -> No
 
 
 @pytest.mark.parametrize(
-    ('params', 'vary', 'outputs', 'message'),
+    ('params', 'outputs', 'message'),
     [
-        ({}, ('bogus',), (), 'bogus: varied but not a parameter'),
-        ({}, (), ('nope',), 'not an output'),
-        ({'scale': 'x'}, ('scale',), (), 'scale'),
+        ({'bogus': 1}, (), 'bogus: not a parameter'),
+        ({}, ('nope',), 'not an output'),
+        ({'scale': 'x'}, (), 'scale'),
     ],
 )
 def test_validation_checks_the_names_of_a_request(
-    client: Client, run_ref: DatasetRef, params, vary, outputs, message
+    client: Client, run_ref: DatasetRef, params, outputs, message
 ) -> None:
     request = RunRequest(
         spec=LOAD.id,
         params={'run': run_ref, **params},
-        vary=vary,
         outputs=outputs,
         instrument=client.instrument,
         proposal=client.proposal,
@@ -440,6 +434,15 @@ def test_validation_checks_the_names_of_a_request(
     )
     report = client.validate(request)
     assert any(message in e for e in report.errors), report.errors
+
+
+def test_submit_refuses_a_varied_name_that_is_not_a_parameter(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    request = client.request(LOAD, {'run': run_ref})
+    with pytest.raises(SubmitError, match='bogus: varied but not a parameter'):
+        client.submit(request, vary=('bogus',))
+    assert client.records() == []
 
 
 def test_validation_checks_reference_types(client: Client, run_ref: DatasetRef) -> None:
