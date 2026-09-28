@@ -202,7 +202,7 @@ SUBTRACT = WorkflowSpec(
     version=1,
     title='Subtract',
     description='Subtract a can run from a sample run; two dataset fields, '
-    'for exercising an as-of lookup fill.',
+    'for exercising a nearest lookup fill.',
     params=SubtractParams,
     outputs=SubtractOutputs,
 )

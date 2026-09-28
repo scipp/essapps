@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from .backend import SubmitError
 from .client import Client
 from .records import Group, Origin, RunRecord, RunRequest, Template
-from .rules import AsOf, Lookup, Rule, matches, precedes
+from .rules import Lookup, Nearest, Rule, gap, matches, precedes
 from .sources import Dataset
 from .spec import DatasetRef, as_ref, dataset_refs, field_of
 
@@ -141,7 +141,7 @@ def _fill(
     What datasets fill, and the lookup entry each matched, by dataset identity.
 
     The template's dataset field gets the dataset, or for a series the list of
-    them. Each dataset is filled from its own lookup entry, an as-of fill
+    them. Each dataset is filled from its own lookup entry, a nearest fill
     resolved against it. When the dataset field is a column of a list parameter
     of rows, ``runs.run``, each dataset is a row, and a fill named for another
     column, ``runs.floor``, goes into that dataset's row. Every other fill goes
@@ -162,7 +162,9 @@ def _fill(
             entries[str(dataset.ref)] = entry.name
         for name, fill in (entry.fills if entry is not None else {}).items():
             value = (
-                _as_of(client, dataset, name, fill) if isinstance(fill, AsOf) else fill
+                _nearest(client, dataset, name, fill)
+                if isinstance(fill, Nearest)
+                else fill
             )
             owner, _, inner = name.partition('.')
             if column and owner == field:
@@ -179,19 +181,40 @@ def _fill(
     return {field: members if series else members[0]} | requests[0], entries
 
 
-def _as_of(client: Client, dataset: Dataset, field: str, as_of: AsOf) -> DatasetRef:
-    """The reference of the nearest dataset matching ``as_of`` before ``dataset``."""
-    best: Dataset | None = None
+class Waiting(ValueError):
+    """A member that cannot be made yet, because what it needs may still arrive."""
+
+
+def _nearest(
+    client: Client, dataset: Dataset, field: str, nearest: Nearest
+) -> DatasetRef:
+    """The reference of the dataset ``nearest`` resolves to for ``dataset``."""
+    before: Dataset | None = None
+    after: Dataset | None = None
     for candidate in client.datasets():
-        if not matches(as_of.match, candidate) or not precedes(candidate, dataset):
+        if not matches(nearest.match, candidate) or any(
+            candidate.fields.get(name) != dataset.fields.get(name)
+            for name in nearest.same
+        ):
             continue
-        if best is None or precedes(best, candidate):
-            best = candidate
-    if best is None:
-        raise ValueError(
-            f'{dataset.ref}: no dataset matching {as_of.match} before it for {field!r}'
-        )
-    return best.ref
+        if precedes(candidate, dataset) and (
+            before is None or precedes(before, candidate)
+        ):
+            before = candidate
+        if precedes(dataset, candidate) and (
+            after is None or precedes(candidate, after)
+        ):
+            after = candidate
+    what = f'{dataset.ref}: no dataset matching {nearest.match}'
+    if nearest.direction == 'before':
+        if before is None:
+            raise ValueError(f'{what} before it for {field!r}')
+        return before.ref
+    if after is None:
+        raise Waiting(f'{what} after it yet for {field!r}')
+    if nearest.direction == 'after' or before is None:
+        return after.ref
+    return (before if gap(before, dataset) <= gap(dataset, after) else after).ref
 
 
 def _pinned(
@@ -363,10 +386,16 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
 
 
 class TriggerStatus(BaseModel, frozen=True):
-    """Why a rule fires on a dataset, or does not."""
+    """
+    Why a rule fires on a dataset, or does not.
+
+    A dataset the rule would fire on but cannot yet, because a fill has nothing
+    to resolve to that may still be measured, is ``waiting``.
+    """
 
     fires: bool
     reason: str
+    waiting: bool = False
 
 
 def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatus:
@@ -380,7 +409,20 @@ def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatu
     failure of the records that do. A facility adds one clause here,
     that the dataset's catalogue entry does not carry our provenance snapshot,
     which the local application has no catalogue for.
+
+    Where these hold, the member waits while it cannot be made yet. That too is
+    a question of the datasets that exist, so a later pass fires on it.
     """
+    status = _clauses(client, rule, dataset)
+    if status.fires:
+        try:
+            apply(client, rule, [dataset])
+        except Waiting as e:
+            return TriggerStatus(fires=False, reason=str(e), waiting=True)
+    return status
+
+
+def _clauses(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatus:
     member = str(dataset.ref)
     if not rule.active:
         return TriggerStatus(fires=False, reason=f'rule {rule.name} is paused')
@@ -421,27 +463,32 @@ class TriggerLoop:
     The loop keeps no memory: every clause of :func:`trigger_status` is a query
     over the records and the sources, so what arrived while the backend was down
     is fired on when it comes back, and a restart is a no-op by construction.
-    ``refusals`` is what the last pass was refused, a log for a user to read,
-    never read by the loop itself.
+    ``refusals`` is what the last pass was refused and ``waiting`` what it
+    could not make yet, logs for a user to read, never read by the loop itself.
     """
 
     def __init__(self, client: Client, *rules: Rule) -> None:
         self.client = client
         self.rules = list(rules)
         self.refusals: dict[str, str] = {}
+        self.waiting: dict[str, str] = {}
         for rule in self.rules:
             self.client.backend.reserve(rule.name, rule.name)
 
     def run_once(self) -> list[RunRecord]:
         """Fire every rule on every dataset it should, and return what was made."""
         self.refusals = {}
+        self.waiting = {}
         datasets = self.client.datasets()
         fired: list[RunRecord] = []
         for rule in self.rules:
             for dataset in datasets:
-                if not trigger_status(self.client, rule, dataset).fires:
-                    continue
                 try:
+                    status = trigger_status(self.client, rule, dataset)
+                    if status.waiting:
+                        self.waiting[f'{rule.name} {dataset.ref}'] = status.reason
+                    if not status.fires:
+                        continue
                     group = apply(self.client, rule, [dataset])
                     fired += self.client.submit_group(group).values()
                 except (SubmitError, ValueError) as e:

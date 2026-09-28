@@ -4,15 +4,13 @@
 Section S of docs/developer/user-stories.md: small stories, one mechanism each.
 """
 
-import pytest
 import scipp as sc
 
-from ess.apps.backend import SubmitError
 from ess.apps.batch import apply
 from ess.apps.client import Client
 from ess.apps.examples import BACKGROUND, HISTOGRAM, LOAD, NORMALIZE, SUBTRACT, SUM
 from ess.apps.records import Template
-from ess.apps.rules import AsOf, Like, Lookup, LookupEntry, Rule, Selector
+from ess.apps.rules import Like, Lookup, LookupEntry, Nearest, Rule, Selector
 from ess.apps.spec import OutputRef
 from ess.apps.testing import equal
 
@@ -123,7 +121,8 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
             name='cans',
             entries=(
                 LookupEntry(
-                    name='can', fills={'can': AsOf(match={'role': Like(pattern='can')})}
+                    name='can',
+                    fills={'can': Nearest(match={'role': Like(pattern='can')})},
                 ),
             ),
         ),

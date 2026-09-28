@@ -6,7 +6,9 @@ Apply, the deliberate operations, the trigger loop, and the batch table.
 See docs/developer/rules.md.
 """
 
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -39,12 +41,12 @@ from ess.apps.examples import (
 )
 from ess.apps.records import RunRecord, Status, Template
 from ess.apps.rules import (
-    AsOf,
     Between,
     Bound,
     Like,
     Lookup,
     LookupEntry,
+    Nearest,
     RetryPolicy,
     Rule,
     Selector,
@@ -825,38 +827,37 @@ def test_the_dataset_table_joins_onto_a_rules_batch_table(
     assert list(table['sample']) == [d.fields['sample'] for d in client.datasets()[-2:]]
 
 
-# An as-of fill
+# A nearest fill
+
+
+def loki(path: Path, run: int, role: str, **fields: str) -> Dataset:
+    return Dataset(
+        path=write_run(path, [1.0, 2.0]),
+        instrument='loki',
+        run=run,
+        metadata={'role': role} | fields,
+    )
 
 
 @pytest.fixture
 def cans_and_samples(client: Client, tmp_path: Path) -> FakeDatasetSource:
     """A stray sample before any can, two cans, two samples, a third can, and
     two more samples -- in run-number order."""
-
-    def dataset(name: str, run: int, role: str) -> Dataset:
-        return Dataset(
-            path=write_run(tmp_path / f'{name}.h5', [1.0, 2.0]),
-            instrument='loki',
-            run=run,
-            metadata={'role': role},
-        )
-
     source = FakeDatasetSource(
-        dataset('sample0', 1, 'sample'),
-        dataset('can1', 2, 'can'),
-        dataset('can2', 3, 'can'),
-        dataset('sample1', 4, 'sample'),
-        dataset('sample2', 5, 'sample'),
-        dataset('can3', 6, 'can'),
-        dataset('sample3', 7, 'sample'),
-        dataset('sample4', 8, 'sample'),
+        *(
+            loki(tmp_path / f'{run}.h5', run, role)
+            for run, role in enumerate(
+                ['sample', 'can', 'can', 'sample', 'sample', 'can', 'sample', 'sample'],
+                start=1,
+            )
+        )
     )
     client.backend.sources.append(source)
     return source
 
 
-@pytest.fixture
-def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
+def subtract_rule(**nearest: Any) -> Rule:
+    """Subtract from each sample the can that ``Nearest(**nearest)`` picks."""
     return Rule(
         name='subtract',
         template=Template(
@@ -870,7 +871,9 @@ def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
             entries=(
                 LookupEntry(
                     name='can',
-                    fills={'can': AsOf(match={'role': Like(pattern='can')})},
+                    fills={
+                        'can': Nearest(match={'role': Like(pattern='can')}, **nearest)
+                    },
                 ),
             ),
         ),
@@ -878,56 +881,112 @@ def as_of_rule(cans_and_samples: FakeDatasetSource) -> Rule:
     )
 
 
-def _can(record: RunRecord) -> str:
-    return as_ref(record.request.params['can']).dataset
+@pytest.fixture
+def before_rule(cans_and_samples: FakeDatasetSource) -> Rule:
+    return subtract_rule()
 
 
-def test_an_as_of_fill_is_the_nearest_earlier_matching_dataset(
-    client: Client, as_of_rule: Rule, cans_and_samples: FakeDatasetSource
+def cans(records: Iterable[RunRecord]) -> dict[str, str]:
+    """The can each member was filled with, by member key."""
+    return {
+        str(r.request.member_key): as_ref(r.request.params['can']).dataset
+        for r in records
+    }
+
+
+def test_a_nearest_fill_is_by_default_the_nearest_earlier_match(
+    client: Client, before_rule: Rule
 ) -> None:
-    loop = TriggerLoop(client, as_of_rule)
+    loop = TriggerLoop(client, before_rule)
     fired = loop.run_once()
-    assert [r.request.member_key for r in fired] == [
-        'run:loki/4',
-        'run:loki/5',
-        'run:loki/7',
-        'run:loki/8',
-    ]
     assert [r.status for r in fired] == [Status.COMPLETED] * 4
-    by_member = {r.request.member_key: r for r in fired}
-    assert _can(by_member['run:loki/4']) == 'run:loki/3'
-    assert _can(by_member['run:loki/5']) == 'run:loki/3'
-    assert _can(by_member['run:loki/7']) == 'run:loki/6'
-    assert _can(by_member['run:loki/8']) == 'run:loki/6'
-
+    assert cans(fired) == {
+        'run:loki/4': 'run:loki/3',
+        'run:loki/5': 'run:loki/3',
+        'run:loki/7': 'run:loki/6',
+        'run:loki/8': 'run:loki/6',
+    }
     refusal = loop.refusals['subtract run:loki/1']
     assert 'run:loki/1: no dataset matching' in refusal
     assert "before it for 'can'" in refusal
 
 
 def test_backlog_and_reprocess_resolve_the_same_can_as_the_live_loop(
-    client: Client, as_of_rule: Rule, cans_and_samples: FakeDatasetSource
+    client: Client, before_rule: Rule
 ) -> None:
-    """The as-of fill is anchored to the member's own dataset, so it is stable
+    """The nearest fill is anchored to the member's own dataset, so it is stable
     under a reprocess, unlike a fill resolved against the time of resolution."""
-    live = {r.request.member_key: r for r in TriggerLoop(client, as_of_rule).run_once()}
+    live = {
+        r.request.member_key: r for r in TriggerLoop(client, before_rule).run_once()
+    }
 
     later = Rule.over(
         client.datasets(),
         name='subtract-backlog',
-        template=as_of_rule.template,
-        lookup=as_of_rule.lookup,
+        template=before_rule.template,
+        lookup=before_rule.lookup,
         selector=Selector(
             match={'role': Like(pattern='sample'), 'run': Between(low=2)}
         ),
     )
     back = client.submit_group(backlog(client, later))
-    assert set(back) == set(live)
-    for member, record in back.items():
-        assert _can(record) == _can(live[member])
+    assert cans(back.values()) == cans(live.values())
 
-    moved = as_of_rule.revise(template=as_of_rule.template.revise())
+    moved = before_rule.revise(template=before_rule.template.revise())
     again = client.submit_group(reprocess(client, moved))
-    assert set(again) == set(live)
-    for member, record in again.items():
-        assert _can(record) == _can(live[member])
+    assert cans(again.values()) == cans(live.values())
+
+
+def test_a_member_waits_for_a_match_after_it(
+    client: Client, cans_and_samples: FakeDatasetSource, tmp_path: Path
+) -> None:
+    """The samples after the last can wait, visibly, and fire once one is measured."""
+    rule = subtract_rule(direction='after')
+    loop = TriggerLoop(client, rule)
+    assert cans(loop.run_once()) == {
+        'run:loki/1': 'run:loki/2',
+        'run:loki/4': 'run:loki/6',
+        'run:loki/5': 'run:loki/6',
+    }
+    assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
+    sample = {str(d.ref): d for d in client.datasets()}['run:loki/7']
+    status = trigger_status(client, rule, sample)
+    assert (status.fires, status.waiting) == (False, True)
+    assert "after it yet for 'can'" in status.reason
+
+    cans_and_samples.add(loki(tmp_path / '9.h5', 9, 'can'))
+    assert cans(loop.run_once()) == {
+        'run:loki/7': 'run:loki/9',
+        'run:loki/8': 'run:loki/9',
+    }
+    assert loop.waiting == {}
+
+
+def test_either_direction_takes_the_nearer_match_and_waits_for_the_one_after(
+    client: Client, cans_and_samples: FakeDatasetSource
+) -> None:
+    """Run 4 lies one run after can 3 and two before can 6: can 3; run 5 the
+    other way round: can 6; a tie would go to the can before."""
+    loop = TriggerLoop(client, subtract_rule(direction='either'))
+    assert cans(loop.run_once()) == {
+        'run:loki/1': 'run:loki/2',
+        'run:loki/4': 'run:loki/3',
+        'run:loki/5': 'run:loki/6',
+    }
+    assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
+
+
+def test_a_nearest_fill_pairs_by_the_fields_named_same(
+    client: Client, tmp_path: Path
+) -> None:
+    """Two sample holders in turn: each sample gets the can of its own holder."""
+    client.backend.sources.append(
+        FakeDatasetSource(
+            loki(tmp_path / '1.h5', 1, 'can', holder='a'),
+            loki(tmp_path / '2.h5', 2, 'can', holder='b'),
+            loki(tmp_path / '3.h5', 3, 'sample', holder='a'),
+            loki(tmp_path / '4.h5', 4, 'sample', holder='b'),
+        )
+    )
+    fired = TriggerLoop(client, subtract_rule(same=('holder',))).run_once()
+    assert cans(fired) == {'run:loki/3': 'run:loki/1', 'run:loki/4': 'run:loki/2'}

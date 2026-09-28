@@ -84,18 +84,29 @@ def matches(criteria: Criteria, dataset: Dataset) -> bool:
     )
 
 
-class AsOf(BaseModel, frozen=True):
+class Nearest(BaseModel, frozen=True):
     """
-    A fill resolved per member: the nearest earlier dataset matching ``match``.
+    A fill resolved per member: the nearest dataset matching ``match``.
 
     Cans, dark frames, and empty-beam runs are measured repeatedly during an
-    experiment; the right one for a member is the one nearest before it, not
-    the one latest at submission, so this is resolved against the member's own
-    dataset in :func:`ess.apps.batch.apply`, never stored as a fixed reference.
+    experiment; which one belongs to a member depends on the member's own
+    dataset, so this is resolved against it in :func:`ess.apps.batch.apply`,
+    never stored as a fixed reference. ``same`` names fields whose value the
+    match shares with the member, a sample holder or a configuration.
+    ``direction`` is where to look in the order of :func:`precedes`: the
+    nearest match ``'before'`` the member, ``'after'`` it, or ``'either'``, the
+    nearer of those two, a tie going to the one before.
+
+    A member with no match before it is refused. A member with no match after
+    it waits, since one may yet be measured, and ``'either'`` waits for the
+    match after it too, so that the answer depends only on the datasets that
+    exist and not on when it is asked.
     """
 
-    kind: Literal['as-of'] = 'as-of'
+    kind: Literal['nearest'] = 'nearest'
     match: Criteria
+    same: tuple[str, ...] = ()
+    direction: Literal['before', 'after', 'either'] = 'before'
 
 
 class LookupEntry(BaseModel, frozen=True):
@@ -103,14 +114,14 @@ class LookupEntry(BaseModel, frozen=True):
     One row of a lookup: what it matches, and what it fills.
 
     An entry with no criteria is the wildcard, which applies to what nothing
-    else matched. A fill may be an :class:`AsOf` instead of a value. A fill
+    else matched. A fill may be a :class:`Nearest` instead of a value. A fill
     named for a column of a list parameter of rows, ``runs.floor``, fills that
     column in the row of the dataset that matched.
     """
 
     name: str
     match: Criteria = Field(default_factory=dict)
-    fills: dict[str, AsOf | Plain] = Field(default_factory=dict)
+    fills: dict[str, Nearest | Plain] = Field(default_factory=dict)
 
     @property
     def wildcard(self) -> bool:
@@ -153,19 +164,30 @@ class Lookup(BaseModel, frozen=True):
         return next((e for e in self.entries if e.wildcard), None)
 
 
+def _positions(a: Dataset, b: Dataset) -> tuple[Any, Any] | None:
+    """Where ``a`` and ``b`` lie, in the terms of :func:`precedes`."""
+    pairs = [(a.run, b.run), (a.created, b.created)]
+    if a.order is not None and a.order == b.order:
+        pairs.insert(0, (a.fields.get(a.order), b.fields.get(b.order)))
+    return next(((x, y) for x, y in pairs if x is not None and y is not None), None)
+
+
 def precedes(a: Dataset, b: Dataset) -> bool:
     """
     Whether ``a`` lies before ``b``, by the first of these both carry: the
     field their instrument's extractor declares to order datasets, the run
     number, the creation time.
     """
-    pairs = [(a.run, b.run), (a.created, b.created)]
-    if a.order is not None and a.order == b.order:
-        pairs.insert(0, (a.fields.get(a.order), b.fields.get(b.order)))
-    for x, y in pairs:
-        if x is not None and y is not None:
-            return bool(x < y)
-    return False
+    positions = _positions(a, b)
+    return positions is not None and bool(positions[0] < positions[1])
+
+
+def gap(a: Dataset, b: Dataset) -> Any:
+    """How far ``b`` lies after ``a``, in the terms :func:`precedes` compares."""
+    positions = _positions(a, b)
+    if positions is None:
+        raise ValueError(f'{a.ref} and {b.ref} carry no common order')
+    return positions[1] - positions[0]
 
 
 class Bound(BaseModel, frozen=True):

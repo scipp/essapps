@@ -12,7 +12,15 @@ import pytest
 from pydantic import BaseModel
 
 from ess.apps.examples import LOAD
-from ess.apps.rules import AsOf, Between, Like, Lookup, LookupEntry, Near, Template
+from ess.apps.rules import (
+    Between,
+    Like,
+    Lookup,
+    LookupEntry,
+    Near,
+    Nearest,
+    Template,
+)
 from ess.apps.sources import Dataset
 from ess.apps.spec import dataset_ref
 
@@ -68,12 +76,12 @@ def dataset(**metadata: object) -> Dataset:
     return Dataset(path=Path('x.h5'), pid='pid/x', metadata=dict(metadata))
 
 
-def test_a_lookup_entry_holds_plain_fills_and_keeps_an_as_of_fill() -> None:
-    as_of = AsOf(match={'role': Like(pattern='can')})
+def test_a_lookup_entry_holds_plain_fills_and_keeps_a_nearest_fill() -> None:
+    nearest = Nearest(match={'role': Like(pattern='can')}, direction='after')
     entry = LookupEntry(
-        name='cans', fills={'can': as_of, 'window': Window(low=1.0, high=2.0)}
+        name='cans', fills={'can': nearest, 'window': Window(low=1.0, high=2.0)}
     )
-    assert entry.fills == {'can': as_of, 'window': {'low': 1.0, 'high': 2.0}}
+    assert entry.fills == {'can': nearest, 'window': {'low': 1.0, 'high': 2.0}}
     assert LookupEntry.model_validate_json(entry.model_dump_json()) == entry
 
 
