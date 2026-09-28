@@ -84,7 +84,7 @@ A session runner makes the workflow once per spec version and holds the stages i
 A session holds the code it imported, so a change to workflow code takes effect in a new session, never in a running one.
 
 **Only the workflow code knows the graph**, and it needs it only to decide what a stage can hold and reuse.
-A mistake there can make a held stage return a wrong result, but the request still says exactly what was asked, and publication recomputes any result a held stage served.
+A mistake there can make a held stage return a wrong result, but the request still says exactly what was asked, and publication refuses any result a held stage served until it is recomputed.
 
 **The framework never imports sciline.**
 The adapter that turns a sciline pipeline into a workflow belongs with the workflow packages, in ess.reduce.

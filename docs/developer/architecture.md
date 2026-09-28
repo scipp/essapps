@@ -373,7 +373,7 @@ Details: [rules.md](rules.md).
 - **Only finalized data enters SciCat**, because data in SciCat cannot be removed.
   Publication is an explicit, idempotent operation on one output.
   The SciCat entry carries a provenance snapshot that can be read without any service of ours.
-  A result that a held stage served is recomputed in a throwaway process first.
+  A result that a held stage served is refused until it is recomputed in a throwaway process.
 - **The record store is not a catalogue.**
   It answers what was computed; SciCat answers what was measured and what was published.
   Nothing is stored per dataset.

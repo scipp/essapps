@@ -479,7 +479,7 @@ Actor: user in a notebook.
 Checks: what enters SciCat was computed in a way the record reproduces; a development binding of the workflow is refused or flagged.
 
 Outcome: fits.
-A result that a held stage served is recomputed in a throwaway process before publication, and a record bound to workflow code in process is refused unless the client overrides ([operations.md](operations.md#publication)).
+A result that a held stage served is refused until it is recomputed in a throwaway process, and a record bound to workflow code in process is refused unless the client overrides ([operations.md](operations.md#publication)).
 
 ### F4. Publish a corrected version
 

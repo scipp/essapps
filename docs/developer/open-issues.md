@@ -166,6 +166,9 @@ Upload of records from a private local record store to a shared backend, carryin
 
 Provisional outputs of a running run, for progress display during chunk-wise processing.
 
+Automatic recompute on publication of a result that a held stage served.
+Publication refuses such a result, and the person recomputes it and publishes the recomputed record.
+
 A versioned collection record, appended to by the client and referenced by version, if lists of runs to aggregate grow well beyond a few thousand entries and resending them whole becomes a cost.
 
 Resource hints on the spec for the cluster launcher, such as memory as a function of input size and of the attempt number, which a retry record knows from its link to the record it retries.

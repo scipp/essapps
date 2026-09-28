@@ -91,7 +91,8 @@ A publication may name the PID it supersedes, which the snapshot records, since 
 
 **Publication reads a disk copy of a result that was computed cold.**
 An output that exists only in a session is written out first.
-A record whose result came out of a held stage is recomputed in a throwaway process first, so that what enters SciCat was computed from its parameters alone and the record describes it exactly.
+A record whose result came out of a held stage is refused, so that what enters SciCat was computed from its parameters alone and the record describes it exactly.
+The person recomputes it in a throwaway process and publishes the new record.
 A record bound to workflow code in-process from a notebook is refused unless the client overrides, because such a record cannot be reproduced elsewhere.
 
 **The intent to publish is recorded before SciCat is written, and the PID after.**
@@ -222,6 +223,6 @@ Rejected because SciCat entries cannot be removed, so every unreviewed intermedi
 
 - A local application in one process shares the interpreter between the UI and the runs, so a long run blocks the UI unless the session moves to a subprocess, which needs the remote-session machinery.
 - The client interface carries a view vocabulary, and dense data needs a chunking decision at write time so that views on data larger than a cache can read partially from disk.
-- Publication costs a recompute whenever the result being published was served by a held stage.
+- A result that a held stage served costs a recompute before it can be published.
 - Instrument-shared artefacts are an access-control case that SciCat proposal membership does not cover, and their disk copies are exempt from retention.
 - "No message broker" is a local-mode decision, to be re-examined when the cluster launcher is built.

@@ -28,13 +28,13 @@ The skeleton was built in the opposite order, local mode and sessions first, bec
 |---|---|---|---|
 | [Records and references](records.md) | run records, output references, dataset references by PID | run-number resolution, recompute, dropping a proposal with its export bundle | local files as datasets with checksums |
 | [Data store](records.md#the-data-store) | disk tier and registry, a quota alarm | retention and drop | private memory caches, the second execution shape, write-out on demand |
-| [Scheduling](records.md#scheduling-pending-outputs-as-inputs) | none required; see below | pending outputs and groups, when a workflow asks | unchanged |
+| [Scheduling](records.md#scheduling-pending-outputs-as-inputs) | pending outputs and groups, for specs over references | unchanged | unchanged |
 | [Workflow contract](workflow-contract.md) | the workflow protocol, entry points, path or object, three validation layers, typed outputs, collections, code revision | exposed intermediates | in-process binding |
-| [Aggregation](aggregation.md) | specs over a list of runs with the binding's accumulators, and a rule's series, for sums and angle series | specs over references to other records' outputs, for a sum spread over nodes | stages that hold a sum's accumulation; the fold, only if a series arrives faster than its runs can be reduced |
+| [Aggregation](aggregation.md) | specs over a list of runs with the binding's accumulators, and a rule's series, for sums and angle series; specs over references to other records' outputs, for a sum split into a contribute and a combine spec | unchanged | stages that hold a sum's accumulation; the fold, only if a series arrives faster than its runs can be reduced |
 | [Rules](rules.md) | templates from files, lookups, rules, `apply`, labels and member keys, the trigger loop, trigger status, cancel by label, real SciCat dataset source | the batch form, templates saved from requests | unchanged |
 | [Interactive work](stages.md) | views of whole small outputs, dense twins of event outputs | view vocabulary for slicing and overlays, a read cache in the service | sessions, held stages, slots, views from session memory |
 | [Client interface](operations.md#the-client-interface) | in-process, used by the trigger loop and a web page in the backend process | over HTTP, for a client outside the backend process | direct scipp access in notebooks |
-| [Publication](operations.md#publication) | provenance snapshot, real SciCat publisher | unchanged | recompute before publishing a result that a stage served |
+| [Publication](operations.md#publication) | provenance snapshot, real SciCat publisher | unchanged | refusal of a result that a stage served, until it is recomputed |
 | [Failure handling](operations.md#failure-handling) | all of it except session loss | unchanged | session loss |
 | Launcher | subprocess on the backend host | cluster, when one host is not enough | session, later remote session |
 | Web UI | the rule's batch table, record list, plots | forms with live validation, per-member overrides, template editor | applications per technique |
@@ -63,9 +63,6 @@ Two simplifications are available in phase 1:
 
 ## Decisions that fall due in phase 2
 
-- **Pending outputs.**
-  The first need is a user who submits a vanadium reduction and its consumers together, or a temperature scan followed by a sum.
-  Until then, "submit, wait, submit the batch" costs the user one wait. The skeleton already implements pending outputs.
 - **Local uploads.**
   Refusing files from a user's disk in the shared service removes local files as datasets, checksums, the quota per proposal, and the retention exemption from phases 1 and 2.
   The cost is that a user away from the facility cannot use the shared service for a file that is not in the catalogue.
@@ -79,7 +76,7 @@ In phase 2 a manual reduction from the web page is a batch of one, and a rerun w
 
 These are judgments.
 
-**Defer until a workflow asks**: pending outputs and groups, the view vocabulary beyond the whole output, and instrument-shared artefacts, which are three rules (access, retention exemption, templates) that are not needed while instrument staff are the only users.
+**Defer until a workflow asks**: the view vocabulary beyond the whole output, and instrument-shared artefacts, which are three rules (access, retention exemption, templates) that are not needed while instrument staff are the only users.
 
 **Consider dropping**:
 

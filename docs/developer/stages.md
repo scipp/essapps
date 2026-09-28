@@ -154,7 +154,7 @@ Changing a threshold is a run record with a new value of the parameter it varies
 Adding one more run to a sum is a run record whose list holds one more run.
 
 The record carries a `reused` flag, which says that a held stage served it.
-Publication reads the flag and recomputes such a result in a throwaway process first, so that what enters SciCat was computed without held state.
+Publication reads the flag and refuses such a result until it is recomputed in a throwaway process, so that what enters SciCat was computed without held state.
 See [operations.md](operations.md#publication).
 
 A session holds the code it imported.
@@ -228,7 +228,7 @@ They differ in where the interactive state lives.
 **The session model** is what this document describes.
 State lives in a session that the framework knows about.
 Every rerun is a complete record in a slot.
-The stage contract and its test helper guarantee that a result through a stage equals the direct one, and publication recomputes without a stage.
+The stage contract and its test helper guarantee that a result through a stage equals the direct one, and publication refuses a result a stage served until it is recomputed without one.
 Interactive work in the shared web UI needs remote sessions, which the framework must launch, route requests to, time out, and cap.
 
 **The checkpoint model** keeps the state in the application's process, and the framework does not know about it.
@@ -319,7 +319,7 @@ Three properties of the core keep all three models possible:
 
 ### What sessions cost in concepts
 
-Without sessions the design loses the session itself, held stages, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
+Without sessions the design loses the session itself, held stages, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication refuses a result a stage served, in-process binding, and session loss as a failure event.
 In the skeleton that is about one seventh of the source.
 Records, references, the spec vocabulary, the scheduler, rules, the trigger loop, validation, completion markers, publication, and proposal scoping are unaffected.
 Batch and automatic reduction use none of the session concepts.
