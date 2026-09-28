@@ -45,8 +45,11 @@ def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> 
 
     assert batch_table(client, rule).index.tolist() == ['si']
     assert len(client.records(label='reflectivity', member_key='si')) == 2
+    # The series lists its runs in run order, whatever order they arrived in.
     assert curve.request.datasets() == [
-        dataset.ref for dataset in client.datasets() if dataset.fields.get('sample')
+        dataset.ref
+        for dataset in sorted(client.datasets(), key=lambda d: d.run)
+        if dataset.fields.get('sample')
     ]
     assert client.output(curve, 'normalized').values.tolist() == [4.0 / 9.0, 5.0 / 9.0]
 

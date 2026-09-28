@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
+from functools import cmp_to_key
 from typing import Any, Literal
 
 import pandas as pd
@@ -270,8 +271,9 @@ def _series(
 
     The members of a series are the candidates, the rule's in ``pool`` and
     those given, with its value of the series key that the rule's selector
-    matches and that are not excluded, in the order the sources list them.
-    The bound does not apply: a series that began before it is one series.
+    matches and that are not excluded, in the order of their datasets by
+    :func:`precedes`, so that it does not depend on the source. The bound does
+    not apply: a series that began before it is one series.
     """
     given: dict[str, list[Candidate]] = {}
     for dataset in datasets:
@@ -287,7 +289,23 @@ def _series(
             and _key(dataset) not in rule.exclusions
         ):
             members[value].setdefault(_key(dataset), dataset)
-    return {value: list(found.values()) for value, found in members.items()}
+    return {
+        value: sorted(found.values(), key=cmp_to_key(_compare))
+        for value, found in members.items()
+    }
+
+
+def _compare(a: Candidate, b: Candidate) -> int:
+    """The order of two candidates by :func:`precedes`; 0 where it says none."""
+    x, y = _dataset(a), _dataset(b)
+    if x is None or y is None:
+        return 0
+    return -1 if precedes(x, y) else 1 if precedes(y, x) else 0
+
+
+def _dataset(candidate: Candidate) -> Dataset | None:
+    """The dataset a candidate is, or the one its member key names."""
+    return candidate if isinstance(candidate, Dataset) else candidate.dataset
 
 
 def _fill(
@@ -409,7 +427,7 @@ def _nearest(
     The reference of the dataset among ``known`` that ``nearest`` resolves to
     for a member, which is resolved against the member's dataset.
     """
-    dataset = member if isinstance(member, Dataset) else member.dataset
+    dataset = _dataset(member)
     if dataset is None:
         raise ValueError(f'{_key(member)} has no dataset to resolve {field!r} by')
     before: Dataset | None = None
@@ -487,7 +505,7 @@ def backlog(client: Client, rule: Rule) -> Group:
 
 def _after(rule: Rule, candidate: Candidate) -> bool:
     """Whether a candidate lies after the rule's bound, by its dataset."""
-    dataset = candidate if isinstance(candidate, Dataset) else candidate.dataset
+    dataset = _dataset(candidate)
     return dataset is None or rule.selector.after.passes(dataset)
 
 

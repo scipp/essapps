@@ -617,6 +617,26 @@ def test_a_series_request_equals_a_sum_over_its_runs(
     )
 
 
+def test_a_series_lists_its_runs_in_run_order_whatever_the_arrival(
+    client: Client, tmp_path: Path
+) -> None:
+    """A run arriving late goes into its place, not at the end."""
+    source = FakeDatasetSource()
+    client.backend.sources.append(source)
+    loop = TriggerLoop(client, series_rule())
+    for run in (1, 3, 2):
+        source.add(
+            Dataset(
+                path=write_run(tmp_path / f'{run}.h5', [1.0, 2.0]),
+                instrument='loki',
+                run=run,
+                metadata={'sample': 'sio2'},
+            )
+        )
+        (latest,) = client.wait(loop.run_once())
+    assert listed(latest) == ['run:loki/1', 'run:loki/2', 'run:loki/3']
+
+
 def test_a_run_acquired_again_is_counted_once(client: Client, tmp_path: Path) -> None:
     """A series request lists each run once, so applying the rule again is safe."""
     first = sample(tmp_path / 'a.h5', [1.0, 2.0, 3.0, 4.0], 'pid/1')

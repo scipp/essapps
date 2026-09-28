@@ -288,7 +288,8 @@ class Series(BaseModel, frozen=True):
 
     ``key`` is the dataset field whose value keys datasets into a series, and
     is the member key of the series' requests. The rule submits one request
-    whose dataset field lists every current member of the series, so
+    whose dataset field lists every current member of the series, in the order
+    of :func:`precedes`, so
     successive requests supersede each other, and the result a record stands
     for is read off its request alone. Each member is filled from its own
     lookup entry: into its row where the template's dataset field is a column

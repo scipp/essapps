@@ -200,7 +200,7 @@ rule = Rule(
 ```
 
 `Series(key, fire)` names the dataset field whose value keys datasets into a series, and when the rule fires.
-The current runs of a series are the datasets with the same value of the key that the selector matches and that are not excluded, in the order the sources list them.
+The current runs of a series are the datasets with the same value of the key that the selector matches and that are not excluded, in the order of the instrument's datasets ([The dataset source](#the-dataset-source)), not the order a source lists them in.
 The series value is the member key, so successive requests of one series supersede each other under the rule's label, and the batch table has one row per sample, whose curve grows.
 A run that arrives again, or out of order, is listed once.
 The bound does not apply to the runs of a series, so a series that began before the bound is one series.
@@ -405,6 +405,7 @@ Fan-out whose keys come from the data takes two phases instead: a first run whos
 - A nearest fill looking before the member has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person pins one.
   One looking after the member, or either way, waits, and the samples after the last can wait until a person pins one.
 - A series request over k runs reduces all k runs in a throwaway process ([aggregation.md](aggregation.md#a-series-under-a-rule)).
+- A run of a series that arrives out of order goes into its place in the list, so the list no longer extends the previous one, and a session accumulates the series again from its first run ([stages.md](stages.md#a-stage-over-a-list-of-runs)).
 - One run that cannot be read fails its series request until someone excludes it.
 - A series a person defines by hand, "these runs, and keep accumulating as more arrive", has no place here.
   It would be a rule with members a person lists instead of a selector, and it is left out until someone asks for it.
