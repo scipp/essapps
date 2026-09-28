@@ -24,6 +24,7 @@ from ess.apps.batch import (
     apply,
     backlog,
     batch_table,
+    candidates,
     dataset_table,
     reprocess,
     retry,
@@ -1362,13 +1363,8 @@ def settle(client: Client, loop: TriggerLoop) -> None:
         client.wait(fired)
 
 
-def test_a_combine_follows_the_contributions_of_a_series_as_it_grows(
-    client: Client, tmp_path: Path
-) -> None:
-    """One rule reduces each run to its contribution, a second combines the
-    contributions of each sample, fired again as the sample gets more runs."""
-    source = FakeDatasetSource()
-    client.backend.sources.append(source)
+def contribute_and_combine() -> tuple[Rule, Rule]:
+    """A contribution per run, and a combine over the contributions per sample."""
     contribute = Rule(
         name='contribute',
         template=Template(spec=CONTRIBUTE.id, params={'floor': 1.5}, blanks=('run',)),
@@ -1379,6 +1375,17 @@ def test_a_combine_follows_the_contributions_of_a_series_as_it_grows(
         follows=Follows(label='contribute'),
         series=Series(key='sample'),
     )
+    return contribute, combine
+
+
+def test_a_combine_follows_the_contributions_of_a_series_as_it_grows(
+    client: Client, tmp_path: Path
+) -> None:
+    """One rule reduces each run to its contribution, a second combines the
+    contributions of each sample, fired again as the sample gets more runs."""
+    source = FakeDatasetSource()
+    client.backend.sources.append(source)
+    contribute, combine = contribute_and_combine()
     loop = TriggerLoop(client, contribute, combine)
     runs = [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]]
     for i, values in enumerate(runs, start=1):
@@ -1448,4 +1455,190 @@ def test_a_second_phase_fans_out_over_the_keys_the_first_found(
     assert [client.output(r, 'csv').read_text() for r in exports] == [
         'x,counts\n0.0,1.0\n1.0,2.0\n',
         'x,counts\n0.0,5.0\n1.0,6.0\n',
+    ]
+
+
+def test_a_combine_waits_on_a_failed_contribution_until_it_is_excluded(
+    client: Client, tmp_path: Path
+) -> None:
+    client.backend.sources += [
+        FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1')),
+        FakeDatasetSource(
+            Dataset(
+                path=tmp_path / 'gone.h5', pid='pid/2', metadata={'sample': 'sio2'}
+            ),
+            locates=False,
+        ),
+    ]
+    contribute, combine = contribute_and_combine()
+    loop = TriggerLoop(client, contribute, combine)
+    settle(client, loop)
+    assert client.records(label='combine') == []
+    reason = 'series sio2: contribute pid:pid/2 failed'
+    assert loop.waiting == {
+        'combine pid:pid/1': reason,
+        'combine pid:pid/2': reason,
+    }
+
+    combine.exclude('pid:pid/2', 'file lost')
+    settle(client, loop)
+    (combined,) = client.records(label='combine')
+    assert combined.status == Status.COMPLETED, combined.failure
+    assert len(combined.request.params['parts']) == 1
+
+
+def test_a_combine_keeps_a_member_whose_correction_failed(
+    client: Client, tmp_path: Path
+) -> None:
+    """The combine waits rather than lose a contribution it had."""
+    second = sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2')
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1'), second)
+    client.backend.sources.append(source)
+    contribute, combine = contribute_and_combine()
+    loop = TriggerLoop(client, contribute, combine)
+    settle(client, loop)
+    (first,) = client.records(label='combine')
+    assert len(first.request.params['parts']) == 2
+
+    second.path.unlink()
+    client.wait(client.submit_group(apply(client, contribute, [second])).values())
+    source.add(sample(tmp_path / 'c.h5', [3.0, 3.0], 'pid/3'))
+    settle(client, loop)
+    assert client.records(label='combine') == [first]
+    assert 'contribute pid:pid/2 failed' in loop.waiting['combine pid:pid/3']
+
+
+def test_a_rule_follows_the_series_of_another_by_the_fields_its_runs_share(
+    client: Client, tmp_path: Path
+) -> None:
+    """A sum per angle, then a sum of those per sample: two levels of a series."""
+    client.backend.sources.append(
+        FakeDatasetSource(
+            sample(tmp_path / '1.h5', [1.0, 2.0], 'pid/1', angle='a'),
+            sample(tmp_path / '2.h5', [3.0, 4.0], 'pid/2', angle='a'),
+            sample(tmp_path / '3.h5', [5.0, 6.0], 'pid/3', angle='b'),
+        )
+    )
+    per_angle = Rule(
+        name='per-angle',
+        template=Template(spec=SUM.id, blanks=('runs',)),
+        series=Series(key='angle'),
+    )
+    per_sample = Rule(
+        name='per-sample',
+        template=Template(spec=SUM.id, blanks=('runs',)),
+        follows=Follows(label='per-angle', output='total'),
+        series=Series(key='sample'),
+    )
+    settle(client, TriggerLoop(client, per_angle, per_sample))
+
+    angles = client.batch('per-angle')
+    assert [r.request.member_key for r in angles] == ['a', 'b']
+    (total,) = client.batch('per-sample')
+    assert total.request.member_key == 'sio2'
+    assert total.request.refs() == [r.ref('total') for r in angles]
+    assert list(client.output(total, 'total').values) == [9.0, 12.0]
+
+
+class Found(BaseModel):
+    parts: dict[str, int]
+
+
+class RunParams(BaseModel):
+    run: OpaqueFile
+
+
+FIND = WorkflowSpec(
+    name='find',
+    version=1,
+    title='Find parts',
+    description='Finds no parts in a run.',
+    params=RunParams,
+    outputs=Found,
+)
+
+
+def find_nothing() -> Any:
+    def run(params: RunParams, inputs: Any) -> dict[str, Any]:
+        return {'parts': {}}
+
+    return run
+
+
+def test_an_empty_collection_output_makes_no_candidate(
+    client: Client, samples: FakeDatasetSource
+) -> None:
+    client.backend.registry.bind(FIND, find_nothing)
+    find = Rule(name='find', template=Template(spec=FIND.id, blanks=('run',)))
+    each = Rule(
+        name='each',
+        template=Template(spec=EXPORT.id, blanks=('data',)),
+        follows=Follows(label='find', output='parts'),
+    )
+    settle(client, TriggerLoop(client, find))
+    assert len(client.batch('find')) == 2
+    assert candidates(client, each) == []
+
+
+def load_and_export() -> tuple[Rule, Rule]:
+    """A rule per dataset, and one that exports each of its results."""
+    load = Rule(name='load', template=Template(spec=LOAD.id, blanks=('run',)))
+    export = Rule(
+        name='export',
+        template=Template(spec=EXPORT.id, blanks=('data',)),
+        follows=Follows(label='load', output='data'),
+    )
+    return load, export
+
+
+def test_a_correction_of_a_followed_record_fires_the_follower_once_more(
+    client: Client, samples: FakeDatasetSource
+) -> None:
+    load, export = load_and_export()
+    loop = TriggerLoop(client, load, export)
+    settle(client, loop)
+    exported = {r.request.member_key: r for r in client.batch('export')}
+    assert list(exported) == ['pid:pid/1', 'pid:pid/2']
+    followed = {_member(c): c for c in candidates(client, export)}
+    assert trigger_status(client, export, followed['pid:pid/1']).reason == (
+        '1 record(s) under the label'
+    )
+
+    pinned = {'pid:pid/1': {'scale': 3.0}}
+    group = apply(client, load, [followed['pid:pid/1'].dataset], pinned)
+    client.wait(client.submit_group(group).values())
+    corrected = {_member(c): c for c in candidates(client, export)}['pid:pid/1']
+    assert trigger_status(client, export, corrected).state == 'fires'
+    settle(client, loop)
+    assert len(client.records(label='export', member_key='pid:pid/1')) == 2
+    assert len(client.records(label='export', member_key='pid:pid/2')) == 1
+
+
+def _member(candidate: Any) -> str:
+    return str(candidate.record.request.member_key)
+
+
+def test_backlog_and_reprocess_of_a_rule_that_follows(
+    client: Client, samples: FakeDatasetSource
+) -> None:
+    load, export = load_and_export()
+    settle(client, TriggerLoop(client, load))
+    later = Rule.over(
+        client.datasets(),
+        name='export',
+        template=export.template,
+        follows=export.follows,
+    )
+    assert trigger_status(client, later, candidates(client, later)[0]).reason == (
+        "before the rule's bound"
+    )
+    back = client.submit_group(backlog(client, later))
+    assert sorted(back) == ['pid:pid/1', 'pid:pid/2']
+    assert all(r.status == Status.COMPLETED for r in client.wait(back.values()))
+
+    moved = later.revise(template=later.template.revise())
+    again = reprocess(client, moved)
+    assert sorted(again) == ['pid:pid/1', 'pid:pid/2']
+    assert [r.refs() for r in again.values()] == [
+        r.request.refs() for r in back.values()
     ]

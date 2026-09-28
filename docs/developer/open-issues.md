@@ -107,9 +107,9 @@ See [aggregation.md](aggregation.md).
 
 See [rules.md](rules.md).
 
-- **Two-level aggregation under a rule is untested.**
+- **Two-level aggregation under a rule is tested with toy sums only.**
   Reflectometry sums same-angle runs and then stitches the angles.
-  A rule with a series per angle and a second rule that follows it with a series per sample would do both levels, but `ess.apps.amor` has neither spec over a list of runs yet.
+  A rule with a series per angle and a second rule that follows it with a series per sample does both levels, as `test_a_rule_follows_the_series_of_another_by_the_fields_its_runs_share` checks, but `ess.apps.amor` has neither spec over a list of runs yet.
 - **Roles fill one dataset field.**
   The field extractor gives each dataset a role, and `Complete(roles=...)` fires a series once each role is present, but the series fills one dataset field.
   A rule that feeds sample runs into one list parameter and background runs into another needs a mapping from role to the list parameter it fills.

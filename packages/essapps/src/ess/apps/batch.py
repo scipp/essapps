@@ -38,24 +38,23 @@ from .spec import DatasetRef, OutputRef, as_ref, dataset_refs, schema_columns, w
 
 
 @dataclass(frozen=True)
-class Completed:
+class Followed:
     """
-    A completed record under the label a rule follows, as one of its candidates.
+    A record under the label a rule follows, as one of its candidates.
 
-    It has the fields of ``dataset``, the one its member key names, if any. It
-    fills a row of references to every output of the record, or with
-    ``output`` a reference to that output, to its element ``key`` for a
-    collection.
+    ``dataset`` is the one its member key names, if any, and ``fields`` are that
+    dataset's, or else those on which every dataset the record references
+    agrees, as for a record of a series. A completed record fills a row of
+    references to every output of the record, or with ``output`` a reference
+    to that output, to its element ``key`` for a collection. A record that has
+    not completed fills nothing: a series lists it only to wait on it.
     """
 
     record: RunRecord
-    dataset: Dataset | None = None
+    dataset: Dataset | None
+    fields: dict[str, Any]
     output: str | None = None
     key: str | None = None
-
-    @property
-    def fields(self) -> dict[str, Any]:
-        return {} if self.dataset is None else self.dataset.fields
 
     @property
     def ref(self) -> Any:
@@ -67,7 +66,7 @@ class Completed:
         return self.record.ref(self.output, self.key)
 
 
-Candidate = Dataset | Completed
+Candidate = Dataset | Followed
 
 
 def _key(candidate: Candidate) -> str:
@@ -84,7 +83,9 @@ def _key(candidate: Candidate) -> str:
 def candidates(client: Client, rule: Rule | Template) -> list[Candidate]:
     """
     What a rule fires on: the datasets the sources know, or, for a rule that
-    follows another, the latest completed record per member key under its label.
+    follows another, the latest completed record per member key under its
+    label. For a rule with a series, the latest records that have not
+    completed are candidates too, so that their series waits on them.
     """
     return _candidates(client, rule, client.datasets())
 
@@ -99,15 +100,39 @@ def _candidates(
     output = rule.follows.output
     found: list[Candidate] = []
     for record in client.batch(rule.follows.label):
-        if record.status != Status.COMPLETED:
+        completed = record.status == Status.COMPLETED
+        if not completed and rule.series is None:
             continue
         dataset = known.get(str(record.request.member_key))
-        keys = None if output is None else record.output_keys(output)
+        fields = dataset.fields if dataset is not None else _shared(record, known)
+        keys = record.output_keys(output) if completed and output else None
         found += [
-            Completed(record, dataset, output, key)
-            for key in (sorted(keys) if keys else [None])
+            Followed(record, dataset, fields, output, key)
+            for key in ([None] if keys is None else sorted(keys))
         ]
     return found
+
+
+def _shared(record: RunRecord, known: Mapping[str, Dataset]) -> dict[str, Any]:
+    """The fields on which every known dataset a record references agrees."""
+    listed = [known[r] for r in map(str, record.request.datasets()) if r in known]
+    if not listed:
+        return {}
+    return {
+        name: value
+        for name, value in listed[0].fields.items()
+        if all(name in d.fields and d.fields[name] == value for d in listed[1:])
+    }
+
+
+def _unfinished(member: list[Candidate]) -> str | None:
+    """The followed records of a series that have not completed, or None."""
+    found = [
+        f'{c.record.request.label} {_key(c)} {c.record.status.value}'
+        for c in member
+        if isinstance(c, Followed) and c.record.status != Status.COMPLETED
+    ]
+    return ', '.join(found) or None
 
 
 def _names(value: Any, candidate: Candidate) -> bool:
@@ -147,7 +172,8 @@ def apply(
     dataset field holds every current member of each, those given included.
     When the dataset field is a column of a list parameter of rows, each
     dataset is one row, filled from its own lookup entry. A series that fires
-    once complete waits until it is.
+    once complete waits until it is, and a series over the records of another
+    rule while one of them has not completed.
 
     A pinned value replaces the fill of its field, so a fill it replaces is not
     resolved: pinning the can of a member that waits for one, or is refused
@@ -204,6 +230,8 @@ def _apply(
     waiting: dict[str, str] = {}
     for key, member in members.items():
         try:
+            if (unfinished := _unfinished(member)) is not None:
+                raise _Waits(f'series {key}: {unfinished}')
             if series is not None and member and not isinstance(series.fire, str):
                 if (missing := series.fire.missing(member)) is not None:
                     raise _Waits(f'series {key}: {missing}')
@@ -676,7 +704,7 @@ def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
     if rule.series is not None:
         member = str(candidate.fields.get(rule.series.key))
     records = client.records(label=rule.name, member_key=member)
-    if rule.series is not None or isinstance(candidate, Completed):
+    if rule.series is not None or isinstance(candidate, Followed):
         records = [
             r
             for r in records

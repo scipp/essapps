@@ -114,7 +114,7 @@ A **slot** is a label with no member key, owned by one interactive tool, so that
 | `retry` | the failure reasons on which a failed record is resubmitted, and a limit |
 | `series` | optional: the dataset field that keys a series, and when the series fires |
 | `follows` | optional: the label of another rule whose completed records are the candidates, instead of datasets |
-| `exclusions` | dataset identities the rule must not fire on or list in a series, each with a reason |
+| `exclusions` | datasets by identity, or followed records by member key, that the rule must not fire on or list in a series, each with a reason |
 | `active` | whether the rule fires at all |
 
 This rule subtracts from each sample the can measured before it, and is `subtract_rule()` of `batch_test.py`:
@@ -246,7 +246,7 @@ The rule says whether the results of a series are published, and by default they
 **Series membership is not stored.**
 Which runs belong to a series is asked of the dataset source when a series request is made.
 A metadata correction at the instrument therefore moves a run between series and the next request reflects it, while earlier records are untouched because they hold resolved references.
-An exclusion drops a run from the next request the same way.
+An exclusion drops a run from the next request the same way; applying the rule to the series again makes that request now.
 
 What the workflow does with the list is its own business, so a sum and a stitch look the same to the rule ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)).
 
@@ -254,7 +254,9 @@ What the workflow does with the list is its own business, so a sum and a stitch 
 
 **A rule that follows another fires on its completed records instead of on datasets.**
 `Follows(label)` makes the candidates the latest completed record per member key under the other rule's label.
-A candidate has the fields of the dataset its member key names, so selectors, lookups, and series keys work as on datasets.
+A candidate has the fields of the dataset its member key names, or else, as for a record of a series, the fields on which every dataset the record references agrees, the series key among them.
+Selectors, lookups, and series keys therefore work as on datasets, and a rule with a series per sample can follow one with a series per angle.
+A rule cannot follow its own label.
 It fills the template's dataset field with a row of references to every output of the record, by output name.
 This splits a sum into one request per run and one combine over the records ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)):
 
@@ -270,10 +272,11 @@ TriggerLoop(client, contribute, combine)
 
 `COMBINE`'s `parts` is a list of rows whose model is `CONTRIBUTE`'s output model, so each completed contribution is one row.
 The combine is fired again as the sample gets more runs, and its latest record equals the one request over the list, as `test_a_combine_follows_the_contributions_of_a_series_as_it_grows` checks.
-A contribution that failed is not a candidate: the combine leaves it out, and the failure shows in the contribute rule's batch table.
+A series over followed records waits while the latest record of one of its members has failed or is not done, and names that member, until it completes or the combine rule excludes it.
+The combine therefore never leaves out a failed contribution in silence, nor loses one it had while a correction of it runs.
 
 **`Follows(label, output=...)` is the second phase of a fan-out.**
-Each candidate fills a reference to that output, and a collection output gives one candidate per key, so the second rule makes one request per key the first phase found:
+Each candidate fills a reference to that output, and a collection output gives one candidate per key, none for an empty one, so the second rule makes one request per key the first phase found:
 
 ```python
 first = Rule(name='first', template=Template(spec=SUM.id, blanks=('runs',)),
@@ -381,7 +384,7 @@ A series whose length the user decides while measuring, such as one more angle, 
 Each arrival submits a request for the new run, whose outputs are the values that add, and a finalize request that accumulates the outputs of every current member.
 The k-th finalize reads k stored contributions and not k runs.
 Two rules, one following the other, build exactly this ([Rules over completed records](#rules-over-completed-records)), but as the default it costs too much.
-Nothing checks that the members fit, which needs the graph, and a member that failed is left out of the finalize, visible only in the other rule's table.
+Nothing checks that the members fit, which needs the graph, and a member that failed holds up the finalize until the finalize rule excludes it.
 One request over the list has neither problem.
 
 **A combine template on the series.**

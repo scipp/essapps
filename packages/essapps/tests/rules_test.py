@@ -14,11 +14,13 @@ from pydantic import BaseModel
 from ess.apps.examples import LOAD
 from ess.apps.rules import (
     Between,
+    Follows,
     Like,
     Lookup,
     LookupEntry,
     Near,
     Nearest,
+    Rule,
     Template,
 )
 from ess.apps.sources import Dataset
@@ -144,3 +146,12 @@ def test_a_dataset_matching_two_entries_is_an_error() -> None:
         lookup.entry(
             Dataset(path=Path('a'), instrument='d', run=7, metadata={'sample': 'van'})
         )
+
+
+# Rules
+
+
+def test_a_rule_cannot_follow_its_own_records(template: Template) -> None:
+    """Each record would be a new candidate, so the loop would fire forever."""
+    with pytest.raises(ValueError, match='would follow its own records'):
+        Rule(name='x', template=template, follows=Follows(label='x'))

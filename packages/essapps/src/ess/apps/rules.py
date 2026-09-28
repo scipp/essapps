@@ -32,8 +32,8 @@ from .sources import Dataset
 
 class HasFields(Protocol):
     """
-    What a rule fires on: a dataset, or a completed record of the rule it
-    follows (:class:`ess.apps.batch.Completed`). Criteria match its fields, and
+    What a rule fires on: a dataset, or a record of the rule it follows
+    (:class:`ess.apps.batch.Followed`). Criteria match its fields, and
     its ``ref`` is what it fills the template's dataset field with.
     """
 
@@ -309,13 +309,20 @@ class Follows(BaseModel, frozen=True):
 
     ``label`` is the other rule's label, and its candidates are the latest
     completed record per member key under it. A candidate has the fields of
-    the dataset its member key names, so selectors, lookups, and series keys
-    work as they do on datasets. It fills the template's dataset field with a
+    the dataset its member key names, or else, as for a record of a series,
+    the fields on which every dataset the record references agrees, the series
+    key among them. Selectors, lookups, and series keys therefore work as they
+    do on datasets. It fills the template's dataset field with a
     row of references to every output of the record, by output name, which is
     the form a combine spec over the records of a contribute spec takes.
     Where ``output`` names one output, it fills a reference to that output
     instead, and one to each element of a collection output, each its own
-    candidate: the second phase of a fan-out whose keys the first found.
+    candidate: the second phase of a fan-out whose keys the first found; a
+    collection with no element makes no candidate.
+
+    A series never loses a member in silence: while the latest record of one
+    of its members under ``label`` has failed or is not done, the series waits
+    and names it, until it completes or the rule excludes it.
     """
 
     label: str
@@ -350,6 +357,12 @@ class Rule(BaseModel):
     )
     active: bool = True
 
+    @model_validator(mode='after')
+    def _not_itself(self) -> Rule:
+        if self.follows is not None and self.follows.label == self.name:
+            raise ValueError(f'rule {self.name} would follow its own records')
+        return self
+
     @classmethod
     def over(cls, datasets: Iterable[Dataset], **fields: Any) -> Rule:
         """A rule bounded at the newest dataset the source knows, as at creation."""
@@ -368,5 +381,8 @@ class Rule(BaseModel):
         return self.model_copy(update={'version': self.version + 1, **changes})
 
     def exclude(self, member_key: str, reason: str) -> None:
-        """Never fire on this dataset; mutable state, not a new version."""
+        """
+        Never fire on or list this candidate, a dataset by identity or a followed
+        record by member key; mutable state, not a new version.
+        """
         self.exclusions[member_key] = reason
