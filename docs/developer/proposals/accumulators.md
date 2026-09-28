@@ -13,6 +13,7 @@ The code below is pseudocode in the style of the skeleton's API; names are open 
 - A reader names the current record of a label with the stand-in `Current`, resolved at submission like a run number. References do not change.
 - Combining and finalizing are separate. The workflow author declares a contribute spec and a finalize spec. The user pushes, the accumulator combines, the user finalizes.
 - How an accumulator combines, in memory, flat, or as a tree over many processes, is its policy. The user does not see it.
+- Adding to a sum in memory and fanning out over processes are one mechanism with two policies. A request over a list of runs stays, computed flat, and holds nothing.
 
 The rule that keeps this from repeating the stage records that 48e2c17 reverted:
 
@@ -37,6 +38,44 @@ An essapps `Stage` or `Accumulator` is plain data that names what to compute or 
 | `AccumulatorSpec`: an operation | an `Accumulator` of one value type; its states are records | a `sciline.Accumulator` |
 
 The word "accumulation" keeps its current meaning: the accumulated value.
+
+## Three needs, one mechanism
+
+Accumulating over runs serves three needs, and techniques differ in which they have:
+
+| Need | Stories | SANS, reflectometry | Spectroscopy |
+|---|---|---|---|
+| one request over a list, computed flat | S5, S6, a stitch under a rule | yes | yes |
+| adding to a sum held in memory | B2, E1, an accumulator over a beamtime | yes | yes |
+| fan-out across processes | a rotation scan over a thousand angles | no | yes |
+
+The second and third need are one mechanism: the author's split into a contribute spec and a finalize spec, and an `Accumulator` between them.
+Techniques differ only in its policy:
+
+```python
+Accumulator(name='sum', spec='sum/v1', policy=Held())                 # SANS: one process holds it
+Accumulator(name='rotation', spec='sum/v1', policy=Tree(fan_in=32))  # spectroscopy: combines fan out
+```
+
+The user code is the same for both, and a technique whose data grows changes a policy, not its workflows.
+
+The first need stays a request over a list parameter, computed flat: the binding calls the package's `sciline.Aggregation` and finalizes, and holds nothing between requests.
+Adding to a sum always goes through explicit pushes.
+The session no longer infers added members by comparing a list with the previous one.
+
+What SANS pays for this: the author declares the split, which is the signature of the `sciline.Aggregation` the package already builds, and interactive work writes more records, a contribute record per push and a state record whenever something reads the sum.
+
+### Alternative considered: an accumulating sibling of `Stage`
+
+An object beside `Stage` would hold accumulators at several points of one spec's graph: each call pushes one member, and outputs are computed from the held values.
+The record of push n is the spec over the list of the first n members, so no new kind of record is needed.
+The skeleton's adapter holds such an object for a stage whose blank is a list, inferring the added members from successive lists.
+
+It is not chosen, for three reasons:
+
+- Where values accumulate changes the result, a sum of ratios against a ratio of sums, so the points cannot be a caller's hint the way a stage's cut is. They belong to the author, which is what the split declares.
+- What such an object holds depends on the shape of the graph: which varied parameters the contributions read decides when the held values are dropped. sciline removed this kind of state from `Aggregation` (design doc section 8.4), and sciline keeps connectors out of `Stage` so that a driver can inspect, clear, serialize, or send them (section 8.1).
+- Spectroscopy needs the split for fan-out anyway, so the object would be a second mechanism for adding to a sum, beside the held `Accumulator`.
 
 ## The objects
 
@@ -241,9 +280,8 @@ The field is typed `Quantity | OutputRef` as today; `Current` is a stand-in for 
 client.run(SANS, {'sample_runs': samples, 'background_runs': backgrounds, ...})
 ```
 
-Unchanged: the binding contributes, accumulates, and finalizes inside one run, with the factory of `sum`.
-It is `Flat` in one process, written as one request.
-Whether to keep it beside accumulators is an open question below; the stories S5, S6, D1, and E1 use it.
+The binding contributes, accumulates, and finalizes inside one run, with the factory of `sum`, and holds nothing afterwards.
+A request whose list extends a previous one reduces every run again; adding a run cheaply is B2.
 
 Across records, S6 is two accumulators with `sum`, one for the sample runs and one for the background runs, and a finalize spec that reads both:
 
@@ -271,6 +309,7 @@ show(client.run(SANS_FINALIZE, {'parts': Current('sum'), 'q': q}))
 ```
 
 Adding is one contribution and one push. Removing pushes the kept contributions again, without running them.
+This replaces the session's held stage over a list, which inferred the added run from the longer list.
 
 ### Rotation scan over a thousand angles
 
@@ -349,13 +388,15 @@ It stays a workflow spec over a list of references, recomputed over every member
 - The skeleton's `COMBINE`, which returns `finalize(combine(parts))`, becomes the built-in `COMBINE` and a finalize spec per workflow.
 - A contribute spec outputs one value, a row where several values accumulate together. The adapter's `targets` map the fields of such an output to sciline keys, as `keys` already do for a list of rows.
 - Accumulator specs are a second kind of spec: operations, a standard set in ess.reduce, with factories under the entry-point group `ess.apps.accumulators`. The adapter's `aggregations={field: MakeAggregation}` stays for the one-request sum; the accumulators of the package's aggregation should be these factories, so that the one-request sum and an accumulator agree.
+- The one-request sum is computed flat, and a stage over a list holds no accumulation. The incremental part of the adapter goes: comparing a list with the previous one, finding the varied parameters the contributions read, rebuilding the aggregation when one changes, and the extra finalize inputs. Story B2's outcome changes to the `Held` accumulator.
+- The adapter checks a contribute spec and a finalize spec against the stages of the package's aggregation when it binds them.
 - `Follows` names any label, including an accumulator's; `Into` is new on `Rule`.
 - The data store may ask a holder the backend owns for a copy. Today the registry never learns about memory in any process.
 
 ## Open questions
 
 1. **Does the standard set cover the packages?** The survey lists categories, not functions. Every function passed to `reduce` in the scipp/ess monorepo, and every accumulator in `ess.reduce.streaming`, should be checked against `sum`, `same`, `union`, and `concat`, and the rest listed as package operations.
-2. **Keep the one-request sum?** It is the common case and four stories use it, but it is a second way to write a flat accumulation.
+2. **Three specs for one reduction.** A SANS author writes the whole spec for the one-request sum, a contribute spec, and a finalize spec, and the adapter checks all three against one aggregation. Can the whole spec be derived from the split instead, without a new, composite kind of record?
 3. **`Current` on a pending state.** Should `Current` resolve only to a completed record, or to the pending root of a `Tree`, so that finalize waits? The rotation scan needs the latter.
 4. **What a push is.** Only a run submitted with `into=`, or also every record completed under a label that the accumulator follows? The second makes rules and hand-made runs the same, and lets anyone who submits under that label feed it.
 5. **Agreement between members.** A field accumulated with `same` refuses members that disagree on its value, so an author who wants members to agree on a parameter puts it in the contribution row. Is that enough, or should the backend also compare the parameters of the contributing records, which needs no graph either?
