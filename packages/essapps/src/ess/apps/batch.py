@@ -30,9 +30,9 @@ from pydantic import BaseModel
 from .backend import SubmitError
 from .client import Client
 from .records import Group, Origin, RunRecord, RunRequest, Template
-from .rules import AsOf, Lookup, LookupEntry, Rule, matches, precedes
+from .rules import AsOf, Lookup, Rule, matches, precedes
 from .sources import Dataset
-from .spec import DatasetRef, as_ref, dataset_refs
+from .spec import DatasetRef, as_ref, dataset_refs, field_of
 
 
 def apply(
@@ -57,6 +57,8 @@ def apply(
     For a rule with a series, a member is a series: the given datasets name the
     series they belong to, keyed by the series value, and the template's
     dataset field holds every current member of each, those given included.
+    When the dataset field is a column of a list parameter of rows, each
+    dataset is one row, filled from its own lookup entry.
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. It carries the template's
@@ -80,7 +82,9 @@ def apply(
         members = {key: [] for key in values}
     group: dict[str, RunRequest] = {}
     for key, member in members.items():
-        fill, entry = _fill(client, template, lookup, member, series=series is not None)
+        fill, entries = _fill(
+            client, template, lookup, member, series=series is not None
+        )
         group[key] = client.request(
             template,
             fill | values.get(key, {}),
@@ -90,7 +94,7 @@ def apply(
                 template=template.id,
                 rule=of_rule.id if of_rule is not None else None,
                 lookup=None if lookup is None else lookup.id,
-                entry=None if entry is None else entry.name,
+                entries=entries,
                 pinned=dict(values.get(key, {})),
             ),
         )
@@ -132,37 +136,47 @@ def _fill(
     datasets: list[Dataset],
     *,
     series: bool,
-) -> tuple[dict[str, Any], LookupEntry | None]:
+) -> tuple[dict[str, Any], dict[str, str]]:
     """
-    What datasets fill, and the lookup entry they matched.
+    What datasets fill, and the lookup entry each matched, by dataset identity.
 
     The template's dataset field gets the dataset, or for a series the list of
-    them, and the fields of the matched lookup entry their values, an as-of
-    fill resolved. A series is one request, so its members must match one entry
-    that fills the same values for each of them.
+    them. Each dataset is filled from its own lookup entry, an as-of fill
+    resolved against it. When the dataset field is a column of a list parameter
+    of rows, ``runs.run``, each dataset is a row, and a fill named for another
+    column, ``runs.floor``, goes into that dataset's row. Every other fill goes
+    into the request, which has one value per field, so members of a series
+    that fill such a field differently are refused.
     """
     if not datasets:
-        return {}, None
-    fills = []
+        return {}, {}
+    field, _, column = template.field_for_dataset().partition('.')
+    requests: list[dict[str, Any]] = []
+    members: list[Any] = []
+    entries: dict[str, str] = {}
     for dataset in datasets:
         entry = lookup.entry(dataset) if lookup is not None else None
-        values = {
-            field: _as_of(client, dataset, field, value)
-            if isinstance(value, AsOf)
-            else value
-            for field, value in (entry.fills if entry is not None else {}).items()
-        }
-        fills.append((entry, values))
-    for dataset, fill in zip(datasets[1:], fills[1:], strict=True):
-        if fill != fills[0]:
-            raise ValueError(
-                f'{dataset.ref} is filled otherwise than {datasets[0].ref}, '
-                'and a series is filled alike for every member'
+        request: dict[str, Any] = {}
+        row: dict[str, Any] = {column: dataset.ref}
+        if entry is not None:
+            entries[str(dataset.ref)] = entry.name
+        for name, fill in (entry.fills if entry is not None else {}).items():
+            value = (
+                _as_of(client, dataset, name, fill) if isinstance(fill, AsOf) else fill
             )
-    refs = [dataset.ref for dataset in datasets]
-    entry, values = fills[0]
-    field = template.field_for_dataset()
-    return {field: refs if series else refs[0]} | values, entry
+            owner, _, inner = name.partition('.')
+            if column and owner == field:
+                row[inner] = value
+            else:
+                request[name] = value
+        if requests and request != requests[0]:
+            raise ValueError(
+                f'{dataset.ref} fills the request otherwise than {datasets[0].ref}, '
+                'and a request has one value per field'
+            )
+        requests.append(request)
+        members.append(row if column else dataset.ref)
+    return {field: members if series else members[0]} | requests[0], entries
 
 
 def _as_of(client: Client, dataset: Dataset, field: str, as_of: AsOf) -> DatasetRef:
@@ -242,9 +256,7 @@ def reprocess(client: Client, rule: Rule) -> Group:
     return _again(client, rule, _stale(client, rule))
 
 
-def retry(
-    client: Client, rule: Rule | Template, *, label: str | None = None
-) -> Group:
+def retry(client: Client, rule: Rule | Template, *, label: str | None = None) -> Group:
     """
     The members under a label whose latest record failed or was cancelled.
 
@@ -266,7 +278,7 @@ def _datasets(
     dataset, and has none.
     """
     if isinstance(rule, Rule) and rule.series is not None:
-        listed = record.request.params.get(rule.template.field_for_dataset())
+        listed = record.request.params.get(field_of(rule.template.field_for_dataset()))
         keys = [str(ref) for ref in dataset_refs(listed)]
     else:
         keys = [str(record.request.member_key)]
@@ -382,7 +394,7 @@ def trigger_status(client: Client, rule: Rule, dataset: Dataset) -> TriggerStatu
         records = client.records(label=rule.name, member_key=member)
     else:
         value = str(dataset.fields.get(rule.series.key))
-        field = rule.template.field_for_dataset()
+        field = field_of(rule.template.field_for_dataset())
         records = [
             record
             for record in client.records(label=rule.name, member_key=value)
@@ -443,7 +455,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
 
     A query over the records, latest per member key, never a stored table: one
     row per member, the member key as index, and each record's rule version and
-    lookup entry as columns. The value columns are the fields that differ per
+    lookup entries as columns. The value columns are the fields that differ per
     member, which are the blanks of the rule's template and every field a member
     pinned. Each shows the value the request was made with, whoever supplied it,
     and ``pinned`` names the fields of the row a person pinned. A field holding a
@@ -468,7 +480,7 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
             'template': origin.template,
             'rule': origin.rule,
             'lookup': origin.lookup,
-            'entry': origin.entry,
+            'entries': ', '.join(dict.fromkeys(origin.entries.values())),
             'pinned': ', '.join(origin.pinned),
         }
         for field in fields:

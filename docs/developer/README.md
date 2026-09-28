@@ -47,7 +47,7 @@ client.provenance(iofq)                                  # back to the dataset r
    That is the only scheduling mechanism.
 6. **A sum over runs is one run over a list of runs.**
    The spec's run parameter is a list, and the record names every run it sums.
-   The binding reduces each run and accumulates with the author's accumulators, as `sciline.Aggregation` does, and the framework never adds arrays.
+   The binding wraps the package's `sciline.Aggregation`, which reduces each run and accumulates, and the framework never adds arrays.
    A session holds the accumulation as a cache, so adding a run to a sum reduces only that run.
 7. **Batch and automatic reduction are one mechanism.**
    A template is a partial request, a lookup fills fields from dataset metadata, and a rule adds a selector for datasets.

@@ -103,7 +103,9 @@ class LookupEntry(BaseModel, frozen=True):
     One row of a lookup: what it matches, and what it fills.
 
     An entry with no criteria is the wildcard, which applies to what nothing
-    else matched. A fill may be an :class:`AsOf` instead of a value.
+    else matched. A fill may be an :class:`AsOf` instead of a value. A fill
+    named for a column of a list parameter of rows, ``runs.floor``, fills that
+    column in the row of the dataset that matched.
     """
 
     name: str
@@ -221,8 +223,10 @@ class Series(BaseModel, frozen=True):
     is the member key of the series' requests. On each arrival the rule
     submits one request whose dataset field lists every current member of the
     series, so successive requests supersede each other, and the result a
-    record stands for is read off its request alone. Whether the workflow sums
-    the members or stitches them is the workflow's.
+    record stands for is read off its request alone. Each member is filled from
+    its own lookup entry: into its row where the template's dataset field is a
+    column of a list parameter of rows, into the request otherwise. Whether the
+    workflow sums the members or stitches them is the workflow's.
     """
 
     key: str

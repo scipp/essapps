@@ -20,6 +20,9 @@ from ess.apps.client import Client, local
 from ess.apps.examples import (
     ACCUMULATORS,
     BACKGROUND,
+    COMBINE,
+    CONTRIBUTE,
+    FLOORED,
     NORMALIZE,
     Counts,
     Denominator,
@@ -29,6 +32,7 @@ from ess.apps.examples import (
     RunFile,
     Scale,
     add,
+    floored_aggregation,
     normalize_aggregation,
     normalize_pipeline,
     registry,
@@ -94,6 +98,17 @@ def pushed() -> list[Any]:
 
 def counted_workflow(pushed: list[Any]) -> PipelineAdapter:
     """The example's binding, with the denominator's accumulator counted."""
+
+    def counted_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+        return sciline.Aggregation(
+            pipeline,
+            members=[RunFile],
+            accumulators={
+                Numerator: ACCUMULATORS[Numerator],
+                Denominator: lambda: CountingAccumulator(pushed),
+            },
+        )
+
     return PipelineAdapter(
         normalize_pipeline(),
         keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
@@ -103,11 +118,7 @@ def counted_workflow(pushed: list[Any]) -> PipelineAdapter:
             'numerator': Numerator,
             'denominator': Denominator,
         },
-        members=('runs',),
-        accumulators={
-            Numerator: ACCUMULATORS[Numerator],
-            Denominator: lambda: CountingAccumulator(pushed),
-        },
+        aggregations={'runs': counted_aggregation},
     )
 
 
@@ -177,6 +188,46 @@ def test_two_lists_of_runs_are_summed_separately(
     assert client.output(result, 'subtracted').values.tolist() == [4.0, 4.0]
 
 
+def test_a_value_per_run_is_a_column_of_the_member_table(
+    client: Client, runs: list[DatasetRef], datasets: Path
+) -> None:
+    floors = (1.5, 0.0, 3.0)
+    rows = [{'run': run, 'floor': f} for run, f in zip(runs, floors, strict=True)]
+    (total,) = client.wait([client.run(FLOORED, {'runs': rows, 'scale': 2.0})])
+    assert total.status == Status.COMPLETED, total.failure
+    pipeline = normalize_pipeline()
+    pipeline[Scale] = 2.0
+    table = {
+        i: {RunFile: datasets / f'dream_{i}.h5', Floor: f}
+        for i, f in zip((1, 2, 3), floors, strict=True)
+    }
+    expected = floored_aggregation(pipeline).compute(table)[Normalized]
+    assert equal(client.output(total, 'normalized'), expected)
+    # Rows that hold data references are a blank of a template saved from it.
+    assert Template.from_request('t', total.request, FLOORED).blanks == ('runs',)
+
+
+def test_contribute_and_combine_over_references_equal_the_list_form(
+    client: Client, runs: list[DatasetRef]
+) -> None:
+    """A sum split into two specs, both built from the one aggregation."""
+    parts = client.wait(
+        [client.run(CONTRIBUTE, {'run': run, 'floor': PARAMS['floor']}) for run in runs]
+    )
+    refs = [
+        {'numerator': part.ref('numerator'), 'denominator': part.ref('denominator')}
+        for part in parts
+    ]
+    (combined,) = client.wait(
+        [client.run(COMBINE, {'parts': refs, 'scale': PARAMS['scale']})]
+    )
+    (at_once,) = client.wait([client.run(NORMALIZE, PARAMS | {'runs': runs})])
+    assert combined.status == Status.COMPLETED, combined.failure
+    assert equal(
+        client.output(combined, 'normalized'), client.output(at_once, 'normalized')
+    )
+
+
 def test_a_sum_without_runs_is_refused_at_submit(client: Client) -> None:
     """At least one run is part of the spec's signature."""
     with pytest.raises(SubmitError, match='runs'):
@@ -210,7 +261,6 @@ def test_a_removed_run_accumulates_the_rest_afresh(
     assert equal(session.output(fewer, 'normalized'), by_sciline(datasets, (1, 3)))
 
 
-
 def test_a_run_whose_file_changed_is_contributed_again(
     session: Client, runs: list[DatasetRef], pushed: list[Any], datasets: Path
 ) -> None:
@@ -222,6 +272,7 @@ def test_a_run_whose_file_changed_is_contributed_again(
     assert not again.reused
     assert len(pushed) == 3 + 3
     assert equal(session.output(again, 'normalized'), by_sciline(datasets))
+
 
 def test_a_parameter_read_after_the_sum_reuses_the_accumulation(
     session: Client, runs: list[DatasetRef], pushed: list[Any], datasets: Path
@@ -257,8 +308,7 @@ def test_an_output_that_needs_each_run_is_refused(datasets: Path) -> None:
         keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
         resolve={'runs': 'path'},
         targets={'counts': Counts},
-        members=('runs',),
-        accumulators=ACCUMULATORS,
+        aggregations={'runs': normalize_aggregation},
     )
     params = NORMALIZE.params.model_validate({'runs': [ref]})
     with pytest.raises(ValueError, match='no value they need accumulates'):

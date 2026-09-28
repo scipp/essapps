@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_origin
 
 from ess.reduce.spec import (
     Array,
@@ -53,6 +53,7 @@ __all__ = [
     'SpecId',
     'WorkflowSpec',
     'as_ref',
+    'data_field_at',
     'data_fields',
     'dataset_path',
     'dataset_ref',
@@ -61,6 +62,7 @@ __all__ = [
     'literal_model',
     'parse_ref',
     'ref_fields',
+    'row_model',
     'schema_data_fields',
     'submodel',
     'walk_refs',
@@ -233,6 +235,36 @@ def literal_model(model: type[BaseModel]) -> type[BaseModel]:
 def field_of(path: str) -> str:
     """The parameter field a reference path belongs to: ``banks.a`` is ``banks``."""
     return path.split('.')[0].split('[')[0]
+
+
+def row_model(model: type[BaseModel], name: str) -> type[BaseModel] | None:
+    """
+    The model of each element of a list parameter of rows, or None.
+
+    A row is one member of a sum whose member table has several columns, such
+    as a run and its own transmission run; its fields are the columns.
+    """
+    annotation = model.model_fields[name].annotation
+    if get_origin(annotation) is not list:
+        return None
+    (item,) = get_args(annotation)
+    return item if isinstance(item, type) and issubclass(item, BaseModel) else None
+
+
+_ROW_PATH = re.compile(r'(?P<field>[^.\[]+)\[\d+\]\.(?P<column>.+)')
+
+
+def data_field_at(model: type[BaseModel], path: str) -> DataField | None:
+    """
+    The data field a reference at ``path`` fills, or None for a literal field.
+
+    ``path`` is as :func:`walk_refs` writes it. A reference in a row of a list
+    parameter, ``runs[0].run``, fills the ``run`` field of the row model.
+    """
+    match = _ROW_PATH.fullmatch(path)
+    if match is not None and (row := row_model(model, match['field'])) is not None:
+        return data_field_at(row, match['column'])
+    return data_fields(model).get(field_of(path))
 
 
 def schema_data_fields(schema: dict[str, Any]) -> dict[str, DataField]:

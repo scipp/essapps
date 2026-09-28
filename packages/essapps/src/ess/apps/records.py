@@ -28,6 +28,7 @@ from .spec import (
     WorkflowSpec,
     data_fields,
     dataset_refs,
+    row_model,
     walk_refs,
 )
 
@@ -66,7 +67,7 @@ class Origin(BaseModel, frozen=True):
 
     Provenance is the data a run read, reached through the resolved request,
     which alone reproduces the run. This says which template version, rule
-    version, lookup version and lookup entry filled the request, and which
+    version, lookup version and lookup entries filled the request, and which
     values were pinned beyond them, so that a reprocess under a new template or
     lookup version carries what was pinned and fills the rest again.
     """
@@ -74,8 +75,10 @@ class Origin(BaseModel, frozen=True):
     template: str | None = None
     rule: str | None = None
     lookup: str | None = None
-    entry: str | None = Field(
-        default=None, description="Name of the entry of ``lookup`` that matched."
+    entries: dict[str, str] = Field(
+        default_factory=dict,
+        description="Name of the entry of ``lookup`` each dataset matched, by "
+        "dataset identity; a dataset that matched none is absent.",
     )
     pinned: dict[str, Plain] = Field(
         default_factory=dict,
@@ -146,7 +149,8 @@ class Template(BaseModel, frozen=True):
     the spec's results. ``dataset_field`` is the blank a dataset fills when a
     rule or :func:`ess.apps.batch.apply` supplies one, which is the sole blank
     unless a template has several; in a rule with a series it holds the list
-    of the series' datasets.
+    of the series' datasets. A column of a list parameter of rows,
+    ``runs.run``, makes each dataset one row of that list.
     """
 
     spec: SpecId
@@ -172,11 +176,17 @@ class Template(BaseModel, frozen=True):
         blank: Iterable[str] = (),
     ) -> Template:
         """
-        Save a request as a template: its data-reference fields, and those
-        named in ``blank``, are the blanks; every other value is kept, the ones
-        the request varied included.
+        Save a request as a template: its data-reference fields, lists of rows
+        that hold data references among them, and those named in ``blank``, are
+        the blanks; every other value is kept, the ones the request varied
+        included.
         """
-        blanks = tuple(sorted(set(data_fields(spec.params)) | set(blank)))
+        rows = {
+            name
+            for name in spec.params.model_fields
+            if (row := row_model(spec.params, name)) is not None and data_fields(row)
+        }
+        blanks = tuple(sorted(set(data_fields(spec.params)) | rows | set(blank)))
         params = {k: v for k, v in request.params.items() if k not in blanks}
         return cls(
             name=name,
@@ -251,9 +261,7 @@ class Group(Mapping[str, RunRequest]):
     or merge drops ``vary`` in silence.
     """
 
-    def __init__(
-        self, requests: Mapping[str, RunRequest], vary: Iterable[str]
-    ) -> None:
+    def __init__(self, requests: Mapping[str, RunRequest], vary: Iterable[str]) -> None:
         self._requests = dict(requests)
         self.vary = tuple(vary)
 

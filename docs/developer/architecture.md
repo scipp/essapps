@@ -304,21 +304,22 @@ total.request.params['runs']                   # the record names every run it s
 ```
 
 The spec declares `runs: list[OpaqueFile]`, and the backend validates the request like any other.
-The binding names `runs` as a **member parameter** and gives an accumulator for each value that adds, such as a numerator and a denominator:
+The package provides a `sciline.Aggregation` over the pipeline, which accumulates the values that add, such as a numerator and a denominator, and the binding wraps it:
 
 ```python
 PipelineAdapter(normalize_pipeline(), keys=..., targets=...,
-                members=('runs',), accumulators=ACCUMULATORS)
+                aggregations={'runs': normalize_aggregation})
 ```
 
-The adapter reduces each run and accumulates, which is `sciline.Aggregation` inside one run.
+The adapter contributes each run through the aggregation and accumulates, inside one run.
 The framework never adds arrays and knows nothing about scipp or normalisation.
+A value that differs per run makes each element of the list a row, whose fields are the columns of sciline's member table.
 Sample runs and background runs are two list parameters of one plain run.
 
 Stages and accumulations are caches.
 In a session, a template whose blank is the list names a stage that holds the accumulation over the runs it has seen, so adding a run to the list reduces only that run.
 A rule with a series submits, on each arrival, one request over every current run of the series.
-To reduce the runs of one sum on separate nodes, a client composes two specs over references, like any chain.
+To reduce the runs of one sum on separate nodes, the author splits the sum into a contribute spec and a combine spec, both built from the one aggregation, and a client composes them over references, like any chain.
 What the workflow does with a list is its own business, so a stitch over angles is a spec over a list as well.
 
 Details: [aggregation.md](aggregation.md).
@@ -410,7 +411,7 @@ Details: [operations.md](operations.md#failure-handling).
 | Runner | calls the workflow, validates and stores outputs | `runner` |
 | Session stages | holds the stages the session built, by the name its requests give them | `stages` |
 | Spec and binding | spec extensions, exposed intermediates, entry points, `Inputs`, the workflow protocol | `spec`, `binding` |
-| Sciline adapter | a pipeline as a workflow: each stage a `sciline.Stage`, member parameters with accumulators by key | `adapter` |
+| Sciline adapter | a pipeline as a workflow: each stage a `sciline.Stage`, list parameters through the package's `sciline.Aggregation` | `adapter` |
 | Dataset source | lists datasets with metadata; persists nothing | `sources` |
 | Rules | templates, lookups, rules, series; `apply`; trigger loop | `rules`, `batch` |
 | Views | slices and reductions for display | `views` |
@@ -438,7 +439,7 @@ The linked document argues the case and lists the costs.
 | [The caller names the stage as a template's blanks, the session holds it](stages.md#who-names-the-stage) | the caller knows which parameter will move | stage inputs inferred from successive requests; stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
 | [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
-| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums; the backend needs no graph; the binding accumulates and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
+| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums; the backend needs no graph; the binding wraps the package's aggregation and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |

@@ -27,6 +27,7 @@ from ess.apps.batch import (
 )
 from ess.apps.client import Client
 from ess.apps.examples import (
+    FLOORED,
     LOAD,
     NORMALIZE,
     REBIN,
@@ -127,7 +128,7 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     assert scales['run:dream/1'] == 2.0  # the template, matching no entry
     origin = group['pid:pid/2'].origin
     assert origin.pinned == {'scale': 4.0}
-    assert origin.entry == 'rest'
+    assert origin.entries == {'pid:pid/2': 'rest'}
     assert origin.template == 'load-defaults/v1'
     # The template's blank is filled in params.
     assert as_ref(group['pid:pid/1'].params['run']) == dataset_ref(pid='pid/1')
@@ -605,28 +606,60 @@ def test_an_excluded_run_leaves_the_series(client: Client, tmp_path: Path) -> No
     assert list(normalized.values) == [2.0 / 8.0 * 2.0] * 4
 
 
-def test_runs_a_lookup_fills_otherwise_refuse_the_series(
+NOISY = LookupEntry(
+    name='noisy', match={'mode': Like(pattern='noisy')}, fills={'floor': 3.0}
+)
+
+
+def test_each_run_of_a_series_is_filled_into_its_own_row(
     client: Client, tmp_path: Path
 ) -> None:
-    """One request has one value per parameter, so every run is filled alike."""
+    """A fill named for a column of the rows fills the row of the run it matched."""
     source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1'))
     client.backend.sources.append(source)
     floors = Lookup(
         name='floors',
-        entries=(
-            LookupEntry(
-                name='noisy',
-                match={'mode': Like(pattern='noisy')},
-                fills={'floor': 3.0},
-            ),
-        ),
+        entries=(NOISY.model_copy(update={'fills': {'runs.floor': 3.0}}),),
     )
-    loop = TriggerLoop(client, series_rule(floors))
+    rule = Rule(
+        name='floored',
+        template=Template(
+            spec=FLOORED.id,
+            params={'scale': 2.0},
+            blanks=('runs',),
+            dataset_field='runs.run',
+        ),
+        lookup=floors,
+        series=Series(key='sample'),
+    )
+    loop = TriggerLoop(client, rule)
+    client.wait(loop.run_once())
+
+    source.add(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2', mode='noisy'))
+    (second,) = client.wait(loop.run_once())
+    assert second.status == Status.COMPLETED, second.failure
+    assert second.request.params['runs'] == [
+        {'run': {'dataset': 'pid:pid/1'}, 'floor': 0.0},
+        {'run': {'dataset': 'pid:pid/2'}, 'floor': 3.0},
+    ]
+    assert second.request.origin.entries == {'pid:pid/2': 'noisy'}
+    # Run b is cut entirely at its floor and adds only to the denominator.
+    normalized = client.output(second, 'normalized')
+    assert list(normalized.values) == [1.0 / 7.0 * 2.0, 2.0 / 7.0 * 2.0]
+
+
+def test_runs_a_lookup_fills_otherwise_refuse_the_series(
+    client: Client, tmp_path: Path
+) -> None:
+    """A field of the request has one value, so runs must fill it alike."""
+    source = FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1'))
+    client.backend.sources.append(source)
+    loop = TriggerLoop(client, series_rule(Lookup(name='floors', entries=(NOISY,))))
     client.wait(loop.run_once())
 
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2', mode='noisy'))
     assert loop.run_once() == []
-    assert 'filled otherwise' in loop.refusals['series pid:pid/2']
+    assert 'one value per field' in loop.refusals['series pid:pid/2']
 
 
 def test_a_series_with_a_failed_run_is_retried_without_it_once_excluded(
@@ -682,7 +715,7 @@ def test_the_batch_table_is_a_query_over_the_records(
     table = batch_table(client, with_lookup)
     assert table.index.name == 'member'
     assert list(table.index) == ['pid:pid/1', 'pid:pid/2', 'pid:pid/9']
-    assert list(table.loc['pid:pid/1', ['rule', 'lookup', 'entry', 'status']]) == [
+    assert list(table.loc['pid:pid/1', ['rule', 'lookup', 'entries', 'status']]) == [
         'auto-load/v1',
         'by-sample/v1',
         'vanadium',

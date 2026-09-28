@@ -65,9 +65,10 @@ See [workflow-contract.md](workflow-contract.md).
   The same rewrite is what stops the additive half of reflectometry, the sum over runs at one angle, from being bound at all.
   ADR 0003 of scipp/sciline#245, section 6.4, makes the mask filenames a list parameter with its own providers.
   Once ess.sans follows it, the masks are an ordinary parameter of the spec.
-- **An ess.sans binding would bind sample and background runs as member parameters.**
-  ess.sans already has the list signature: `with_sample_runs` is the parameter mapper for `Filename[SampleRun]`, and `with_background_runs` the one for `Filename[BackgroundRun]`.
-  Such a binding would name `sample_run` and `background_run` as member parameters, with accumulators on `NormalizedQ[..., Numerator]` and `NormalizedQ[..., Denominator]`, the values the mappers merge.
+- **The LoKI binding sums no runs.**
+  ess.sans has no aggregation object yet, so `loki.py` would build one per run type, with accumulators on `NormalizedQ[..., Numerator]` and `NormalizedQ[..., Denominator]`, as in the validation script of scipp/sciline#245.
+  In ess.sans the detector masks read the detector IDs of `Filename[SampleRun]`, so the background runs cannot be contributed while the sample runs are a list: the key the background needs is the member key of the other list.
+  The validation script keeps one sample run set on the pipeline for this; the binding has no such value.
 - **The LoKI binding wraps the beam-centre finder as a function**, because the finder takes a pipeline, not a key.
   The expensive part of it is not shared with the reduction that consumes its result.
 - **Every scalar parameter costs a `NewType` and a provider** in the adapter's setup, whose only job is to turn plain data into a scipp object.
@@ -96,8 +97,8 @@ See [aggregation.md](aggregation.md).
 - **A combination over references has no consistency check over its parts.**
   A spec over a collection of references to other records' outputs, such as a stitch over a dict of curves (`amor.COMBINE`) or a sum spread over nodes, accepts parts reduced with different parameters, such as different detector limits.
   A parameter read on both sides is set twice and never compared.
-- **A list of runs inside one request has one value per parameter.**
-  Per-run values, such as a transmission run per sample run or a rotation offset per angle, are needed in general.
+- **The binding wraps `sciline.Aggregation` only.**
+  A package driver for nested levels, such as runs times banks (section 6.3 of scipp/sciline#245), has no interface the binding could wrap.
 
 ### Rules
 
@@ -177,8 +178,7 @@ Resource hints on the spec for the cluster launcher, such as memory as a functio
 
 These are changes to scipp/sciline#245, the proposal this design's stages and aggregations build on.
 
-- **The design document of the proposal describes essapps as one spec with a declared contribution and three entry points**, and says that the spec declares which parameters the finalize stage reads.
-  It should instead say that a run record holds the pipeline's parameters, that a sum over runs is a parameter holding a list, which the binding accumulates with the accumulators an `Aggregation` takes, and that stages are caches a session holds.
 - **Extra stage inputs on `Aggregation`.**
-  The adapter builds the contribute and finalize stages itself, because `Aggregation` takes no extra stage inputs and one member list at a time.
-  `Aggregation` with extra inputs on both stages, the `finalize_inputs=` idea and its contribute counterpart, would let the adapter use it directly.
+  The adapter builds its own final stage, because the finalize stage of an `Aggregation` takes no inputs beyond its accumulation keys and reads one aggregation only.
+  It also builds a new aggregation when a varied parameter the contributions read changes, which computes again what the runs share.
+  `Aggregation` with extra inputs on both stages, the `finalize_inputs=` idea and its contribute counterpart, would let the adapter use its stages directly.

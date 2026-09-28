@@ -3,8 +3,9 @@
 """
 Example workflows exercising the contract: a load-and-histogram pipeline to
 stage, a per-run reduction, a combine step over a list of references, and
-pipelines that take a list of runs and sum what each contributes, so a sum over
-runs, chaining, and a growing series can be tried without instrument code.
+pipelines that take a list of runs and sum what each contributes, through an
+aggregation the example provides as a package would, so a sum over runs,
+chaining, and a growing series can be tried without instrument code.
 ``registry`` is importable by the subprocess launcher.
 
 See docs/developer/aggregation.md.
@@ -216,6 +217,9 @@ def registry() -> Registry:
         (FAIL, fail_workflow),
         (HISTOGRAM, histogram_workflow),
         (NORMALIZE, normalize_workflow),
+        (FLOORED, floored_workflow),
+        (CONTRIBUTE, contribute_workflow),
+        (COMBINE, combine_workflow),
         (EXPORT, export_workflow),
         (SUBTRACT, subtract_workflow),
         (BACKGROUND, background_workflow),
@@ -329,7 +333,21 @@ def add(*parts: Any) -> Any:
 
 
 ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
-"""One definition for a ``sciline.Aggregation`` in a notebook and for the binding."""
+
+
+def normalize_pipeline() -> sciline.Pipeline:
+    return sciline.Pipeline([load_counts, numerator, denominator, normalized])
+
+
+def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+    """
+    The sum over runs: what the package provides, for notebooks and bindings.
+
+    Built from a pipeline with its parameters set, as every aggregation is.
+    """
+    return sciline.Aggregation(
+        pipeline, members=[RunFile], accumulators=ACCUMULATORS, outputs=[Normalized]
+    )
 
 
 class NormalizeParams(BaseModel):
@@ -356,17 +374,6 @@ NORMALIZE = WorkflowSpec(
 )
 
 
-def normalize_pipeline() -> sciline.Pipeline:
-    return sciline.Pipeline([load_counts, numerator, denominator, normalized])
-
-
-def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
-    """The sum over runs, for direct use with sciline."""
-    return sciline.Aggregation(
-        pipeline, members=[RunFile], accumulators=ACCUMULATORS, outputs=[Normalized]
-    )
-
-
 def normalize_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         normalize_pipeline(),
@@ -377,9 +384,138 @@ def normalize_workflow() -> PipelineAdapter:
             'numerator': Numerator,
             'denominator': Denominator,
         },
-        members=('runs',),
-        accumulators=ACCUMULATORS,
+        aggregations={'runs': normalize_aggregation},
     )
+
+
+# A value that differs per run is a second column of the member table: each
+# element of the list is a row, a run with its own floor.
+
+
+class FlooredRun(BaseModel):
+    """One member of the sum: a run and the floor its counts are cut at."""
+
+    run: OpaqueFile
+    floor: float = 0.0
+
+
+class FlooredParams(BaseModel):
+    runs: list[FlooredRun] = Field(min_length=1)
+    scale: float = 1.0
+
+
+FLOORED = WorkflowSpec(
+    name='normalize-floored',
+    version=1,
+    title='Normalize, a floor per run',
+    description='As Normalize, with each run cut at its own floor.',
+    params=FlooredParams,
+    outputs=NormalizeOutputs,
+    intermediates=('numerator', 'denominator'),
+)
+
+
+def floored_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+    """The sum over runs with the run file and the floor as member keys."""
+    return sciline.Aggregation(
+        pipeline,
+        members=[RunFile, Floor],
+        accumulators=ACCUMULATORS,
+        outputs=[Normalized],
+    )
+
+
+def floored_workflow() -> PipelineAdapter:
+    return PipelineAdapter(
+        normalize_pipeline(),
+        keys={'runs': {'run': RunFile, 'floor': Floor}, 'scale': Scale},
+        resolve={'runs': 'path'},
+        targets={
+            'normalized': Normalized,
+            'numerator': Numerator,
+            'denominator': Denominator,
+        },
+        aggregations={'runs': floored_aggregation},
+    )
+
+
+# The same sum split into two specs, so that each run is reduced in its own
+# request: CONTRIBUTE reduces one run to what it adds to the sum, and COMBINE
+# takes references to those outputs, combines, and normalises. Both are built
+# from the one aggregation of NORMALIZE, and each record describes only its own
+# computation.
+
+
+class ContributeParams(BaseModel):
+    run: OpaqueFile
+    floor: float = 0.0
+
+
+class Contribution(BaseModel):
+    """What one run adds to the sum, the values at the accumulation keys."""
+
+    numerator: Array()
+    denominator: Array()
+
+
+CONTRIBUTE = WorkflowSpec(
+    name='normalize-contribute',
+    version=1,
+    title='Normalize: contribute one run',
+    description="One run's numerator and denominator, to be combined.",
+    params=ContributeParams,
+    outputs=Contribution,
+)
+
+
+def contribute_workflow() -> Any:
+    def run(params: ContributeParams, inputs: Inputs) -> dict[str, Any]:
+        pipeline = normalize_pipeline()
+        pipeline[Floor] = params.floor
+        part = normalize_aggregation(pipeline).contribute(
+            {RunFile: inputs.path(params.run)}
+        )
+        return {'numerator': part[Numerator], 'denominator': part[Denominator]}
+
+    return run
+
+
+class CombineParams(BaseModel):
+    parts: list[Contribution] = Field(min_length=1)
+    scale: float = 1.0
+
+
+class CombineOutputs(BaseModel):
+    normalized: Array(ArraySpec(dims=('x',)))
+
+
+COMBINE = WorkflowSpec(
+    name='normalize-combine',
+    version=1,
+    title='Normalize: combine contributions',
+    description='Combine the contributions of runs and normalise.',
+    params=CombineParams,
+    outputs=CombineOutputs,
+)
+
+
+def combine_workflow() -> Any:
+    def run(params: CombineParams, inputs: Inputs) -> dict[str, Any]:
+        pipeline = normalize_pipeline()
+        pipeline[Scale] = params.scale
+        aggregation = normalize_aggregation(pipeline)
+        parts = [
+            {
+                Numerator: inputs.array(part.numerator),
+                Denominator: inputs.array(part.denominator),
+            }
+            for part in params.parts
+        ]
+        return {
+            'normalized': aggregation.finalize(aggregation.combine(parts))[Normalized]
+        }
+
+    return run
 
 
 # Two member tables: sample runs and background runs are summed separately, and
@@ -424,15 +560,32 @@ BACKGROUND = WorkflowSpec(
 )
 
 
+def sample_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+    """The sum over sample runs, without outputs: it shares a final stage."""
+    return sciline.Aggregation(
+        pipeline,
+        members=[SampleFile],
+        accumulators={SampleCounts: sciline.Buffered(add)},
+    )
+
+
+def background_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+    """The sum over background runs, without outputs: it shares a final stage."""
+    return sciline.Aggregation(
+        pipeline,
+        members=[BackgroundFile],
+        accumulators={BackgroundCounts: sciline.Buffered(add)},
+    )
+
+
 def background_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         sciline.Pipeline([sample_counts, background_counts, subtracted]),
         keys={'sample_runs': SampleFile, 'background_runs': BackgroundFile},
         resolve={'sample_runs': 'path', 'background_runs': 'path'},
         targets={'subtracted': Subtracted},
-        members=('sample_runs', 'background_runs'),
-        accumulators={
-            SampleCounts: sciline.Buffered(add),
-            BackgroundCounts: sciline.Buffered(add),
+        aggregations={
+            'sample_runs': sample_aggregation,
+            'background_runs': background_aggregation,
         },
     )

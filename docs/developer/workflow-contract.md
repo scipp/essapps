@@ -126,9 +126,7 @@ That the NMX product is then held in memory before it is written is a cost accep
 `PipelineAdapter` in `adapter.py` does it, and `examples.py` binds the `NORMALIZE` spec, a sum over runs, with it:
 
 ```python
-ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
-
-def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:  # the package's
     return sciline.Aggregation(pipeline, members=[RunFile], accumulators=ACCUMULATORS,
                                outputs=[Normalized])
 
@@ -138,16 +136,14 @@ def normalize_workflow() -> PipelineAdapter:
         keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
         resolve={'runs': 'path'},
         targets={'normalized': Normalized, 'numerator': Numerator, 'denominator': Denominator},
-        members=('runs',),
-        accumulators=ACCUMULATORS,
+        aggregations={'runs': normalize_aggregation},
     )
 ```
 
 `keys` maps each parameter field to the sciline key it sets, and `resolve` names the form in which each data reference is asked for.
 `targets` maps each output field to the key to compute, intermediates included.
-`members` names the fields that hold a list of members, each element a value of the field's key.
-`accumulators` gives, by sciline key, a factory for the accumulator of each value the members contribute to.
-It is the same dictionary a `sciline.Aggregation` takes, so a package defines it once for notebooks and for the binding.
+`aggregations` gives, for each list parameter, the package's function that builds its `sciline.Aggregation` from a pipeline with the parameters set.
+The key of a list parameter is the aggregation's member key, or for a list of rows a mapping from each field of the row model to a member key ([aggregation.md](aggregation.md#a-value-per-run)).
 
 For `stage` the adapter sets the parameters it is given on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
 A `Stage` computes once everything the inputs cannot affect, holds it at its **frontier**, and on each call recomputes only what lies downstream of the inputs.
@@ -157,11 +153,11 @@ A parameter input that the outputs do not need, which `sciline.Stage` refuses, i
 
 This matches how notebooks already work: Q bins, d-spacing bins, and cut axes enter after the expensive load and coordinate conversion.
 
-For each member parameter that the requested outputs need, the adapter builds a contribute stage.
-It goes from the member key, plus any varied parameter the contributions read, to the accumulation keys that depend on the member.
-One finalize stage goes from all accumulation keys, plus the varied parameters read after them, to the outputs.
-This is `sciline.Aggregation`, with the extra stage inputs that tuning needs.
-The adapter finds which varied parameters the contributions read with `sciline.Stage(...).keys`, when it builds the stage.
+For each list parameter that the requested outputs need, the adapter builds the package's aggregation, contributes each member through it, and pushes into its accumulators.
+One final stage goes from the accumulation keys of every list parameter, plus the varied parameters read after them, to the outputs.
+It takes the place of the aggregation's own finalize stage, whose inputs are the accumulation keys only.
+The adapter finds which varied parameters the contributions read from `aggregation.contribute_stage.keys`, when it builds the stage.
+It sets those on the pipeline, so each new value builds a new aggregation.
 An output that needs each member separately, and not only what the members accumulate to, is refused then.
 The stage holds the accumulation over the members it has seen, so a call whose list extends the previous one contributes only the new members ([stages.md](stages.md#a-stage-over-a-list-of-runs)).
 
@@ -292,7 +288,8 @@ With `stage` as the one method, a plain run, a rerun, and a sum are all stages, 
 A pipeline that aggregates is published as two specs cut at the values that add: a contribute spec per run, and a combine spec over a list of references to contributions.
 A `carry` declaration on the combine spec says that its combined output may be passed back into its list.
 The adapter must re-derive the member parameters to check that members agree, and the associativity promise sits on the spec although it is a property of the code.
-A list parameter with the binding's accumulators expresses the same with one spec and no declaration.
+A list parameter with the package's aggregation expresses the same with one spec and no declaration.
+An author who needs the split for spreading runs over nodes writes the two specs without `carry`, both from one aggregation ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)).
 
 **A summary of the graph in the spec.**
 The spec lists, per output, the parameters it reads, so the backend can check that the pieces of a pipeline fit and which parameters a request needs.

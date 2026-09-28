@@ -26,7 +26,7 @@ batch_table(client, 'scan')
 Each member is a run request that holds every filled value in `params`.
 The group carries the template's blanks, here `run`, as `group.vary`, and `submit_group` passes them on as what the members vary.
 The two members above agree on everything but their blanks, so in a session they share one held stage.
-`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
+`batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entries that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
 Each shows the value the request was made with, whoever supplied it, and the `pinned` column names the fields of the row a person pinned.
 A field that holds a model is one column per leaf, `q.start` and `q.num_bins`, which is how a form would lay it out.
@@ -63,7 +63,7 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 A blank at any rung falls through to the next.
 Every filled value goes into the member's `params`, and the members vary the template's blanks.
 A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a held stage of its own.
-The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
+The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and the entry that applied to each dataset, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
 ## Labels, batches, and slots
@@ -186,8 +186,21 @@ A run that arrives again, or out of order, is listed once.
 The bound does not apply to the runs of a series, so a series that began before the bound is one series.
 A series of k runs therefore costs k requests, the k-th of which reduces k runs, and the superseded ones are the first evicted.
 
-**A series request holds one value per parameter.**
-If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
+**Each run of a series is filled from its own lookup entry.**
+When the template's dataset field is a column of a list of rows, each run is one row, and a fill named for another column goes into that run's row:
+
+```python
+template = Template(spec=FLOORED.id, params={'scale': 2.0}, blanks=('runs',),
+                    dataset_field='runs.run')
+lookup = Lookup(name='floors', entries=(
+    LookupEntry(name='noisy', match={'mode': Like(pattern='noisy')},
+                fills={'runs.floor': 3.0}),     # the floor of this run only
+))
+```
+
+A fill of any other field goes into the request, which has one value per field.
+If two runs of one series fill such a field differently, `apply` refuses the series and names the runs.
+`Origin.entries` records the entry each run matched.
 
 **A run that cannot be read fails the whole series request, visibly.**
 The operator excludes the run, and `retry` submits the series without it.

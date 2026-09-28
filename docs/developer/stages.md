@@ -141,7 +141,7 @@ def stage(self, params, inputs, outputs, data):
     return lambda params, data: outputs_of(stage.compute(values_of(params)))
 ```
 
-A member parameter, such as the list of runs of a sum, gets a contribute stage and accumulators in front of this stage ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
+A list parameter, such as the runs of a sum, is contributed through the package's `sciline.Aggregation` into its accumulators in front of this stage ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
 
 A parameter input that the outputs do not need is held and ignored, although sciline's `Stage` would refuse it.
 Such an input cannot change the result, and which parameters a caller varies must not decide whether a run succeeds.

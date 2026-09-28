@@ -121,7 +121,7 @@ def test_a_plain_run_records_every_field_of_its_request(
             'template': None,
             'rule': None,
             'lookup': None,
-            'entry': None,
+            'entries': {},
             'pinned': {},
         },
     }

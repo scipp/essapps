@@ -7,13 +7,13 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Accumulation key**: sciline's name for a value at which the members of an aggregation are accumulated, such as a numerator.
   It need not be exposed in the spec, because it never leaves the run.
 - **Accumulator**: sciline's object that takes values by `push` and holds their accumulation as its value.
-  The binding gives one per accumulation key, and `Buffered` makes one from a function.
+  An aggregation makes one per accumulation key, and `Buffered` makes one from a function.
   A stage over a list of runs holds its accumulators between calls.
 - **Adapter**: the code, in ess.reduce, that turns a sciline pipeline into a workflow, and each run into a call of a `sciline.Stage`.
-  It maps fields to keys, names the form of each data reference, names the member parameters, and gives the accumulators by sciline key, the same dictionary a `sciline.Aggregation` takes.
+  It maps fields to keys, names the form of each data reference, and gives for each list parameter the package's function that builds its `sciline.Aggregation`.
   See [workflow-contract.md](workflow-contract.md#the-sciline-adapter).
-- **Aggregation**: in the framework, one run request whose member parameter holds a list, such as the runs of a sum; the binding reduces each member and accumulates.
-  In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process.
+- **Aggregation**: in the framework, one run request whose list parameter holds the members, such as the runs of a sum; the binding contributes each member through the package's aggregation and accumulates.
+  In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process, over the rows of a member table.
   It has no spec of its own.
   See [aggregation.md](aggregation.md).
 - **Annotations**: labels and notes attached to a record after the fact.
@@ -69,8 +69,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
   See [rules.md](rules.md).
 - **Member**: one record under a label, identified by its **member key**: a name a person chose for a batch made by hand, the dataset identity for a rule's batch.
-  The members of a sum are the elements of its **member parameter**, the list the adapter accumulates over.
-- **Origin**: the field on a run request that says where its values came from: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values pinned beyond template and lookup.
+  The members of a sum are the elements of its list parameter, one row each of sciline's **member table**: a value of the one member key, or a **row**, a model whose fields are the member keys.
+- **Origin**: the field on a run request that says where its values came from: the template version, the rule version when a rule filled it, the lookup version and the entry that applied to each dataset, and the values pinned beyond template and lookup.
   Explanation, not provenance, which is the data the run read.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
 - **Picker**: the client query behind an input field: candidates of matching format from the record store and from every dataset source, as rows of one shape.

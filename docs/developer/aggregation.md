@@ -31,6 +31,8 @@ ess.sans contributes a numerator and a denominator and normalises in the finaliz
 Dimensionality and event mode do not change the shape: a 4D volume adds like a curve, and concatenation is accumulation for binned data.
 
 sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per **accumulation key**, and a finalize stage.
+Its members are the rows of a **member table**, whose columns are the member keys.
+The package builds the aggregation, and the binding wraps it, so a workflow author uses the model of sciline and nothing is solved twice.
 
 ## A sum is one run over a list of runs
 
@@ -52,26 +54,38 @@ total.request.params['runs']        # the three runs: the record names what it s
 
 The backend validates the request against the whole params model, like any other, so an empty list is refused at submit.
 
-The binding names its member parameters and gives an accumulator per accumulation key:
+The binding gives, for each list parameter, the package's function that builds the aggregation:
 
 ```python
-ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
+def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:  # the package's
+    return sciline.Aggregation(
+        pipeline, members=[RunFile], accumulators=ACCUMULATORS, outputs=[Normalized]
+    )
 
 PipelineAdapter(
     normalize_pipeline(),
     keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
     resolve={'runs': 'path'},
     targets={'normalized': Normalized, 'numerator': Numerator, 'denominator': Denominator},
-    members=('runs',),
-    accumulators=ACCUMULATORS,
+    aggregations={'runs': normalize_aggregation},
 )
 ```
 
-`ACCUMULATORS` is the dictionary a `sciline.Aggregation` over the same pipeline takes, so a package defines it once for notebooks and for the binding.
-For each member parameter that the requested outputs need, the adapter builds a contribute stage.
-It goes from the member key, plus any varied parameter the contributions read, to the accumulation keys that depend on the member.
-One finalize stage goes from all accumulation keys, plus the varied parameters read after them, to the outputs.
-This is `sciline.Aggregation` inside one run, with the extra stage inputs that tuning needs ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
+The binding takes a function rather than an aggregation, because an aggregation is a snapshot of the pipeline's parameters, and the binding sets them per request.
+For each list parameter that the requested outputs need, the adapter builds the aggregation, contributes each run through it, and pushes into its accumulators:
+
+```python
+aggregation = normalize_aggregation(pipeline)      # every parameter the request does not vary is set
+acc = aggregation.accumulators()
+for run in runs:
+    for key, value in aggregation.contribute({RunFile: run}).items():
+        acc[key].push(value)
+finalize.compute({key: a.value for key, a in acc.items()} | varied_read_after)
+```
+
+`finalize` is one stage of the binding's own, from the accumulation keys of every list parameter, plus the varied parameters read after them, to the requested outputs.
+The aggregation's own finalize stage is not used, because the requested outputs and the varied parameters change from request to request ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
+A varied parameter that the contributions read is set on the pipeline, so each new value builds a new aggregation.
 An output that needs each run separately, and not only what the runs accumulate to, is refused when the stage is built.
 An example is the counts of one run in a sum.
 
@@ -85,6 +99,33 @@ Events keep the binning a parameter read after the sum, and cost memory.
 A histogram fixes the bins in the contribute stage, and is small.
 The framework does not see the difference.
 
+### A value per run
+
+A value that differs per run is a second column of the member table.
+The list then holds rows, models whose fields are the columns, as the skeleton's `FLOORED` spec does:
+
+```python
+class FlooredRun(BaseModel):
+    run: OpaqueFile
+    floor: float = 0.0          # this run's own floor
+
+class FlooredParams(BaseModel):
+    runs: list[FlooredRun] = Field(min_length=1)
+    scale: float = 1.0          # one value for the whole sum
+
+PipelineAdapter(
+    normalize_pipeline(),
+    keys={'runs': {'run': RunFile, 'floor': Floor}, 'scale': Scale},
+    resolve={'runs': 'path'},
+    targets=...,
+    aggregations={'runs': floored_aggregation},   # members=[RunFile, Floor]
+)
+```
+
+The key of a list of rows maps each field of the row model to a member key, and these must be the aggregation's member keys.
+A plain list of values is the table with one column.
+A transmission run per sample run or a rotation offset per angle has the same form.
+
 ### Two lists
 
 A workflow that sums sample runs and background runs separately has two list parameters, as the skeleton's `BACKGROUND` spec does:
@@ -93,7 +134,8 @@ A workflow that sums sample runs and background runs separately has two list par
 client.run(BACKGROUND, {'sample_runs': samples, 'background_runs': backgrounds})
 ```
 
-The binding names both as member parameters.
+Each list has its own aggregation, built without outputs, and the binding's one final stage reads the accumulation keys of both.
+This is how sciline composes two aggregations that share a final stage.
 
 ## In a session
 
@@ -132,8 +174,7 @@ Successive requests supersede each other, and the result a record stands for is 
   A run that arrives again is listed once, and an excluded run is not listed at all.
 - **A run that cannot be read fails the whole series request, visibly.**
   The operator excludes the run, and `retry` submits the series without it.
-- **A series request holds one value per parameter.**
-  If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
+- **Each run is filled from its own lookup entry**, into its own row when the list holds rows ([rules.md](rules.md#series)).
 
 A rule runs each request in a throwaway process, so the request of the k-th arrival reduces all k runs.
 A disk cache of contributions would remove that cost.
@@ -146,20 +187,36 @@ It needs a runner addressed by its series, which does not exist yet ([stages.md]
 ## Reducing the runs of a sum on separate nodes
 
 A sum inside one request runs in one process.
-To spread the runs over nodes, a client composes two specs over references, as `ess.apps.examples.SUM` and the Amor stitch do:
+To spread the runs over nodes, the author splits the sum into two specs, and the client composes them over references.
+The skeleton's `CONTRIBUTE` and `COMBINE` are built from the one aggregation that `NORMALIZE` wraps:
 
 ```python
-# CONTRIBUTE and COMBINE are illustrative: one run to numerator and denominator,
-# and a list of numerators and denominators to I(Q).
+def contribute(params, inputs):     # CONTRIBUTE: one run -> numerator and denominator
+    pipeline = normalize_pipeline()
+    pipeline[Floor] = params.floor
+    part = normalize_aggregation(pipeline).contribute({RunFile: inputs.path(params.run)})
+    return {'numerator': part[Numerator], 'denominator': part[Denominator]}
+
+def combine(params, inputs):        # COMBINE: rows of references to contributions -> result
+    pipeline = normalize_pipeline()
+    pipeline[Scale] = params.scale
+    aggregation = normalize_aggregation(pipeline)
+    parts = [{Numerator: inputs.array(p.numerator), Denominator: inputs.array(p.denominator)}
+             for p in params.parts]
+    return {'normalized': aggregation.finalize(aggregation.combine(parts))[Normalized]}
+```
+
+```python
 member = Template(spec=CONTRIBUTE, params={'floor': 1.5}, blanks=('run',))
 parts = [client.run(member, {'run': r}) for r in runs]    # independent requests
 total = client.run(COMBINE, {
-    'numerators': [p.ref('numerator') for p in parts],
-    'denominators': [p.ref('denominator') for p in parts],
+    'parts': [{'numerator': p.ref('numerator'), 'denominator': p.ref('denominator')}
+              for p in parts],
     'scale': 2.0,
 })
 ```
 
+The result equals the one request over the list.
 Each record describes only its own computation, and the parts are one reference away.
 The combine waits for the parts as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
 The costs are in [Costs](#costs).
@@ -179,8 +236,11 @@ Recomputing a stitch over all angles on every arrival is affordable, because its
 | `Pipeline` with parameters set | a run request's spec and `params` |
 | `Stage(pipeline, inputs, outputs)` | a template whose blanks are the stage inputs, held by a session |
 | `Stage.compute` | a run record |
-| `Aggregation(pipeline, members=..., accumulators=...)` | a member parameter and the binding's accumulators |
-| `Aggregation.compute(table)` | one run request whose member parameter holds the list |
+| `Aggregation(pipeline, members=..., accumulators=...)` | built by the package, wrapped by the binding for a list parameter |
+| member table | a list parameter; a list of rows for several member keys |
+| two aggregations sharing a final stage | two list parameters |
+| `Aggregation.compute(table)` | one run request whose list parameter holds the members |
+| `contribute`, then `combine` and `finalize` | a contribute spec and a combine spec, composed over references |
 | accumulators held by a loop | a stage over the list, held by a session |
 
 ## Alternatives considered
@@ -223,6 +283,5 @@ A cache of contributions gives the same saving and leaves the request as it is.
 - A series under a rule, without a session, reduces all k runs on the k-th arrival.
 - One run that cannot be read fails the series request until someone excludes it.
 - `sciline.Buffered` holds every contribution in memory.
-- A request over a list holds one value per parameter, so every run of a sum is reduced with the same values.
-  Per-run values, such as a transmission run per sample run or a rotation offset per angle, are needed in general.
-- A correction to a parameter that the contribute stage reads reduces every run again.
+- A correction to a parameter that the contribute stage reads reduces every run again, and builds a new aggregation, which computes again what the runs share.
+- The binding wraps `sciline.Aggregation` only. A package driver for nested levels, such as runs times banks, has no place in the binding yet.

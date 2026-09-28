@@ -51,9 +51,9 @@ from .spec import (
     SpecId,
     WorkflowSpec,
     as_ref,
+    data_field_at,
     data_fields,
     dataset_path,
-    field_of,
     submodel,
     walk_refs,
 )
@@ -303,10 +303,9 @@ class LocalBackend:
         if errors:
             return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
         request = self._as_recorded(request)
-        params = data_fields(spec.params)
         for path, ref in walk_refs(request.params):
             errors += self._check_ref(
-                ref, params.get(field_of(path)), request, group or {}
+                ref, data_field_at(spec.params, path), request, group or {}
             )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
@@ -646,11 +645,11 @@ class LocalBackend:
         self.record_store.update(record)
 
     def _dispatch(self, record: RunRecord) -> None:
-        params = data_fields(self.registry.spec(record.spec).params)
+        params = self.registry.spec(record.spec).params
         locations: dict[Ref, Path] = {}
         literals: dict[str, Any] = {}
         named = [
-            (ref, field_of(path) in params)
+            (ref, data_field_at(params, path) is not None)
             for path, ref in walk_refs(record.request.params)
         ]
         # A reference named by two parameters is one thing to resolve, and
