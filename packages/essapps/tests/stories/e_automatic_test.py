@@ -71,7 +71,7 @@ def test_e2_automatic_reduction_goes_quiet(client: Client, measure: Measure) -> 
     assert client.records() == []
     (dataset,) = client.datasets()
     status = trigger_status(client, rule, dataset)
-    assert (status.fires, status.reason) == (False, 'unknown spec load/v2')
+    assert (status.state, status.reason) == ('skips', 'unknown spec load/v2')
 
 
 @pytest.mark.xfail(

@@ -418,7 +418,7 @@ Actor: instrument operator.
 Checks: where the operator sees that the loop is refusing to fire, and why; nothing silently continues with a superseded workflow.
 
 Outcome: fits.
-`trigger_status` answers for one dataset why the rule did not fire, or that it waits, and a spec-version mismatch fails loudly rather than defaulting ([rules.md](rules.md#the-trigger-loop)).
+`trigger_status` answers for one dataset or completed record why the rule did not fire, or that it waits, and a spec-version mismatch fails loudly rather than defaulting ([rules.md](rules.md#the-trigger-loop)).
 
 ### E3. Reduction of our own output
 

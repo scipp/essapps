@@ -22,9 +22,9 @@ See docs/developer/rules.md.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from pydantic import BaseModel
@@ -86,9 +86,16 @@ def candidates(client: Client, rule: Rule | Template) -> list[Candidate]:
     What a rule fires on: the datasets the sources know, or, for a rule that
     follows another, the latest completed record per member key under its label.
     """
+    return _candidates(client, rule, client.datasets())
+
+
+def _candidates(
+    client: Client, rule: Rule | Template, datasets: list[Dataset]
+) -> list[Candidate]:
+    """:func:`candidates` among ``datasets``, what the sources know in one pass."""
     if not isinstance(rule, Rule) or rule.follows is None:
-        return list(client.datasets())
-    known = {str(dataset.ref): dataset for dataset in client.datasets()}
+        return list(datasets)
+    known = {str(dataset.ref): dataset for dataset in datasets}
     output = rule.follows.output
     found: list[Candidate] = []
     for record in client.batch(rule.follows.label):
@@ -142,11 +149,39 @@ def apply(
     dataset is one row, filled from its own lookup entry. A series that fires
     once complete waits until it is.
 
+    A pinned value replaces the fill of its field, so a fill it replaces is not
+    resolved: pinning the can of a member that waits for one, or is refused
+    for want of one, makes the member.
+
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. It carries the template's
     blanks as what its members vary, so that members that agree on everything
-    else share a held stage in a session.
+    else share a held stage in a session. A member that cannot be made yet,
+    because what it needs may still arrive, is left out of the group and listed
+    in its ``waiting`` with the reason.
     """
+    return _apply(
+        client,
+        rule,
+        datasets,
+        pinned,
+        lookup=lookup,
+        label=label,
+        known=client.datasets(),
+    )
+
+
+def _apply(
+    client: Client,
+    rule: Rule | Template,
+    datasets: Iterable[Candidate],
+    pinned: Mapping[str, Mapping[str, Any]] | pd.DataFrame | None,
+    *,
+    lookup: Lookup | None = None,
+    label: str | None = None,
+    known: list[Dataset],
+) -> Group:
+    """:func:`apply` among ``known``, the datasets the sources know in one pass."""
     template, of_rule = (
         (rule.template, rule) if isinstance(rule, Rule) else (rule, None)
     )
@@ -159,19 +194,30 @@ def apply(
         _check_fills(client, template, lookup)
     members: dict[str, list[Candidate]]
     if series is not None and of_rule is not None and datasets:
-        members = _series(client, of_rule, series.key, datasets)
+        pool = _candidates(client, of_rule, known)
+        members = _series(of_rule, series.key, datasets, pool)
     elif datasets:
         members = {_key(d): [d] for d in datasets}
     else:
         members = {key: [] for key in values}
     group: dict[str, RunRequest] = {}
+    waiting: dict[str, str] = {}
     for key, member in members.items():
-        if series is not None and member and not isinstance(series.fire, str):
-            if (missing := series.fire.missing(member)) is not None:
-                raise Waiting(f'series {key}: {missing}')
-        fill, entries = _fill(
-            client, template, lookup, member, series=series is not None
-        )
+        try:
+            if series is not None and member and not isinstance(series.fire, str):
+                if (missing := series.fire.missing(member)) is not None:
+                    raise _Waits(f'series {key}: {missing}')
+            fill, entries = _fill(
+                template,
+                lookup,
+                member,
+                known,
+                series=series is not None,
+                pinned=values.get(key, {}),
+            )
+        except _Waits as e:
+            waiting[key] = str(e)
+            continue
         group[key] = client.request(
             template,
             fill | values.get(key, {}),
@@ -185,19 +231,19 @@ def apply(
                 pinned=dict(values.get(key, {})),
             ),
         )
-    return Group(group, template.blanks)
+    return Group(group, template.blanks, waiting)
 
 
 def _series(
-    client: Client, rule: Rule, key: str, datasets: Iterable[Candidate]
+    rule: Rule, key: str, datasets: Iterable[Candidate], pool: list[Candidate]
 ) -> dict[str, list[Candidate]]:
     """
     The current members of each series the datasets belong to, by series value.
 
-    The members of a series are the candidates with its value of the series key
-    that the rule's selector matches and that are not excluded, in the order the
-    sources list them. The bound does not apply: a series that began before it
-    is one series.
+    The members of a series are the candidates, the rule's in ``pool`` and
+    those given, with its value of the series key that the rule's selector
+    matches and that are not excluded, in the order the sources list them.
+    The bound does not apply: a series that began before it is one series.
     """
     given: dict[str, list[Candidate]] = {}
     for dataset in datasets:
@@ -205,7 +251,7 @@ def _series(
             raise ValueError(f'{_key(dataset)} has no field {key!r} to key a series')
         given.setdefault(str(dataset.fields[key]), []).append(dataset)
     members: dict[str, dict[str, Candidate]] = {value: {} for value in given}
-    for dataset in [*candidates(client, rule), *(d for g in given.values() for d in g)]:
+    for dataset in [*pool, *(d for g in given.values() for d in g)]:
         value = str(dataset.fields.get(key))
         if (
             value in members
@@ -217,24 +263,26 @@ def _series(
 
 
 def _fill(
-    client: Client,
     template: Template,
     lookup: Lookup | None,
     datasets: list[Candidate],
+    known: list[Dataset],
     *,
     series: bool,
+    pinned: Collection[str] = (),
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """
     What datasets fill, and the lookup entry each matched, by member key.
 
     The template's dataset field gets the dataset, or for a series the list of
     them. Each dataset is filled from its own lookup entry, a nearest fill
-    resolved against it. When the dataset field is a column of a list parameter
-    of rows, ``runs.run``, each dataset is a row, a list of one row outside a
-    series, and a fill named for another column, ``runs.floor``, goes into that
-    dataset's row. Every other fill goes into the request, which has one value
-    per field, so members of a series that fill such a field differently are
-    refused.
+    resolved against it among the ``known`` datasets, except where a ``pinned``
+    field replaces the fill, or the rows it would go into. When the dataset
+    field is a column of a list parameter of rows, ``runs.run``, each dataset
+    is a row, a list of one row outside a series, and a fill named for another
+    column, ``runs.floor``, goes into that dataset's row. Every other fill goes
+    into the request, which has one value per field, so members of a series
+    that fill such a field differently are refused.
     """
     if not datasets:
         return {}, {}
@@ -249,12 +297,14 @@ def _fill(
         if entry is not None:
             entries[_key(dataset)] = entry.name
         for name, fill in (entry.fills if entry is not None else {}).items():
+            owner, _, inner = name.partition('.')
+            if name in pinned or owner in pinned:
+                continue
             value = (
-                _nearest(client, dataset, name, fill)
+                _nearest(dataset, name, fill, known)
                 if isinstance(fill, Nearest)
                 else fill
             )
-            owner, _, inner = name.partition('.')
             if column and owner == field:
                 row[inner] = value
             else:
@@ -313,23 +363,28 @@ def _check_fills(client: Client, template: Template, lookup: Lookup) -> None:
             )
 
 
-class Waiting(ValueError):
-    """A member that cannot be made yet, because what it needs may still arrive."""
+class _Waits(Exception):
+    """
+    A member cannot be made yet, because what it needs may still arrive.
+
+    Raised while one member is filled and caught by :func:`apply`, which lists
+    the member as waiting.
+    """
 
 
 def _nearest(
-    client: Client, member: Candidate, field: str, nearest: Nearest
+    member: Candidate, field: str, nearest: Nearest, known: list[Dataset]
 ) -> DatasetRef:
     """
-    The reference of the dataset ``nearest`` resolves to for a member, which is
-    resolved against the member's dataset.
+    The reference of the dataset among ``known`` that ``nearest`` resolves to
+    for a member, which is resolved against the member's dataset.
     """
     dataset = member if isinstance(member, Dataset) else member.dataset
     if dataset is None:
         raise ValueError(f'{_key(member)} has no dataset to resolve {field!r} by')
     before: Dataset | None = None
     after: Dataset | None = None
-    for candidate in client.datasets():
+    for candidate in known:
         if not matches(nearest.match, candidate) or any(
             candidate.fields.get(name) != dataset.fields.get(name)
             for name in nearest.same
@@ -349,7 +404,7 @@ def _nearest(
             raise ValueError(f'{what} before it for {field!r}')
         return before.ref
     if after is None:
-        raise Waiting(f'{what} after it yet for {field!r}')
+        raise _Waits(f'{what} after it yet for {field!r}')
     if nearest.direction == 'after' or before is None:
         return after.ref
     return (before if gap(before, dataset) <= gap(dataset, after) else after).ref
@@ -384,16 +439,19 @@ def backlog(client: Client, rule: Rule) -> Group:
 
     Offered when a rule is created; nothing is submitted until the group is.
     """
-    return apply(
+    known = client.datasets()
+    return _apply(
         client,
         rule,
         [
             candidate
-            for candidate in candidates(client, rule)
+            for candidate in _candidates(client, rule, known)
             if rule.selector.selects(candidate)
             and not _after(rule, candidate)
             and _key(candidate) not in rule.exclusions
         ],
+        None,
+        known=known,
     )
 
 
@@ -459,7 +517,8 @@ def _again(
     label: str | None = None,
 ) -> Group:
     """Apply again over the datasets of these records, carrying the pinned values."""
-    known = {_key(c): c for c in candidates(client, rule)}
+    known = client.datasets()
+    by_key = {_key(c): c for c in _candidates(client, rule, known)}
     excluded = rule.exclusions if isinstance(rule, Rule) else {}
     spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
     datasets: dict[str, Candidate] = {}
@@ -467,22 +526,27 @@ def _again(
     for record in records:
         found = [
             d
-            for d in _datasets(known, rule, record)
+            for d in _datasets(by_key, rule, record)
             if record.spec == spec and _key(d) not in excluded
         ]
         datasets |= {_key(d): d for d in found}
         if found:
             pinned[str(record.request.member_key)] = record.request.origin.pinned
-    return apply(client, rule, datasets.values(), pinned, label=label)
+    return _apply(client, rule, datasets.values(), pinned, label=label, known=known)
 
 
 def _without_pinned(
-    client: Client, rule: Rule, datasets: list[Candidate]
+    rule: Rule, datasets: list[Candidate], known: list[Dataset]
 ) -> dict[str, Any]:
     """The template and lookup fill for datasets, before what a person pinned."""
-    fill, _ = _fill(
-        client, rule.template, rule.lookup, datasets, series=rule.series is not None
-    )
+    try:
+        fill, _ = _fill(
+            rule.template, rule.lookup, datasets, known, series=rule.series is not None
+        )
+    except _Waits as e:
+        raise ValueError(
+            f'cannot compare the fills of a member that waits: {e}'
+        ) from None
     return rule.template.params | fill
 
 
@@ -501,14 +565,15 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
     values shadows the others as well. The rows are therefore per leaf, named as
     in :func:`batch_table`: the leaves of a pinned field whose fill changed.
     """
-    known = {_key(c): c for c in candidates(client, rule)}
+    known = client.datasets()
+    by_key = {_key(c): c for c in _candidates(client, rule, known)}
     rows: list[dict[str, Any]] = []
     for record in _stale(client, rule):
-        datasets = _datasets(known, rule, record)
+        datasets = _datasets(by_key, rule, record)
         if record.spec != rule.template.spec or not datasets:
             continue
-        was = _without_pinned(client, previous, datasets)
-        now = _without_pinned(client, rule, datasets)
+        was = _without_pinned(previous, datasets, known)
+        now = _without_pinned(rule, datasets, known)
         for field, value in record.request.origin.pinned.items():
             pinned = _leaves(field, value)
             before = _leaves(field, was.get(field))
@@ -530,20 +595,21 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
 
 class TriggerStatus(BaseModel, frozen=True):
     """
-    Why a rule fires on a candidate, or does not.
+    Whether the trigger loop fires a rule on a candidate, and why.
 
-    A candidate the rule would fire on but cannot yet, because a fill has nothing
-    to resolve to that may still be measured, is ``waiting``.
+    ``state`` is ``'fires'``; ``'waits'``, where the clauses hold but the
+    request cannot be made yet, because what it needs may still arrive; or
+    ``'skips'``, where a clause does not hold or the request is refused.
     """
 
-    fires: bool
+    state: Literal['fires', 'waits', 'skips']
     reason: str
-    waiting: bool = False
 
 
 def trigger_status(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
     """
-    The trigger status of one candidate: the loop's decision, and why.
+    The trigger status of one candidate, a dataset or a completed record: the
+    loop's decision, and why.
 
     The clauses are the loop's: the rule is active, the selector matches, the
     candidate lies after the rule's bound, it is not excluded, and no record
@@ -556,27 +622,44 @@ def trigger_status(client: Client, rule: Rule, candidate: Candidate) -> TriggerS
     which the local application has no catalogue for.
 
     Where these hold, the member waits while it cannot be made yet. That too is
-    a question of the datasets that exist, so a later pass fires on it.
+    a question of the datasets that exist, so a later pass fires on it. A
+    request that :func:`apply` refuses is skipped, with the refusal as reason.
+    """
+    try:
+        status, _ = _decide(client, rule, candidate, client.datasets())
+    except ValueError as e:
+        return TriggerStatus(state='skips', reason=str(e))
+    return status
+
+
+def _decide(
+    client: Client, rule: Rule, candidate: Candidate, known: list[Dataset]
+) -> tuple[TriggerStatus, Group | None]:
+    """
+    The trigger status of a candidate among the ``known`` datasets, and the
+    group to submit where it fires. A refusal raises.
     """
     status = _clauses(client, rule, candidate)
-    if status.fires:
-        try:
-            apply(client, rule, [candidate])
-        except Waiting as e:
-            return TriggerStatus(fires=False, reason=str(e), waiting=True)
-    return status
+    if status.state != 'fires':
+        return status, None
+    group = _apply(client, rule, [candidate], None, known=known)
+    if group.waiting:
+        return TriggerStatus(
+            state='waits', reason='; '.join(group.waiting.values())
+        ), None
+    return status, group
 
 
 def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
     member = _key(candidate)
     if not rule.active:
-        return TriggerStatus(fires=False, reason=f'rule {rule.name} is paused')
+        return TriggerStatus(state='skips', reason=f'rule {rule.name} is paused')
     if not rule.selector.selects(candidate):
-        return TriggerStatus(fires=False, reason='the selector does not match')
+        return TriggerStatus(state='skips', reason='the selector does not match')
     if not _after(rule, candidate):
-        return TriggerStatus(fires=False, reason="before the rule's bound")
+        return TriggerStatus(state='skips', reason="before the rule's bound")
     if (reason := rule.exclusions.get(member)) is not None:
-        return TriggerStatus(fires=False, reason=f'excluded: {reason}')
+        return TriggerStatus(state='skips', reason=f'excluded: {reason}')
     if rule.series is not None:
         member = str(candidate.fields.get(rule.series.key))
     records = client.records(label=rule.name, member_key=member)
@@ -587,17 +670,17 @@ def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
             if _names(_listed(rule.template, r.request.params), candidate)
         ]
     if not records:
-        return TriggerStatus(fires=True, reason='no record under the label yet')
+        return TriggerStatus(state='fires', reason='no record under the label yet')
     failure = records[-1].failure
     if failure is None or failure.kind not in rule.retry.kinds:
         return TriggerStatus(
-            fires=False, reason=f'{len(records)} record(s) under the label'
+            state='skips', reason=f'{len(records)} record(s) under the label'
         )
     if len(records) >= rule.retry.limit:
         return TriggerStatus(
-            fires=False, reason=f'{failure.kind} retried {rule.retry.limit} times'
+            state='skips', reason=f'{failure.kind} retried {rule.retry.limit} times'
         )
-    return TriggerStatus(fires=True, reason=f'retry after {failure.kind}')
+    return TriggerStatus(state='fires', reason=f'retry after {failure.kind}')
 
 
 class TriggerLoop:
@@ -625,17 +708,16 @@ class TriggerLoop:
         self.refusals = {}
         self.waiting = {}
         fired: list[RunRecord] = []
+        known = self.client.datasets()
         for rule in self.rules:
-            for candidate in candidates(self.client, rule):
+            for candidate in _candidates(self.client, rule, known):
                 name = f'{rule.name} {_key(candidate)}'
                 try:
-                    status = trigger_status(self.client, rule, candidate)
-                    if status.waiting:
+                    status, group = _decide(self.client, rule, candidate, known)
+                    if status.state == 'waits':
                         self.waiting[name] = status.reason
-                    if not status.fires:
-                        continue
-                    group = apply(self.client, rule, [candidate])
-                    fired += self.client.submit_group(group).values()
+                    if group is not None:
+                        fired += self.client.submit_group(group).values()
                 except (SubmitError, ValueError) as e:
                     self.refusals[name] = str(e)
         return fired

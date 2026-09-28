@@ -259,11 +259,20 @@ class Group(Mapping[str, RunRequest]):
     that whoever submits the group need not name the template again. A plain
     mapping of requests submits with nothing varied. Read-only, so that no copy
     or merge drops ``vary`` in silence.
+
+    ``waiting`` is the members that cannot be made yet, because what they need
+    may still arrive, with the reason; the group holds no request for them.
     """
 
-    def __init__(self, requests: Mapping[str, RunRequest], vary: Iterable[str]) -> None:
+    def __init__(
+        self,
+        requests: Mapping[str, RunRequest],
+        vary: Iterable[str],
+        waiting: Mapping[str, str] | None = None,
+    ) -> None:
         self._requests = dict(requests)
         self.vary = tuple(vary)
+        self.waiting = dict(waiting or {})
 
     def __getitem__(self, key: str) -> RunRequest:
         return self._requests[key]
@@ -275,7 +284,9 @@ class Group(Mapping[str, RunRequest]):
         return len(self._requests)
 
     def __repr__(self) -> str:
-        return f'Group({self._requests!r}, vary={self.vary!r})'
+        return (
+            f'Group({self._requests!r}, vary={self.vary!r}, waiting={self.waiting!r})'
+        )
 
 
 class Derivation(BaseModel, frozen=True):

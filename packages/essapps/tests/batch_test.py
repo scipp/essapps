@@ -8,6 +8,7 @@ See docs/developer/rules.md.
 
 import re
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -356,7 +357,7 @@ def test_the_loops_five_clauses_are_answered_for_one_dataset(
     client: Client, rule: Rule, samples: FakeDatasetSource
 ) -> None:
     vanadium, sio2 = client.datasets()[-2:]
-    assert trigger_status(client, rule, vanadium).fires
+    assert trigger_status(client, rule, vanadium).state == 'fires'
 
     narrow = rule.model_copy(
         update={'selector': Selector(match={'sample': Like(pattern='sio*')})}
@@ -366,8 +367,8 @@ def test_the_loops_five_clauses_are_answered_for_one_dataset(
     )
 
     late = rule.model_copy(update={'selector': Selector(after=Bound(run=11))})
-    assert not trigger_status(client, late, vanadium).fires
-    assert trigger_status(client, late, sio2).fires
+    assert trigger_status(client, late, vanadium).state == 'skips'
+    assert trigger_status(client, late, sio2).state == 'fires'
 
     rule.exclude(str(vanadium.ref), 'chopper was off')
     assert 'chopper was off' in trigger_status(client, rule, vanadium).reason
@@ -631,7 +632,7 @@ def test_a_series_that_fires_when_complete_waits_for_its_count(
         f'series pid:pid/{i}': 'series sio2: 2 of 3 members' for i in (1, 2)
     }
     status = trigger_status(client, rule, client.datasets()[-1])
-    assert (status.fires, status.waiting) == (False, True)
+    assert status.state == 'waits'
 
     source.add(sample(tmp_path / '3.h5', [1.0, 2.0], 'pid/3'))
     (complete,) = client.wait(loop.run_once())
@@ -660,6 +661,20 @@ def test_a_series_of_fixed_roles_fires_when_every_role_is_present(
     source.add(sample(tmp_path / 'b.h5', [1.0, 1.0], 'pid/2', role='transmission'))
     (both,) = client.wait(loop.run_once())
     assert listed(both) == ['pid:pid/1', 'pid:pid/2']
+
+
+def test_an_exclusion_counts_against_completion(client: Client, tmp_path: Path) -> None:
+    source = FakeDatasetSource(
+        sample(tmp_path / '1.h5', [1.0, 2.0], 'pid/1'),
+        sample(tmp_path / '2.h5', [1.0, 2.0], 'pid/2'),
+    )
+    client.backend.sources.append(source)
+    rule = series_rule(fire=Complete(count=2))
+    client.wait(TriggerLoop(client, rule).run_once())
+    rule.exclude('pid:pid/1', 'bad sample alignment')
+    group = apply(client, rule, client.datasets()[-1:])
+    assert dict(group) == {}
+    assert group.waiting == {'sio2': 'series sio2: 1 of 2 members'}
 
 
 def test_a_series_is_complete_by_a_count_or_by_roles() -> None:
@@ -862,7 +877,7 @@ def test_a_dataset_only_in_another_column_is_no_member_of_the_series(
 
     every = scatter.revise(selector=Selector())
     status = trigger_status(client, every, transmission)
-    assert status.fires, status.reason
+    assert status.state == 'fires', status.reason
 
 
 def test_a_reprocess_offers_only_the_series_whose_runs_a_record_lists(
@@ -1170,7 +1185,7 @@ def test_a_member_waits_for_a_match_after_it(
     assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
     sample = {str(d.ref): d for d in client.datasets()}['run:loki/7']
     status = trigger_status(client, rule, sample)
-    assert (status.fires, status.waiting) == (False, True)
+    assert status.state == 'waits'
     assert "after it yet for 'can'" in status.reason
 
     cans_and_samples.add(loki(tmp_path / '9.h5', 9, 'can'))
@@ -1193,6 +1208,99 @@ def test_either_direction_takes_the_nearer_match_and_waits_for_the_one_after(
         'run:loki/5': 'run:loki/6',
     }
     assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
+
+
+def test_backlog_and_reprocess_leave_out_the_members_that_wait(
+    client: Client, before_rule: Rule
+) -> None:
+    """A member that waits is listed beside the group, as the live loop lists it,
+    and does not stop the others."""
+    TriggerLoop(client, before_rule).run_once()
+    after = (
+        before_rule.lookup.entries[0]
+        .fills['can']
+        .model_copy(update={'direction': 'after'})
+    )
+    lookup = Lookup(
+        name='cans', entries=(LookupEntry(name='can', fills={'can': after}),)
+    )
+
+    again = reprocess(client, before_rule.revise(lookup=lookup))
+    assert sorted(again) == ['run:loki/4', 'run:loki/5']
+    assert sorted(again.waiting) == ['run:loki/7', 'run:loki/8']
+    assert "after it yet for 'can'" in again.waiting['run:loki/7']
+
+    later = Rule.over(
+        client.datasets(),
+        name='subtract-backlog',
+        template=before_rule.template,
+        lookup=lookup,
+        selector=Selector(
+            match={'role': Like(pattern='sample'), 'run': Between(low=2)}
+        ),
+    )
+    back = backlog(client, later)
+    assert sorted(back) == ['run:loki/4', 'run:loki/5']
+    assert back.waiting == again.waiting
+
+
+def test_a_pinned_can_makes_a_member_that_waits(
+    client: Client, cans_and_samples: FakeDatasetSource
+) -> None:
+    """The pinned value replaces the nearest fill, which is then not resolved."""
+    rule = subtract_rule(direction='after')
+    loop = TriggerLoop(client, rule)
+    loop.run_once()
+    seven = {str(d.ref): d for d in client.datasets()}['run:loki/7']
+    pinned = {'run:loki/7': {'can': dataset_ref(instrument='loki', run=6)}}
+    (record,) = client.submit_group(apply(client, rule, [seven], pinned)).values()
+    assert record.status == Status.COMPLETED, record.failure
+    assert cans([record]) == {'run:loki/7': 'run:loki/6'}
+    assert list(record.request.origin.pinned) == ['can']
+    assert loop.run_once() == []
+    assert set(loop.waiting) == {'subtract run:loki/8'}
+
+
+def test_a_member_refused_for_want_of_a_can_is_made_with_a_pinned_one(
+    client: Client, before_rule: Rule
+) -> None:
+    first = {str(d.ref): d for d in client.datasets()}['run:loki/1']
+    status = trigger_status(client, before_rule, first)
+    assert status.state == 'skips'
+    assert "before it for 'can'" in status.reason
+    pinned = {'run:loki/1': {'can': dataset_ref(instrument='loki', run=2)}}
+    group = apply(client, before_rule, [first], pinned)
+    assert cans(client.submit_group(group).values()) == {'run:loki/1': 'run:loki/2'}
+    assert trigger_status(client, before_rule, first).reason == (
+        '1 record(s) under the label'
+    )
+
+
+def test_either_direction_breaks_a_tie_toward_the_match_before_in_the_extractors_order(
+    client: Client, tmp_path: Path
+) -> None:
+    """By start time the sample lies ten minutes after one can and ten minutes
+    before the other; by run number it would lie after both."""
+
+    def dataset(run: int, role: str, minute: int) -> Dataset:
+        return Dataset(
+            path=write_run(tmp_path / f'{run}.h5', [1.0, 2.0]),
+            instrument='loki',
+            run=run,
+            metadata={
+                'role': role,
+                'start': datetime(2026, 9, 1, 10, minute, tzinfo=UTC),
+            },
+            order='start',
+        )
+
+    client.backend.sources.append(
+        FakeDatasetSource(
+            dataset(1, 'can', 0), dataset(2, 'can', 20), dataset(3, 'sample', 10)
+        )
+    )
+    fired = TriggerLoop(client, subtract_rule(direction='either')).run_once()
+    assert cans(fired) == {'run:loki/3': 'run:loki/1'}
 
 
 def test_a_nearest_fill_pairs_by_the_fields_named_same(

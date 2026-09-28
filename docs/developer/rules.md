@@ -71,6 +71,7 @@ Because the fill is anchored to the member's own dataset, the backlog and a repr
 A member with no match before it is refused, visibly.
 A member with no match after it *waits*: `trigger_status` says so, and a later pass fires on it once the match is measured.
 `'either'` waits for the match after as well, so the answer depends only on the datasets that exist, not on when it is asked.
+A pinned value replaces the fill, which is then not resolved, so a person makes a member that waits or is refused by pinning its can.
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
@@ -150,7 +151,9 @@ It fires a rule on a candidate, a new dataset or a completed record of the rule 
 
 For a series, and for a completed record, a record counts only if it references the candidate.
 `trigger_status` answers this for one candidate and returns the reason, so the loop's decision and the status a user reads are one function.
-Where the clauses hold but the request cannot be made yet, because a nearest fill looks after the member or a series fires once complete, the status is *waiting*, and the loop lists it in `TriggerLoop.waiting`.
+Its `state` is `fires`, `skips`, or `waits`.
+A candidate *waits* where the clauses hold but the request cannot be made yet, because a nearest fill looks after the member or a series fires once complete, and the loop lists it in `TriggerLoop.waiting`.
+A candidate whose request `apply` refuses is skipped, with the refusal as reason, and the loop lists it in `TriggerLoop.refusals`.
 The last clause keeps automatic reduction off its own output: a published output is recognized by the snapshot in its SciCat entry, not by a table of ours.
 
 **The loop keeps no memory.**
@@ -162,6 +165,7 @@ Refusals are kept as a log for a user, never read by the loop itself.
 
 Three deliberate operations call `apply` with a query instead of with a dataset.
 Each returns a group that `validate` shows before anything is created, and none of them runs on its own.
+A member that waits is left out of the group and listed in its `waiting`, as the loop lists it.
 
 - **`backlog`**: the datasets before a new rule's bound that its selector matches, offered when the rule is created.
 - **`reprocess`**: the members whose latest record under the rule's label came from an older rule version, offered when the rule moves to a new template or lookup version.
@@ -391,7 +395,7 @@ Fan-out whose keys come from the data takes two phases instead: a first run whos
 - Reprocessing after a template change is a client operation over a query, not a stored diff.
 - A rule's bound is one more thing to get right at creation.
   Its default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
-- A nearest fill looking before the member has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
+- A nearest fill looking before the member has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person pins one.
   One looking after the member, or either way, waits, and the samples after the last can wait until a person pins one.
 - A series request over k runs reduces all k runs in a throwaway process ([aggregation.md](aggregation.md#a-series-under-a-rule)).
 - One run that cannot be read fails its series request until someone excludes it.
