@@ -22,12 +22,26 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from fnmatch import fnmatch
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, model_validator
 
 from .records import Plain, Template
 from .sources import Dataset
+
+
+class HasFields(Protocol):
+    """
+    What a rule fires on: a dataset, or a completed record of the rule it
+    follows (:class:`ess.apps.batch.Completed`). Criteria match its fields, and
+    its ``ref`` is what it fills the template's dataset field with.
+    """
+
+    @property
+    def fields(self) -> dict[str, Any]: ...
+
+    @property
+    def ref(self) -> Any: ...
 
 
 class Criterion(BaseModel, frozen=True):
@@ -73,11 +87,11 @@ class Between(Criterion, frozen=True):
 
 
 Criteria = dict[str, Near | Like | Between]
-"""Conditions by dataset field; a dataset satisfies them when it satisfies all."""
+"""Conditions by field; a candidate satisfies them when it satisfies all."""
 
 
-def matches(criteria: Criteria, dataset: Dataset) -> bool:
-    fields = dataset.fields
+def matches(criteria: Criteria, candidate: HasFields) -> bool:
+    fields = candidate.fields
     return all(
         name in fields and criterion.matches(fields[name])
         for name, criterion in criteria.items()
@@ -152,12 +166,14 @@ class Lookup(BaseModel, frozen=True):
     def id(self) -> str:
         return f'{self.name}/v{self.version}'
 
-    def entry(self, dataset: Dataset) -> LookupEntry | None:
+    def entry(self, candidate: HasFields) -> LookupEntry | None:
         """The entry that applies, the wildcard, or None."""
-        hits = [e for e in self.entries if not e.wildcard and matches(e.match, dataset)]
+        hits = [
+            e for e in self.entries if not e.wildcard and matches(e.match, candidate)
+        ]
         if len(hits) > 1:
             raise ValueError(
-                f'{dataset.ref} matches lookup entries {[e.name for e in hits]}'
+                f'{candidate.ref} matches lookup entries {[e.name for e in hits]}'
             )
         if hits:
             return hits[0]
@@ -223,9 +239,9 @@ class Selector(BaseModel, frozen=True):
     match: Criteria = Field(default_factory=dict)
     after: Bound = Field(default_factory=Bound)
 
-    def selects(self, dataset: Dataset) -> bool:
+    def selects(self, candidate: HasFields) -> bool:
         """Whether the criteria match, leaving the bound to :attr:`after`."""
-        return matches(self.match, dataset)
+        return matches(self.match, candidate)
 
 
 class RetryPolicy(BaseModel, frozen=True):
@@ -255,7 +271,7 @@ class Complete(BaseModel, frozen=True):
             raise ValueError('a series is complete by a count or by roles, not both')
         return self
 
-    def missing(self, members: Iterable[Dataset]) -> str | None:
+    def missing(self, members: Iterable[HasFields]) -> str | None:
         """What the members lack to be complete, or None."""
         members = list(members)
         if self.count is not None:
@@ -287,9 +303,29 @@ class Series(BaseModel, frozen=True):
     fire: Literal['each'] | Complete = 'each'
 
 
+class Follows(BaseModel, frozen=True):
+    """
+    The candidates of a rule that fires on the completed records of another.
+
+    ``label`` is the other rule's label, and its candidates are the latest
+    completed record per member key under it. A candidate has the fields of
+    the dataset its member key names, so selectors, lookups, and series keys
+    work as they do on datasets. It fills the template's dataset field with a
+    row of references to every output of the record, by output name, which is
+    the form a combine spec over the records of a contribute spec takes.
+    Where ``output`` names one output, it fills a reference to that output
+    instead, and one to each element of a collection output, each its own
+    candidate: the second phase of a fan-out whose keys the first found.
+    """
+
+    label: str
+    output: str | None = None
+
+
 class Rule(BaseModel):
     """
-    Stored, versioned data that makes requests from datasets.
+    Stored, versioned data that makes requests from datasets, or from the
+    completed records of another rule when it :class:`Follows` one.
 
     Everything but ``exclusions`` and ``active`` changes by copy through
     :meth:`revise`, and the records say which version made them; those two are
@@ -306,9 +342,11 @@ class Rule(BaseModel):
     selector: Selector = Field(default_factory=Selector)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     series: Series | None = None
+    follows: Follows | None = None
     exclusions: dict[str, str] = Field(
         default_factory=dict,
-        description="Dataset identities not to fire on or list, with a reason.",
+        description="Candidates not to fire on or list, with a reason: datasets "
+        "by identity, completed records by member key.",
     )
     active: bool = True
 

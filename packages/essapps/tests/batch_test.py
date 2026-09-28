@@ -29,11 +29,15 @@ from ess.apps.batch import (
 )
 from ess.apps.client import Client
 from ess.apps.examples import (
+    COMBINE,
+    CONTRIBUTE,
+    EXPORT,
     FLOORED,
     LOAD,
     NORMALIZE,
     REBIN,
     SUBTRACT,
+    SUM,
     LoadOutputs,
     LoadParams,
     load_workflow,
@@ -44,6 +48,7 @@ from ess.apps.rules import (
     Between,
     Bound,
     Complete,
+    Follows,
     Like,
     Lookup,
     LookupEntry,
@@ -1045,3 +1050,101 @@ def test_a_nearest_fill_pairs_by_the_fields_named_same(
     )
     fired = TriggerLoop(client, subtract_rule(same=('holder',))).run_once()
     assert cans(fired) == {'run:loki/3': 'run:loki/1', 'run:loki/4': 'run:loki/2'}
+
+
+# Rules over the completed records of another rule
+
+
+def settle(client: Client, loop: TriggerLoop) -> None:
+    """Run the loop until it fires on nothing, as passes over time would."""
+    while fired := loop.run_once():
+        client.wait(fired)
+
+
+def test_a_combine_follows_the_contributions_of_a_series_as_it_grows(
+    client: Client, tmp_path: Path
+) -> None:
+    """One rule reduces each run to its contribution, a second combines the
+    contributions of each sample, fired again as the sample gets more runs."""
+    source = FakeDatasetSource()
+    client.backend.sources.append(source)
+    contribute = Rule(
+        name='contribute',
+        template=Template(spec=CONTRIBUTE.id, params={'floor': 1.5}, blanks=('run',)),
+    )
+    combine = Rule(
+        name='combine',
+        template=Template(spec=COMBINE.id, params={'scale': 2.0}, blanks=('parts',)),
+        follows=Follows(label='contribute'),
+        series=Series(key='sample'),
+    )
+    loop = TriggerLoop(client, contribute, combine)
+    runs = [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]]
+    for i, values in enumerate(runs, start=1):
+        source.add(sample(tmp_path / f'{i}.h5', values, f'pid/{i}'))
+        settle(client, loop)
+
+    combined = client.records(label='combine', member_key='sio2')
+    assert len(combined) == 3
+    latest = client.latest('combine', 'sio2')
+    parts = client.batch('contribute')
+    assert latest.request.params['parts'] == [
+        {
+            name: part.ref(name).model_dump(mode='json')
+            for name in ('numerator', 'denominator')
+        }
+        for part in parts
+    ]
+    (at_once,) = client.wait(
+        [
+            client.run(
+                NORMALIZE,
+                {
+                    'runs': [dataset_ref(pid=f'pid/{i}') for i in (1, 2, 3)],
+                    'floor': 1.5,
+                    'scale': 2.0,
+                },
+            )
+        ]
+    )
+    assert latest.status == Status.COMPLETED, latest.failure
+    assert sc.identical(
+        client.output(latest, 'normalized'), client.output(at_once, 'normalized')
+    )
+    assert loop.run_once() == []
+
+
+def test_a_second_phase_fans_out_over_the_keys_the_first_found(
+    client: Client, tmp_path: Path
+) -> None:
+    """SUM stands in for a first phase whose output is keyed by what it read;
+    the second phase makes one request per key."""
+    client.backend.sources.append(
+        FakeDatasetSource(
+            sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1'),
+            sample(tmp_path / 'b.h5', [5.0, 6.0], 'pid/2'),
+        )
+    )
+    first = Rule(
+        name='first',
+        template=Template(spec=SUM.id, blanks=('runs',)),
+        series=Series(key='sample', fire=Complete(count=2)),
+    )
+    second = Rule(
+        name='second',
+        template=Template(spec=EXPORT.id, blanks=('data',)),
+        follows=Follows(label='first', output='per_run'),
+    )
+    loop = TriggerLoop(client, first, second)
+    settle(client, loop)
+
+    (phase1,) = client.batch('first')
+    exports = client.batch('second')
+    assert [r.request.member_key for r in exports] == ['sio2[0]', 'sio2[1]']
+    assert [r.request.refs() for r in exports] == [
+        [phase1.ref('per_run', key)] for key in ('0', '1')
+    ]
+    assert [client.output(r, 'csv').read_text() for r in exports] == [
+        'x,counts\n0.0,1.0\n1.0,2.0\n',
+        'x,counts\n0.0,5.0\n1.0,6.0\n',
+    ]
