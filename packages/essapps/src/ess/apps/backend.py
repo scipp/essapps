@@ -41,8 +41,9 @@ from .records import (
     Status,
 )
 from .runner import Job
-from .sources import Dataset, DatasetSource, find
+from .sources import Dataset, DatasetSource, find, merge
 from .spec import (
+    STAND_INS,
     DataField,
     DatasetRef,
     Format,
@@ -74,6 +75,12 @@ class Access(Protocol):
     A request may name datasets and outputs of records of any proposal its
     submitter may read, such as a facility vanadium run or a commissioning
     reference. At a facility the user office answers this.
+
+    The check prevents mistakes, not misuse: submitters are not authenticated,
+    and a request may read its own proposal without asking, so a submitter
+    who names a proposal reads it. It becomes a security boundary once
+    submitters are authenticated and their membership in the owning proposal
+    is checked before anything else.
     """
 
     def may_read(self, submitter: str, proposal: str) -> bool: ...
@@ -193,11 +200,14 @@ class Backend(Protocol):
         """Cancel a record; a no-op once it is terminal."""
         ...
 
-    def recompute(self, record_id: str) -> RunRecord:
-        """Run a record's request again as a new record linked to the old one."""
+    def recompute(self, record_id: str, submitter: str) -> RunRecord:
+        """
+        Run a record's request again as a new record linked to the old one,
+        submitted by ``submitter``.
+        """
         ...
 
-    def retry(self, record_id: str) -> RunRecord:
+    def retry(self, record_id: str, submitter: str) -> RunRecord:
         """Like ``recompute``, marked as a retry rather than a deliberate rerun."""
         ...
 
@@ -278,21 +288,19 @@ class LocalBackend:
         """
         Every dataset the sources know for these proposals, by identity.
 
-        Arrival may be repeated and out of order, so the first dataset of
-        each identity wins; nothing is stored to make the list.
+        Arrival may be repeated and out of order, and two sources may know
+        one dataset by different identities, so datasets that share an
+        identity are one, see :func:`ess.apps.sources.merge`; nothing is
+        stored to make the list.
         """
-        seen: dict[DatasetRef, Dataset] = {}
-        for source in self.sources:
-            for dataset in source.datasets(proposals):
-                seen.setdefault(dataset.ref, dataset)
-        return list(seen.values())
+        return merge(d for s in self.sources for d in s.datasets(proposals))
 
     def find(self, ref: DatasetRef) -> Dataset | None:
         """
         The dataset an identity or a stand-in names among those the sources
         know, or None; raises for a stand-in that names several.
         """
-        return find(filter(None, (s.find(ref) for s in self.sources)), ref)
+        return find(merge(filter(None, (s.find(ref) for s in self.sources))), ref)
 
     def locate(self, ref: DatasetRef) -> Path | None:
         """
@@ -319,19 +327,28 @@ class LocalBackend:
         pipeline, whichever outputs it asks for, so a missing parameter is
         refused here and never found when the run starts.
         """
+        return self._validate(request, group or {})[0]
+
+    def _validate(
+        self, request: RunRequest, group: Mapping[str, RunRequest]
+    ) -> tuple[ValidationReport, RunRequest]:
+        """The report, and the request as it would be recorded where it is valid."""
         if request.spec not in self.registry:
             return ValidationReport(
                 layers=('schema',), errors=(f'unknown spec {request.spec}',)
-            )
+            ), request
         spec = self.registry.spec(request.spec)
         request = self._with_defaults(request)
         errors = _shape_errors(spec, request)
         if errors:
-            return ValidationReport(layers=('schema', 'params'), errors=tuple(errors))
-        request = self._as_recorded(request)
+            return ValidationReport(
+                layers=('schema', 'params'), errors=tuple(errors)
+            ), request
+        found: dict[DatasetRef, Dataset | str] = {}
+        request = self._as_recorded(request, found)
         for path, ref in walk_refs(request.params):
             errors += self._check_ref(
-                ref, data_field_at(spec.params, path), request, group or {}
+                ref, data_field_at(spec.params, path), request, group, found
             )
         if (rule := self._reserved.get(request.label)) is not None:
             submitted = (
@@ -348,7 +365,7 @@ class LocalBackend:
             errors.append(f'launcher cannot run {request.spec}')
         return ValidationReport(
             layers=('schema', 'params', 'runnability'), errors=tuple(errors)
-        )
+        ), request
 
     def _check_ref(
         self,
@@ -356,10 +373,14 @@ class LocalBackend:
         consumer: DataField | None,
         request: RunRequest,
         group: Mapping[str, RunRequest],
+        found: Mapping[DatasetRef, Dataset | str],
     ) -> list[str]:
-        """Whether a reference may fill the field it is in."""
+        """
+        Whether a reference may fill the field it is in; ``found`` is the
+        dataset each dataset reference names, or why none.
+        """
         if isinstance(ref, DatasetRef):
-            return self._check_dataset(ref, consumer, request)
+            return self._check_dataset(ref, consumer, request, found[ref])
         if ref.record.startswith(GROUP_PREFIX):
             name = ref.record[len(GROUP_PREFIX) :]
             if name not in group:
@@ -392,7 +413,11 @@ class LocalBackend:
         return []
 
     def _check_dataset(
-        self, ref: DatasetRef, consumer: DataField | None, request: RunRequest
+        self,
+        ref: DatasetRef,
+        consumer: DataField | None,
+        request: RunRequest,
+        dataset: Dataset | str,
     ) -> list[str]:
         """
         Whether a source knows the dataset and the submitter may read it.
@@ -402,12 +427,8 @@ class LocalBackend:
         """
         if consumer is None:
             return [f'{ref}: a dataset cannot fill a literal field']
-        try:
-            dataset = self.find(ref)
-        except ValueError as e:
-            return [str(e)]
-        if dataset is None:
-            return [f'{ref}: no source knows it']
+        if isinstance(dataset, str):
+            return [dataset]
         if not self._may_read(request, dataset.proposals):
             return [
                 f'{ref}: belongs to proposals {dataset.proposals}, which '
@@ -436,7 +457,8 @@ class LocalBackend:
         dispatched after a restart runs without it, which holds nothing and
         gives the same result.
         """
-        reports = {name: self.validate(req, group) for name, req in group.items()}
+        validated = {name: self._validate(req, group) for name, req in group.items()}
+        reports = {name: report for name, (report, _) in validated.items()}
         for name, req in group.items():
             if errors := _vary_errors(req, vary, self.registry):
                 reports[name] = ValidationReport(
@@ -457,7 +479,7 @@ class LocalBackend:
         for name, req in group.items():
             record = RunRecord(
                 id=ids[name],
-                request=self._complete(req, named),
+                request=self._complete(validated[name][1], named),
                 supersedes=self._supersedes(req, latest),
             )
             records[name] = record
@@ -471,13 +493,12 @@ class LocalBackend:
 
     def _complete(self, request: RunRequest, named: Mapping[str, str]) -> RunRequest:
         """
-        The request as recorded: defaults filled, group references by ID,
-        outputs named.
+        The validated request as recorded: group references by ID, outputs named.
 
         A request without outputs asks for the spec's results, and its record
         names them, so that what a record computed never depends on the spec.
         """
-        request = self._as_recorded(request)
+        _check_identities(request)
         return request.model_copy(
             update={
                 'params': _rewrite(request.params, lambda ref: _grouped(ref, named)),
@@ -485,30 +506,48 @@ class LocalBackend:
             }
         )
 
-    def _as_recorded(self, request: RunRequest) -> RunRequest:
+    def _as_recorded(
+        self, request: RunRequest, found: dict[DatasetRef, Dataset | str]
+    ) -> RunRequest:
         """
         The request with defaults filled, every value in the form the params
-        model gives it, and every dataset named by its identity.
+        model gives it, and every dataset named by its identity, in the
+        params and in the values the submitter pinned alike.
 
         So ``0`` and ``0.0`` given for one float field are one recorded value
-        and one held stage, and ``run:dream/1`` and the dataset's identity are
-        one input. Raises for a request whose values do not validate; leaves a
-        stand-in no source resolves as it is, for validation to refuse.
+        and one held stage, ``run:dream/1`` and the dataset's identity are one
+        input, and a reprocess that carries a pinned ``run:dream/1`` names the
+        dataset it named the first time. ``found`` collects, by each dataset
+        reference the result holds, the dataset it names, or why none: a
+        reference no source resolves is kept as given. Raises for a request
+        whose values do not validate.
         """
         request = self._with_defaults(request)
         params = self.registry.spec(request.spec).params
         values = params.model_validate(request.params).model_dump(mode='json')
-        return request.model_copy(update={'params': _rewrite(values, self._identity)})
 
-    def _identity(self, ref: Ref) -> Ref:
-        """The identity of the dataset a stand-in names; any other ref as it is."""
-        if not isinstance(ref, DatasetRef):
-            return ref
-        try:
-            dataset = self.find(ref)
-        except ValueError:
-            return ref
-        return ref if dataset is None else dataset.ref
+        def identity(ref: Ref) -> Ref:
+            if not isinstance(ref, DatasetRef):
+                return ref
+            if ref not in found:
+                try:
+                    found[ref] = self.find(ref) or f'{ref}: no source knows it'
+                except ValueError as e:
+                    found[ref] = str(e)
+            if isinstance(dataset := found[ref], str):
+                return ref
+            found[dataset.ref] = dataset
+            return dataset.ref
+
+        origin = request.origin
+        return request.model_copy(
+            update={
+                'params': _rewrite(values, identity),
+                'origin': origin.model_copy(
+                    update={'pinned': _rewrite(origin.pinned, identity)}
+                ),
+            }
+        )
 
     def _with_defaults(self, request: RunRequest) -> RunRequest:
         """
@@ -553,20 +592,26 @@ class LocalBackend:
         )
         return None if record is None else record.id
 
-    def recompute(self, record_id: str) -> RunRecord:
+    def recompute(self, record_id: str, submitter: str) -> RunRecord:
         """Run a record's request again as a new record linked to the old one."""
-        return self._derive(record_id, 'recompute')
+        return self._derive(record_id, submitter, 'recompute')
 
-    def retry(self, record_id: str) -> RunRecord:
-        return self._derive(record_id, 'retry')
+    def retry(self, record_id: str, submitter: str) -> RunRecord:
+        return self._derive(record_id, submitter, 'retry')
 
-    def _derive(self, record_id: str, reason: Any) -> RunRecord:
+    def _derive(self, record_id: str, submitter: str, reason: Any) -> RunRecord:
+        """
+        The old record's request, validated and recorded again as ``submitter``'s.
+        """
         old = self.record_store.get(record_id)
-        report = self.validate(old.request)
+        report, request = self._validate(
+            old.request.model_copy(update={'submitter': submitter}), {}
+        )
         if not report.ok:
             raise SubmitError({record_id: report})
+        _check_identities(request)
         new = RunRecord(
-            request=self._as_recorded(old.request),
+            request=request,
             derives_from=Derivation(record=old.id, reason=reason),
             supersedes=self._supersedes(old.request, {}),
         )
@@ -865,6 +910,17 @@ class LocalBackend:
         record.published[ref.output] = pid
         self.record_store.update(record)
         return pid
+
+
+def _check_identities(request: RunRequest) -> None:
+    """Raise for a dataset a request about to be recorded names by a stand-in."""
+    values = {'params': request.params, 'pinned': request.origin.pinned}
+    if stand_ins := [
+        str(ref)
+        for _, ref in walk_refs(values)
+        if isinstance(ref, DatasetRef) and ref.dataset.partition(':')[0] in STAND_INS
+    ]:
+        raise RuntimeError(f'unresolved stand-ins in a request to record: {stand_ins}')
 
 
 def _dead(producers: Iterable[RunRecord]) -> RunRecord | None:

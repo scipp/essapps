@@ -187,12 +187,20 @@ class RemoteBackend:
     def cancel(self, record_id: str) -> None:
         _checked(self._client.post(f'/records/{record_id}/cancel'))
 
-    def recompute(self, record_id: str) -> RunRecord:
-        r = _checked(self._client.post(f'/records/{record_id}/recompute'))
+    def recompute(self, record_id: str, submitter: str) -> RunRecord:
+        r = _checked(
+            self._client.post(
+                f'/records/{record_id}/recompute', params={'submitter': submitter}
+            )
+        )
         return RunRecord.model_validate(r.json())
 
-    def retry(self, record_id: str) -> RunRecord:
-        r = _checked(self._client.post(f'/records/{record_id}/retry'))
+    def retry(self, record_id: str, submitter: str) -> RunRecord:
+        r = _checked(
+            self._client.post(
+                f'/records/{record_id}/retry', params={'submitter': submitter}
+            )
+        )
         return RunRecord.model_validate(r.json())
 
     def output(self, ref: OutputRef) -> Any:

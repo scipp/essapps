@@ -275,6 +275,107 @@ def test_a_file_that_moved_is_found_by_its_identity_on_recompute(
     assert again.request == record.request
 
 
+@pytest.mark.parametrize('change', ['rewrite', 'delete'])
+def test_a_recompute_over_a_dataset_no_source_knows_any_more_is_refused(
+    client: Client, run_ref: DatasetRef, run_file: Path, change: str
+) -> None:
+    """A file identified by its bytes and rewritten in place is another dataset."""
+    record = client.run(LOAD, {'run': run_ref})
+    if change == 'rewrite':
+        write_run(run_file, [9.0])
+    else:
+        run_file.unlink()
+    with pytest.raises(SubmitError, match=f'{run_ref}: no source knows it'):
+        client.recompute(record)
+
+
+def test_bytes_that_differ_from_the_sha256_they_are_located_by_fail_the_run(
+    tmp_path: Path, run_file: Path
+) -> None:
+    """The file changed between locating it and reading it."""
+    stale = Dataset(path=run_file, proposals=['p1'], sha256='0' * 64)
+    client = local(
+        tmp_path / 'store',
+        instrument='dream',
+        proposal='p1',
+        submitter='simon',
+        registry=registry(),
+        sources=[FakeDatasetSource(stale)],
+    )
+    record = client.run(LOAD, {'run': stale.ref})
+    client.close()
+    assert record.status == Status.FAILED
+    assert f'now has sha256 {file_checksum(run_file)}' in record.failure.message
+
+
+def test_stand_ins_in_a_list_and_beside_a_group_reference_are_resolved(
+    client: Client, run_ref: DatasetRef, run_file: Path, datasets: Path
+) -> None:
+    other = write_run(datasets / 'dream_2.h5', [1.0] * 8, uuid='dream-2')
+    group = client.submit_group(
+        {
+            'a': client.request(LOAD, {'run': dataset_ref(path=other)}),
+            'b': client.request(
+                SUM,
+                {
+                    'runs': [
+                        OutputRef(record='@a', output='data'),
+                        dataset_ref(instrument='dream', run=1),
+                        dataset_ref(path=run_file),
+                    ]
+                },
+            ),
+        }
+    )
+    assert group['a'].request.params['run'] == dataset_ref(uuid='dream-2').model_dump()
+    assert group['b'].request.params['runs'] == [
+        group['a'].ref('data').model_dump(),
+        run_ref.model_dump(),
+        run_ref.model_dump(),
+    ]
+
+
+def test_a_dataset_two_sources_know_by_different_identities_is_one(
+    tmp_path: Path, datasets: Path
+) -> None:
+    """A catalogue knows the file by its PID and UUID, the folder by its UUID."""
+    path = write_run(datasets / 'dream_3.h5', [1.0], uuid='u3')
+    catalogue = FakeDatasetSource(
+        Dataset(
+            path=path,
+            proposals=['p1', 'p2'],
+            pid='pid/3',
+            uuid='u3',
+            instrument='dream',
+            run=3,
+        )
+    )
+    client = make_client(tmp_path / 'store', datasets, sources=[catalogue])
+    (dataset,) = client.datasets(['p1', 'p2'])
+    record = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=3)})
+    client.close()
+    assert (dataset.ref, dataset.proposals) == (dataset_ref(pid='pid/3'), ['p1', 'p2'])
+    assert record.status == Status.COMPLETED, record.failure
+    assert record.request.params['run'] == dataset_ref(pid='pid/3').model_dump()
+
+
+def test_a_dataset_of_two_proposals_is_readable_through_either(
+    tmp_path: Path, run_file: Path
+) -> None:
+    shared = Dataset(path=run_file, proposals=['p1', 'p2'], pid='pid/shared')
+    backend = local_backend(
+        tmp_path / 'store', registry=registry(), sources=[FakeDatasetSource(shared)]
+    )
+    reports = {}
+    for proposal in ('p1', 'p2', 'p3'):
+        client = Client(backend, instrument='dream', proposal=proposal, submitter='x')
+        reports[proposal] = client.validate(client.request(LOAD, {'run': shared.ref}))
+    backend.close()
+    assert reports['p1'].ok
+    assert reports['p2'].ok
+    assert not reports['p3'].ok
+
+
 def test_a_dataset_whose_bytes_are_missing_fails_the_run_naming_the_sources(
     tmp_path: Path, datasets: Path
 ) -> None:
@@ -693,7 +794,7 @@ def test_a_retry_and_a_correction_supersede_the_current_head(
 ) -> None:
     first = client.run(LOAD, {'run': run_ref}, label='tune')
     assert first.supersedes is None
-    retried = client.backend.retry(first.id)
+    retried = client.backend.retry(first.id, client.submitter)
     assert retried.supersedes == first.id
     assert client.latest('tune').id == retried.id
 

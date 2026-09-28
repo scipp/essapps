@@ -81,6 +81,37 @@ def _key(candidate: Candidate) -> str:
     return member if candidate.key is None else f'{member}[{candidate.key}]'
 
 
+def _keys(candidate: Candidate) -> list[str]:
+    """
+    Every key a candidate may be a member under: one for each identity of a
+    dataset, since a dataset may gain a PID after a record named it.
+    """
+    if isinstance(candidate, Dataset):
+        return [str(ref) for ref in candidate.identities]
+    return [_key(candidate)]
+
+
+def _member_key(client: Client, label: str, candidate: Candidate) -> str:
+    """
+    The key a candidate is a member under: the first of its keys that has a
+    record under the label, so that its records supersede each other whichever
+    identity it has, else its own key.
+    """
+    keys = _keys(candidate)
+    if len(keys) > 1:
+        for key in keys:
+            if client.latest(label, member_key=key) is not None:
+                return key
+    return _key(candidate)
+
+
+def _excluded(rule: Rule, candidate: Candidate) -> str | None:
+    """Why the rule excludes a candidate, under any of its keys, or None."""
+    return next(
+        (rule.exclusions[k] for k in _keys(candidate) if k in rule.exclusions), None
+    )
+
+
 def candidates(client: Client, rule: Rule | Template) -> list[Candidate]:
     """
     What a rule fires on: the datasets the sources know, or, for a rule that
@@ -97,7 +128,7 @@ def _candidates(
     """:func:`candidates` among ``datasets``, what the sources know in one pass."""
     if not isinstance(rule, Rule) or rule.follows is None:
         return list(datasets)
-    known = {str(dataset.ref): dataset for dataset in datasets}
+    known = {key: dataset for dataset in datasets for key in _keys(dataset)}
     output = rule.follows.output
     found: list[Candidate] = []
     for record in client.batch(rule.follows.label):
@@ -139,7 +170,8 @@ def _unfinished(member: list[Candidate]) -> str | None:
 def _names(value: Any, candidate: Candidate) -> bool:
     """Whether a parameter value references the candidate."""
     if isinstance(candidate, Dataset):
-        return candidate.ref in dataset_refs(value)
+        refs = dataset_refs(value)
+        return any(ref in refs for ref in candidate.identities)
     return any(
         isinstance(ref, OutputRef)
         and ref.record == candidate.record.id
@@ -224,7 +256,7 @@ def _apply(
         pool = _candidates(client, of_rule, known)
         members = _series(of_rule, series.key, datasets, pool)
     elif datasets:
-        members = {_key(d): [d] for d in datasets}
+        members = {_member_key(client, label, d): [d] for d in datasets}
     else:
         members = {key: [] for key in values}
     group: dict[str, RunRequest] = {}
@@ -286,7 +318,7 @@ def _series(
         if (
             value in members
             and rule.selector.selects(dataset)
-            and _key(dataset) not in rule.exclusions
+            and _excluded(rule, dataset) is None
         ):
             members[value].setdefault(_key(dataset), dataset)
     return {
@@ -496,7 +528,7 @@ def backlog(client: Client, rule: Rule) -> Group:
             for candidate in _candidates(client, rule, known)
             if rule.selector.selects(candidate)
             and not _after(rule, candidate)
-            and _key(candidate) not in rule.exclusions
+            and _excluded(rule, candidate) is None
         ],
         None,
         known=known,
@@ -552,7 +584,7 @@ def _datasets(
     """
     if isinstance(rule, Rule) and rule.series is not None:
         listed = _listed(rule.template, record.request.params)
-        return [c for c in known.values() if _names(listed, c)]
+        return list({_key(c): c for c in known.values() if _names(listed, c)}.values())
     member = known.get(str(record.request.member_key))
     return [] if member is None else [member]
 
@@ -566,8 +598,7 @@ def _again(
 ) -> Group:
     """Apply again over the datasets of these records, carrying the pinned values."""
     known = client.datasets()
-    by_key = {_key(c): c for c in _candidates(client, rule, known)}
-    excluded = rule.exclusions if isinstance(rule, Rule) else {}
+    by_key = {k: c for c in _candidates(client, rule, known) for k in _keys(c)}
     spec = rule.template.spec if isinstance(rule, Rule) else rule.spec
     datasets: dict[str, Candidate] = {}
     pinned: dict[str, dict[str, Any]] = {}
@@ -575,7 +606,8 @@ def _again(
         found = [
             d
             for d in _datasets(by_key, rule, record)
-            if record.spec == spec and _key(d) not in excluded
+            if record.spec == spec
+            and not (isinstance(rule, Rule) and _excluded(rule, d) is not None)
         ]
         datasets |= {_key(d): d for d in found}
         if found:
@@ -614,7 +646,7 @@ def shadowed(client: Client, rule: Rule, previous: Rule) -> pd.DataFrame:
     in :func:`batch_table`: the leaves of a pinned field whose fill changed.
     """
     known = client.datasets()
-    by_key = {_key(c): c for c in _candidates(client, rule, known)}
+    by_key = {k: c for c in _candidates(client, rule, known) for k in _keys(c)}
     rows: list[dict[str, Any]] = []
     for record in _stale(client, rule):
         datasets = _datasets(by_key, rule, record)
@@ -708,7 +740,6 @@ def _decide(
 
 
 def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
-    member = _key(candidate)
     if not rule.active:
         return TriggerStatus(state='skips', reason=f'rule {rule.name} is paused')
     if isinstance(candidate, Dataset) and candidate.error is not None:
@@ -717,10 +748,12 @@ def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
         return TriggerStatus(state='skips', reason='the selector does not match')
     if not _after(rule, candidate):
         return TriggerStatus(state='skips', reason="before the rule's bound")
-    if (reason := rule.exclusions.get(member)) is not None:
+    if (reason := _excluded(rule, candidate)) is not None:
         return TriggerStatus(state='skips', reason=f'excluded: {reason}')
     if rule.series is not None:
         member = str(candidate.fields.get(rule.series.key))
+    else:
+        member = _member_key(client, rule.name, candidate)
     records = client.records(label=rule.name, member_key=member)
     if rule.series is not None or isinstance(candidate, Followed):
         records = [

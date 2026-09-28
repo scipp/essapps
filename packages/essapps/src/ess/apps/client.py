@@ -212,7 +212,8 @@ class Client:
         self.backend.cancel(record if isinstance(record, str) else record.id)
 
     def recompute(self, record: RunRecord | str) -> RunRecord:
-        return self.backend.recompute(record if isinstance(record, str) else record.id)
+        record_id = record if isinstance(record, str) else record.id
+        return self.backend.recompute(record_id, self.submitter)
 
     def output(
         self,

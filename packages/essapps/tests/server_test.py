@@ -81,6 +81,13 @@ def test_datasets_and_pick_see_the_run_file(
     assert run_ref in [c.ref for c in remote_client.pick()]
 
 
+def test_datasets_of_several_proposals_reach_the_server(
+    remote_client: Client, run_ref: DatasetRef
+) -> None:
+    assert [d.ref for d in remote_client.datasets(['p2', 'p1'])] == [run_ref]
+    assert remote_client.datasets(['p2', 'p3']) == []
+
+
 def test_cancel_propagates_to_a_record_waiting_on_the_producer(
     remote_client: Client, run_ref: DatasetRef
 ) -> None:

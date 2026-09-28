@@ -211,14 +211,14 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             backend.cancel(record_id)
 
     @app.post('/records/{record_id}/recompute')
-    def recompute(record_id: str) -> RunRecord:
+    def recompute(record_id: str, submitter: str) -> RunRecord:
         with lock:
-            return backend.recompute(record_id)
+            return backend.recompute(record_id, submitter)
 
     @app.post('/records/{record_id}/retry')
-    def retry(record_id: str) -> RunRecord:
+    def retry(record_id: str, submitter: str) -> RunRecord:
         with lock:
-            return backend.retry(record_id)
+            return backend.retry(record_id, submitter)
 
     @app.get('/outputs/{record_id}/{output}')
     def get_output(record_id: str, output: str, key: str | None = None) -> FileResponse:

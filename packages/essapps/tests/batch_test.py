@@ -8,6 +8,7 @@ See docs/developer/rules.md.
 
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -163,6 +164,41 @@ def test_apply_without_datasets_is_the_batch_form(
         '300K',
         '310K',
     ]
+
+
+def test_a_pinned_stand_in_is_recorded_as_the_identity_it_names(
+    client: Client, template: Template, run_ref: DatasetRef
+) -> None:
+    """So a reprocess, which carries what was pinned, names the same dataset."""
+    typed = dataset_ref(instrument='dream', run=1)
+    group = apply(client, template, pinned={'m': {'run': typed}}, label='scan')
+    (record,) = client.submit_group(group).values()
+    assert record.request.origin.pinned == {'run': run_ref.model_dump()}
+    assert record.request.params['run'] == run_ref.model_dump()
+
+
+def test_a_pid_minted_after_reduction_leaves_the_member_as_it_was(
+    client: Client, template: Template, tmp_path: Path
+) -> None:
+    uuid_only = Dataset(
+        path=write_run(tmp_path / 'v9.h5', [1.0, 2.0]),
+        proposals=['p1'],
+        uuid='u9',
+        run=9,
+        metadata={'sample': 'vanadium'},
+    )
+    client.backend.sources.append(FakeDatasetSource(uuid_only))
+    rule = Rule(
+        name='auto-load',
+        template=template,
+        selector=Selector(match={'sample': Like(pattern='*')}),
+    )
+    (first,) = TriggerLoop(client, rule).run_once()
+    client.backend.sources[-1] = FakeDatasetSource(replace(uuid_only, pid='pid/9'))
+    assert TriggerLoop(client, rule).run_once() == []
+    moved = rule.revise(template=rule.template.revise(scale=7.0))
+    assert list(reprocess(client, moved)) == ['uuid:u9']
+    assert client.recompute(first).status == Status.COMPLETED
 
 
 def test_a_group_from_apply_shares_a_held_stage_and_a_plain_mapping_does_not(
