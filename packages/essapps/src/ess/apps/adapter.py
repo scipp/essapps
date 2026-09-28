@@ -226,7 +226,10 @@ class PipelineAdapter:
         finalize = sciline.Stage(
             pipeline,
             outputs=targets,
-            inputs=[*accumulated, *(self._keys[name] for name in fed)],
+            inputs=[
+                *accumulated,
+                *(key for name in fed for key in self._wiring.columns(name)),
+            ],
         )
         each = [
             s.field
