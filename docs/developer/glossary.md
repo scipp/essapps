@@ -35,6 +35,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   See [operations.md](operations.md#the-client-interface).
 - **Collection**: a list or dict of values of one declared type, usable as a parameter and as an output.
   A reference may name one element of a collection output by key.
+- **Contribute stage**: the stage of an aggregation from one member to the values that add, built by the adapter inside one run.
 - **Data reference**: a field type: a parameter or output declared to hold a reference to a file or an array rather than a literal.
   Easy to confuse with *reference*, which is the value such a field holds.
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend.

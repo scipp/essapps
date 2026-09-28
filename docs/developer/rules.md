@@ -98,7 +98,7 @@ A **slot** is a label with no member key, owned by one interactive tool, so that
 | `selector` | metadata criteria that pick the datasets, and a lower `Bound` |
 | `retry` | the failure reasons on which a failed record is resubmitted, and a limit |
 | `series` | optional: the dataset field that keys a series |
-| `exclusions` | member keys the rule must not fire on, each with a reason |
+| `exclusions` | dataset identities the rule must not fire on or list in a series, each with a reason |
 | `active` | whether the rule fires at all |
 
 This rule subtracts from each sample the can measured before it, and is the `as_of_rule` fixture of `batch_test.py`:
@@ -193,7 +193,7 @@ If a lookup fills a field differently for two runs of one series, `apply` refuse
 The operator excludes the run, and `retry` submits the series without it.
 
 **A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
-A series of fixed roles, a scatter and its transmission, is the same rule with the request fired only when every role is present.
+A series of fixed roles, a scatter and its transmission, would be the same rule with the request fired only when every role is present.
 The rule says whether the results of a series are published, and by default they are not.
 
 **Series membership is not stored.**

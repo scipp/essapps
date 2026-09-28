@@ -37,7 +37,6 @@ The recommendation in brackets is mine.
 - **Exposed intermediates in ess.reduce.spec.**
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
-  A list of runs is a plain `list[NexusFile]` field and needs nothing more.
 - **A sum under a rule whose runs must be reduced on separate nodes.**
   Is there a real case? Interactively, composing two specs over references covers it ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)), but a rule cannot drive that composition.
 - **A sum with one unreadable run.**
@@ -63,7 +62,10 @@ See [workflow-contract.md](workflow-contract.md).
 - **Pixel masks are a graph rewrite, so the request is not complete.**
   In the LoKI workflow a list of mask filenames rebuilds the sciline graph, so the masks are fixed in the factory that makes the workflow and never reach the record.
   The same rewrite is what stops the additive half of reflectometry, the sum over runs at one angle, from being bound at all.
-  The way out is a pipeline whose masks are parameters, which is not bound that way yet.
+  The way out is a form in which the masks are a parameter, such as a list input, which is untried.
+- **An ess.sans binding would bind sample and background runs as member parameters.**
+  ess.sans already has the list signature: `with_sample_runs` is the parameter mapper for `Filename[SampleRun]`, and `with_background_runs` the one for `Filename[BackgroundRun]`.
+  Such a binding would name `sample_run` and `background_run` as member parameters, with accumulators on `NormalizedQ[..., Numerator]` and `NormalizedQ[..., Denominator]`, the values the mappers merge.
 - **The beam-centre finder takes a pipeline, not a key.**
   It is therefore a plain function, and the expensive part of it is not shared with the reduction that consumes its result.
 - **Every scalar parameter costs a `NewType` and a provider** in the adapter's setup, whose only job is to turn plain data into a scipp object.
@@ -90,7 +92,7 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 See [aggregation.md](aggregation.md).
 
 - **A combination over references has no consistency check over its parts.**
-  A spec over a list of references to other records' outputs, such as a stitch over curves (`amor.COMBINE`) or a sum spread over nodes, accepts parts reduced with different parameters, such as different detector limits.
+  A spec over a collection of references to other records' outputs, such as a stitch over a dict of curves (`amor.COMBINE`) or a sum spread over nodes, accepts parts reduced with different parameters, such as different detector limits.
   A parameter read on both sides is set twice and never compared.
   A list of runs inside one request has one value per parameter.
 

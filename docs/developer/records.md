@@ -18,7 +18,8 @@ client.run(tune, {'bins': 16})
 ```
 
 A **run record** is one run of a spec with every parameter value set, like `compute` on a configured `sciline.Pipeline`.
-A call of a stage, like one `sciline.Stage.compute`, is one run record too, equal to the record of a plain run with the same values.
+A call of a stage, like one `sciline.Stage.compute`, is one run record too, whose `params` and outputs equal those of a plain run with the same values.
+The label, the origin, and `reused` can differ.
 A **template** names the stage: the spec, the values set, the blanks each request fills, and the outputs to compute.
 It is plain data.
 `client.run(template, values)` fills its blanks and submits one run request, and a value for a parameter that is not a blank replaces the template's value.
@@ -96,7 +97,7 @@ The backend checks a run request against the spec, without workflow code, in the
 
 - **Every name is known.**
   A parameter in `params` must be a parameter of the spec, and an output must be an output of it.
-  A name submitted as varying must be a parameter of the spec.
+  At submit, a name given as varying must be a parameter of the spec.
 - **Every request is checked against the whole params model**, so a request that leaves a required parameter unset is refused at submit, whichever outputs it names.
 - **References resolve**, as in [workflow-contract.md](workflow-contract.md#validation).
 
@@ -243,7 +244,7 @@ client.run(IOFQ, {'sample_run': run, 'beam_center': centre.ref('center'), ...})
 
 A value from outside is a parameter whose field accepts a reference, such as `beam_center: Quantity | OutputRef` in `ess.apps.loki`.
 The run record of the reduction names the run record the beam centre came from.
-In sciline terms, setting a key replaces its provider, so a value from outside needs no mechanism of its own.
+Such a parameter is how a value that another run computes can also be typed in, so a value from outside needs no mechanism of its own.
 
 Three reasons make a value an output of a run record.
 

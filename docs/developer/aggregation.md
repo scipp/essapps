@@ -169,7 +169,7 @@ A rule cannot drive this, because a series fills a dataset field with runs, not 
 ## Combinations that are not accumulations
 
 What the workflow does with a list is the workflow's business, so a sum and a stitch look the same to the framework.
-In `ess.apps.amor`, reflectometry's stitch over angles, with its global fit of scale factors, is a spec whose parameter is a list of references to per-angle curves (`COMBINE`).
+In `ess.apps.amor`, reflectometry's stitch over angles, with its global fit of scale factors, is a spec whose parameter is a dict of references to per-angle curves, keyed by rotation (`COMBINE`).
 Under a rule it needs a spec over a list of runs, which `ess.apps.amor` does not have yet.
 Recomputing a stitch over all angles on every arrival is affordable, because its inputs are small.
 

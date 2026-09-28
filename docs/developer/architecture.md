@@ -73,7 +73,7 @@ stage.compute({QBins: q})                                 # one call of a stage:
 A **run request** is one run of a spec with every parameter value set, like `compute` on a configured `sciline.Pipeline`.
 It holds the spec, its `params`, and the outputs to compute.
 When the backend accepts a request, it fills into `params` the spec's default for every parameter not given, and records every value in the form the params model gives it, so the record holds every value the run used.
-A call of a stage is a run request too, and its record equals the record of a plain run with the same values: where a session cuts the pipeline does not change the result, so the record does not say ([Interactive work](#interactive-work)).
+A call of a stage is a run request too, whose `params` and outputs equal those of a plain run with the same values: where a session cuts the pipeline does not change the result, so the record does not say ([Interactive work](#interactive-work)).
 A run request is plain JSON-serializable data, even when it never leaves a process.
 It never names a session, a process, or a storage location.
 
@@ -137,7 +137,9 @@ def histogram(params: HistogramParams, inputs: Inputs) -> dict[str, Any]:
   The spec says nothing about which value depends on which parameter; only the workflow code knows the graph.
 - **The workflow builds the stages a session holds.**
   Its protocol is one method: `stage(params, inputs, outputs, data)` takes the parameters not varied and returns a callable from the varied parameters to the outputs.
-  A plain run is the stage with no inputs, and a plain function such as `histogram` is a workflow whose stages hold nothing.
+  A plain run is the stage with no inputs, and a plain function is a workflow whose stages hold nothing.
+  The function `histogram` above shows the contract.
+  The skeleton binds `HISTOGRAM` through the sciline adapter, so a session can hold its stages.
 - **Inputs are parameters.**
   A parameter that holds a reference is what this document calls an input.
   Outputs are declared in the same type vocabulary, so checking that an output may feed a parameter is a type check between two fields.
@@ -235,7 +237,8 @@ assert second.reused and client.latest('hist').id == second.id
 Each call is a run request with `bins` in `params`, under the template's name as its label.
 `client.run` submits it with the template's blanks as `vary`, a hint for the session that is not recorded.
 The session holds the stage under a name made of the spec, the values not varied, the varied names, and the outputs.
-The record of each call equals the record of a plain run with the same values, and `reused` says that a held stage served it.
+Each call's `params` and outputs equal those of a plain run with the same values.
+The label, the origin, and `reused`, which says that a held stage served it, can differ.
 Recomputing it needs nothing from the session.
 
 **Labels keep hundreds of reruns from being what a person sees.**
@@ -268,7 +271,7 @@ group = client.submit_group({
 The backend validates the group whole, creates all records, and holds each request until every record it references has completed.
 A request fails if a record it references fails, and is cancelled if one is cancelled.
 This **pending output as input** is the only scheduling primitive.
-Vanadium feeding a sample reduction, a temperature scan followed by a sum, and a sum spread over nodes all use it.
+Vanadium feeding a sample reduction, a temperature scan followed by a sum, an angle series, and a sum spread over nodes all use it.
 
 One rule for workflow authors follows: **a value that other requests reference must be an output of a run record.**
 An exposed intermediate, such as a detector image, can be such an output, so reuse does not force a cut into separate specs.
@@ -284,7 +287,7 @@ client.run(IOFQ, {'sample_run': run, 'beam_center': centre.ref('center'), ...})
 ```
 
 The run record of the reduction names the run record the beam centre came from.
-Setting a parameter replaces what would compute it, as setting a key does in sciline, so a value from outside needs no mechanism of its own.
+A parameter typed `Quantity | OutputRef` is how a value that another run computes can also be typed in, so a value from outside needs no mechanism of its own.
 Separate pipelines, such as vanadium processing and the sample reduction, remain separate specs.
 
 Details: [records.md](records.md#scheduling-pending-outputs-as-inputs).
@@ -430,7 +433,7 @@ The linked document argues the case and lists the costs.
 | [Run records, defaults filled at submit](records.md#requests-and-records) | a record holds every value it ran with; where a session cuts the pipeline is a hint given with the submission and not recorded | a stage record that holds the cut; the varied names on the record; a stored workflow record holding only the values given |
 | [Reuse means a run record](records.md#reuse-means-a-run-record) | a referenced value needs a record | references to values that no run record outputs |
 | [Own record store, single writer](records.md#the-record-store) | no engine offers a stateless request that a notebook, a loop, and a UI can all emit | AiiDA, Snakemake, Prefect; a message broker |
-| [Pending outputs as inputs](records.md#scheduling-pending-outputs-as-inputs) | the smallest addition that covers chaining and aggregation | a general DAG scheduler |
+| [Pending outputs as inputs](records.md#scheduling-pending-outputs-as-inputs) | the smallest addition that covers chaining, and sums spread over nodes | a general DAG scheduler |
 | [The workflow builds the stages a session holds](workflow-contract.md#the-workflow-protocol) | one execution path for plain runs, reruns, and sums, in every runner; only the workflow code knows the graph | a file-based contract; a framework that knows sciline; a summary of the graph in the spec |
 | [The caller names the stage as a template's blanks, the session holds it](stages.md#who-names-the-stage) | the caller knows which parameter will move | stage inputs inferred from successive requests; stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |

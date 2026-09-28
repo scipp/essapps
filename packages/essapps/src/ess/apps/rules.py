@@ -248,7 +248,8 @@ class Rule(BaseModel):
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     series: Series | None = None
     exclusions: dict[str, str] = Field(
-        default_factory=dict, description="Member keys not to fire on, with a reason."
+        default_factory=dict,
+        description="Dataset identities not to fire on or list, with a reason.",
     )
     active: bool = True
 

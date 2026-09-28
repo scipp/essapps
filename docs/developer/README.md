@@ -40,7 +40,7 @@ client.provenance(iofq)                                  # back to the dataset r
    Batch and automatic reduction run each request in a throwaway process that writes its outputs to disk.
 4. **A rerun recomputes only what the changed parameter affects.**
    The client names the stage as a template, whose blanks are the parameters that move, and the session holds a sciline `Stage` for it.
-   Each rerun is still a complete record, equal to that of a plain run with the same values: what varies is a hint given with the submission.
+   Each rerun is still a complete record, with the `params` and outputs of a plain run with the same values: what varies is a hint given with the submission.
    A label on the request groups the reruns, so a person sees the latest result and not a hundred records.
 5. **Chaining is a reference to an output that does not exist yet.**
    Requests submitted together may reference each other's outputs, and the backend holds each one until its inputs have completed.

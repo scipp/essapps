@@ -241,7 +241,8 @@ Shared interactive use is a hosting question, a process per user as JupyterHub p
 
 **The stateless model with splits** has no state between runs.
 The workflow author exposes the value where the expensive part ends as an intermediate, and a first run stores it as an output of its run record.
-On the first rung, every rerun is a throwaway process that takes that output through a parameter that accepts a reference, and runs the cheap part.
+The cheap part is a second spec with a parameter that accepts a reference.
+On the first rung, every rerun is a throwaway process that runs the second spec on that output.
 On the second rung, runners stay alive and keep their outputs, and the launcher routes a request to the runner that already holds its input.
 A routing miss falls back to the first rung, so the second rung is an addition to the first.
 
@@ -254,7 +255,7 @@ A routing miss falls back to the first rung, so the second rung is an addition t
 | Framework concepts added | session, held stages, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
 | Interactive use in the shared web UI | remote sessions owned by the framework | a hosted process per user, owned by infrastructure | works, slowly; on the second rung without a process per user |
 | Disk volume | low | low | high; lower on the second rung |
-| Burden on workflow authors | none beyond the adapter | none beyond the adapter | an exposed intermediate at every boundary a person tunes across |
+| Burden on workflow authors | none beyond the adapter | none beyond the adapter | a split into two specs, an exposed intermediate and a parameter that accepts a reference, at every boundary a person tunes across |
 | Losing the process | lose time; every step was recorded | lose the exploration since the last kept result | lose nothing |
 | Exploring a large volume | views from session memory | views from the application's memory | needs a chunked layout on disk |
 | Keeping a result | already a record; recomputed before publication | one full computation per kept result | already a record |
