@@ -26,8 +26,8 @@ from typing import Any, Protocol
 
 import h5py
 
-from .runner import file_checksum
-from .spec import DatasetRef, dataset_ref
+from .runner import FileMemo, file_checksum
+from .spec import IDENTITIES, DatasetRef, dataset_ref
 
 
 @dataclass(frozen=True)
@@ -35,20 +35,20 @@ class Dataset:
     """
     What a source yields: where the bytes are now, what identifies them, metadata.
 
-    A source fills the identity fields it can, and the first of ``pid``,
-    ``uuid``, ``sha256`` is the dataset's identity, see
-    :func:`ess.apps.spec.dataset_ref`. ``proposals`` are the proposals the
-    dataset belongs to, which decide who may read it; a catalogue may list
-    several. ``instrument`` and ``run`` are the instrument and run number the
-    dataset carries, fields like any other, which a person may type to name
-    it. ``metadata`` is what the instrument's :class:`FieldExtractor` derived,
-    an angle, a sample name, a run's role, and ``order`` the one of those
-    fields that orders the instrument's datasets, as the extractor declares,
-    which two datasets must share for it to order them; ``created`` is when the
-    acquisition wrote the dataset, which is the other form a rule's lower bound
-    takes. ``error`` says why the extractor gave no usable fields, and a rule
-    refuses such a dataset, visibly, rather than the source failing for every
-    dataset.
+    A source fills the identity fields it can. A reference by any of them names
+    the dataset, and the first of ``pid``, ``uuid``, ``sha256`` is the one a new
+    request is written with, see :func:`ess.apps.spec.dataset_ref`.
+    ``proposals`` are the proposals the dataset belongs to, which decide who may
+    read it; a catalogue may list several. ``instrument`` and ``run`` are the
+    instrument and run number the dataset carries, fields like any other, which
+    a person may type to name it. ``metadata`` is what the instrument's
+    :class:`FieldExtractor` derived, an angle, a sample name, a run's role, and
+    ``order`` the one of those fields that orders the instrument's datasets, as
+    the extractor declares, which two datasets must share for it to order them;
+    ``created`` is when the acquisition wrote the dataset, which is the other
+    form a rule's lower bound takes. ``error`` says why the extractor gave no
+    usable fields, and a rule refuses such a dataset, visibly, rather than the
+    source failing for every dataset.
     """
 
     path: Path
@@ -79,35 +79,79 @@ class Dataset:
 
     @property
     def ref(self) -> DatasetRef:
-        """This dataset's identity, which is how a request names it."""
-        if self.pid is not None:
-            return dataset_ref(pid=self.pid)
-        if self.uuid is not None:
-            return dataset_ref(uuid=self.uuid)
-        return dataset_ref(sha256=self.sha256)
+        """The identity a new request names this dataset by, its first identity."""
+        return self.identities[0]
+
+    @property
+    def identities(self) -> list[DatasetRef]:
+        """
+        Every identity this dataset has, in order of preference.
+
+        A reference by any of them names the dataset: a PID minted after a
+        request named the dataset by its UUID leaves the record locatable.
+        """
+        return [
+            dataset_ref(**{kind: value})
+            for kind in IDENTITIES
+            if (value := getattr(self, kind)) is not None
+        ]
+
+
+def merge(datasets: Iterable[Dataset]) -> list[Dataset]:
+    """
+    One dataset for each set of datasets that share an identity.
+
+    Two sources may know one file, a catalogue by its PID and UUID and a folder
+    by its UUID. The first of datasets that share an identity stands for all of
+    them, with the identities the others add and the union of their proposals.
+    """
+    merged: list[Dataset] = []
+    at: dict[DatasetRef, int] = {}
+    for dataset in datasets:
+        i = next((at[r] for r in dataset.identities if r in at), None)
+        if i is None:
+            i = len(merged)
+            merged.append(dataset)
+        else:
+            first = merged[i]
+            merged[i] = replace(
+                first,
+                **{k: getattr(first, k) or getattr(dataset, k) for k in IDENTITIES},
+                proposals=list(dict.fromkeys([*first.proposals, *dataset.proposals])),
+            )
+        at |= dict.fromkeys(merged[i].identities, i)
+    return merged
 
 
 def find(datasets: Iterable[Dataset], ref: DatasetRef) -> Dataset | None:
     """
     The dataset ``ref`` names among ``datasets``, or None.
 
-    ``ref`` is an identity, or a stand-in a person typed,
-    ``run:<instrument>/<run>`` or ``path:<path>``. A stand-in that fits
-    datasets of several identities names none of them, and raises.
+    ``ref`` is any identity of the dataset, or a stand-in a person typed,
+    ``run:<instrument>/<run>`` or ``path:<path>``, where the instrument is
+    matched regardless of case and the run number regardless of leading zeros.
+    A stand-in that fits datasets of several identities names none of them,
+    and raises.
     """
     kind, _, value = ref.dataset.partition(':')
     if kind == 'run':
         instrument, _, run = value.rpartition('/')
-        hits = [d for d in datasets if d.instrument == instrument and str(d.run) == run]
+        hits = [
+            d
+            for d in datasets
+            if (d.instrument or '').lower() == instrument.lower()
+            and run.isdigit()
+            and d.run == int(run)
+        ]
     elif kind == 'path':
         path = Path(value).resolve()
         hits = [d for d in datasets if d.path.resolve() == path]
     else:
-        hits = [d for d in datasets if d.ref == ref]
-    found = {d.ref: d for d in hits}
+        hits = [d for d in datasets if ref in d.identities]
+    found = merge(hits)
     if len(found) > 1:
-        raise ValueError(f'{ref} names several datasets: {sorted(map(str, found))}')
-    return next(iter(found.values()), None)
+        raise ValueError(f'{ref} names several datasets: {[str(d.ref) for d in found]}')
+    return next(iter(found), None)
 
 
 UUID_FIELD = 'entry/entry_identifier_uuid'
@@ -117,11 +161,21 @@ def file_identity(path: Path) -> dict[str, str]:
     """
     The identity fields of a local file: the UUID a NeXus file carries in
     ``entry/entry_identifier_uuid``, else the sha256 of its bytes.
+
+    A UUID field that holds no single non-empty string is no UUID. Raises
+    ``OSError`` for an HDF5 file that cannot be opened, truncated or locked
+    by the writer.
     """
     if h5py.is_hdf5(path):
         with h5py.File(path, 'r') as file:
-            if isinstance(uuid := file.get(UUID_FIELD), h5py.Dataset):
-                return {'uuid': str(uuid.asstr()[()])}
+            uuid = file.get(UUID_FIELD)
+            if (
+                isinstance(uuid, h5py.Dataset)
+                and uuid.shape == ()
+                and h5py.check_string_dtype(uuid.dtype) is not None
+                and (value := uuid.asstr()[()])
+            ):
+                return {'uuid': value}
     return {'sha256': file_checksum(path)}
 
 
@@ -226,7 +280,14 @@ class FolderSource:
     belong to one proposal.
 
     A file is identified by the UUID it carries, or else by the sha256 of its
-    bytes, which is read once per file and kept while the file is unchanged.
+    bytes, which is read once per file and kept while the file is unchanged:
+    the first scan of a folder reads every file it matches, which for tens of
+    gigabytes on a network mount takes minutes. A file that is still being
+    written is not identified yet: one the writer holds open, one that changes
+    while it is read, and one modified less than ``settle`` seconds ago, which
+    is how a copy in progress that pauses is told apart. Two files that carry
+    one UUID are not identified either, since a request could not say which
+    it means. ``skipped`` says why each file the last scan passed over was.
     A file whose name carries an instrument and a run number,
     ``dream_4711.nxs``, has those as fields, so that a person can name it by
     them. Facilities name files differently, so ``stem`` is the expression
@@ -250,6 +311,7 @@ class FolderSource:
         instrument: str | None = None,
         journal: Mapping[int, Mapping[str, Any]] | None = None,
         fields: FieldExtractor | None = None,
+        settle: float = 0.0,
     ) -> None:
         self.path = Path(path)
         self.pattern = pattern
@@ -258,7 +320,9 @@ class FolderSource:
         self.instrument = instrument
         self.journal = journal or {}
         self.fields = fields
-        self._identities: dict[tuple[Path, int, int], dict[str, str]] = {}
+        self.settle = settle
+        self.skipped: dict[Path, str] = {}
+        self._identity = FileMemo(file_identity)
 
     def __repr__(self) -> str:
         return f'FolderSource({str(self.path)!r}, {self.pattern!r})'
@@ -274,22 +338,38 @@ class FolderSource:
         return None if dataset is None else dataset.path
 
     def _scan(self) -> list[Dataset]:
-        return [
-            self._dataset(p)
-            for p in sorted(self.path.glob(self.pattern))
-            if p.is_file()
-        ]
+        paths = [p for p in sorted(self.path.glob(self.pattern)) if p.is_file()]
+        self._identity.keep(paths)
+        self.skipped = {}
+        identified: dict[Path, dict[str, Any]] = {}
+        for path in paths:
+            if isinstance(identity := self._identified(path), str):
+                self.skipped[path] = identity
+            else:
+                identified[path] = identity
+        by_uuid: dict[str, list[Path]] = {}
+        for path, identity in identified.items():
+            if 'uuid' in identity:
+                by_uuid.setdefault(identity['uuid'], []).append(path)
+        for uuid, shared in by_uuid.items():
+            if len(shared) > 1:
+                for path in shared:
+                    del identified[path]
+                    self.skipped[path] = f'{len(shared)} files carry uuid {uuid}'
+        return [self._dataset(path, identity) for path, identity in identified.items()]
 
-    def _dataset(self, path: Path) -> Dataset:
-        stat = path.stat()
-        known = (path, stat.st_mtime_ns, stat.st_size)
-        if known not in self._identities:
-            self._identities[known] = file_identity(path)
-        identity: dict[str, Any] = {
-            **self._identities[known],
-            'proposals': [self.proposal],
-            'created': datetime.fromtimestamp(stat.st_mtime, UTC),
-        }
+    def _identified(self, path: Path) -> dict[str, Any] | str:
+        """The identity fields of a file and when it was written, or why not."""
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
+            if (datetime.now(UTC) - modified).total_seconds() < self.settle:
+                return f'not identified: modified less than {self.settle} s ago'
+            return {**self._identity(path), 'created': modified}
+        except OSError as e:
+            return f'not identified: {e}'
+
+    def _dataset(self, path: Path, identity: dict[str, Any]) -> Dataset:
+        identity = {**identity, 'proposals': [self.proposal]}
         match = self.stem.fullmatch(path.stem)
         if match is None:
             return self._extractor(self.instrument).dataset({}, path, **identity)

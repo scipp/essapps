@@ -89,12 +89,13 @@ def dataset_ref(
     A dataset reference from the one identity or stand-in given.
 
     The spec keeps a dataset's identity as one string whose meaning is the
-    framework's; this is where the framework gives it one. A dataset is
-    identified by the first of these it has: the PID of its catalogue entry,
-    ``pid:<pid>``; the UUID its NeXus file carries in
-    ``entry/entry_identifier_uuid``, ``uuid:<uuid>``; the sha256 of the bytes
-    of a file that carries neither, ``sha256:<hex>``. A moved file keeps its
-    identity: where the bytes are is asked of a dataset source at dispatch.
+    framework's; this is where the framework gives it one. A dataset has one
+    or more of these identities, and a reference by any of them names it: the
+    PID of its catalogue entry, ``pid:<pid>``; the UUID its NeXus file carries
+    in ``entry/entry_identifier_uuid``, ``uuid:<uuid>``; the sha256 of the
+    bytes of a file that carries neither, ``sha256:<hex>``. A new record names
+    it by the first it has. A moved file keeps its identity: where the bytes
+    are is asked of a dataset source at dispatch.
 
     The instrument and run number, ``run:<instrument>/<run>``, and a path,
     ``path:<path>``, are stand-ins a person may type. The backend resolves a

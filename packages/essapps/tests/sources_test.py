@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import h5py
 import pytest
 
 from ess.apps.examples import write_run
@@ -18,12 +19,14 @@ from ess.apps.rules import precedes
 from ess.apps.runner import file_checksum
 from ess.apps.sources import (
     AS_IS,
+    UUID_FIELD,
     Dataset,
     FieldExtractor,
     FolderSource,
     field_extractor,
+    find,
 )
-from ess.apps.spec import dataset_ref
+from ess.apps.spec import DatasetRef, dataset_ref
 
 
 def write(folder: Path, name: str) -> Path:
@@ -58,6 +61,69 @@ def test_a_pid_is_the_identity_when_the_source_knows_one(tmp_path: Path) -> None
     assert dataset.ref == dataset_ref(pid='20.500/abc')
 
 
+def test_any_identity_of_a_dataset_finds_it(tmp_path: Path) -> None:
+    """A PID minted after a record named the dataset by its UUID changes nothing."""
+    dataset = Dataset(
+        path=tmp_path / 'x.nxs', proposals=['p1'], pid='20.500/abc', uuid='u1'
+    )
+    assert find([dataset], dataset_ref(uuid='u1')) == dataset
+    assert find([dataset], dataset_ref(pid='20.500/abc')) == dataset
+
+
+@pytest.mark.parametrize('uuid', [42, '', ['x']], ids=['number', 'empty', 'array'])
+def test_a_uuid_field_holding_no_single_string_is_no_uuid(
+    tmp_path: Path, uuid: object
+) -> None:
+    path = write_run(tmp_path / 'dream_1.nxs', [1.0])
+    with h5py.File(path, 'a') as file:
+        file[UUID_FIELD] = uuid
+    (dataset,) = FolderSource(tmp_path, proposal='p1').datasets(['p1'])
+    assert dataset.ref == dataset_ref(sha256=file_checksum(path))
+
+
+def test_a_file_not_readable_yet_is_skipped_and_the_others_listed(
+    tmp_path: Path,
+) -> None:
+    """A file the writer has not finished is truncated or locked."""
+    good = write_run(tmp_path / 'dream_1.nxs', [1.0], uuid='good')
+    truncated = write_run(tmp_path / 'dream_2.nxs', [1.0, 2.0], uuid='partial')
+    truncated.write_bytes(truncated.read_bytes()[:1000])
+    source = FolderSource(tmp_path, proposal='p1')
+    assert [d.path for d in source.datasets(['p1'])] == [good]
+    assert source.locate(dataset_ref(uuid='good')) == good
+    assert list(source.skipped) == [truncated]
+    assert 'not identified' in source.skipped[truncated]
+
+
+def test_a_file_modified_within_the_settle_time_is_skipped(tmp_path: Path) -> None:
+    path = write(tmp_path, 'dream_1.nxs')
+    source = FolderSource(tmp_path, proposal='p1', settle=3600)
+    assert source.datasets(['p1']) == []
+    assert 'modified less than 3600 s ago' in source.skipped[path]
+
+
+def test_two_files_carrying_one_uuid_are_both_skipped(tmp_path: Path) -> None:
+    """A copied file, edited after, keeps the UUID of the original."""
+    write_run(tmp_path / 'dream_1.nxs', [1.0], uuid='same')
+    write_run(tmp_path / 'dream_5.nxs', [2.0], uuid='same')
+    write(tmp_path, 'dream_6.nxs')
+    source = FolderSource(tmp_path, proposal='p1')
+    assert [d.run for d in source.datasets(['p1'])] == [6]
+    assert source.locate(dataset_ref(uuid='same')) is None
+    assert sorted(p.name for p in source.skipped) == ['dream_1.nxs', 'dream_5.nxs']
+    assert '2 files carry uuid same' in source.skipped[tmp_path / 'dream_1.nxs']
+
+
+def test_a_file_rewritten_in_place_has_a_new_identity(tmp_path: Path) -> None:
+    path = write(tmp_path, 'dream_1.nxs')
+    source = FolderSource(tmp_path, proposal='p1')
+    before = dataset_ref(sha256=file_checksum(path))
+    assert source.locate(before) == path
+    path.write_bytes(b'corrected bytes')
+    assert source.locate(before) is None
+    assert source.locate(dataset_ref(sha256=file_checksum(path))) == path
+
+
 def test_a_dataset_without_an_identity_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match='needs a pid, uuid, or sha256'):
         Dataset(path=tmp_path / 'x.nxs', proposals=['p1'])
@@ -90,6 +156,16 @@ def test_a_run_number_or_a_path_finds_the_dataset(tmp_path: Path) -> None:
         assert found.ref == identity
     assert source.find(dataset_ref(instrument='dream', run=1)) is None
     assert source.find(dataset_ref(instrument='loki', run=4711)) is None
+
+
+def test_a_run_number_matches_regardless_of_case_and_leading_zeros(
+    tmp_path: Path,
+) -> None:
+    path = write(tmp_path, 'dream_42.nxs')
+    source = FolderSource(tmp_path, proposal='p1')
+    found = source.find(DatasetRef(dataset='run:DREAM/0042'))
+    assert found is not None
+    assert found.path == path
 
 
 def test_a_run_number_that_names_two_datasets_finds_none(tmp_path: Path) -> None:

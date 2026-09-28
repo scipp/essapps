@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import traceback
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -98,6 +99,42 @@ def file_checksum(path: Path) -> str:
         return hashlib.file_digest(file, 'sha256').hexdigest()
 
 
+class FileMemo[T]:
+    """
+    A value computed from a file's bytes, kept while the file is unchanged.
+
+    A file counts as unchanged while its modification time, size, inode, and
+    status-change time are, the last because ``cp -p`` and ``rsync -t`` keep
+    the modification time. One value is kept per path. A file that changes
+    while its value is computed raises ``OSError``: what was read
+    describes no version of it.
+    """
+
+    def __init__(self, compute: Callable[[Path], T]) -> None:
+        self._compute = compute
+        self._values: dict[Path, tuple[tuple[int, int, int, int], T]] = {}
+
+    def __call__(self, path: Path) -> T:
+        before = _version(path)
+        if (known := self._values.get(path)) is not None and known[0] == before:
+            return known[1]
+        value = self._compute(path)
+        if _version(path) != before:
+            raise OSError(f'{path} changed while it was read')
+        self._values[path] = (before, value)
+        return value
+
+    def keep(self, paths: Collection[Path]) -> None:
+        """Forget the value of every path not among ``paths``."""
+        for path in self._values.keys() - set(paths):
+            del self._values[path]
+
+
+def _version(path: Path) -> tuple[int, int, int, int]:
+    stat = path.stat()
+    return (stat.st_mtime_ns, stat.st_size, stat.st_ino, stat.st_ctime_ns)
+
+
 def _elements(value: Any) -> list[Any]:
     """What an output field holds: one value, or the elements of a collection."""
     if isinstance(value, dict):
@@ -162,10 +199,11 @@ class Runner:
     A runner without ``keep`` builds the stage a request names, calls it once,
     and holds nothing.
 
-    Checksums survive between runs as well: a file is hashed once per (path,
-    size, mtime). A session that reruns a workflow over the same hundreds of
-    megabytes therefore spends the sha256 once rather than on every rerun. A
-    throwaway runner runs once, so it hashes each file it reads once either way.
+    Checksums survive between runs as well: a file is hashed once while it is
+    unchanged, see :class:`FileMemo`. A session that reruns a workflow over the
+    same hundreds of megabytes therefore spends the sha256 once rather than on
+    every rerun. A throwaway runner runs once, so it hashes each file it reads
+    once either way.
     A session also keeps the checksum each dataset had when it read it, and a
     dataset whose bytes changed since drops every stage it holds: a held stage
     knows its datasets, the runs of a sum included, by identity alone.
@@ -175,15 +213,8 @@ class Runner:
         self._keep = keep
         self._workflows: dict[SpecId, Workflow] = {}
         self._stages = Stages(limit=stages) if keep else None
-        self._digests: dict[tuple[Path, int, int], str] = {}
+        self._checksum = FileMemo(file_checksum)
         self._read: dict[str, str] = {}
-
-    def _checksum(self, path: Path) -> str:
-        stat = path.stat()
-        key = (path, stat.st_size, stat.st_mtime_ns)
-        if key not in self._digests:
-            self._digests[key] = file_checksum(path)
-        return self._digests[key]
 
     def _checksums(self, values: dict[str, Any], inputs: Inputs) -> dict[str, str]:
         """
@@ -193,13 +224,17 @@ class Runner:
         recompute can only tell whether it read the same bytes if we take these.
         The key is the reference rather than a parameter path, because a dataset
         two parameters name is one file; which parameter read it is in the
-        request.
+        request. A dataset identified by its sha256 whose bytes now hash
+        otherwise changed after the backend located it, and fails the run.
         """
         checksums = {}
         for ref in dataset_refs(values):
             located = inputs.path(ref)
             if located.is_file():
-                checksums[str(ref)] = self._checksum(located)
+                checksums[str(ref)] = checksum = self._checksum(located)
+                kind, _, value = ref.dataset.partition(':')
+                if kind == 'sha256' and value != checksum:
+                    raise ValueError(f'{ref}: {located} now has sha256 {checksum}')
         return checksums
 
     def _workflow(self, spec: WorkflowSpec, factory: Factory) -> Workflow:
