@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import cache
 from importlib.metadata import entry_points
@@ -37,9 +37,11 @@ class Dataset:
     for a file that carries none, whose path is then its identity. ``metadata``
     is what the instrument's :class:`FieldExtractor` derived, an angle, a sample
     name, a run's role, and ``order`` the one of those fields that orders the
-    instrument's datasets, as the extractor declares; ``created`` is when the
-    acquisition wrote the dataset, which is the other form a rule's lower bound
-    takes.
+    instrument's datasets, as the extractor declares, which two datasets must
+    share for it to order them; ``created`` is when the acquisition wrote the
+    dataset, which is the other form a rule's lower bound takes. ``error`` says
+    why the extractor gave no usable fields, and a rule refuses such a dataset,
+    visibly, rather than the source failing for every dataset.
     """
 
     path: Path
@@ -49,6 +51,7 @@ class Dataset:
     created: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     order: str | None = None
+    error: str | None = None
 
     @property
     def fields(self) -> dict[str, Any]:
@@ -85,7 +88,11 @@ class FieldExtractor:
     field, a variable of the acquisition script, so this is code the instrument
     team owns, and nothing is required of acquisition. ``order`` names the
     field that orders the instrument's datasets, typically the start time of
-    the acquisition; without one, datasets are ordered by run number.
+    the acquisition, and its value must be a number or a :class:`datetime`;
+    without one, datasets are ordered by run number.
+
+    The framework reads one field by name: ``role``, which
+    :class:`ess.apps.rules.Complete` counts a series' roles by.
 
     An installed package registers one per instrument under the entry-point
     group ``ess.apps.fields``, named for the instrument, as it registers specs.
@@ -95,13 +102,25 @@ class FieldExtractor:
     order: str | None = None
 
     def dataset(self, entry: Mapping[str, Any], path: Path, **identity: Any) -> Dataset:
-        """The dataset with this identity, its fields derived from ``entry``."""
-        return Dataset(
-            path=path,
-            metadata=dict(self.derive(entry, path)),
-            order=self.order,
-            **identity,
-        )
+        """
+        The dataset with this identity, its fields derived from ``entry``, or
+        with the reason as its ``error`` where they cannot be.
+        """
+        dataset = Dataset(path=path, order=self.order, **identity)
+        try:
+            metadata = dict(self.derive(entry, path))
+        # Instrument code: whatever it raises concerns this dataset only.
+        except Exception as e:
+            return replace(dataset, error=f'{dataset.ref}: no fields derived: {e!r}')
+        dataset = replace(dataset, metadata=metadata)
+        value = metadata.get(self.order) if self.order is not None else 0
+        if isinstance(value, bool) or not isinstance(value, int | float | datetime):
+            return replace(
+                dataset,
+                error=f'{dataset.ref}: its order field {self.order!r} is '
+                f'{value!r}, not a number or a datetime',
+            )
+        return dataset
 
 
 def _entry_as_is(entry: Mapping[str, Any], path: Path) -> Mapping[str, Any]:
@@ -116,7 +135,13 @@ AS_IS = FieldExtractor(_entry_as_is)
 def field_extractor(instrument: str | None) -> FieldExtractor:
     """The extractor an installed package registers for an instrument, or AS_IS."""
     found = entry_points(group=FIELDS_GROUP, name=instrument or '')
-    return next((ep.load() for ep in found), AS_IS)
+    extractor = next((ep.load() for ep in found), AS_IS)
+    if not isinstance(extractor, FieldExtractor):
+        raise TypeError(
+            f'{FIELDS_GROUP} entry point {instrument!r} is {extractor!r}, '
+            'not a FieldExtractor'
+        )
+    return extractor
 
 
 class DatasetSource(Protocol):

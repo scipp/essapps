@@ -7,7 +7,7 @@ See docs/developer/rules.md.
 """
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from ess.apps.backend import SubmitError
 from ess.apps.batch import (
     TriggerLoop,
+    TriggerStatus,
     apply,
     backlog,
     batch_table,
@@ -60,7 +61,7 @@ from ess.apps.rules import (
     Selector,
     Series,
 )
-from ess.apps.sources import Dataset
+from ess.apps.sources import Dataset, FieldExtractor, FolderSource
 from ess.apps.spec import DatasetRef, OpaqueFile, WorkflowSpec, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
@@ -462,6 +463,39 @@ def test_a_failure_the_policy_does_not_name_is_not_retried(
     loop.run_once()
     loop.run_once()
     assert len(client.records(label='auto', member_key='pid:pid/9')) == 1
+
+
+def start_only(entry: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    return {'start': entry['start']}
+
+
+def test_a_dataset_the_extractor_gives_no_usable_fields_is_refused_alone(
+    client: Client, template: Template, tmp_path: Path
+) -> None:
+    folder = tmp_path / 'loki'
+    folder.mkdir()
+    for run in (1, 2):
+        write_run(folder / f'loki_{run}.h5', [1.0])
+    client.backend.sources.append(
+        FolderSource(
+            folder,
+            '*.h5',
+            journal={1: {'start': 10}, 2: {'start': '10:00'}},
+            fields=FieldExtractor(start_only, order='start'),
+        )
+    )
+    rule = Rule(name='auto', template=template)
+    loop = TriggerLoop(client, rule)
+    fired = loop.run_once()
+    assert sorted(r.request.member_key for r in fired) == ['run:dream/1', 'run:loki/1']
+    refusal = (
+        "run:loki/2: its order field 'start' is '10:00', not a number or a datetime"
+    )
+    assert loop.refusals == {'auto run:loki/2': refusal}
+    bad = {str(d.ref): d for d in client.datasets()}['run:loki/2']
+    assert trigger_status(client, rule, bad) == TriggerStatus(
+        state='skips', reason=refusal
+    )
 
 
 # A rule's label is reserved

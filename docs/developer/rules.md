@@ -299,7 +299,8 @@ The instrument team writes a function from what the source has, the catalogue en
 ```python
 def loki_fields(entry: Mapping[str, Any], path: Path) -> Mapping[str, Any]:
     role, _, sample = entry['title'].partition(': ')
-    return {'role': role, 'sample': sample, 'start': entry['start_time']}
+    return {'role': role, 'sample': sample,
+            'start': datetime.fromisoformat(entry['start_time'])}
 
 LOKI_FIELDS = FieldExtractor(loki_fields, order='start')
 # pyproject.toml: [project.entry-points."ess.apps.fields"] loki = "ess.loki.apps:LOKI_FIELDS"
@@ -309,6 +310,9 @@ The source applies it; lookups, selectors, series keys, and completion criteria 
 Nothing is required of acquisition.
 An instrument without one keeps the catalogue entry's own fields.
 `order` names the field that orders the instrument's datasets, typically the start time, which is what "before" and "after" mean to a nearest fill; without it, datasets are ordered by run number.
+Its value must be a number or a datetime, since a nearest fill subtracts two of them.
+The framework reads one field by name, `role`, which `Complete(roles=...)` counts.
+A dataset whose fields the extractor cannot derive, or whose order value is neither, carries the reason, and a rule refuses it, visibly, while the other datasets are fired on.
 A role that is a frame range inside one file is not a dataset field: splitting the file is the workflow's.
 
 A dataset enters the record store only as a reference in the requests a rule submits, like any other stand-in.

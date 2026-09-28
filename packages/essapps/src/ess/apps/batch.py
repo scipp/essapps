@@ -291,6 +291,8 @@ def _fill(
     members: list[Any] = []
     entries: dict[str, str] = {}
     for dataset in datasets:
+        if isinstance(dataset, Dataset) and dataset.error is not None:
+            raise ValueError(dataset.error)
         entry = lookup.entry(dataset) if lookup is not None else None
         request: dict[str, Any] = {}
         row: dict[str, Any] = {column: dataset.ref}
@@ -623,13 +625,22 @@ def trigger_status(client: Client, rule: Rule, candidate: Candidate) -> TriggerS
 
     Where these hold, the member waits while it cannot be made yet. That too is
     a question of the datasets that exist, so a later pass fires on it. A
-    request that :func:`apply` refuses is skipped, with the refusal as reason.
+    request that :func:`apply` refuses, or a dataset whose fields the
+    instrument's extractor could not derive, is skipped, with the refusal as
+    reason.
     """
     try:
         status, _ = _decide(client, rule, candidate, client.datasets())
-    except ValueError as e:
+    except _REFUSED as e:
         return TriggerStatus(state='skips', reason=str(e))
     return status
+
+
+_REFUSED = (ValueError, TypeError)
+"""
+What a refusal of one candidate raises: a value that cannot be used, or two
+order values that do not compare, a number and a datetime.
+"""
 
 
 def _decide(
@@ -654,6 +665,8 @@ def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
     member = _key(candidate)
     if not rule.active:
         return TriggerStatus(state='skips', reason=f'rule {rule.name} is paused')
+    if isinstance(candidate, Dataset) and candidate.error is not None:
+        raise ValueError(candidate.error)
     if not rule.selector.selects(candidate):
         return TriggerStatus(state='skips', reason='the selector does not match')
     if not _after(rule, candidate):
@@ -718,7 +731,7 @@ class TriggerLoop:
                         self.waiting[name] = status.reason
                     if group is not None:
                         fired += self.client.submit_group(group).values()
-                except (SubmitError, ValueError) as e:
+                except (SubmitError, *_REFUSED) as e:
                     self.refusals[name] = str(e)
         return fired
 

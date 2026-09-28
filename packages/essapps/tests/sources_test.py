@@ -7,6 +7,7 @@ See docs/developer/rules.md.
 """
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,40 @@ def test_datasets_are_ordered_by_the_field_the_extractor_declares(
     )
     first, second = by_run.new_datasets('p1')
     assert precedes(first, second)
+
+
+def test_an_order_value_that_is_no_number_or_datetime_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A journal gives times as strings, which order but do not subtract."""
+    write(tmp_path, 'loki_1.nxs')
+    write(tmp_path, 'loki_2.nxs')
+    journal = {
+        1: {'title': 'sample: a', 'start': datetime(2026, 9, 1, 10, tzinfo=UTC)},
+        2: {'title': 'can: a', 'start': '2026-09-01T10:00'},
+    }
+    source = FolderSource(
+        tmp_path, journal=journal, fields=FieldExtractor(title_fields, order='start')
+    )
+    first, second = source.new_datasets('p1')
+    assert first.error is None
+    assert second.error == (
+        "run:loki/2: its order field 'start' is '2026-09-01T10:00', "
+        'not a number or a datetime'
+    )
+
+
+def test_an_extractor_failing_on_one_dataset_leaves_the_others(tmp_path: Path) -> None:
+    write(tmp_path, 'loki_1.nxs')
+    write(tmp_path, 'loki_2.nxs')
+    source = FolderSource(
+        tmp_path,
+        journal={1: {'title': 'can: a', 'start': 10}},
+        fields=FieldExtractor(title_fields),
+    )
+    first, second = source.new_datasets('p1')
+    assert first.fields['role'] == 'can'
+    assert second.error == "run:loki/2: no fields derived: KeyError('title')"
 
 
 def test_an_instrument_without_a_registered_extractor_keeps_the_entry_as_is() -> None:
