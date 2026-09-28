@@ -332,8 +332,8 @@ Three kinds of stored, versioned data drive it:
 | Stored data | What it is |
 |---|---|
 | **Template** | a partial request: the values set, and the blanks each request fills, typically the data references |
-| **Lookup** | a table beside a template: entries match dataset metadata and supply fills, e.g. a Q range per angle |
-| **Rule** | a template, a lookup, and a selector that picks datasets; optionally a series |
+| **Lookup** | a table beside a template: entries match dataset fields and supply fills, e.g. a Q range per angle |
+| **Rule** | a template, a lookup, and a selector that picks datasets, or the completed records of a rule it follows; optionally a series |
 
 ```python
 rule = Rule(
@@ -341,7 +341,7 @@ rule = Rule(
     template=Template(name='subtract-defaults', spec=SUBTRACT.id,
                       blanks=('sample', 'can'), dataset_field='sample'),
     lookup=Lookup(name='cans', entries=(
-        LookupEntry(name='can', fills={'can': AsOf(match={'role': Like(pattern='can')})}),
+        LookupEntry(name='can', fills={'can': Nearest(match={'role': Like(pattern='can')})}),
     )),
     selector=Selector(match={'role': Like(pattern='sample')}),
 )
@@ -360,9 +360,12 @@ group = apply(client, rule, datasets)      # preview through validate, then subm
   A rule's records carry the rule's name as label and the dataset as member key, so the status page of automatic reduction is the same table.
 - **The trigger loop keeps no memory.**
   It fires a rule on a dataset when the selector matches and no record exists under the rule's label for that dataset.
-  Every condition is a query over records, so a restart neither loses nor repeats work.
-- **A rule with a series key does not wait for a series to be complete.**
-  Each arrival submits one request over every run of the series so far, which supersedes the previous one.
+  Every condition is a query over records and datasets, so a restart neither loses nor repeats work.
+  A request that needs a dataset still to come, a can measured after the sample, waits until a later pass.
+- **A rule with a series key submits one request over every run of the series so far**, on each arrival or once the series is complete, and it supersedes the previous one.
+- **A rule may follow another** and fire on its completed records: a combine over the contributions of a series, or one request per key a first phase found.
+- **Dataset fields come from instrument code.**
+  A field extractor, registered per instrument, derives role, sample, angle, and start time from the catalogue entry and the file; nothing is required of acquisition.
 
 A rule is to a batch what a template is to a request.
 A template is also the stage a client names for a slider, so the batch form and the notebook use one concept.
@@ -412,7 +415,7 @@ Details: [operations.md](operations.md#failure-handling).
 | Session stages | holds the stages the session built, by the name its requests give them | `stages` |
 | Spec and binding | spec extensions, exposed intermediates, entry points, `Inputs`, the workflow protocol | `spec`, `binding` |
 | Sciline adapter | a pipeline as a workflow: each stage a `sciline.Stage`, list parameters through the package's `sciline.Aggregation` | `adapter` |
-| Dataset source | lists datasets with metadata; persists nothing | `sources` |
+| Dataset source | lists datasets with the fields a field extractor derives; persists nothing | `sources` |
 | Rules | templates, lookups, rules, series; `apply`; trigger loop | `rules`, `batch` |
 | Views | slices and reductions for display | `views` |
 | Test helpers | a stage returns what a plain run returns; fakes of a dataset source and a publisher | `testing` |
@@ -447,7 +450,7 @@ The linked document argues the case and lists the costs.
 
 ## Status
 
-The skeleton covers both execution shapes, run records, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, sums over runs as list parameters, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, publication, and the HTTP transport with a server and a CLI.
+The skeleton covers both execution shapes, run records, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, sums over runs as list parameters, lookups with nearest fills, rules over datasets and over completed records, `apply`, reprocess, the trigger loop, publication, and the HTTP transport with a server and a CLI.
 LoKI SANS and Amor reflectometry are bound to it.
 Not in it: a SciCat dataset source, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
 What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).

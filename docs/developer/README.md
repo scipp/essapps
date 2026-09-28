@@ -50,7 +50,7 @@ client.provenance(iofq)                                  # back to the dataset r
    The binding wraps the package's `sciline.Aggregation`, which reduces each run and accumulates, and the framework never adds arrays.
    A session holds the accumulation as a cache, so adding a run to a sum reduces only that run.
 7. **Batch and automatic reduction are one mechanism.**
-   A template is a partial request, a lookup fills fields from dataset metadata, and a rule adds a selector for datasets.
+   A template is a partial request, a lookup fills parameters by matching dataset fields, and a rule adds a selector for datasets.
    The stage a slider fills is a template too.
    One operation, `apply`, makes requests from them.
    The trigger loop calls it for each new dataset and keeps no memory of its own.

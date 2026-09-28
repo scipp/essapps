@@ -116,7 +116,7 @@ For records a UUID serves, since a record is written once by one writer; for out
 | Namespaces | A rule's label is reserved; a missed run or a corrected member goes through apply | D14; Components; Glossary |
 | A name as a stand-in, withdrawn | The as-of fill in the lookup, resolved against the member, for cans, dark frames, and empty-beam runs | D14; Glossary |
 
-All four are in the skeleton: the `supersedes` field and the head queries in the record store, the reserved label in the backend's validation, `shadowed` beside `reprocess`, and `AsOf` as a lookup fill.
+All four are in the skeleton: the `supersedes` field and the head queries in the record store, the reserved label in the backend's validation, `shadowed` beside `reprocess`, and `Nearest` as a lookup fill.
 
 ## Sources
 

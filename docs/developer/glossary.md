@@ -44,9 +44,12 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path.
   The second form of reference.
   Not a record: no request, no status, nothing to recompute.
-- **Dataset source**: where datasets are discovered and listed.
+- **Dataset source**: where datasets are discovered and listed, with the fields the instrument's field extractor derives.
   Persists nothing.
   SciCat for a proposal, a folder in local mode, a fake for tests.
+- **Field extractor**: an instrument's code that derives a dataset's fields, role, sample, angle, start time, from its catalogue entry and file, and names the field that orders the instrument's datasets.
+  Registered per instrument under the entry-point group `ess.apps.fields`.
+  See [rules.md](rules.md#the-dataset-source).
 - **Finalize stage**: the stage of an aggregation from the accumulated values to the outputs, built by the adapter inside one run.
 - **Group**: several requests submitted atomically that may reference each other's outputs before those exist.
   `apply` returns a `Group`, which also carries the template's blanks as what its members vary.
@@ -65,7 +68,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Local mode**: client, backend, launcher, session, and data store in one Python process.
   **Shared mode**: the backend as a service used by many people.
   The **shared service** is that backend's process, which also holds a memory cache.
-- **Lookup**: stored, versioned data beside a template: ordered entries that match dataset metadata and supply template fills, literal or **as-of**, the nearest earlier dataset matching criteria, with at most one wildcard.
+- **Lookup**: stored, versioned data beside a template: ordered entries that match dataset fields and supply template fills, literal or **nearest**, the dataset nearest the member, before, after, or either, that matches criteria, with at most one wildcard.
   What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
   See [rules.md](rules.md).
 - **Member**: one record under a label, identified by its **member key**: a name a person chose for a batch made by hand, the dataset identity for a rule's batch.
@@ -92,7 +95,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Retention**: how long a disk copy is kept within its proposal's lifetime.
   It applies to bytes, never to single records.
 - **Results**: the outputs of a spec that are not intermediates; what a plain run computes.
-- **Rule**: stored, versioned data that makes requests from datasets: a selector with a lower bound, a template and a lookup, a retry policy, exclusions, an active state, and optionally a series.
+- **Rule**: stored, versioned data that makes requests from datasets, or from the completed records of a rule it follows: a selector with a lower bound, a template and a lookup, a retry policy, exclusions, an active state, and optionally a series.
   A rule is to a batch what a template is to a request, and its label is reserved for it.
   See [rules.md](rules.md).
 - **Run record**: a run request plus what happened to it: status, outputs, versions.
@@ -107,8 +110,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Runner**: the process that executes runs: one run and exit, or many in a session.
 - **SciCat**: the facility's data catalogue.
   **PID**: SciCat's persistent identifier for a dataset.
-- **Series**: the datasets a rule keys together by a metadata value.
-  `Series(key)` on a rule makes each arrival submit one request whose dataset field lists every current run of the series.
+- **Series**: the datasets a rule keys together by a field value.
+  `Series(key, fire)` on a rule submits one request whose dataset field lists every current run of the series, on each arrival or once the series is `Complete`.
   See [rules.md](rules.md#series).
 - **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its run records, and the stages it built for them, in memory.
   A cache over records.
@@ -135,7 +138,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Throwaway process**: a subprocess or cluster job that runs one request and exits.
   The execution shape of shared mode.
 - **Trigger loop**: applies the active rules to new datasets and completed records.
-  Keeps no state: every decision is a query over the records.
+  Keeps no state: every decision is a query over the records and the datasets.
+  A member that cannot be made yet, because a fill or a series completion depends on a dataset still to come, is **waiting**.
   See [rules.md](rules.md#the-trigger-loop).
 - **Vary**: the names of the parameters a caller varies from run to run, given with the submission beside the requests, each with its value in `params`.
   They are the blanks of the request's template.

@@ -406,6 +406,7 @@ Checks: a rule can key runs into a group; every arrival reduces the member and c
 Outcome: fits.
 A rule with a series submits one run request per arrival whose dataset field lists every run of the series so far, and successive requests supersede each other under the series value as member key ([rules.md](rules.md#series)).
 A sum and a stitch look the same to the rule; the stitch needs a spec over a list of runs, which the skeleton's Amor binding does not have yet.
+A rule that reduces each run and a second rule that follows it and combines the results of each series is the other form ([rules.md](rules.md#rules-over-completed-records)).
 
 ### E2. Automatic reduction goes quiet
 
@@ -417,7 +418,7 @@ Actor: instrument operator.
 Checks: where the operator sees that the loop is refusing to fire, and why; nothing silently continues with a superseded workflow.
 
 Outcome: fits.
-`trigger_status` answers for one dataset why the rule did not fire, and a spec-version mismatch fails loudly rather than defaulting ([rules.md](rules.md#the-trigger-loop)).
+`trigger_status` answers for one dataset why the rule did not fire, or that it waits, and a spec-version mismatch fails loudly rather than defaulting ([rules.md](rules.md#the-trigger-loop)).
 
 ### E3. Reduction of our own output
 

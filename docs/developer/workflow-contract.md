@@ -192,7 +192,7 @@ This gives every mapping between outputs and inputs with one mechanism:
 
 Keys are declared on the spec where the author can name them, such as bank names, and free otherwise.
 Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
-Fan-out whose keys are known only after reading the data takes two phases: a first run whose output holds the keys, then one request per key.
+Fan-out whose keys are known only after reading the data takes two phases: a first run whose output holds the keys, then one request per key, which a rule that follows the first makes under automatic reduction ([rules.md](rules.md#rules-over-completed-records)).
 A workflow may also group inside its pipeline, as Bifrost does by rotation.
 Snakemake put fan-out in the scheduler, as checkpoints, and it became the most confusing part of the tool.
 

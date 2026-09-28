@@ -47,8 +47,7 @@ Batch and automatic reduction use nothing from the phase 3 column.
 The skeleton does not contain these, and phase 1 cannot be shown without them:
 
 - **A SciCat dataset source and a SciCat publisher**, behind the interfaces that the folder source and the fake publisher implement today.
-- **A trigger loop that fires on completed records** as well as on new datasets.
-  A chain such as vanadium then sample is then two rules and needs no pending outputs.
+- **A field extractor for each phase 1 instrument**, written with its instrument team, so that rules can match roles and samples.
 - **A deployment**: the backend as a long-running service on one host per instrument, with the store lock, reconciliation at restart, logs, and an alert to an operator.
 - **Authentication for the web page**, mapping a login to SciCat proposal membership, unless the page is restricted to instrument staff.
 - **A web framework for the status page.**
@@ -95,9 +94,8 @@ As a judgment:
 
 1. Keep the skeleton, make the throwaway launcher its default, and keep the session launcher out of the acceptance tests of phases 1 and 2.
 2. Build the SciCat dataset source and publisher.
-3. Extend the trigger loop to completed records.
-4. Choose the web framework for the status page and run it in the backend process.
-5. Deploy for one instrument, and let phase 2 start from what the operators ask for.
+3. Choose the web framework for the status page and run it in the backend process.
+4. Deploy for one instrument, and let phase 2 start from what the operators ask for.
 
 Phase 3 also needs a decision that is still open: whether interactive work uses sessions at all.
 See [stages.md](stages.md#sessions-are-one-of-three-models) and [open-issues.md](open-issues.md#open-questions).

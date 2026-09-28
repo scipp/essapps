@@ -39,7 +39,7 @@ The recommendation in brackets is mine.
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
 - **A sum under a rule whose runs must be reduced on separate nodes.**
-  Is there a real case? Interactively, composing two specs over references covers it ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)), but a rule cannot drive that composition.
+  Is there a real case? Composing two specs over references covers it, by hand or with two rules ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)).
 - **A sum with one unreadable run.**
   Do scientists want the series request to fail visibly until the run is excluded, rather than be summed without it?
 - **Where the workflow contract lives once it is stable.**
@@ -106,10 +106,10 @@ See [rules.md](rules.md).
 
 - **Two-level aggregation under a rule is untested.**
   Reflectometry sums same-angle runs and then stitches the angles.
-  A series fills a dataset field with the runs of the series, so a rule drives both levels only as one spec over the list of runs, which `ess.apps.amor` does not have yet.
-- **Roles are named but not defined.**
-  A rule that feeds sample runs into one list parameter and background runs into another needs a role per dataset and a mapping from role to the list parameter it fills.
-  "A series of fixed roles" names this and says nothing about how it works.
+  A rule with a series per angle and a second rule that follows it with a series per sample would do both levels, but `ess.apps.amor` has neither spec over a list of runs yet.
+- **Roles fill one dataset field.**
+  The field extractor gives each dataset a role, and `Complete(roles=...)` fires a series once each role is present, but the series fills one dataset field.
+  A rule that feeds sample runs into one list parameter and background runs into another needs a mapping from role to the list parameter it fills.
 
 ## What the design does not solve
 
@@ -142,8 +142,8 @@ It does not contain:
 - The fold: a long-lived runner that holds the stage of one series.
   It is not needed until a series arrives faster than its runs can be reduced.
 - The `paused` status and the runner liveness timeout described in [operations.md](operations.md#failure-handling).
-- A rule that fires on a completed record.
-  The trigger loop iterates datasets only, so a second rule over the completed records of a first rule is untested.
+- A field extractor for any instrument.
+  The tests pass one to the folder source directly; no package registers one.
 - The last clause of the trigger loop's firing condition, that the dataset's SciCat entry must not carry our provenance snapshot.
   Local mode has no catalogue to ask.
 - A durable reservation of a rule's label.

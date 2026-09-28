@@ -47,17 +47,30 @@ Its parameters, like a lookup's fills and the pinned values on a record, are hel
 A batch rerun under the copy is a new batch whose records link to the old ones.
 
 **A lookup is stored, versioned data beside a template that supplies fills per dataset.**
-It is an ordered list of entries, each matching dataset metadata by a value within a tolerance (`Near`), a glob pattern (`Like`), or a run-number range open at either end (`Between`).
+It is an ordered list of entries, each matching dataset fields by a value within a tolerance (`Near`), a glob pattern (`Like`), or a run-number range open at either end (`Between`).
 At most one entry is the wildcard, which applies to what nothing else matched, and a dataset matching more than one entry is a validation error rather than a choice.
-An entry may match only on the fields the dataset source declares for the instrument, an angle, a sample name, or a run's role.
+An entry may match only on the fields the instrument's field extractor derives, an angle, a sample name, or a run's role ([The dataset source](#the-dataset-source)).
 Every ISIS batch interface converged on this table under a different name, and [mantid.md](prior-art/mantid.md) says why it must be data rather than code: the instrument scientist edits it, the UI shows it, and a batch file carries it.
 
-**An as-of fill is resolved against the member, not against the clock.**
-A fill is either a literal or an `AsOf`, which holds criteria on dataset metadata and resolves to the nearest dataset before the member that matches them.
-It is one way to pick a can, dark frame, or empty-beam run for a sample: the last one measured before it, as FIA does by walking back through the journal by title.
+**A nearest fill is resolved against the member, not against the clock.**
+A fill is either a literal or a `Nearest`, which resolves to the dataset nearest the member that matches its criteria:
+
+```python
+Nearest(match={'role': Like(pattern='can')})                        # the last can before
+Nearest(match={'role': Like(pattern='can')}, direction='after')     # the first can after
+Nearest(match={'role': Like(pattern='can')}, direction='either',    # the nearer of the two,
+        same=('sample_holder',))                                    # in the same holder
+```
+
+It picks a can, dark frame, or empty-beam run for a sample, however the instrument is operated.
+`direction='before'`, the default, is what FIA does by walking back through the journal by title.
+`same` names fields whose value the match shares with the member.
+"Nearest" is in the order of the instrument's datasets ([The dataset source](#the-dataset-source)), and `'either'` compares distances in that order, a tie going to the match before.
 A fixed run, or one run for the whole proposal, is a literal fill, and a run a person picks is a pinned value.
 Because the fill is anchored to the member's own dataset, the backlog and a reprocess give a sample the same can the live loop gave it, as `test_backlog_and_reprocess_resolve_the_same_can_as_the_live_loop` checks, and the record holds the reference it resolved to.
-A member with no matching dataset before it is refused, visibly, in the trigger status.
+A member with no match before it is refused, visibly.
+A member with no match after it *waits*: `trigger_status` says so, and a later pass fires on it once the match is measured.
+`'either'` waits for the match after as well, so the answer depends only on the datasets that exist, not on when it is asked.
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
@@ -90,26 +103,27 @@ A **slot** is a label with no member key, owned by one interactive tool, so that
 
 ## Rules
 
-**A rule is stored, versioned data that makes requests from datasets.**
+**A rule is stored, versioned data that makes requests from datasets, or from the completed records of another rule.**
 
 | Field | What it holds |
 |---|---|
 | `template` | the partial request to fill, with its version |
 | `lookup` | the table beside it, with its version |
-| `selector` | metadata criteria that pick the datasets, and a lower `Bound` |
+| `selector` | field criteria that pick the candidates, and a lower `Bound` |
 | `retry` | the failure reasons on which a failed record is resubmitted, and a limit |
-| `series` | optional: the dataset field that keys a series |
+| `series` | optional: the dataset field that keys a series, and when the series fires |
+| `follows` | optional: the label of another rule whose completed records are the candidates, instead of datasets |
 | `exclusions` | dataset identities the rule must not fire on or list in a series, each with a reason |
 | `active` | whether the rule fires at all |
 
-This rule subtracts from each sample the can measured before it, and is the `as_of_rule` fixture of `batch_test.py`:
+This rule subtracts from each sample the can measured before it, and is `subtract_rule()` of `batch_test.py`:
 
 ```python
 Rule(name='subtract',
      template=Template(name='subtract-defaults', spec=SUBTRACT.id,
                        blanks=('sample', 'can'), dataset_field='sample'),
      lookup=Lookup(name='cans', entries=(
-         LookupEntry(name='can', fills={'can': AsOf(match={'role': Like(pattern='can')})}),
+         LookupEntry(name='can', fills={'can': Nearest(match={'role': Like(pattern='can')})}),
      )),
      selector=Selector(match={'role': Like(pattern='sample')}))
 ```
@@ -125,16 +139,18 @@ A user who wants a gap left alone excludes it or moves the bound.
 ## The trigger loop
 
 **The trigger loop runs the active rules, and nothing else does.**
-It fires a rule on a candidate, a new dataset or a completed record, when all of these hold:
+It fires a rule on a candidate, a new dataset or a completed record of the rule it follows, when all of these hold:
 
 - the rule is active,
-- the selector matches the candidate's metadata,
+- the selector matches the candidate's fields,
 - the candidate lies after the rule's bound,
 - the candidate is not in the rule's exclusions,
 - no record exists under the rule's label with the candidate as member key, unless the latest one failed for a reason the retry policy names and the records under that member key are fewer than the limit,
 - the candidate's SciCat entry does not carry our provenance snapshot.
 
-`trigger_status` answers this for one dataset and returns the reason, so the loop's decision and the status a user reads are one function.
+For a series, and for a completed record, a record counts only if it references the candidate.
+`trigger_status` answers this for one candidate and returns the reason, so the loop's decision and the status a user reads are one function.
+Where the clauses hold but the request cannot be made yet, because a nearest fill looks after the member or a series fires once complete, the status is *waiting*, and the loop lists it in `TriggerLoop.waiting`.
 The last clause keeps automatic reduction off its own output: a published output is recognized by the snapshot in its SciCat entry, not by a table of ours.
 
 **The loop keeps no memory.**
@@ -167,7 +183,7 @@ There are two kinds of batching.
 Batching for convenience is many independent requests from one template, made by a person or by a rule without a series.
 Batching for merging is one request over a list of runs ([aggregation.md](aggregation.md)).
 
-**A rule with a series submits one request per arrival, whose dataset field lists every current run of the series.**
+**A rule with a series submits one request, whose dataset field lists every current run of the series, on each arrival or once the series is complete.**
 
 ```python
 rule = Rule(
@@ -179,7 +195,7 @@ rule = Rule(
 )
 ```
 
-`Series(key)` names the dataset field whose value keys datasets into a series.
+`Series(key, fire)` names the dataset field whose value keys datasets into a series, and when the rule fires.
 The current runs of a series are the datasets with the same value of the key that the selector matches and that are not excluded, in the order the sources list them.
 The series value is the member key, so successive requests of one series supersede each other under the rule's label, and the batch table has one row per sample, whose curve grows.
 A run that arrives again, or out of order, is listed once.
@@ -205,9 +221,19 @@ If two runs of one series fill such a field differently, `apply` refuses the ser
 **A run that cannot be read fails the whole series request, visibly.**
 The operator excludes the run, and `retry` submits the series without it.
 
-**A rule does not wait for a series to be complete.**
-Each arrival reduces what exists, which fits a series whose length the user decides while measuring.
-A series of fixed roles, a scatter and its transmission, would be the same rule with the request fired only when every role is present.
+**A series fires on each arrival, or once complete.**
+
+```python
+Series(key='sample')                                                 # fire='each'
+Series(key='sample', fire=Complete(count=4))                         # once 4 runs exist
+Series(key='sample', fire=Complete(roles=('scatter', 'transmission')))  # once each role is there
+```
+
+`fire='each'`, the default, reduces what exists on every arrival, which fits a series whose length the user decides while measuring.
+`Complete` waits until the series has `count` runs, or a run of each of `roles`, the values of the runs' `role` field, and then fires on each arrival like `'each'`.
+Until then the series waits, visibly in `trigger_status`.
+Completion is a question of the datasets that exist, so the loop stays without memory.
+Firing after a quiet period needs a clock the loop does not have, and is left out.
 The rule says whether the results of a series are published, and by default they are not.
 
 **Series membership is not stored.**
@@ -215,16 +241,68 @@ Which runs belong to a series is asked of the dataset source when a series reque
 A metadata correction at the instrument therefore moves a run between series and the next request reflects it, while earlier records are untouched because they hold resolved references.
 An exclusion drops a run from the next request the same way.
 
-`Series` needs only its key.
 What the workflow does with the list is its own business, so a sum and a stitch look the same to the rule ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)).
-A rule cannot drive a combination over references to the records of another rule, because a series fills a dataset field with runs.
+
+## Rules over completed records
+
+**A rule that follows another fires on its completed records instead of on datasets.**
+`Follows(label)` makes the candidates the latest completed record per member key under the other rule's label.
+A candidate has the fields of the dataset its member key names, so selectors, lookups, and series keys work as on datasets.
+It fills the template's dataset field with a row of references to every output of the record, by output name.
+This splits a sum into one request per run and one combine over the records ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)):
+
+```python
+contribute = Rule(name='contribute',
+                  template=Template(spec=CONTRIBUTE.id, params={'floor': 1.5}, blanks=('run',)))
+combine = Rule(name='combine',
+               template=Template(spec=COMBINE.id, params={'scale': 2.0}, blanks=('parts',)),
+               follows=Follows(label='contribute'),
+               series=Series(key='sample'))
+TriggerLoop(client, contribute, combine)
+```
+
+`COMBINE`'s `parts` is a list of rows whose model is `CONTRIBUTE`'s output model, so each completed contribution is one row.
+The combine is fired again as the sample gets more runs, and its latest record equals the one request over the list, as `test_a_combine_follows_the_contributions_of_a_series_as_it_grows` checks.
+A contribution that failed is not a candidate: the combine leaves it out, and the failure shows in the contribute rule's batch table.
+
+**`Follows(label, output=...)` is the second phase of a fan-out.**
+Each candidate fills a reference to that output, and a collection output gives one candidate per key, so the second rule makes one request per key the first phase found:
+
+```python
+first = Rule(name='first', template=Template(spec=SUM.id, blanks=('runs',)),
+             series=Series(key='sample', fire=Complete(count=2)))
+second = Rule(name='second', template=Template(spec=EXPORT.id, blanks=('data',)),
+              follows=Follows(label='first', output='per_run'))    # member keys sio2[0], sio2[1]
+```
+
+A candidate's member key is the record's member key, with `[key]` for an element.
+A record counts as fired on only when a record under the following rule's label references it, so a new record under the same member key, a correction or a grown series, is fired on again.
+That keeps the loop without memory: the state is the records.
 
 ## The dataset source
 
 **A dataset source yields the datasets of a proposal and persists nothing.**
-Each dataset comes as an identity, a PID or an instrument and run number, plus the metadata fields the source declares for the instrument.
-Those declared fields are the only ones a lookup entry or a selector may match on, and they are declared here because the source knows what the datasets of each instrument carry.
+Each dataset comes as an identity, a PID or an instrument and run number, plus the fields the instrument's field extractor derives.
 Arrival may be out of order and repeated, and the interface promises no monotonic cursor, which is why the trigger loop asks queries rather than holding a position in a stream.
+
+**A field extractor is instrument code; rules stay data.**
+Where a run's role, sample, or angle is written differs between instruments: a title prefix, a NeXus field, a variable of the acquisition script.
+The instrument team writes a function from what the source has, the catalogue entry and the file, to the fields, and an installed package registers it for the instrument, as it registers specs:
+
+```python
+def loki_fields(entry: Mapping[str, Any], path: Path) -> Mapping[str, Any]:
+    role, _, sample = entry['title'].partition(': ')
+    return {'role': role, 'sample': sample, 'start': entry['start_time']}
+
+LOKI_FIELDS = FieldExtractor(loki_fields, order='start')
+# pyproject.toml: [project.entry-points."ess.apps.fields"] loki = "ess.loki.apps:LOKI_FIELDS"
+```
+
+The source applies it; lookups, selectors, series keys, and completion criteria use the fields it returns, and fills and firing stay data.
+Nothing is required of acquisition.
+An instrument without one keeps the catalogue entry's own fields.
+`order` names the field that orders the instrument's datasets, typically the start time, which is what "before" and "after" mean to a nearest fill; without it, datasets are ordered by run number.
+A role that is a frame range inside one file is not a dataset field: splitting the file is the workflow's.
 
 A dataset enters the record store only as a reference in the requests a rule submits, like any other stand-in.
 Which datasets a rule has already decided on is a query over the records, not memory in the source or the loop.
@@ -238,11 +316,11 @@ The batch table is a frame, and the pieces above are how it is built:
 |---|---|
 | Batch table | a frame: one row per member, the member key as index, parameters as columns |
 | Template | column defaults, one row broadcast over the frame |
-| Lookup | a join against the dataset metadata on a value within a tolerance, a pattern, or an interval, the wildcard as fallback; two matches are an error, not the nearest |
-| As-of fill | `merge_asof` of each member against the datasets matching the criteria, direction backward |
+| Lookup | a join against the dataset fields on a value within a tolerance, a pattern, or an interval, the wildcard as fallback; two matches are an error, not the nearest |
+| Nearest fill | `merge_asof` of each member against the datasets matching the criteria, `by=same`, direction backward, forward, or nearest |
 | Precedence ladder | `pinned.combine_first(lookup).combine_first(template)`; a blank is a NaN falling through |
 | Pinned values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
-| Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
+| Selector | a boolean mask over the dataset fields frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
 | Request of a series | a reduction over the group so far, done again on each arrival; the superseded requests are its earlier values |
 | Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
@@ -278,7 +356,7 @@ Clocks on different hosts disagree, so a person's correction could lose to a ret
 Each record instead links to the record it supersedes.
 
 **A fill that names whatever dataset is newest at submission.**
-This is simpler than an as-of fill and right for the live loop only.
+This is simpler than a nearest fill and right for the live loop only.
 Every backlogged sample would get the can that is newest when the backlog runs, so the backlog and a reprocess would disagree with the live loop.
 
 **Skipping a request when an equal one already completed.**
@@ -288,26 +366,30 @@ Requests are therefore always made, and a superseding record shows the repeat.
 **Waiting for a series to be complete as the only behaviour.**
 A series whose length the user decides while measuring, such as one more angle, would have no result before its last run.
 
-**Member and finalize requests per arrival.**
+**Member and finalize requests per arrival as the default for a series.**
 Each arrival submits a request for the new run, whose outputs are the values that add, and a finalize request that accumulates the outputs of every current member.
 The k-th finalize reads k stored contributions and not k runs.
-But the finalize must check that the members fit, which needs the graph, a member that a lookup filled beyond the blanks cannot be accumulated, and a failed member is left out of the next finalize without anyone seeing it.
+Two rules, one following the other, build exactly this ([Rules over completed records](#rules-over-completed-records)), but as the default it costs too much.
+Nothing checks that the members fit, which needs the graph, and a member that failed is left out of the finalize, visible only in the other rule's table.
+One request over the list has neither problem.
 
 **A combine template on the series.**
 The series names a second template, for a combine spec over a list of references to the members' contributions, with the output that is the contribution and the parameter that takes it.
 The rule then holds two templates that share most of their values and can disagree.
+Two rules say the same with one template each.
 
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.
 Snakemake put it in the scheduler as checkpoints and it became the most confusing part of the tool.
-Fan-out whose keys come from the data takes two phases instead: a first run whose output holds the keys, then one request per key.
+Fan-out whose keys come from the data takes two phases instead: a first run whose output holds the keys, then one request per key, made by hand or by a rule that follows the first.
 
 ## Costs
 
 - Reprocessing after a template change is a client operation over a query, not a stored diff.
 - A rule's bound is one more thing to get right at creation.
   Its default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
-- An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
+- A nearest fill looking before the member has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
+  One looking after the member, or either way, waits, and the samples after the last can wait until a person pins one.
 - A series request over k runs reduces all k runs in a throwaway process ([aggregation.md](aggregation.md#a-series-under-a-rule)).
 - One run that cannot be read fails its series request until someone excludes it.
 - A series a person defines by hand, "these runs, and keep accumulating as more arrive", has no place here.

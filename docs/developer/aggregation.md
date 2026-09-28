@@ -220,7 +220,7 @@ The result equals the one request over the list.
 Each record describes only its own computation, and the parts are one reference away.
 The combine waits for the parts as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
 The costs are in [Costs](#costs).
-A rule cannot drive this, because a series fills a dataset field with runs, not with references to the records of another rule.
+Under automatic reduction two rules drive it: one makes a contribution per run, and one that follows it combines the contributions of each series ([rules.md](rules.md#rules-over-completed-records)).
 
 ## Combinations that are not accumulations
 
