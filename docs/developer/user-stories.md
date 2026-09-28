@@ -273,8 +273,8 @@ Actor: user configuring single, batch, or automatic reduction.
 
 Checks: a published output is an ordinary input; the reduction does not depend on the vanadium's original record store being reachable.
 
-Outcome: fits.
-A PID typed at submission resolves to the run record named in its provenance snapshot while the store still has it, and to a dataset reference otherwise ([records.md](records.md#datasets)).
+Outcome: fits where a dataset source knows the published output, as it knows any SciCat dataset.
+Resolving a PID typed at submission to the run record named in its provenance snapshot is not built, so a published output no dataset source knows is refused ([records.md](records.md#datasets)).
 
 ### C3. Per-bank diffraction results
 

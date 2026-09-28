@@ -89,7 +89,7 @@ A **reference** is the only way a request names data. It has two forms:
 | Dataset reference | data the framework did not compute: a SciCat dataset or a local file | `{"dataset": "pid:20.500.12269/abc"}`, `{"dataset": "uuid:05165700-…"}` |
 
 A reference names data by identity, never by where the bytes are.
-A dataset's identity is its SciCat PID, else the UUID its NeXus file carries, else the sha256 of a local file's bytes; a moved file keeps it.
+A dataset is identified by its SciCat PID, the UUID its NeXus file carries, or the sha256 of a local file's bytes, and a reference by any of these it has names it; a new record uses the first it has, and a moved file keeps it.
 Where a dataset's bytes are is asked of SciCat, or of the user's folder, when the run is dispatched.
 Records keep references in reference form.
 **Provenance** is therefore the graph obtained by following references from a result back to datasets, parameters, and software versions.

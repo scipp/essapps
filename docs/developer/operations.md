@@ -122,7 +122,9 @@ user.run(REBIN, {'data': vanadium.ref('data')})  # a record owned by 'commission
 user.datasets(['commissioning'])                 # the datasets of another proposal
 ```
 
-The backend checks every reference when a request is submitted or recomputed.
+The backend checks every reference when a request is submitted or recomputed; a recompute is checked as a request of whoever asks for it.
+The check prevents mistakes, not misuse: the backend does not authenticate the submitter a client names, and a request reads its own proposal without asking, so naming a proposal is enough to read it.
+It becomes a security boundary once submitters are authenticated and their membership in the owning proposal is checked first.
 A rule's lookup may fill references of other proposals in the same way, and the check applies to the request it makes.
 Instrument defaults, such as the templates, lookups, and rules a facility runs for every user, are owned by the instrument's commissioning proposal like anything else.
 Commissioning proposals are long-lived, so what users read from them stays.

@@ -33,6 +33,7 @@ client.provenance(iofq)                                  # back to the dataset r
 2. **Data is named by reference.**
    A reference is either "output X of record Y" or a dataset identity such as a SciCat PID.
    Requests never contain file paths into our storage.
+   A person may type a run number or a path, which the backend replaces by the dataset's identity at submission; a path names only a file in a folder a dataset source reads, so an ad-hoc local file must be put there first.
    Provenance is the graph of references between records, so no separate provenance model exists.
 3. **Records are stateless, sessions are caches.**
    Interactive work runs in a session, a process that keeps outputs and intermediate results in memory.

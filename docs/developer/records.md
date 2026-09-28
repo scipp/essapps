@@ -125,13 +125,16 @@ There is no separate provenance model and no "which record produced this" query,
 
 **Datasets are the leaves.**
 A **dataset** is data the framework did not compute: a SciCat dataset, or a file on a user's disk.
-It is identified by the first of these it has:
+It has one or more of these identities, and a reference by any of them names it:
 
 ```python
 dataset_ref(pid='20.500.12269/abc')          # pid:…      the SciCat PID
 dataset_ref(uuid='05165700-0292-5e93-…')     # uuid:…     entry/entry_identifier_uuid in the NeXus file
 dataset_ref(sha256='9f2c…')                  # sha256:…   the bytes of a local file that carries neither
 ```
+
+A new record names the dataset by the first of them it has.
+A PID minted after a record named the dataset by its UUID therefore leaves that record locatable, and a rule's member keyed by the UUID stays that member.
 
 The run number is a field of the dataset, like its sample or angle, and not part of its identity: the run counter may span instruments, and a local file may carry none.
 Identity is not location.
@@ -153,8 +156,8 @@ client.run(LOAD, {'run': dataset_ref(instrument='dream', run=1)})
 ```
 
 A stand-in that names no dataset, or several, is refused.
-A PID of a published output resolves to the run record named in its provenance snapshot while the store still has it.
-Nothing is downloaded at submission.
+Resolving the PID of a published output to the run record named in its provenance snapshot is not built: such a PID is refused like any reference no source knows.
+Nothing is downloaded at submission, though a folder source reads each file it offers once, at the first submission, to identify it.
 
 **Whether an output is usable is two questions**: the record's status, and whether the data store holds a copy.
 A missing copy is reported as such, never silently recomputed, because a silent recompute hides both its cost and the loss of the bytes.

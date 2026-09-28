@@ -294,7 +294,8 @@ That keeps the loop without memory: the state is the records.
 **A dataset source yields the datasets of proposals and persists nothing.**
 Each dataset comes with its identity ([records.md](records.md#datasets)), the proposals it belongs to, its instrument and run number where it has them, and the fields the instrument's field extractor derives.
 A source also finds the dataset an identity or a stand-in names, which is how the backend resolves and checks a reference at submission.
-A rule's candidates are the datasets of its own proposal; a lookup may fill a reference to a dataset or record of another proposal the submitter may read.
+A folder source leaves out a file it cannot identify yet, such as one still being written, and two files that carry one UUID, and says why in its `skipped`.
+A rule's candidates are the datasets of its own proposal, and so are those a `Nearest` fill searches; only a literal fill of a lookup entry may name a dataset or record of another proposal the submitter may read.
 Arrival may be out of order and repeated, and the interface promises no monotonic cursor, which is why the trigger loop asks queries rather than holding a position in a stream.
 
 **A field extractor is instrument code; rules stay data.**

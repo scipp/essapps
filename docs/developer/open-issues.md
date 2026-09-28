@@ -36,11 +36,16 @@ The recommendation in brackets is mine.
   A person may name a run as `run:<instrument>/<n>`, which assumes a run number is unique within an instrument.
   If the counter is shared by several instruments this still holds; if it is reset, a run number names several datasets and is refused.
 - **How the SciCat ingestor mints PIDs.**
-  A folder source identifies a NeXus file by its UUID, and SciCat by its PID, so one file reached both ways has two identities, and a record made from each does not reuse the other.
-  [Ask whether the PID is derived from `entry/entry_identifier_uuid`, or whether the entry stores the UUID, so that a source can give both and a reference by UUID resolves to the PID.]
+  A folder source identifies a NeXus file by its UUID, and SciCat by its PID.
+  A reference by any identity a dataset has names it, so one file reached both ways is one dataset only if SciCat gives the UUID as well.
+  [Ask whether the PID is derived from `entry/entry_identifier_uuid`, or whether the entry stores the UUID.]
+- **Rule candidates and `Nearest` fills across proposals.**
+  A rule fires on the datasets of its own proposal, and a `Nearest` fill searches only those, so a vanadium or empty-beam run measured under a facility or commissioning proposal can fill a rule's request only as a literal fill of a lookup entry.
+  [Not supported. Measuring such runs under a facility proposal is common at ESS, so a rule may need to name the proposals a fill searches.]
 - **Records that others reference when their proposal is dropped.**
   A reference may name a record of another proposal the submitter may read, and that record goes when its proposal is dropped.
-  [Accept it: references across proposals go mostly to long-lived commissioning proposals, and a record left without its input is the missing-copy case.]
+  The same holds for routine retention of disk copies in a commissioning proposal whose vanadium or direct beam user records reference.
+  Options: exempt proposals that others read from routine retention; accept it as the missing-copy case, where a recompute fails with a clear reason; or copy referenced data into the referencing proposal on use, which contradicts never copying raw data.
 - **Exposed intermediates in ess.reduce.spec.**
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
