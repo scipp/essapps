@@ -23,7 +23,7 @@ The rule that keeps this from repeating the stage records that 48e2c17 reverted:
 | sciline | essapps, inside one process (a cache) | essapps, between records (durable) |
 |---|---|---|
 | `Stage` | a held `sciline.Stage`, named by a `Stage` | a spec: a cut the author made |
-| forwarder | the stage's frontier | a label: its current record |
+| forwarder | an output one held stage passes to the next, from the session's memory (C5) | a label: its current record |
 | `Accumulator` | held by the accumulation's holder | the state records of an accumulation |
 | driver | a workflow's `stage()`; the holder of an accumulation | a group; a rule; the policy of an accumulation |
 
