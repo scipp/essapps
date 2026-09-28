@@ -1,4 +1,4 @@
-# Proposal: stages, labels, and accumulations
+# Proposal: stages, labels, and accumulators
 
 **Status: proposal for review. Nothing here is implemented.**
 It extends the design in [architecture.md](../architecture.md) with sciline's connectors and drivers (scipp/sciline#245, design doc sections 2 and 4).
@@ -8,10 +8,11 @@ The code below is pseudocode in the style of the skeleton's API; names are open 
 
 - `Template` splits in two: a **stage** is plain data, the counterpart of `sciline.Stage`; a **template** is a stored, versioned stage that batches and rules fill.
 - A **label** is a name over a sequence of records. Its current record is its value.
-- An **accumulation** is a label whose records are successive states of a set of accumulators. Runs push into it; it keeps its value in memory when it can; its states are records.
+- An **accumulator** is a label whose records are successive states of one accumulated value, the counterpart of `sciline.Accumulator`. Runs push into it; it keeps its value in memory when it can; its states are records.
+- The workflow author declares what may be accumulated as an **accumulator spec**: a value type and a factory, as a workflow spec declares a signature and its code.
 - A reader names the current record of a label with the stand-in `Current`, resolved at submission like a run number. References do not change.
-- Combining and finalizing are separate. The workflow author declares a contribute spec, accumulators, and a finalize spec. The user pushes, the accumulation combines, the user finalizes.
-- How an accumulation combines, in memory, flat, or as a tree over many processes, is its policy. The user does not see it.
+- Combining and finalizing are separate. The author declares a contribute spec, an accumulator spec, and a finalize spec. The user pushes, the accumulator combines, the user finalizes.
+- How an accumulator combines, in memory, flat, or as a tree over many processes, is its policy. The user does not see it.
 
 The rule that keeps this from repeating the stage records that 48e2c17 reverted:
 
@@ -24,8 +25,18 @@ The rule that keeps this from repeating the stage records that 48e2c17 reverted:
 |---|---|---|
 | `Stage` | a held `sciline.Stage`, named by a `Stage` | a spec: a cut the author made |
 | forwarder | an output one held stage passes to the next, from the session's memory (C5) | a label: its current record |
-| `Accumulator` | held by the accumulation's holder | the state records of an accumulation |
-| driver | a workflow's `stage()`; the holder of an accumulation | a group; a rule; the policy of an accumulation |
+| `Accumulator` | a held `sciline.Accumulator`, named by an `Accumulator` | an `Accumulator`'s state records |
+| driver | a workflow's `stage()`; the holder of an accumulator | a group; a rule; the policy of an accumulator |
+
+The essapps names mirror the sciline names on purpose.
+An essapps `Stage` or `Accumulator` is plain data that names what to compute or hold; the process that computes or holds it keeps the sciline object.
+
+| Author declares | User creates | Held in memory |
+|---|---|---|
+| `WorkflowSpec` | a run request; its record is its instance | a `sciline.Stage` |
+| `AccumulatorSpec` | an `Accumulator`; its states are records | a `sciline.Accumulator` |
+
+The word "accumulation" keeps its current meaning: the accumulated value.
 
 ## The objects
 
@@ -50,7 +61,7 @@ class Template(BaseModel):               # stored and versioned; batches and rul
 ```python
 class Current(BaseModel):                # a stand-in, never stored in a record
     label: str
-    output: str
+    output: str = 'value'                # the output of an accumulator's state
     member_key: str | None = None
 
 # at submission, the backend replaces every Current by a reference:
@@ -59,42 +70,64 @@ def resolve(value: Current) -> OutputRef:
     return OutputRef(record=record.id, output=value.output)
 ```
 
-A record under a slot, a batch, a rule, or an accumulation is read the same way.
+A record under a slot, a batch, a rule, or an accumulator is read the same way.
 The reader cannot tell whether the value was forwarded or accumulated, and its record names the exact state it read.
 
-### Accumulators, declared by the author
+### Accumulator spec, declared by the author
 
 ```python
-class AccumulatorDecl(BaseModel):        # in the spec package, beside the specs
-    name: str                            # 'sans.numerator'
+class AccumulatorSpec(BaseModel):        # in the spec package, beside the workflow specs
+    name: str                            # 'sans.parts'
+    version: int
     value: FieldType                     # the type pushed and the type of the value: they are one type
-    factory: EntryPoint                  # builds a sciline.Accumulator
-    closed: bool                         # value can be pushed again, grouping does not matter
-    commutative: bool                    # order of pushes does not matter
+    closed: bool                         # the value can be pushed again, and grouping does not matter
+    commutative: bool                    # the order of pushes does not matter
 ```
+
+The factory that builds the `sciline.Accumulator` is bound through an entry-point group, `ess.apps.accumulators`, as workflow code is bound to a workflow spec.
+The backend loads accumulator specs only, so it checks the types of pushes and reads without importing workflow code.
 
 `closed` is sciline's condition for "combining combined values" (design doc section 4).
 Without it, only the policies `Flat` and `Held` apply.
 
+An accumulator holds one value.
+Values that must accumulate together, such as a numerator and a denominator, are one value whose type is a row model:
+
+```python
+class NormalizationParts(BaseModel):
+    numerator: Array(...)
+    denominator: Array(...)
+```
+
 The author of esssans declares:
 
 ```python
-SANS_CONTRIBUTE   # spec: one run and the parameters it reads -> numerator, denominator
-SANS_NUMERATOR = AccumulatorDecl(name='sans.numerator', value=..., factory=..., closed=True, commutative=True)
-SANS_DENOMINATOR = AccumulatorDecl(...)
-SANS_FINALIZE     # spec: numerator, denominator, and the parameters finalize reads -> I(Q)
+SANS_CONTRIBUTE   # workflow spec: one run and the parameters it reads -> parts: NormalizationParts
+SANS_PARTS = AccumulatorSpec(name='sans.parts', version=1, value=NormalizationParts,
+                             closed=True, commutative=True)
+SANS_FINALIZE     # workflow spec: parts: NormalizationParts, and the parameters finalize reads -> I(Q)
 ```
 
-`SANS_FINALIZE` is a spec, not a stage the caller cuts from the whole reduction.
-Its params hold only what finalize reads, so its record names no value it did not use.
-
-### Accumulation
+and binds the factory, which wraps sciline's accumulators, one per accumulation key, into one:
 
 ```python
-class Accumulation(BaseModel):           # plain data; its states are the records under `name`
+def sans_parts() -> sciline.Accumulator:            # entry point in ess.apps.accumulators
+    return RowAccumulator({'numerator': Buffered(merge), 'denominator': Buffered(merge)})
+```
+
+`RowAccumulator` pushes each field of a row into its own accumulator and returns a row as its value.
+It belongs beside the sciline adapter in ess.reduce.
+
+`SANS_FINALIZE` is a workflow spec, not a stage the caller cuts from the whole reduction.
+Its params hold only what finalize reads, so its record names no value it did not use.
+
+### Accumulator
+
+```python
+class Accumulator(BaseModel):            # plain data; its states are the records under `name`
     name: str                            # its label
     version: int = 1                     # a reset is a new version
-    accumulators: dict[str, str]         # slot -> AccumulatorDecl name
+    spec: AccumulatorSpecId
     policy: Held | Flat | Tree = Held()
     order: str | None = None             # field ordering the members; required unless commutative
 
@@ -103,18 +136,19 @@ class Flat(BaseModel): pass                                   # one combine over
 class Tree(BaseModel): fan_in: int = 32                       # combines over chunks, then over chunks of those
 ```
 
-A **push** is one record whose outputs fill the slots by name, under a **member key**.
+A **push** is one output of one record, under a **member key**.
+A run submitted with `into=acc` computes exactly one output, and that output is pushed.
 A member key is pushed at most once; pushing it again is refused.
-Removing or correcting a member means a new version of the accumulation.
+Removing or correcting a member means a new version of the accumulator.
 
 A **state** is a run record of the framework's combine:
 
 ```python
-# built-in spec, typed by the accumulators' declared value types
-COMBINE(accumulators: dict[slot, decl], parts: list[dict[slot, OutputRef]]) -> dict[slot, value]
+# built-in workflow spec, typed by the accumulator spec's value type
+COMBINE(accumulator: AccumulatorSpecId, parts: list[OutputRef]) -> value
 ```
 
-A part is a pushed record or another state of the same accumulation, so every policy writes the same kind of record:
+A part is a pushed output or another state of the same accumulator, so every policy writes the same kind of record:
 
 ```text
 Flat:  s = COMBINE([m1, ..., m1000])
@@ -128,18 +162,18 @@ Finding the leaves is a walk over references, the same as provenance, and needs 
 ### The driver
 
 ```python
-def on_push(acc: Accumulation, member_key: str, record: RunRecord) -> None:
-    check_types(record, acc)                        # outputs match the slots' declared types
+def on_push(acc: Accumulator, member_key: str, part: OutputRef) -> None:
+    check_type(part, acc.spec)                      # the output has the spec's value type
     refuse_if_pushed(acc, member_key)
     match acc.policy:
         case Held():
-            holder(acc).push(record)                # in memory; copy fetched as needed
+            holder(acc).push(part)                  # into the held sciline.Accumulator
         case Flat():
             pass                                    # nothing until a state is asked for
         case Tree(fan_in=n):
             submit_missing_chunks(acc, n)           # chunks full under the order field
 
-def current_state(acc: Accumulation) -> RunRecord:  # called when Current(acc.name, ...) resolves
+def current_state(acc: Accumulator) -> RunRecord:   # called when Current(acc.name) resolves
     members = pushed(acc)                           # a query over records: no memory needed
     match acc.policy:
         case Held():
@@ -155,8 +189,8 @@ A trigger loop that restarts finds the same chunks, and submits only the missing
 A late member in the middle of the order changes one chunk and the root.
 
 `holder(acc)` is a session in local mode or a long-lived runner the backend owns in shared mode.
-It holds the accumulators, writes a state record when `Current` asks for one, and writes a copy of a state's value to disk only when a process elsewhere reads it, on publication, or at `snapshot_every`.
-If the holder is lost, a new one replays the pushes, starting from the last snapshot if the accumulators are `closed`.
+It holds the `sciline.Accumulator`, writes a state record when `Current` asks for one, and writes a copy of a state's value to disk only when a process elsewhere reads it, on publication, or at `snapshot_every`.
+If the holder is lost, a new one replays the pushes, starting from the last snapshot if the spec is `closed`.
 
 ## Examples
 
@@ -194,28 +228,33 @@ The field is typed `Quantity | OutputRef` as today; `Current` is a stand-in for 
 client.run(SANS, {'sample_runs': samples, 'background_runs': backgrounds, ...})
 ```
 
-Unchanged: the binding contributes, accumulates, and finalizes inside one run.
+Unchanged: the binding contributes, accumulates, and finalizes inside one run, with the factory of `SANS_PARTS`.
 It is `Flat` in one process, written as one request.
-Whether to keep it beside accumulations is an open question below; the stories S5, S6, D1, and E1 use it.
+Whether to keep it beside accumulators is an open question below; the stories S5, S6, D1, and E1 use it.
+
+Across records, S6 is two accumulators of one spec, one for the sample runs and one for the background runs, and a finalize spec that reads both:
+
+```python
+client.run(SANS_SUBTRACT_FINALIZE, {'sample': Current('sample-sum'),
+                                    'background': Current('background-sum'), ...})
+```
 
 ### B2. Add a run to a sum, then remove one
 
 ```python
-acc = Accumulation(name='sum', accumulators={'numerator': 'sans.numerator',
-                                             'denominator': 'sans.denominator'})
-contribute = Stage(spec=SANS_CONTRIBUTE, params={...}, blanks=('run',), outputs=())
+acc = Accumulator(name='sum', spec=SANS_PARTS.id)
+contribute = Stage(spec=SANS_CONTRIBUTE, params={...}, blanks=('run',), outputs=('parts',))
 for r in (r611, r612):
     client.run(contribute, {'run': r}, label='parts', member_key=str(r), into=acc)
-show(client.run(SANS_FINALIZE, {'numerator': Current('sum', 'numerator'),
-                                'denominator': Current('sum', 'denominator'), 'q': q}))
+show(client.run(SANS_FINALIZE, {'parts': Current('sum'), 'q': q}))
 
 client.run(contribute, {'run': r613}, label='parts', member_key='613', into=acc)   # one push
-show(client.run(SANS_FINALIZE, {...}))              # from the held value; no run is read again
+show(client.run(SANS_FINALIZE, {'parts': Current('sum'), 'q': q}))   # from the held value
 
 acc = acc.reset()                                   # version 2, empty
 for key in ('611', '613'):
-    client.push(acc, client.latest('parts', key), member_key=key)   # the contributions exist already
-show(client.run(SANS_FINALIZE, {...}))
+    client.push(acc, client.latest('parts', key).ref('parts'), member_key=key)   # no rerun
+show(client.run(SANS_FINALIZE, {'parts': Current('sum'), 'q': q}))
 ```
 
 Adding is one contribution and one push. Removing pushes the kept contributions again, without running them.
@@ -223,11 +262,11 @@ Adding is one contribution and one push. Removing pushes the kept contributions 
 ### Rotation scan over a thousand angles
 
 ```python
-acc = Accumulation(name='rotation', accumulators={...}, policy=Tree(fan_in=32), order='angle')
-contribute = Stage(spec=SXD_CONTRIBUTE, params={...}, blanks=('run',), outputs=())
+acc = Accumulator(name='rotation', spec=SXD_COUNTS.id, policy=Tree(fan_in=32), order='angle')
+contribute = Stage(spec=SXD_CONTRIBUTE, params={...}, blanks=('run',), outputs=('counts',))
 for run in angle_runs:                                        # 1000 independent throwaway runs
     client.submit(contribute, {'run': run}, into=acc, member_key=run.id)
-volume = client.run(SXD_FINALIZE, {'counts': Current('rotation', 'counts'), ...})
+volume = client.run(SXD_FINALIZE, {'counts': Current('rotation'), ...})
 ```
 
 The user writes the same code as for B2. `Tree` submits 32 chunk combines as their members complete, and the root when `Current` resolves; `SXD_FINALIZE` waits for the root as a pending output.
@@ -236,24 +275,24 @@ The user writes the same code as for B2. `Tree` submits 32 chunk combines as the
 
 ```python
 contribute = Rule(name='sans-contribute',
-                  template=Template(name='sans-contribute', stage=Stage(spec=SANS_CONTRIBUTE, ...)),
+                  template=Template(name='sans-contribute',
+                                    stage=Stage(spec=SANS_CONTRIBUTE, ..., outputs=('parts',))),
                   selector=Selector(match={'role': Like(pattern='sample')}),
-                  into=Into(accumulators={...}, key='sample', policy=Held()))
+                  into=Into(spec=SANS_PARTS.id, key='sample', policy=Held()))
 finalize = Rule(name='sans-finalize',
                 template=Template(name='sans-finalize', stage=Stage(spec=SANS_FINALIZE, ...)),
                 follows=Follows(label='sans-contribute/acc'))
 ```
 
-`Into(..., key='sample')` makes one accumulation per value of the dataset field `sample`, all under the label `sans-contribute/acc` with the value of `sample` as member key.
+`Into(..., key='sample')` makes one accumulator per value of the dataset field `sample`, all under the label `sans-contribute/acc` with the value of `sample` as member key.
 Each arrival pushes one contribution; each new state fires one finalize, which supersedes the previous one under the member key `sample`.
 A repeated arrival is refused by "pushed at most once", which is the E1 check against duplicates.
-This replaces `Series` for accumulations; a stitch keeps `Series`, see C4.
+This replaces `Series` for accumulators; a stitch keeps `Series`, see C4.
 
-### A beamtime-long accumulation in memory
+### A beamtime-long accumulator in memory
 
 ```python
-acc = Accumulation(name='background-map', accumulators={...},
-                   policy=Held(snapshot_every=50))
+acc = Accumulator(name='background-map', spec=..., policy=Held(snapshot_every=50))
 ```
 
 The same as B2 or E1.
@@ -261,50 +300,52 @@ A shared backend places the holder in a long-lived runner it owns; the value sta
 
 ### Accumulating outputs of one spec into another
 
-A user has spec `A` with output `image` and spec `B` with a parameter `background`, both of the type an installed accumulator declares.
+A user has workflow spec `A` with output `image` and workflow spec `B` with a parameter `background`, both of the value type of an installed accumulator spec `ess.image_sum`.
 Neither author planned the connection.
 
 ```python
-acc = Accumulation(name='bg', accumulators={'image': 'ess.image_sum'})
+acc = Accumulator(name='bg', spec='ess.image_sum/v1')
+image = Stage(spec=A, params={...}, blanks=('run',), outputs=('image',))
 for run in runs:
-    client.run(A, {'run': run}, into=acc, member_key=run.id)    # the output 'image' fills the slot 'image'
-client.run(B, {'background': Current('bg', 'image'), ...})
+    client.run(image, {'run': run}, into=acc, member_key=run.id)
+client.run(B, {'background': Current('bg'), ...})
 ```
 
 What the authors decide is only what is reachable: `A` must expose `image` as an output, and `B` must accept a reference for `background`.
 
 ### Groups that have meaning
 
-Partial results that are scientific outputs, one per range of angles, are several accumulations, not a tree:
+Partial results that are scientific outputs, one per range of angles, are several accumulators, not a tree:
 
 ```python
-ranges = {f'range-{k}': Accumulation(name=f'range-{k}', accumulators=...) for k in range(4)}
-total = Accumulation(name='total', accumulators=...)             # the accumulators must be closed
-for name, acc in ranges.items():
-    ...                                                           # push the angles of each range
-    client.push(total, Current(name, 'counts'), member_key=name)
+ranges = [Accumulator(name=f'range-{k}', spec=SXD_COUNTS.id) for k in range(4)]
+total = Accumulator(name='total', spec=SXD_COUNTS.id)           # the spec must be closed
+for acc in ranges:
+    ...                                                          # push the angles of each range
+    client.push(total, Current(acc.name), member_key=acc.name)
 ```
 
 ### C4. A stitch is not an accumulation
 
-The reflectometry stitch fits scale factors over all angles at once, so no accumulator is closed or commutative for it.
-It stays a spec over a list of references, recomputed over every member, as in [aggregation.md](../aggregation.md#combinations-that-are-not-accumulations), and a rule drives it with `Series`.
+The reflectometry stitch fits scale factors over all angles at once, so no accumulator spec is closed or commutative for it.
+It stays a workflow spec over a list of references, recomputed over every member, as in [aggregation.md](../aggregation.md#combinations-that-are-not-accumulations), and a rule drives it with `Series`.
 
 ## What changes in the current design
 
 - `Template` becomes `Stage` and `Template`; a slider's label is given with the run, since a stage has no name.
 - The skeleton's `COMBINE`, which returns `finalize(combine(parts))`, becomes the built-in `COMBINE` and a finalize spec per workflow.
-- The adapter's `aggregations={field: MakeAggregation}` stays for the one-request sum; the accumulators it uses become `AccumulatorDecl`s, so the one-request sum and an accumulation share them.
-- `Follows` names any label, including an accumulation's; `Into` is new on `Rule`.
+- A contribute spec outputs one value, a row where several values accumulate together. The adapter's `targets` map the fields of such an output to sciline keys, as `keys` already do for a list of rows.
+- Accumulator specs are a second kind of spec, with factories under the entry-point group `ess.apps.accumulators`. The adapter's `aggregations={field: MakeAggregation}` stays for the one-request sum and uses the same factories, so the one-request sum and an accumulator agree.
+- `Follows` names any label, including an accumulator's; `Into` is new on `Rule`.
 - The data store may ask a holder the backend owns for a copy. Today the registry never learns about memory in any process.
 
 ## Open questions
 
-1. **Name.** "Accumulation" avoids a near-homonym of sciline's `Aggregation`, which the author's declarations correspond to. Better names are welcome.
+1. **Row values.** An accumulator holds one value, so values that accumulate together are one row, and `RowAccumulator` wraps sciline's per-key accumulators. Is that wrapper in ess.reduce acceptable, or should sciline's `Aggregation.accumulators()` return one such object?
 2. **Keep the one-request sum?** It is the common case and four stories use it, but it is a second way to write a flat accumulation.
 3. **`Current` on a pending state.** Should `Current` resolve only to a completed record, or to the pending root of a `Tree`, so that finalize waits? The rotation scan needs the latter.
-4. **What a push is.** Only a run submitted with `into=`, or also every record completed under a label that the accumulation follows? The second makes rules and hand-made runs the same, and lets anyone who submits under that label feed it.
+4. **What a push is.** Only a run submitted with `into=`, or also every record completed under a label that the accumulator follows? The second makes rules and hand-made runs the same, and lets anyone who submits under that label feed it.
 5. **Agreement between members.** Across records, contributions made with different parameter values would be combined without complaint, and each record would still be honest. A check needs no graph: members of one contribute spec agree on every parameter except their member fields. Wanted?
-6. **Automatic reduction.** Is an accumulation a stored, versioned object beside rules, or only `Into` on a rule?
+6. **Automatic reduction.** Is an accumulator a stored, versioned object beside rules, or only `Into` on a rule?
 7. **A forwarder that fires.** C1 resolves `Current` when a person submits. An interactive chain that reruns I(Q) whenever the beam centre changes needs a follow in a session, as `Follows` does for rules.
 8. **A copy from a holder.** Is it acceptable that the backend asks its own long-lived runner to write a copy, given that the registry otherwise never tracks memory?
