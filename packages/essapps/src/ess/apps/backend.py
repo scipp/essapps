@@ -25,7 +25,8 @@ import time
 from collections.abc import Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from types import UnionType
+from typing import Any, Protocol, Union, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
@@ -887,13 +888,19 @@ def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
 
     A params model ignores fields it does not declare unless its author forbids
     them, and a reduction parameter dropped in silence gives a wrong number
-    without an error, so every name is checked against the spec. The values are
-    checked against the whole params model.
+    without an error, so every name is checked against the spec, the names in a
+    row or another nested model included. The values are checked against the
+    whole params model.
     """
     fields = spec.params.model_fields
     errors = [
         f'{name}: not a parameter of {spec.id}'
         for name in sorted(set(request.params) - set(fields))
+    ]
+    errors += [
+        error
+        for name in sorted(set(request.params) & set(fields))
+        for error in _unknown_names(fields[name].annotation, request.params[name], name)
     ]
     errors += [
         f'{name}: not an output of {spec.id}'
@@ -909,3 +916,40 @@ def _shape_errors(spec: WorkflowSpec, request: RunRequest) -> list[str]:
             f'{".".join(map(str, err["loc"]))}: {err["msg"]}' for err in e.errors()
         ]
     return errors
+
+
+def _unknown_names(annotation: Any, value: Any, path: str) -> list[str]:
+    """
+    The names in ``value`` that its model does not declare, at any depth: in a
+    model, a list or dict of models, or an optional model.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if not isinstance(value, dict):
+            return []
+        fields = annotation.model_fields
+        errors: list[str] = []
+        for name, inner in value.items():
+            if name in fields:
+                errors += _unknown_names(
+                    fields[name].annotation, inner, f'{path}.{name}'
+                )
+            else:
+                errors.append(f'{path}.{name}: not a field of {annotation.__name__}')
+        return errors
+    origin, args = get_origin(annotation), get_args(annotation)
+    if origin is list and isinstance(value, list):
+        return [
+            error
+            for i, item in enumerate(value)
+            for error in _unknown_names(args[0], item, f'{path}[{i}]')
+        ]
+    if origin is dict and isinstance(value, dict):
+        return [
+            error
+            for key, item in value.items()
+            for error in _unknown_names(args[1], item, f'{path}[{key}]')
+        ]
+    options = [arg for arg in args if arg is not type(None)]
+    if origin in (Union, UnionType) and len(options) == 1:
+        return _unknown_names(options[0], value, path)
+    return []

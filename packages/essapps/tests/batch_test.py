@@ -6,6 +6,7 @@ Apply, the deliberate operations, the trigger loop, and the batch table.
 See docs/developer/rules.md.
 """
 
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
@@ -13,7 +14,7 @@ from typing import Any, Literal
 import pandas as pd
 import pytest
 import scipp as sc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.apps.backend import SubmitError
 from ess.apps.batch import (
@@ -59,7 +60,7 @@ from ess.apps.rules import (
     Series,
 )
 from ess.apps.sources import Dataset
-from ess.apps.spec import DatasetRef, WorkflowSpec, as_ref, dataset_ref
+from ess.apps.spec import DatasetRef, OpaqueFile, WorkflowSpec, as_ref, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 
@@ -671,6 +672,7 @@ def test_a_series_is_complete_by_a_count_or_by_roles() -> None:
 NOISY = LookupEntry(
     name='noisy', match={'mode': Like(pattern='noisy')}, fills={'floor': 3.0}
 )
+NOISY_ROW = NOISY.model_copy(update={'fills': {'runs.floor': 3.0}})
 
 
 def test_each_run_of_a_series_is_filled_into_its_own_row(
@@ -681,7 +683,7 @@ def test_each_run_of_a_series_is_filled_into_its_own_row(
     client.backend.sources.append(source)
     floors = Lookup(
         name='floors',
-        entries=(NOISY.model_copy(update={'fills': {'runs.floor': 3.0}}),),
+        entries=(NOISY_ROW,),
     )
     rule = Rule(
         name='floored',
@@ -722,6 +724,163 @@ def test_runs_a_lookup_fills_otherwise_refuse_the_series(
     source.add(sample(tmp_path / 'b.h5', [2.0, 2.0], 'pid/2', mode='noisy'))
     assert loop.run_once() == []
     assert 'one value per field' in loop.refusals['series pid:pid/2']
+
+
+def floored_rule(lookup: Lookup | None, series: Series | None = None) -> Rule:
+    """A rule whose datasets are the run column of the rows of ``FLOORED``."""
+    return Rule(
+        name='floored',
+        template=Template(
+            spec=FLOORED.id,
+            params={'scale': 2.0},
+            blanks=('runs',),
+            dataset_field='runs.run',
+        ),
+        lookup=lookup,
+        series=series,
+    )
+
+
+@pytest.mark.parametrize(
+    ('fills', 'message'),
+    [
+        ({'runs.flor': 3.0}, "'runs.flor' is no column of 'runs'"),
+        ({'scale.x': 3.0}, "'scale.x' is no column of 'runs'"),
+        ({'runs.floor.x': 3.0}, "'runs.floor.x' is no column of 'runs'"),
+        ({'flor': 3.0}, "'flor' is not a parameter of normalize-floored/v1"),
+        ({'runs': []}, "'runs' fills 'runs.run', which a dataset fills"),
+        ({'runs.run': {'dataset': 'pid:x'}}, "'runs.run' fills 'runs.run'"),
+    ],
+)
+def test_a_fill_that_names_no_parameter_or_column_is_refused(
+    client: Client, tmp_path: Path, fills: dict[str, Any], message: str
+) -> None:
+    """A row drops a column it does not declare, so a typo would leave the default."""
+    dataset = sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1', mode='noisy')
+    client.backend.sources.append(FakeDatasetSource(dataset))
+    lookup = Lookup(name='floors', entries=(NOISY.model_copy(update={'fills': fills}),))
+    rule = floored_rule(lookup, Series(key='sample'))
+    with pytest.raises(ValueError, match=re.escape(f'entry noisy: {message}')):
+        apply(client, rule, [dataset])
+
+
+def test_a_column_fill_is_refused_where_a_dataset_fills_no_row(
+    client: Client, tmp_path: Path
+) -> None:
+    """A rule that follows fills a row whole, the outputs of the record it follows."""
+    dataset = sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1', mode='noisy')
+    fills = {'parts.numerator': 1.0}
+    rule = Rule(
+        name='combine',
+        template=Template(spec=COMBINE.id, params={'scale': 2.0}, blanks=('parts',)),
+        lookup=Lookup(name='l', entries=(NOISY.model_copy(update={'fills': fills}),)),
+        follows=Follows(label='contribute'),
+        series=Series(key='sample'),
+    )
+    with pytest.raises(ValueError, match="names a column, but a dataset fills 'parts'"):
+        apply(client, rule, [dataset])
+
+
+def test_a_row_outside_a_series_is_a_list_of_one_row(
+    client: Client, tmp_path: Path
+) -> None:
+    source = FakeDatasetSource(
+        sample(tmp_path / 'a.h5', [2.0, 2.0], 'pid/1', mode='noisy')
+    )
+    client.backend.sources.append(source)
+    rule = floored_rule(Lookup(name='floors', entries=(NOISY_ROW,)))
+    (record,) = client.wait(TriggerLoop(client, rule).run_once())
+    assert record.status == Status.COMPLETED, record.failure
+    assert record.request.params['runs'] == [
+        {'run': {'dataset': 'pid:pid/1'}, 'floor': 3.0}
+    ]
+
+
+class TransmittedRun(BaseModel):
+    """A row with two dataset columns: a run, and the transmission run it needs."""
+
+    run: OpaqueFile
+    transmission: OpaqueFile
+
+
+class TransmittedParams(BaseModel):
+    runs: list[TransmittedRun] = Field(min_length=1)
+
+
+class RowCount(BaseModel):
+    rows: int
+
+
+TRANSMITTED = WorkflowSpec(
+    name='transmitted',
+    version=1,
+    title='Rows with a transmission run',
+    description='Counts its rows; each names a run and its transmission run.',
+    params=TransmittedParams,
+    outputs=RowCount,
+)
+
+
+def count_rows() -> Any:
+    def run(params: TransmittedParams, inputs: Any) -> dict[str, Any]:
+        return {'rows': len(params.runs)}
+
+    return run
+
+
+def transmitted_rule(selector: Selector, transmission: Dataset) -> Rule:
+    """A series over runs, each filled with ``transmission`` as its own column."""
+    fills = {'runs.transmission': transmission.ref.model_dump()}
+    return Rule(
+        name='transmitted',
+        template=Template(
+            spec=TRANSMITTED.id, blanks=('runs',), dataset_field='runs.run'
+        ),
+        lookup=Lookup(name='t', entries=(LookupEntry(name='all', fills=fills),)),
+        selector=selector,
+        series=Series(key='sample'),
+    )
+
+
+SCATTER = Selector(match={'role': Like(pattern='scatter')})
+
+
+def test_a_dataset_only_in_another_column_is_no_member_of_the_series(
+    client: Client, tmp_path: Path
+) -> None:
+    """The loop fires on a transmission run that a row named, once it is selected."""
+    client.backend.registry.bind(TRANSMITTED, count_rows)
+    transmission = sample(tmp_path / 't.h5', [1.0], 'pid/t', role='transmission')
+    client.backend.sources.append(
+        FakeDatasetSource(
+            transmission, sample(tmp_path / 'a.h5', [1.0], 'pid/a', role='scatter')
+        )
+    )
+    scatter = transmitted_rule(SCATTER, transmission)
+    (first,) = client.wait(TriggerLoop(client, scatter).run_once())
+    assert first.status == Status.COMPLETED, first.failure
+
+    every = scatter.revise(selector=Selector())
+    status = trigger_status(client, every, transmission)
+    assert status.fires, status.reason
+
+
+def test_a_reprocess_offers_only_the_series_whose_runs_a_record_lists(
+    client: Client, tmp_path: Path
+) -> None:
+    """A transmission run of another sample names no series to reprocess."""
+    client.backend.registry.bind(TRANSMITTED, count_rows)
+    empty = sample(
+        tmp_path / 't.h5', [1.0], 'pid/t', sample='empty', role='transmission'
+    )
+    client.backend.sources.append(
+        FakeDatasetSource(
+            empty, sample(tmp_path / 'a.h5', [1.0], 'pid/a', role='scatter')
+        )
+    )
+    rule = transmitted_rule(SCATTER, empty)
+    client.wait(TriggerLoop(client, rule).run_once())
+    assert list(reprocess(client, rule.revise())) == ['sio2']
 
 
 def test_a_series_with_a_failed_run_is_retried_without_it_once_excluded(

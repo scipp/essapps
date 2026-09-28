@@ -116,13 +116,14 @@ class FlooredParams(BaseModel):
 PipelineAdapter(
     normalize_pipeline(),
     keys={'runs': {'run': RunFile, 'floor': Floor}, 'scale': Scale},
-    resolve={'runs': 'path'},
+    resolve={'runs': {'run': 'path'}},
     targets=...,
     aggregations={'runs': floored_aggregation},   # members=[RunFile, Floor]
 )
 ```
 
 The key of a list of rows maps each field of the row model to a member key, and these must be the aggregation's member keys.
+Its `resolve` is keyed by column in the same way, so one row may hold a file and a precomputed array.
 A plain list of values is the table with one column.
 A transmission run per sample run or a rotation offset per angle has the same form.
 
@@ -283,5 +284,6 @@ A cache of contributions gives the same saving and leaves the request as it is.
 - A series under a rule, without a session, reduces all k runs on the k-th arrival.
 - One run that cannot be read fails the series request until someone excludes it.
 - `sciline.Buffered` holds every contribution in memory.
-- A correction to a parameter that the contribute stage reads reduces every run again, and builds a new aggregation, which computes again what the runs share.
+- A correction to a parameter that the contribute stage reads reduces every run again, and builds a new aggregation, which computes again what the runs share, such as masks, geometry, or calibration.
+  Tuning such a parameter in a session therefore holds nothing upstream of the contributions.
 - The binding wraps `sciline.Aggregation` only. A package driver for nested levels, such as runs times banks, has no place in the binding yet.

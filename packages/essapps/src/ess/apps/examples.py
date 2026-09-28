@@ -429,7 +429,7 @@ def floored_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         normalize_pipeline(),
         keys={'runs': {'run': RunFile, 'floor': Floor}, 'scale': Scale},
-        resolve={'runs': 'path'},
+        resolve={'runs': {'run': 'path'}},
         targets={
             'normalized': Normalized,
             'numerator': Numerator,
@@ -481,6 +481,8 @@ def contribute_workflow() -> Any:
 
 
 class CombineParams(BaseModel):
+    # The outputs model of CONTRIBUTE is the row model on purpose: a row holds a
+    # reference to each output of one contribute record, by output name.
     parts: list[Contribution] = Field(min_length=1)
     scale: float = 1.0
 

@@ -13,8 +13,10 @@ from typing import Any
 
 import pytest
 import sciline
+import scipp as sc
+from pydantic import BaseModel
 
-from ess.apps.adapter import PipelineAdapter
+from ess.apps.adapter import MakeAggregation, PipelineAdapter, Wiring
 from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
 from ess.apps.examples import (
@@ -40,7 +42,7 @@ from ess.apps.examples import (
 )
 from ess.apps.records import Status, Template
 from ess.apps.sources import FolderSource
-from ess.apps.spec import DatasetRef, dataset_ref
+from ess.apps.spec import DatasetRef, OpaqueFile, dataset_ref
 from ess.apps.testing import LocalInputs, equal
 
 PARAMS = {'floor': 1.5, 'scale': 2.0}
@@ -96,43 +98,66 @@ def pushed() -> list[Any]:
     return []
 
 
-def counted_workflow(pushed: list[Any]) -> PipelineAdapter:
-    """The example's binding, with the denominator's accumulator counted."""
+@pytest.fixture
+def built() -> list[sciline.Pipeline]:
+    """The pipeline of every aggregation built: one per snapshot of its values."""
+    return []
 
-    def counted_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+
+def counted(
+    pushed: list[Any], built: list[sciline.Pipeline], *members: Any
+) -> MakeAggregation:
+    """The example's aggregation, with its builds and denominators counted."""
+
+    def make(pipeline: sciline.Pipeline) -> sciline.Aggregation:
+        built.append(pipeline)
         return sciline.Aggregation(
             pipeline,
-            members=[RunFile],
+            members=list(members),
             accumulators={
                 Numerator: ACCUMULATORS[Numerator],
                 Denominator: lambda: CountingAccumulator(pushed),
             },
         )
 
-    return PipelineAdapter(
-        normalize_pipeline(),
-        keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
-        resolve={'runs': 'path'},
-        targets={
-            'normalized': Normalized,
-            'numerator': Numerator,
-            'denominator': Denominator,
-        },
-        aggregations={'runs': counted_aggregation},
-    )
+    return make
+
+
+TARGETS = {'normalized': Normalized, 'numerator': Numerator, 'denominator': Denominator}
 
 
 @pytest.fixture
-def session(tmp_path: Path, datasets: Path, pushed: list[Any]) -> Iterator[Client]:
-    """A session whose denominator accumulator is counted."""
-    counted = registry()
-    counted.bind(NORMALIZE, lambda: counted_workflow(pushed))
+def session(
+    tmp_path: Path, datasets: Path, pushed: list[Any], built: list[sciline.Pipeline]
+) -> Iterator[Client]:
+    """A session whose aggregations are counted, over a list and over rows."""
+    counted_registry = registry()
+    counted_registry.bind(
+        NORMALIZE,
+        lambda: PipelineAdapter(
+            normalize_pipeline(),
+            keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
+            resolve={'runs': 'path'},
+            targets=TARGETS,
+            aggregations={'runs': counted(pushed, built, RunFile)},
+        ),
+    )
+    counted_registry.bind(
+        FLOORED,
+        lambda: PipelineAdapter(
+            normalize_pipeline(),
+            keys={'runs': {'run': RunFile, 'floor': Floor}, 'scale': Scale},
+            resolve={'runs': {'run': 'path'}},
+            targets=TARGETS,
+            aggregations={'runs': counted(pushed, built, RunFile, Floor)},
+        ),
+    )
     client = local(
         tmp_path / 'session',
         instrument='dream',
         proposal='p1',
         submitter='simon',
-        registry=counted,
+        registry=counted_registry,
         sources=[FolderSource(datasets, '*.h5')],
     )
     yield client
@@ -297,6 +322,146 @@ def test_a_parameter_the_runs_contribute_with_accumulates_again(
     assert equal(
         session.output(results[-1], 'normalized'), by_sciline(datasets, floor=0.0)
     )
+
+
+def test_a_parameter_the_runs_contribute_with_builds_a_new_aggregation(
+    session: Client, runs: list[DatasetRef], built: list[sciline.Pipeline]
+) -> None:
+    """
+    Each value of ``floor`` builds a new aggregation, so what the runs share is
+    computed again rather than held: the cost aggregation.md names.
+    """
+    tune = Template(
+        spec=NORMALIZE, params={'runs': runs, 'scale': 2.0}, blanks=('floor',)
+    )
+    session.run(tune, {'floor': 1.5})
+    before = len(built)
+    session.run(tune, {'floor': 0.0})
+    assert len(built) == before + 1
+    assert built[-1].compute(Floor) == 0.0
+
+
+def floored_by_sciline(datasets: Path, floors: tuple[float, ...]) -> Any:
+    """The sum over rows of ``FLOORED``, with sciline alone."""
+    pipeline = normalize_pipeline()
+    pipeline[Scale] = 2.0
+    table = {
+        i: {RunFile: datasets / f'dream_{i}.h5', Floor: f}
+        for i, f in enumerate(floors, start=1)
+    }
+    return floored_aggregation(pipeline).compute(table)[Normalized]
+
+
+def test_a_growing_list_of_rows_contributes_only_the_new_row(
+    session: Client, runs: list[DatasetRef], pushed: list[Any], datasets: Path
+) -> None:
+    floors = (1.5, 0.0, 3.0)
+    rows = [{'run': run, 'floor': f} for run, f in zip(runs, floors, strict=True)]
+    growing = Template(spec=FLOORED, params={'scale': 2.0}, blanks=('runs',))
+    totals = []
+    for k in (1, 2, 3):
+        totals.append(session.run(growing, {'runs': rows[:k]}))
+        assert len(pushed) == k
+    assert [t.reused for t in totals] == [False, True, True]
+    assert equal(
+        session.output(totals[-1], 'normalized'), floored_by_sciline(datasets, floors)
+    )
+
+    # Another floor for the first run is another first row: all accumulate afresh.
+    changed = session.run(growing, {'runs': [rows[0] | {'floor': 0.0}, *rows[1:]]})
+    assert len(pushed) == 3 + 3
+    assert equal(
+        session.output(changed, 'normalized'),
+        floored_by_sciline(datasets, (0.0, 0.0, 3.0)),
+    )
+
+
+@pytest.fixture
+def floored_params(runs: list[DatasetRef]) -> Any:
+    return FLOORED.params.model_validate({'runs': [{'run': runs[0]}]})
+
+
+def test_rows_without_an_aggregation_are_refused() -> None:
+    with pytest.raises(ValueError, match='need an aggregation'):
+        PipelineAdapter(
+            normalize_pipeline(),
+            keys={'runs': {'run': RunFile, 'floor': Floor}},
+            targets=TARGETS,
+        )
+
+
+def test_the_form_of_rows_is_given_per_column() -> None:
+    with pytest.raises(ValueError, match='not keyed like its keys'):
+        PipelineAdapter(
+            normalize_pipeline(),
+            keys={'runs': {'run': RunFile, 'floor': Floor}},
+            resolve={'runs': 'path'},
+            targets=TARGETS,
+            aggregations={'runs': floored_aggregation},
+        )
+
+
+def test_columns_that_are_not_the_member_keys_are_refused(
+    floored_params: Any, runs: list[DatasetRef], datasets: Path
+) -> None:
+    workflow = PipelineAdapter(
+        normalize_pipeline(),
+        keys={'runs': {'run': RunFile}, 'scale': Scale},
+        resolve={'runs': {'run': 'path'}},
+        targets=TARGETS,
+        aggregations={'runs': floored_aggregation},
+    )
+    inputs = LocalInputs({runs[0]: datasets / 'dream_1.h5'})
+    with pytest.raises(ValueError, match='but its aggregation has the member keys'):
+        workflow.stage(floored_params, (), ('normalized',), inputs)
+
+
+def test_two_aggregations_that_accumulate_one_key_are_refused(
+    runs: list[DatasetRef], datasets: Path
+) -> None:
+    """Otherwise the final stage would read the accumulation of one of them only."""
+
+    class Twice(BaseModel):
+        runs: list[OpaqueFile]
+        more: list[OpaqueFile]
+
+    workflow = PipelineAdapter(
+        normalize_pipeline(),
+        keys={'runs': RunFile, 'more': RunFile},
+        resolve={'runs': 'path', 'more': 'path'},
+        targets=TARGETS,
+        aggregations={'runs': normalize_aggregation, 'more': normalize_aggregation},
+    )
+    params = Twice(runs=runs[:1], more=runs[1:2])
+    inputs = LocalInputs(
+        {ref: datasets / f'dream_{i}.h5' for i, ref in enumerate(runs, 1)}
+    )
+    with pytest.raises(ValueError, match='share accumulation keys'):
+        workflow.stage(params, (), ('normalized',), inputs)
+
+
+def test_each_column_of_a_row_is_resolved_in_its_own_form(
+    runs: list[DatasetRef], datasets: Path
+) -> None:
+    """A run as a path and a precomputed curve as an array, in one row."""
+
+    class RunWithCurve(BaseModel):
+        run: OpaqueFile
+        curve: OpaqueFile
+
+    curve = sc.array(dims=['x'], values=[1.0, 2.0])
+    curve_ref = dataset_ref(path=datasets / 'curve.h5')
+    curve.save_hdf5(datasets / 'curve.h5')
+    wiring = Wiring(
+        keys={'runs': {'run': RunFile, 'curve': Counts}},
+        resolve={'runs': {'run': 'path', 'curve': 'array'}},
+    )
+    inputs = LocalInputs(
+        {runs[0]: datasets / 'dream_1.h5', curve_ref: datasets / 'curve.h5'}
+    )
+    row = wiring.row('runs', RunWithCurve(run=runs[0], curve=curve_ref), inputs)
+    assert row[RunFile] == datasets / 'dream_1.h5'
+    assert equal(row[Counts], curve)
 
 
 def test_an_output_that_needs_each_run_is_refused(datasets: Path) -> None:

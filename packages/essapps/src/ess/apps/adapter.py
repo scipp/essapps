@@ -11,14 +11,14 @@ inputs. A stage over no inputs is a plain run of the pipeline.
 
 A list parameter, such as the runs of a sum, is the member table of a
 ``sciline.Aggregation`` that the package builds from the configured pipeline;
-the binding wraps it and builds none of its own. An element of the list is one
-member: a value of the one member key, or a row, a model whose fields are the
-columns of a member table with several member keys. Each member is contributed
-through the aggregation into its accumulators, and one final stage computes the
-outputs from the accumulated values of every list parameter, as sciline does for
-two aggregations that share a final stage. A stage holds the accumulation over
-the members it has seen, so a call whose list extends the previous one
-contributes only the new members.
+the binding uses its contribute stage and accumulators, and builds none of its
+own. An element of the list is one member: a value of the one member key, or a
+row, a model whose fields are the columns of a member table with several member
+keys. Each member is contributed through the aggregation into its
+accumulators, and one final stage computes the outputs from the accumulated
+values of every list parameter, as sciline does for two aggregations that share
+a final stage. A stage holds the accumulation over the members it has seen, so
+a call whose list extends the previous one contributes only the new members.
 
 References in the parameters not varied are resolved once, when the stage is
 built; references in the stage inputs, and the members of a sum, when they are
@@ -41,6 +41,8 @@ from .binding import Form, Inputs, StageCall, resolve
 Key = Any
 Columns = Key | Mapping[str, Key]
 """The sciline key a field sets, or for a list of rows the key of each column."""
+Forms = Form | Mapping[str, Form]
+"""The form a field's references are asked for, or for rows that of each column."""
 MakeAggregation = Callable[[sciline.Pipeline], sciline.Aggregation]
 """
 Builds the package's aggregation from a pipeline with its parameters set.
@@ -57,16 +59,17 @@ class Wiring:
 
     ``keys`` is the sciline key each field sets, or for a list of rows the key
     of each column, ``resolve`` the form a data reference is asked for, a local
-    path or a scipp object. The two together are everything a spec's signature
-    does not say and the pipeline needs.
+    path or a scipp object, keyed like ``keys``. The two together are
+    everything a spec's signature does not say and the pipeline needs.
     """
 
     keys: dict[str, Columns]
-    resolve: dict[str, Form]
+    resolve: dict[str, Forms]
 
-    def value(self, name: str, value: Any, inputs: Inputs) -> Any:
-        """A value of the named field, references resolved."""
-        form = self.resolve.get(name)
+    def value(self, name: str, value: Any, inputs: Inputs, column: str = '') -> Any:
+        """A value of the named field, or of a column of its rows, resolved."""
+        forms = self.resolve.get(name)
+        form = forms.get(column) if isinstance(forms, Mapping) else forms
         return value if form is None else resolve(value, form, inputs)
 
     def values(
@@ -89,7 +92,7 @@ class Wiring:
         if not isinstance(columns, Mapping):
             return {columns: self.value(name, member, inputs)}
         return {
-            key: self.value(name, getattr(member, column), inputs)
+            key: self.value(name, getattr(member, column), inputs, column)
             for column, key in columns.items()
         }
 
@@ -165,7 +168,8 @@ class PipelineAdapter:
     parameter is set on the pipeline. ``aggregations`` gives, for each list
     parameter, the package's function that builds its aggregation. The key of
     a list parameter is the aggregation's member key, or for a list of rows a
-    mapping from each field of the row model to a member key.
+    mapping from each field of the row model to a member key, and so is its
+    form.
 
     A parameter input whose key the outputs do not need is held rather than fed.
     It cannot change what the stage returns, and which parameters a caller
@@ -178,7 +182,7 @@ class PipelineAdapter:
         *,
         keys: Mapping[str, Columns],
         targets: Mapping[str, Key],
-        resolve: Mapping[str, Form] = {},
+        resolve: Mapping[str, Forms] = {},
         aggregations: Mapping[str, MakeAggregation] = {},
     ) -> None:
         self._pipeline = pipeline
@@ -198,6 +202,12 @@ class PipelineAdapter:
         ]
         if rows:
             raise ValueError(f'rows of {rows} need an aggregation')
+        for name, forms in self._wiring.resolve.items():
+            columns = self._keys[name]
+            if isinstance(forms, Mapping) != isinstance(columns, Mapping) or (
+                isinstance(forms, Mapping) and forms.keys() - columns.keys()
+            ):
+                raise ValueError(f'resolve of {name} is not keyed like its keys')
 
     def stage(
         self,
@@ -221,6 +231,11 @@ class PipelineAdapter:
             if any(key in needed for key in self._wiring.columns(field))
         ]
         accumulated = [key for s in sums for key in s.keys]
+        if len(set(accumulated)) != len(accumulated):
+            raise ValueError(
+                f'the aggregations of {[s.field for s in sums]} share accumulation '
+                f'keys {accumulated}, and one would overwrite the other'
+            )
         cut = sciline.Stage(pipeline, outputs=targets, inputs=accumulated).keys
         fed = [name for name in varied if self._keys[name] in cut]
         finalize = sciline.Stage(
@@ -265,6 +280,8 @@ class PipelineAdapter:
     ) -> _Sum:
         """The accumulation over ``field`` that the outputs need."""
         make = self._aggregations[field]
+        # Built for the checks and keys below. With ``reads``, the first call
+        # builds it again with those parameters set.
         aggregation = make(pipeline)
         members = aggregation.contribute_stage.inputs
         if set(members) != set(self._wiring.columns(field)):

@@ -99,6 +99,9 @@ See [aggregation.md](aggregation.md).
   A parameter read on both sides is set twice and never compared.
 - **The binding wraps `sciline.Aggregation` only.**
   A package driver for nested levels, such as runs times banks (section 6.3 of scipp/sciline#245), has no interface the binding could wrap.
+- **The binding is a second driver beside the package's own.**
+  It uses only the contribute half of the package's aggregation and keeps its own final stage and cache, so a package object such as the `SansReduction` of scipp/sciline#245 cannot be used through it.
+  Injecting a stage runner into such objects instead is the open question of [scipp/essapps#5](https://github.com/scipp/essapps/issues/5).
 
 ### Rules
 

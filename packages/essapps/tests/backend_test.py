@@ -4,6 +4,7 @@
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import scipp as sc
@@ -13,8 +14,10 @@ from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
 from ess.apps.datastore import MissingCopyError, Serializers
 from ess.apps.examples import (
+    COMBINE,
     EXPORT,
     FAIL,
+    FLOORED,
     HISTOGRAM,
     LOAD,
     REBIN,
@@ -31,12 +34,15 @@ from ess.apps.spec import (
     OpaqueFile,
     OutputRef,
     SpecId,
+    WorkflowSpec,
     as_ref,
     dataset_ref,
 )
 from ess.apps.testing import FakeDatasetSource
 
 from .conftest import make_client
+
+PART = OutputRef(record='r1', output='numerator')
 
 
 class ScaledByFive(BaseModel):
@@ -467,6 +473,43 @@ def test_validation_checks_reference_types(client: Client, run_ref: DatasetRef) 
     assert any('no output' in e for e in missing_output.errors)
     unknown_spec = client.validate(client.request(SpecId(name='nope', version=1)))
     assert unknown_spec.layers == ('schema',)
+
+
+@pytest.mark.parametrize(
+    ('spec', 'params', 'message'),
+    [
+        (
+            FLOORED,
+            {'runs': [{'run': dataset_ref(path='a.h5'), 'flor': 3.0}]},
+            'runs[0].flor: not a field of FlooredRun',
+        ),
+        (
+            COMBINE,
+            {'parts': [{'numerator': PART, 'denominator': PART, 'total': PART}]},
+            'parts[0].total: not a field of Contribution',
+        ),
+    ],
+)
+def test_validation_checks_the_names_in_a_row(
+    client: Client, spec: WorkflowSpec, params: dict[str, Any], message: str
+) -> None:
+    """A row drops a name it does not declare, and the default would stand."""
+    report = client.validate(client.request(spec, params))
+    assert message in report.errors
+
+
+def test_validation_checks_a_reference_in_a_row(
+    client: Client, run_ref: DatasetRef
+) -> None:
+    """A reference in a row fills the column of the row model it sits in."""
+    loaded = client.run(LOAD, {'run': run_ref})
+    for ref, message in [
+        (loaded.ref('total'), 'literal output cannot fill a data field'),
+        (loaded.ref('data'), 'output into opaque field'),
+        (OutputRef(record='nope', output='data'), 'no such record'),
+    ]:
+        report = client.validate(client.request(FLOORED, {'runs': [{'run': ref}]}))
+        assert any(message in e for e in report.errors), report.errors
 
 
 def test_reference_across_proposals_is_refused(

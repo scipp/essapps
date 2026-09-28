@@ -156,6 +156,12 @@ This matches how notebooks already work: Q bins, d-spacing bins, and cut axes en
 For each list parameter that the requested outputs need, the adapter builds the package's aggregation, contributes each member through it, and pushes into its accumulators.
 One final stage goes from the accumulation keys of every list parameter, plus the varied parameters read after them, to the outputs.
 It takes the place of the aggregation's own finalize stage, whose inputs are the accumulation keys only.
+
+**The adapter is a driver of the aggregation, not a wrapper around it.**
+It uses the aggregation's contribute stage, `accumulators()`, and `accumulation_keys`, and builds its own final stage from the pipeline and `targets`.
+It never calls the aggregation's `finalize`, `combine`, or `compute`, so the package's `outputs=` has no effect on the binding.
+Whether essapps should instead inject a stage runner into the package's own driver objects is an open question ([scipp/essapps#5](https://github.com/scipp/essapps/issues/5)).
+
 The adapter finds which varied parameters the contributions read from `aggregation.contribute_stage.keys`, when it builds the stage.
 It sets those on the pipeline, so each new value builds a new aggregation.
 An output that needs each member separately, and not only what the members accumulate to, is refused then.
@@ -246,7 +252,7 @@ Each must become a named option or data, such as ranges or files, before its wor
 
 **Parameters**: the pydantic parameter model, which catches cross-field rules the schema cannot express.
 A parameter the spec does not declare is refused, because a pydantic model ignores unknown fields unless its author forbids them, and a reduction parameter dropped in silence gives a wrong number without an error.
-scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the top-level fields itself.
+scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the names itself, at every depth: the fields of the request, and those of each row and nested model in it.
 Requiring a closed parameter model in the spec would be the better place.
 The same check covers the names: a name submitted as varying must be a parameter of the spec, and an output an output of the spec.
 The check sees the request with the spec's defaults filled, as it will be recorded.

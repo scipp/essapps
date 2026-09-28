@@ -216,6 +216,9 @@ lookup = Lookup(name='floors', entries=(
 
 A fill of any other field goes into the request, which has one value per field.
 If two runs of one series fill such a field differently, `apply` refuses the series and names the runs.
+Before that, `apply` checks each fill name of the lookup against the template's spec.
+A name must be a parameter, or a column of the rows the dataset is one of, and must not be the dataset field itself.
+A row ignores a name it does not declare, so a misspelt column would otherwise leave its default in every row and in the record.
 `Origin.entries` records the entry each run matched.
 
 **A run that cannot be read fails the whole series request, visibly.**

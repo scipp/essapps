@@ -63,6 +63,7 @@ __all__ = [
     'parse_ref',
     'ref_fields',
     'row_model',
+    'schema_columns',
     'schema_data_fields',
     'submodel',
     'walk_refs',
@@ -249,6 +250,18 @@ def row_model(model: type[BaseModel], name: str) -> type[BaseModel] | None:
         return None
     (item,) = get_args(annotation)
     return item if isinstance(item, type) and issubclass(item, BaseModel) else None
+
+
+def schema_columns(schema: dict[str, Any], name: str) -> tuple[str, ...] | None:
+    """
+    The columns of a list parameter of rows in a serialized params schema, or
+    None: :func:`row_model` for a spec known by its schema only.
+    """
+    items = schema.get('properties', {}).get(name, {}).get('items', {})
+    prefix, ref = '#/$defs/', items.get('$ref', '')
+    if not ref.startswith(prefix):
+        return None
+    return tuple(schema['$defs'][ref[len(prefix) :]].get('properties', {}))
 
 
 _ROW_PATH = re.compile(r'(?P<field>[^.\[]+)\[\d+\]\.(?P<column>.+)')

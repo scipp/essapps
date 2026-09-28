@@ -34,7 +34,7 @@ from .client import Client
 from .records import Group, Origin, RunRecord, RunRequest, Status, Template
 from .rules import Lookup, Nearest, Rule, gap, matches, precedes
 from .sources import Dataset
-from .spec import DatasetRef, OutputRef, as_ref, dataset_refs, field_of, walk_refs
+from .spec import DatasetRef, OutputRef, as_ref, dataset_refs, schema_columns, walk_refs
 
 
 @dataclass(frozen=True)
@@ -155,6 +155,8 @@ def apply(
     values = _pinned(pinned)
     datasets = list(datasets)
     series = of_rule.series if of_rule is not None else None
+    if lookup is not None and datasets:
+        _check_fills(client, template, lookup)
     members: dict[str, list[Candidate]]
     if series is not None and of_rule is not None and datasets:
         members = _series(client, of_rule, series.key, datasets)
@@ -228,10 +230,11 @@ def _fill(
     The template's dataset field gets the dataset, or for a series the list of
     them. Each dataset is filled from its own lookup entry, a nearest fill
     resolved against it. When the dataset field is a column of a list parameter
-    of rows, ``runs.run``, each dataset is a row, and a fill named for another
-    column, ``runs.floor``, goes into that dataset's row. Every other fill goes
-    into the request, which has one value per field, so members of a series
-    that fill such a field differently are refused.
+    of rows, ``runs.run``, each dataset is a row, a list of one row outside a
+    series, and a fill named for another column, ``runs.floor``, goes into that
+    dataset's row. Every other fill goes into the request, which has one value
+    per field, so members of a series that fill such a field differently are
+    refused.
     """
     if not datasets:
         return {}, {}
@@ -263,7 +266,51 @@ def _fill(
             )
         requests.append(request)
         members.append(row if column else dataset.ref)
-    return {field: members if series else members[0]} | requests[0], entries
+    return {field: members if series or column else members[0]} | requests[0], entries
+
+
+def _listed(template: Template, params: Mapping[str, Any]) -> list[Any]:
+    """
+    What a request's dataset field holds of each member, the inverse of
+    :func:`_fill`: of a list of rows only the dataset column, so that another
+    reference in a row, a transmission run, names no member.
+    """
+    field, _, column = template.field_for_dataset().partition('.')
+    value = params.get(field)
+    listed = value if isinstance(value, list) else [value]
+    if not column:
+        return listed
+    return [row.get(column) if isinstance(row, dict) else None for row in listed]
+
+
+def _check_fills(client: Client, template: Template, lookup: Lookup) -> None:
+    """
+    Refuse a fill that names no parameter of the template's spec, or no column
+    of the list of rows a dataset is a row of, or that replaces the dataset.
+
+    A row ignores names it does not declare, so a misspelt column would leave
+    its default in every row and in the record, with nothing to say so.
+    """
+    schema = client.spec(template.spec).params_schema
+    dataset_field = template.field_for_dataset()
+    field, _, column = dataset_field.partition('.')
+    columns = schema_columns(schema, field) or ()
+    for entry in lookup.entries:
+        for name in entry.fills:
+            owner, dot, inner = name.partition('.')
+            if name in (field, dataset_field):
+                error = f'fills {dataset_field!r}, which a dataset fills'
+            elif dot and not column:
+                error = f'names a column, but a dataset fills {dataset_field!r}'
+            elif dot and (owner != field or inner not in columns):
+                error = f'is no column of {field!r}, the rows a dataset is one of'
+            elif not dot and name not in schema.get('properties', {}):
+                error = f'is not a parameter of {template.spec}'
+            else:
+                continue
+            raise ValueError(
+                f'lookup {lookup.id}, entry {entry.name}: {name!r} {error}'
+            )
 
 
 class Waiting(ValueError):
@@ -398,7 +445,7 @@ def _datasets(
     candidate, and has none.
     """
     if isinstance(rule, Rule) and rule.series is not None:
-        listed = record.request.params.get(field_of(rule.template.field_for_dataset()))
+        listed = _listed(rule.template, record.request.params)
         return [c for c in known.values() if _names(listed, c)]
     member = known.get(str(record.request.member_key))
     return [] if member is None else [member]
@@ -534,8 +581,11 @@ def _clauses(client: Client, rule: Rule, candidate: Candidate) -> TriggerStatus:
         member = str(candidate.fields.get(rule.series.key))
     records = client.records(label=rule.name, member_key=member)
     if rule.series is not None or isinstance(candidate, Completed):
-        field = field_of(rule.template.field_for_dataset())
-        records = [r for r in records if _names(r.request.params.get(field), candidate)]
+        records = [
+            r
+            for r in records
+            if _names(_listed(rule.template, r.request.params), candidate)
+        ]
     if not records:
         return TriggerStatus(fires=True, reason='no record under the label yet')
     failure = records[-1].failure
@@ -597,13 +647,15 @@ def batch_table(client: Client, batch: Rule | str) -> pd.DataFrame:
 
     A query over the records, latest per member key, never a stored table: one
     row per member, the member key as index, and each record's rule version and
-    lookup entries as columns. The value columns are the fields that differ per
-    member, which are the blanks of the rule's template and every field a member
-    pinned. Each shows the value the request was made with, whoever supplied it,
-    and ``pinned`` names the fields of the row a person pinned. A field holding a
-    model is one column per leaf, ``q.start`` and ``q.stop``, and a reference
-    is shown as the reference rather than in its stored form. A rule's
-    exclusions are rows without a record.
+    lookup entries as columns. For a series, ``entries`` lists the distinct
+    entries its datasets matched, not which dataset matched which, which the
+    record's ``origin.entries`` holds. The value columns are the fields that
+    differ per member, which are the blanks of the rule's template and every
+    field a member pinned. Each shows the value the request was made with,
+    whoever supplied it, and ``pinned`` names the fields of the row a person
+    pinned. A field holding a model is one column per leaf, ``q.start`` and
+    ``q.stop``, and a reference is shown as the reference rather than in its
+    stored form. A rule's exclusions are rows without a record.
     """
     rule = batch if isinstance(batch, Rule) else None
     label = rule.name if rule is not None else batch
