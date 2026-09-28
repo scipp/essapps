@@ -133,7 +133,7 @@ dataset_ref(instrument='dream', run=1)       # run:dream/1
 dataset_ref(path='/data/local.nxs')          # path:/data/local.nxs
 ```
 
-The instrument and run number of a local file are what a PID is minted from, so a file that carries them needs no path, and the path is an identity only for a file that carries neither.
+A local file that carries its instrument and run number needs no path, and the path is an identity only for a file that carries neither.
 Identity is not location: where a catalogue dataset's bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable.
 
 **Nothing is stored per dataset.**
@@ -144,7 +144,7 @@ Datasets come from a dataset source ([rules.md](rules.md#the-dataset-source)).
 
 **Stand-ins resolve at submission**, because provenance must not depend on a search that could give a different answer later.
 A user may type a run number, a PID, or a path, and the backend turns it into a reference before it persists anything.
-A run number is looked up in SciCat, where it is unique within an instrument and proposal, and a path under the facility filesystem resolves to the PID of the dataset that owns it.
+A run number is looked up in SciCat within the instrument and proposal, and a path under the facility filesystem resolves to the PID of the dataset that owns it.
 A PID resolves to the run record named in its provenance snapshot while the store still has it, and otherwise to a dataset reference.
 Any other path becomes a local dataset.
 Nothing is downloaded at submission, and SciCat is not needed again once a reference exists.
@@ -163,7 +163,7 @@ A missing copy is reported as such, never silently recomputed, because a silent 
 ## Where runs execute and where data lives
 
 Batch and automatic reduction need runs that can be made without a person present, and provenance needs runs that describe their result completely.
-Interactive work needs the opposite: reruns in under a second over intermediates of several gigabytes, as in SANS, kept in memory between reruns.
+Interactive work needs the opposite: fast reruns over large intermediates kept in memory between reruns.
 **The design pins "stateless" on the record and allows state in the process that executes it**, which costs batch, automatic reduction, and provenance nothing, because those are properties of the record and not of the process.
 
 Execution may happen in a **session**: a process belonging to one client, which keeps the outputs of its runs in memory.

@@ -155,7 +155,7 @@ References in the parameters not varied are resolved once, when the stage is bui
 Correctness follows from the graph for any choice of stage inputs, so the choice decides only where the frontier sits and what a rerun costs.
 A parameter input that the outputs do not need, which `sciline.Stage` refuses, is held and ignored, because it cannot change the result and which parameters a caller varies must not decide whether a run succeeds.
 
-This matches how notebooks already work: Q bins, d-spacing bins, cut axes and a beam centre enter after the expensive load and coordinate conversion.
+This matches how notebooks already work: Q bins, d-spacing bins, and cut axes enter after the expensive load and coordinate conversion.
 
 For each member parameter that the requested outputs need, the adapter builds a contribute stage.
 It goes from the member key, plus any varied parameter the contributions read, to the accumulation keys that depend on the member.
@@ -196,8 +196,8 @@ This gives every mapping between outputs and inputs with one mechanism:
 
 Keys are declared on the spec where the author can name them, such as bank names, and free otherwise.
 Elements of a collection output are stored and served individually, so reading one bank does not load the rest.
-No current workflow needs fan-out whose keys are known only after reading the data: Bifrost groups by rotation inside its pipeline, and imaging has no tomography grouping.
-If such a case arises it is a rule on the completed producer, one template instantiation per key, and not a scheduler feature.
+Fan-out whose keys are known only after reading the data takes two phases: a first run whose output holds the keys, then one request per key.
+A workflow may also group inside its pipeline, as Bifrost does by rotation.
 Snakemake put fan-out in the scheduler, as checkpoints, and it became the most confusing part of the tool.
 
 **Outputs are a typed model in the same vocabulary.**
@@ -238,6 +238,11 @@ Intermediates are listed once per spec, not once per stage.
 The spec says nothing about the graph: which parameters an intermediate depends on is known only to the workflow code.
 `WorkflowSpec` in `spec.py` checks that every intermediate is an output.
 This is an extension of this design rather than a field of scipp/ess#690.
+
+**Parameters are data, not code.**
+A choice between code paths is a named option, a `Literal` in the spec, that the binding maps to code.
+Some ess packages take Python callables as parameters: powder masks (`TofMask`, `TwoThetaMask`, `WavelengthMask`), imaging `MaskingRules`, and reflectometry `CorrectionsToApply`.
+Each must become a named option or data, such as ranges or files, before its workflow gets a spec.
 
 ## Validation
 
@@ -310,7 +315,5 @@ A `Stage` recomputes everything downstream of all its inputs, so a stage whose i
   `assert_stage_equals_workflow` is the check, and the record's `reused` flag lets publication insist on a result computed without a held stage.
 - Authors must expose the intermediates that apps use, each with a format.
 - A request for an intermediate output must set every required parameter, including those the output does not need.
-- DREAM and imaging masks are Python callables today.
-  Each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 - The backend must walk the request's values to find references, and the spec's JSON Schema, including nested models, to check them.
 - An array output is checked against its `ArraySpec` in the runner at completion, because pydantic cannot check a scipp object.

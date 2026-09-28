@@ -15,7 +15,7 @@ Where this document gives a judgment and not a fact, it says so.
    A user fills in a form once, applies it to many datasets with differences per dataset, watches progress, cancels, reruns the failures, and saves the form as a template.
    Done when a batch of two hundred members can be submitted, monitored, cancelled, and partially rerun from the web page.
 3. **Applications per technique.**
-   Interactive reduction with feedback in under a second, plot selections that become parameters, and exploration of large volumes.
+   Interactive reduction with fast feedback, plot selections that become parameters, and exploration of large volumes.
    The scope of this phase is the least known of the three.
 
 Phases 1 and 2 are shared mode with throwaway processes only.

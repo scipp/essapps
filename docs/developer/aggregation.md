@@ -5,13 +5,13 @@ It is the detail behind ["Aggregation over runs" in architecture.md](architectur
 
 ## The shape of a sum over runs
 
-The ESS workflows combine runs in different places, but the additive cases share one shape.
+The ESS workflows combine runs in different places.
 
 | Workflow | What it combines | How |
 |---|---|---|
 | ess.sans | numerator and denominator of I(Q), over runs | events by concatenation, dense data by summation, normalisation once after the merge |
 | ess.reflectometry | runs at the same angle; then angles | events by concatenation; then a global fit of scale factors over all curves, which is not additive |
-| ess.powder | nothing yet | normalises per run, upstream of where a sum would go |
+| ess.powder | nothing | normalises each run by its own monitor |
 | ess.bifrost | angle groups inside one run | events grouped by rotation and concatenated |
 
 ```mermaid
@@ -26,7 +26,8 @@ flowchart LR
 A contribute stage per run computes one or more values.
 The values of all runs are accumulated.
 A finalize stage turns the accumulated values into the outputs.
-Normalisation sits in the finalize stage, so there are usually two accumulated values, a numerator and a denominator.
+What a contribution is, normalised or not, is the author's choice.
+ess.sans contributes a numerator and a denominator and normalises in the finalize stage.
 Dimensionality and event mode do not change the shape: a 4D volume adds like a curve, and concatenation is accumulation for binned data.
 
 sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per **accumulation key**, and a finalize stage.
@@ -50,7 +51,6 @@ total.request.params['runs']        # the three runs: the record names what it s
 ```
 
 The backend validates the request against the whole params model, like any other, so an empty list is refused at submit.
-The record holds one value per parameter, so every run of the sum was reduced with the same masks and the same direct beam.
 
 The binding names its member parameters and gives an accumulator per accumulation key:
 
@@ -75,7 +75,7 @@ This is `sciline.Aggregation` inside one run, with the extra stage inputs that t
 An output that needs each run separately, and not only what the runs accumulate to, is refused when the stage is built.
 An example is the counts of one run in a sum.
 
-The framework never adds arrays, never chooses between summation and concatenation, and never places normalisation.
+The framework never adds arrays, never chooses between summation and concatenation, and knows nothing about normalisation.
 The accumulation keys need not be exposed in the spec.
 They never leave the run, so they need no format, and anything the accumulator can combine works, such as essreflectometry's lists of ORSO entries.
 An intermediate the spec does expose, such as `numerator` above, is over a sum its accumulated value.
@@ -132,8 +132,7 @@ Successive requests supersede each other, and the result a record stands for is 
   A run that arrives again is listed once, and an excluded run is not listed at all.
 - **A run that cannot be read fails the whole series request, visibly.**
   The operator excludes the run, and `retry` submits the series without it.
-- **Every run of a series is filled alike.**
-  A series is one request, so one value per parameter.
+- **A series request holds one value per parameter.**
   If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
 
 A rule runs each request in a throwaway process, so the request of the k-th arrival reduces all k runs.
@@ -187,10 +186,10 @@ Recomputing a stitch over all angles on every arrival is affordable, because its
 ## Alternatives considered
 
 **The framework sums arrays itself.**
-It would import scipp semantics, decide between summation and concatenation, and still could not place normalisation.
+It would import scipp semantics and decide between summation and concatenation, which is each workflow's choice.
 
 **A member record per run and a finalize record over their intermediates.**
-Each run has a record of the stage from the run to the numerator and denominator, and a finalize record supplies the accumulated intermediates as a reference form of its own, `Accumulate`, to the stage that normalises.
+Each run has a record of the stage from the run to the numerator and denominator, and a finalize record supplies the accumulated intermediates as a reference form of its own, `Accumulate`, to the finalize stage.
 Runs reduce in parallel across processes and a series reads only the new member.
 But pieces must fit together, and checking that needs to know which parameters each piece reads, which only the workflow code knows.
 Without the graph the backend refuses a member of a sum with two run lists, because the member leaves the other list unset.
@@ -224,5 +223,6 @@ A cache of contributions gives the same saving and leaves the request as it is.
 - A series under a rule, without a session, reduces all k runs on the k-th arrival.
 - One run that cannot be read fails the series request until someone excludes it.
 - `sciline.Buffered` holds every contribution in memory.
-- Authors must place normalisation after the accumulation keys. ess.sans does, ess.powder does not yet.
+- A request over a list holds one value per parameter, so every run of a sum is reduced with the same values.
+  Per-run values, such as a transmission run per sample run or a rotation offset per angle, are needed in general.
 - A correction to a parameter that the contribute stage reads reduces every run again.

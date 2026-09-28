@@ -20,6 +20,7 @@ The recommendation in brackets is mine.
 - **Measurements the decision needs.**
   The feedback loop of a throwaway process in three configurations: cold, with a pool of idle runners that have their imports done, and with a runner that already holds the intermediate in memory.
   The three numbers separate the cost of process start, of the disk read, and of the computation.
+  With the LoKI instrument scientists: the rerun latency and intermediate sizes on a real LoKI file, and the latency the users need.
   Also how long the request of a real SANS series under a rule takes, which reduces every run of the series on each arrival, and which decides when a series needs the disk cache of contributions or the [fold](aggregation.md#a-series-under-a-rule).
   [Measure before remote interactive work is designed.]
 - **Retention policy for disk copies in shared mode.**
@@ -60,14 +61,15 @@ The findings stand until the design changes or the finding is dismissed.
 See [workflow-contract.md](workflow-contract.md).
 
 - **Pixel masks are a graph rewrite, so the request is not complete.**
-  In the LoKI workflow a list of mask filenames rebuilds the sciline graph, so the masks are fixed in the factory that makes the workflow and never reach the record.
+  In the LoKI workflow a list of mask filenames rebuilds the sciline graph (`with_pixel_mask_filenames`), so the masks are fixed in the factory that makes the workflow and never reach the record.
   The same rewrite is what stops the additive half of reflectometry, the sum over runs at one angle, from being bound at all.
-  The way out is a form in which the masks are a parameter, such as a list input, which is untried.
+  ADR 0003 of scipp/sciline#245, section 6.4, makes the mask filenames a list parameter with its own providers.
+  Once ess.sans follows it, the masks are an ordinary parameter of the spec.
 - **An ess.sans binding would bind sample and background runs as member parameters.**
   ess.sans already has the list signature: `with_sample_runs` is the parameter mapper for `Filename[SampleRun]`, and `with_background_runs` the one for `Filename[BackgroundRun]`.
   Such a binding would name `sample_run` and `background_run` as member parameters, with accumulators on `NormalizedQ[..., Numerator]` and `NormalizedQ[..., Denominator]`, the values the mappers merge.
-- **The beam-centre finder takes a pipeline, not a key.**
-  It is therefore a plain function, and the expensive part of it is not shared with the reduction that consumes its result.
+- **The LoKI binding wraps the beam-centre finder as a function**, because the finder takes a pipeline, not a key.
+  The expensive part of it is not shared with the reduction that consumes its result.
 - **Every scalar parameter costs a `NewType` and a provider** in the adapter's setup, whose only job is to turn plain data into a scipp object.
   Naming a conversion beside the key, the way the form of a data reference is named, would remove them.
 - **An output the framework cannot serialize has no place to declare its serializer.**
@@ -94,7 +96,8 @@ See [aggregation.md](aggregation.md).
 - **A combination over references has no consistency check over its parts.**
   A spec over a collection of references to other records' outputs, such as a stitch over a dict of curves (`amor.COMBINE`) or a sum spread over nodes, accepts parts reduced with different parameters, such as different detector limits.
   A parameter read on both sides is set twice and never compared.
-  A list of runs inside one request has one value per parameter.
+- **A list of runs inside one request has one value per parameter.**
+  Per-run values, such as a transmission run per sample run or a rotation offset per angle, are needed in general.
 
 ### Rules
 
@@ -106,9 +109,6 @@ See [rules.md](rules.md).
 - **Roles are named but not defined.**
   A rule that feeds sample runs into one list parameter and background runs into another needs a role per dataset and a mapping from role to the list parameter it fills.
   "A series of fixed roles" names this and says nothing about how it works.
-- **A feedback cycle has no rule shape.**
-  Amor fits scale factors over all members and then re-reduces each member with its factor, which is a cycle from members to the stitch and back to members.
-  Three requests express it, but a rule only ever submits one request per series.
 
 ## What the design does not solve
 

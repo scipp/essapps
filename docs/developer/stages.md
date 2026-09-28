@@ -6,14 +6,17 @@ Interactive work decides whether people will use the framework instead of a note
 
 ## The requirement
 
-A person reducing SANS data loads a run of several gigabytes, converts coordinates, and then adjusts Q bins, a wavelength range, or a beam centre while watching I(Q).
+A person reducing SANS data loads a run of several gigabytes, converts coordinates, and then adjusts Q bins or a wavelength range while watching I(Q).
 Loading and converting take seconds to minutes.
 Everything after them takes a fraction of a second.
 In a notebook the person gets this split for free: the loaded data sits in a variable, and only the last cells run again.
 
-The framework must give the same response time.
+The framework aims at the same response time.
 It must also keep its own promise that every result has a complete record.
-The `loki-session.ipynb` notebook in the skeleton shows both on the esssans tutorial data: a rerun with changed Q bins takes about a quarter of a second instead of three, and each rerun has a record that reproduces it from raw data.
+The `loki-session.ipynb` notebook in the skeleton shows both on the esssans tutorial data.
+In one measurement there, a rerun with changed Q bins took about a quarter of a second instead of three.
+Each rerun has a record that reproduces it from raw data.
+The latency on real LoKI files is not measured ([open-issues.md](open-issues.md#open-questions)).
 
 ```python
 tune = Template(spec=IOFQ, params=params,          # ess.apps.loki.IOFQ, 'q' left unset
@@ -75,9 +78,10 @@ It never decides what a rerun returns.
 A client writes the stage as a template, `Template(spec=..., params=..., blanks=..., outputs=...)`.
 It sets every parameter but the moving ones, which are its blanks.
 `template.cut(blanks=..., outputs=...)` derives another stage over the same spec and values.
-The workflow author cannot make this choice, because no fixed choice serves both "tune one parameter" and "the same settings over many runs".
+The caller chooses because it knows which parameter will move: a UI author knows which widget drives which parameter, and writes the template to match.
+The first call then already builds the stage.
+No fixed choice by the workflow author serves both "tune one parameter" and "the same settings over many runs".
 The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
-The caller knows which parameter will move, and the first call already builds the stage.
 
 `client.run(template, values)` fills the blanks, puts every value in the request's `params`, and submits the request with the template's blanks as `vary`.
 A value for a parameter that is not a blank replaces the template's value and is not varied, so it names another stage.

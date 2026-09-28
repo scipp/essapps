@@ -24,7 +24,7 @@ The reason is that a UI which reaches into backend internals owns state it does 
 `Backend` is a protocol, the closed surface a client may ask of a backend, with plain data in and out; it is the transport boundary.
 `LocalBackend` does the work, in the notebook's process or in the server's.
 `RemoteBackend` satisfies the same protocol and forwards each call as one HTTP request to a server that holds a `LocalBackend`, and `Client` does not know which of the two it holds.
-The server holds one lock and a poller thread, because the backend is single-threaded by design: every route body and the poll run under the lock, and the poll is where dispatched runs are reconciled and waiting ones dispatched.
+The server holds one lock and a poller thread, because the backend is single-threaded in phase 1: every route body and the poll run under the lock, and the poll is where dispatched runs are reconciled and waiting ones dispatched.
 `wait` is a loop over `record` on the client side, so the server never blocks on a client.
 An output travels as the file the data store holds, its suffix naming the serializer; this is the data path Tiled would replace.
 `write_out` returns the data store's own path, meaningful on the shared filesystem of the deployment; given a folder, it places a copy there on the caller's side, which over HTTP is a streamed download and the way large data leaves the service.
@@ -119,9 +119,8 @@ A rule is bound to the proposal whose datasets it selects.
 
 ## Deployment
 
-**One backend per instrument**, each with its own record store and data store.
+**In phase 1, one single-threaded backend per instrument**, each with its own record store and data store.
 Several backends may share a host while load is low.
-With one or two users per instrument, of whom at most one works with large volumes, a single backend process serves views comfortably.
 Nothing in the model needs cross-instrument state.
 A facility-wide entry point, if one is ever wanted, is a thin front that routes to the instrument backend.
 

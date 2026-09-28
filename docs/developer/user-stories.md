@@ -68,7 +68,7 @@ Actor: user in a notebook.
 1. Has three runs of the same sample.
 2. Reduces them as one measurement.
 
-Checks: the result equals the reduction of the summed counts; each run is reduced on its own; the result names the runs it sums.
+Checks: the result names the runs it sums.
 
 Outcome: fits.
 The sum is one run whose run parameter lists the runs; the binding reduces each run and accumulates ([aggregation.md](aggregation.md#a-sum-is-one-run-over-a-list-of-runs)).
@@ -80,7 +80,7 @@ Actor: user in a notebook.
 1. Has several sample runs and several background runs.
 2. Sums each set and subtracts the background.
 
-Checks: each sample run and each background run is reduced on its own; the result names every run.
+Checks: the result names every run.
 
 Outcome: fits.
 Sample runs and background runs are two list parameters of one plain run ([aggregation.md](aggregation.md#two-lists)).
@@ -132,7 +132,7 @@ Actor: user at the instrument.
 Checks: the run number resolves to one catalogue dataset at submission; the record names the dataset, not the number.
 
 Outcome: fits.
-Stand-ins resolve at submission, and a run number is unique within an instrument and proposal ([records.md](records.md#datasets)).
+Stand-ins resolve at submission ([records.md](records.md#datasets)).
 
 ### A3. Work without the facility mount
 
@@ -297,7 +297,7 @@ Actor: reflectometry user.
 2. Reduces them together so the curves are scaled against each other.
 3. Exports one ORSO file with one dataset per angle.
 
-Checks: the stitch that feeds back into its members is expressible; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
+Checks: the stitch returns the scaled per-angle curves; the export carries per-angle metadata; the published file is the per-angle set, not one merged curve.
 
 Outcome: fits.
 The stitch is a spec whose parameter is a list of references to the per-angle curves, recomputed over all members ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)).
@@ -398,7 +398,7 @@ A template moves to a new spec version by copy, the records say which version fi
 Actor: reflectometry user during a beamtime.
 
 1. An angle series is measured one run at a time, plus a reference.
-2. Nobody can say in advance how many angles there will be.
+2. The user decides while measuring how many angles there will be.
 3. After each run the stitched curve in the web UI grows by one angle, within minutes of the run.
 
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combination; the UI shows one curve per sample, not one per arrival.

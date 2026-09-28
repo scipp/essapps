@@ -170,7 +170,7 @@ Details: [workflow-contract.md](workflow-contract.md).
 ## Where a run executes
 
 Batch reduction, automatic reduction, and provenance need runs that describe their result completely and need no human present.
-Interactive work needs the opposite: reruns in under a second over intermediates of several gigabytes, as in SANS.
+Interactive work needs the opposite: fast reruns over large intermediates held in memory.
 The design pins "stateless" on the record and allows state in the process that executes it.
 
 A run executes in one of two shapes:
@@ -223,6 +223,7 @@ Three mechanisms make that fast and presentable.
 
 **Stages make reruns cheap.**
 The client names the stage before the first call, as a template: the parameters that stay fixed, and the moving one as a blank.
+The caller knows which parameter will move: a UI author knows which widget drives which parameter.
 The session builds the stage on the first call and holds it.
 A stage holds everything its inputs cannot affect, such as the loaded and coordinate-converted data, and each call computes only what lies downstream of the stage inputs.
 The sciline adapter builds a `sciline.Stage` (scipp/sciline#245).
@@ -294,7 +295,7 @@ Details: [records.md](records.md#scheduling-pending-outputs-as-inputs).
 
 ## Aggregation over runs
 
-Many reductions add up counts from several runs and normalise afterwards.
+Many reductions combine several runs into one result.
 A sum over runs is one run request whose run parameter is a list:
 
 ```python
@@ -311,8 +312,7 @@ PipelineAdapter(normalize_pipeline(), keys=..., targets=...,
 ```
 
 The adapter reduces each run and accumulates, which is `sciline.Aggregation` inside one run.
-The framework never adds arrays and knows nothing about scipp.
-A record holds one value per parameter, so every run of a sum was reduced with the same masks and direct beam.
+The framework never adds arrays and knows nothing about scipp or normalisation.
 Sample runs and background runs are two list parameters of one plain run.
 
 Stages and accumulations are caches.
@@ -360,7 +360,7 @@ group = apply(client, rule, datasets)      # preview through validate, then subm
 - **The trigger loop keeps no memory.**
   It fires a rule on a dataset when the selector matches and no record exists under the rule's label for that dataset.
   Every condition is a query over records, so a restart neither loses nor repeats work.
-- **A rule with a series key never waits for a series to be complete**, because nobody at the instrument can say when it is.
+- **A rule with a series key does not wait for a series to be complete.**
   Each arrival submits one request over every run of the series so far, which supersedes the previous one.
 
 A rule is to a batch what a template is to a request.
@@ -379,7 +379,7 @@ Details: [rules.md](rules.md).
   Nothing is stored per dataset.
 - **Instrument plus proposal scopes everything**: both are mandatory on every record, and access follows SciCat proposal membership.
   Artefacts from commissioning proposals, such as a direct beam, can be marked instrument-shared.
-- **One backend per instrument**, each with its own record store and data store.
+- **One backend per instrument in phase 1**, each with its own record store and data store.
 - **The Python client interface is the API.**
   Every UI reaches the backend through it.
   HTTP is a transport under it: a server holds the backend, and a remote backend forwards each call.
@@ -438,7 +438,7 @@ The linked document argues the case and lists the costs.
 | [The caller names the stage as a template's blanks, the session holds it](stages.md#who-names-the-stage) | the caller knows which parameter will move | stage inputs inferred from successive requests; stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
 | [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
-| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums and holds one value per parameter; the backend needs no graph; the binding accumulates and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
+| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums; the backend needs no graph; the binding accumulates and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |

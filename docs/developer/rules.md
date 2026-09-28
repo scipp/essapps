@@ -54,7 +54,8 @@ Every ISIS batch interface converged on this table under a different name, and [
 
 **An as-of fill is resolved against the member, not against the clock.**
 A fill is either a literal or an `AsOf`, which holds criteria on dataset metadata and resolves to the nearest dataset before the member that matches them.
-This is how a sample gets the last can, dark frame, or empty-beam run measured before it, which FIA does by walking back through the journal by title.
+It is one way to pick a can, dark frame, or empty-beam run for a sample: the last one measured before it, as FIA does by walking back through the journal by title.
+A fixed run, or one run for the whole proposal, is a literal fill, and a run a person picks is a pinned value.
 Because the fill is anchored to the member's own dataset, the backlog and a reprocess give a sample the same can the live loop gave it, as `test_backlog_and_reprocess_resolve_the_same_can_as_the_live_loop` checks, and the record holds the reference it resolved to.
 A member with no matching dataset before it is refused, visibly, in the trigger status.
 
@@ -185,14 +186,14 @@ A run that arrives again, or out of order, is listed once.
 The bound does not apply to the runs of a series, so a series that began before the bound is one series.
 A series of k runs therefore costs k requests, the k-th of which reduces k runs, and the superseded ones are the first evicted.
 
-**Every run of a series is filled alike.**
-A series is one request, so one value per parameter.
+**A series request holds one value per parameter.**
 If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
 
 **A run that cannot be read fails the whole series request, visibly.**
 The operator excludes the run, and `retry` submits the series without it.
 
-**A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
+**A rule does not wait for a series to be complete.**
+Each arrival reduces what exists, which fits a series whose length the user decides while measuring.
 A series of fixed roles, a scatter and its transmission, would be the same rule with the request fired only when every role is present.
 The rule says whether the results of a series are published, and by default they are not.
 
@@ -209,7 +210,7 @@ A rule cannot drive a combination over references to the records of another rule
 
 **A dataset source yields the datasets of a proposal and persists nothing.**
 Each dataset comes as an identity, a PID or an instrument and run number, plus the metadata fields the source declares for the instrument.
-Those declared fields are the only ones a lookup entry or a selector may match on, and they are declared here because the source knows what the acquisition writes into the catalogue.
+Those declared fields are the only ones a lookup entry or a selector may match on, and they are declared here because the source knows what the datasets of each instrument carry.
 Arrival may be out of order and repeated, and the interface promises no monotonic cursor, which is why the trigger loop asks queries rather than holding a position in a stream.
 
 A dataset enters the record store only as a reference in the requests a rule submits, like any other stand-in.
@@ -265,15 +266,14 @@ Each record instead links to the record it supersedes.
 
 **A fill that names whatever dataset is newest at submission.**
 This is simpler than an as-of fill and right for the live loop only.
-Every backlogged sample would get the latest can rather than the can measured before it, so the backlog and a reprocess would disagree with the live loop.
+Every backlogged sample would get the can that is newest when the backlog runs, so the backlog and a reprocess would disagree with the live loop.
 
 **Skipping a request when an equal one already completed.**
 An up-to-date check of this kind, as build systems and Snakemake make it, hides a decision from the user, because the run that did not happen is invisible.
 Requests are therefore always made, and a superseding record shows the repeat.
 
-**Waiting for a series to be complete before accumulating.**
-Completeness is not knowable at the instrument, since the user decides to measure one more angle.
-Each arrival therefore accumulates what exists.
+**Waiting for a series to be complete as the only behaviour.**
+A series whose length the user decides while measuring, such as one more angle, would have no result before its last run.
 
 **Member and finalize requests per arrival.**
 Each arrival submits a request for the new run, whose outputs are the values that add, and a finalize request that accumulates the outputs of every current member.
@@ -287,7 +287,7 @@ The rule then holds two templates that share most of their values and can disagr
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.
 Snakemake put it in the scheduler as checkpoints and it became the most confusing part of the tool.
-No current workflow needs it, and if one arises it is a rule on the completed producer, one template instantiation per key.
+Fan-out whose keys come from the data takes two phases instead: a first run whose output holds the keys, then one request per key.
 
 ## Costs
 
@@ -295,7 +295,6 @@ No current workflow needs it, and if one arises it is a rule on the completed pr
 - A rule's bound is one more thing to get right at creation.
   Its default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
 - An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
-- The acquisition must write the fields a lookup or a selector matches on into the catalogue, which is a requirement on the instrument to be stated to the instrument teams early.
 - A series request over k runs reduces all k runs in a throwaway process ([aggregation.md](aggregation.md#a-series-under-a-rule)).
 - One run that cannot be read fails its series request until someone excludes it.
 - A series a person defines by hand, "these runs, and keep accumulating as more arrive", has no place here.
