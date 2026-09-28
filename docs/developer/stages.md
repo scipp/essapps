@@ -25,26 +25,24 @@ for num_bins in (50, 100, 200):
 
 `tune` is a template: the reduction with every parameter but `q` set, and the stage from `q` to `iofq`.
 It is plain data, held on the client side only.
-Every call submits a complete run request, `{spec: ..., params: {..., 'q': ...}, vary: ['q'], outputs: ['iofq']}`, and the backend fills the spec's defaults into `params`.
+Every call submits a complete run request, `{spec: ..., params: {..., 'q': ...}, outputs: ['iofq']}`, with `vary=('q',)` beside it, and the backend fills the spec's defaults into `params`.
 The first call builds the stage, and the later ones reuse it.
 The rest of this document explains how.
 
 ## What a session holds
 
 A **session** is a runner process that belongs to one client and lives as long as the client wants.
-It holds three things in memory:
+It holds two things in memory:
 
 | Held object | Addressed by |
 |---|---|
 | output of a run record | the run record's ID |
-| stage | workflow ID, names of the varied parameters, names of the supplied intermediates, output names, checksums of the datasets the parameters not varied name |
-| accumulator | workflow ID, the intermediate it fills, the outputs pushed into it so far |
+| stage | spec, values of the parameters not varied, names of the varied parameters, output names |
 
 The outputs let a chained request get its input without a disk read.
-A stage holds intermediate results of a workflow.
-An accumulator holds the running accumulation of a growing sum over runs.
+A stage holds intermediate results of a workflow, and a stage over a list of runs also holds the accumulation over the runs it has seen.
 
-All three are caches over records, by the two invariants in [records.md](records.md#where-runs-execute-and-where-data-lives): a record never names a session, and everything a session holds can be recomputed from records.
+Both are caches over records, by the two invariants in [records.md](records.md#where-runs-execute-and-where-data-lives): a record never names a session, and everything a session holds can be recomputed from records.
 Dropping one, or closing or losing the session, costs time and never changes a result.
 
 A workflow holds nothing between calls.
@@ -65,7 +63,6 @@ flowchart LR
 
 With the Q bins, field `q`, as the only stage input, the frontier holds the converted events.
 A call with new Q bins runs the histogram and the normalisation, and nothing else.
-A stage input may also be an intermediate, such as a beam centre supplied from another run record; the stage then cuts off whatever would compute it.
 
 A `Stage` recomputes everything downstream of all its inputs on every call.
 A stage whose inputs are `q` and the sample run therefore loads the run again when only `q` changes.
@@ -82,24 +79,24 @@ The workflow author cannot make this choice, because no fixed choice serves both
 The Amor reflectometry binding showed this: a stage over the sample run, the number of Q bins, and a scale factor loads the run again whenever the Q bins change.
 The caller knows which parameter will move, and the first call already builds the stage.
 
-`client.run(template, values)` fills the blanks and splits the values by name.
-A value for a parameter goes into the request's `params`, and a blank that is a parameter is named in `vary`.
-A value for an intermediate goes into `supplied`.
-A value for a parameter that is not a blank replaces the template's value and is not varied, so it changes the workflow ID.
+`client.run(template, values)` fills the blanks, puts every value in the request's `params`, and submits the request with the template's blanks as `vary`.
+A value for a parameter that is not a blank replaces the template's value and is not varied, so it names another stage.
 
-**Each run request names its stage**: the workflow ID of the request, a hash of spec, the parameters not varied, instrument, and proposal; the names of the parameters it varies; the names of the intermediates it supplies; and its outputs.
-`vary` is a hint for the session, like `label`: it does not change the result, and provenance does not rely on it.
+**A run request and the names submitted with it name the stage**: the spec, the values of the parameters not varied, the names of those varied, and the outputs.
+`vary` is a hint for the session, like `label`: it does not change the result, and the record does not hold it.
+The backend keeps the names in memory from submission to dispatch.
+A record dispatched after a restart runs without them: it holds nothing and gives the same result.
 Because `params` holds the defaults filled at submit, a request that omits a default and one that gives it name the same stage.
-The session holds the stage it built under that name, together with the checksums of the datasets that the parameters not varied name, so that a file that changed on disk does not find a stage built from its earlier bytes.
 A later request that names the same stage computes only what lies downstream of the stage's inputs.
-`apply` makes a rule's members from the rule's template in the same way ([rules.md](rules.md)).
-Nothing is inferred from earlier requests: a `client.run(spec, params)` varies nothing, so one that differs from the previous one in a single field has another workflow ID and is a plain run.
+Nothing is inferred from earlier requests: a `client.run(spec, params)` varies nothing, so one that differs from the previous one in a single field is a plain run.
 
-`ess.apps.stages.Stages` holds stages and accumulators:
+`apply` returns a `Group`, the requests made from a rule's or a batch's template together with the template's blanks as `group.vary`, which `client.submit_group(group)` passes on ([rules.md](rules.md)).
+A plain mapping of requests submits with nothing varied.
+
+`ess.apps.stages.Stages` holds the stages:
 
 ```python
-call, held = stages.stage(name, build)            # name: (workflow ID, varied, supplied, outputs, checksums)
-value, held = stages.accumulate(name, refs, make, load)
+call, held = stages.stage(name, build)     # name: (spec, values not varied, varied names, outputs)
 ```
 
 A stage belongs to no label.
@@ -109,18 +106,22 @@ The session holds a bounded number of stages and drops the least recently used.
 A stage resolves the references in the parameters not varied when it is built and holds those objects.
 They count towards the session's memory, and they stay valid when the session's output cache drops its own copy.
 
-### Held accumulators
+**A session keeps the checksum each dataset had when it read it.**
+When a dataset's bytes change, the session drops every stage it holds, so no stage serves a file from its earlier bytes.
+A held stage knows its datasets, the runs of a sum included, by identity alone, and a run acquired again keeps its identity.
 
-The finalize request of a sum over runs supplies an `Accumulate` for an intermediate, listing the outputs of the member run records to accumulate ([aggregation.md](aggregation.md)).
-The session holds one accumulator per workflow ID and intermediate, with the list of outputs pushed into it so far.
-When a request's list begins with that list, the session pushes only the rest, so adding a third run pushes one value, not three.
-Any other list, such as one in which a corrected member replaces an earlier record, starts a fresh accumulator; nothing is ever taken out.
-Without a session, a finalize reads every output its list names.
+### A stage over a list of runs
+
+A sum over runs is a parameter that holds a list ([aggregation.md](aggregation.md)).
+A held stage over a sum holds the accumulation over the runs it has seen.
+When the list is a blank, a call whose list begins with those runs contributes only the rest, so adding a third run reduces one run, not three.
+Any other list, such as one without a run, is accumulated again from its first run.
+Without a session, a request reduces every run its list names.
 
 ### What this costs
 
 The first call of a stage costs one full computation, because the stage must be built.
-A person who moves two parameters in turn either names a stage over both, which recomputes everything downstream of either on every call, or two stages over one each, which have different workflow IDs and are built again whenever the other value changes.
+A person who moves two parameters in turn either names a stage over both, which recomputes everything downstream of either on every call, or two stages over one each, which are built again whenever the other value changes.
 Making the switch cheap needs values held between two consecutive stages.
 That is the network of stages which scipp/sciline#245 deferred.
 
@@ -133,8 +134,10 @@ def stage(self, params, inputs, outputs, data):
     pipeline = self._pipeline.copy()
     set_on(pipeline, params)                                       # resolved once, now
     stage = sciline.Stage(pipeline, outputs=keys_of(outputs), inputs=keys_of(inputs))
-    return lambda params, intermediates, data: outputs_of(stage.compute(values_of(params, intermediates)))
+    return lambda params, data: outputs_of(stage.compute(values_of(params)))
 ```
+
+A member parameter, such as the list of runs of a sum, gets a contribute stage and accumulators in front of this stage ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
 
 A parameter input that the outputs do not need is held and ignored, although sciline's `Stage` would refuse it.
 Such an input cannot change the result, and which parameters a caller varies must not decide whether a run succeeds.
@@ -148,7 +151,7 @@ Every workflow bound through an adapter runs it.
 
 Every call through a stage is a complete run request and writes a complete run record.
 Changing a threshold is a run record with a new value of the parameter it varies.
-Adding one more run to a sum is a member run record plus a finalize run record whose `Accumulate` lists one more output.
+Adding one more run to a sum is a run record whose list holds one more run.
 
 The record carries a `reused` flag, which says that a held stage served it.
 Publication reads the flag and recomputes such a result in a throwaway process first, so that what enters SciCat was computed without held state.
@@ -171,7 +174,7 @@ For interactive work this means:
 - A plot, a record browser, and a replay tool identify a series of reruns by its slot. The slot is the stable identity across superseded records.
 - Comparing two variants side by side is two slots. The second is assigned when the user forks, as the same stage under another name, `tune.cut(name='iofq-fine')`. Discarding a variant drops its label from the UI and changes nothing else.
 - Cancelling the queued earlier records of a slot is one client call.
-- Inspection shows the latest record with its difference from the record it superseded: "one value changed" for a slider, "one more member" for a growing sum.
+- Inspection shows the latest record with its difference from the record it superseded: "one value changed" for a slider, "one more run" for a growing sum.
 - The data store evicts outputs of superseded records first.
 
 A slot adds nothing to the record model.
@@ -205,7 +208,7 @@ Tuning two workflows together, such as vanadium processing and the sample reduct
 The output of the first is a record's output that the session holds in memory, and the second references it.
 No disk access happens between them.
 
-A sum over a growing list of runs needs held stages and held accumulators.
+A sum over a growing list of runs is a held stage over the list.
 See [aggregation.md](aggregation.md#in-a-session).
 
 ## Where sessions run
@@ -238,7 +241,7 @@ Shared interactive use is a hosting question, a process per user as JupyterHub p
 
 **The stateless model with splits** has no state between runs.
 The workflow author exposes the value where the expensive part ends as an intermediate, and a first run stores it as an output of its run record.
-On the first rung, every rerun is a throwaway process that supplies that output as an intermediate and runs the cheap part.
+On the first rung, every rerun is a throwaway process that takes that output through a parameter that accepts a reference, and runs the cheap part.
 On the second rung, runners stay alive and keep their outputs, and the launcher routes a request to the runner that already holds its input.
 A routing miss falls back to the first rung, so the second rung is an addition to the first.
 
@@ -248,7 +251,7 @@ A routing miss falls back to the first rung, so the second rung is an addition t
 | Records created while exploring | one per change, grouped by slots | none | one per change |
 | Provenance of a kept result | complete | complete | complete |
 | What the user saw equals the record | by the stage contract and its test helper | checked once, when the result is kept | by construction |
-| Framework concepts added | session, held stages and accumulators, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
+| Framework concepts added | session, held stages, slots, private caches, two execution shapes | none; the adapter becomes a library for applications | none on the first rung; a placement policy and a memory index on the second |
 | Interactive use in the shared web UI | remote sessions owned by the framework | a hosted process per user, owned by infrastructure | works, slowly; on the second rung without a process per user |
 | Disk volume | low | low | high; lower on the second rung |
 | Burden on workflow authors | none beyond the adapter | none beyond the adapter | an exposed intermediate at every boundary a person tunes across |
@@ -258,8 +261,8 @@ A routing miss falls back to the first rung, so the second rung is an addition t
 
 On the first rung of the stateless model, two [user stories](user-stories.md) fail: tuning a SANS reduction with feedback within a second or two, and tuning vanadium and sample together, where each change to the vanadium runs both parts again.
 
-How a growing series is accumulated does not depend on the model.
-It is a finalize over every current member in all three ([aggregation.md](aggregation.md#a-growing-series)).
+How a growing series is reduced does not depend on the model.
+It is one request over every current run in all three ([aggregation.md](aggregation.md#a-series-under-a-rule)).
 
 ### What a rerun costs without held state
 
@@ -297,7 +300,7 @@ The cost is placement, not transfer:
   Every eviction makes a routing prediction wrong, so a rerun under a second becomes the typical case and not a guarantee.
 - The address includes the code version, so an upgrade fragments the pool.
 
-The [fold](aggregation.md#the-fold) is a kept runner addressed by a series, so both problems would be solved by one mechanism.
+The [fold](aggregation.md#a-series-under-a-rule) is a kept runner addressed by a series, so both problems would be solved by one mechanism.
 
 ### What keeps the choice open
 
@@ -315,7 +318,7 @@ Three properties of the core keep all three models possible:
 
 ### What sessions cost in concepts
 
-Without sessions the design loses the session itself, held stages and held accumulators, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
+Without sessions the design loses the session itself, held stages, slots as used by interactive tools, the private memory caches, the second execution shape, the rule that publication recomputes a result a stage served, in-process binding, and session loss as a failure event.
 In the skeleton that is about one seventh of the source.
 Records, references, the spec vocabulary, the scheduler, rules, the trigger loop, validation, completion markers, publication, and proposal scoping are unaffected.
 Batch and automatic reduction use none of the session concepts.
@@ -326,7 +329,7 @@ These concern how stages are chosen and held, given the session model.
 
 **Stage inputs inferred from successive requests.**
 The session compares a request with the one it supersedes under its label and takes the fields that differ as the stage inputs.
-A slider then needs no declaration, but the record cannot say which stage ran, the first call of every slider computes everything and holds nothing, and a supplied intermediate cannot be expressed.
+A slider then needs no declaration, but the first call of every slider computes everything and holds nothing.
 A caller that knows which parameter will move has no way to say so.
 
 **Stage inputs named by the workflow author.**
@@ -338,7 +341,7 @@ A parameter the author did not name costs a full computation on every change.
 The session keeps the workflow callable between runs, and the callable caches what it likes.
 Session state then sits inside workflow code, where the session cannot see, bound, or drop it: a stage with its own rebuild rule, accumulators for a series with their own staleness rule, caches of contributions shared between callables.
 Each workflow author reimplements invalidation, and the framework cannot tell whether a result came from held state.
-A workflow instead builds stages and accumulators, and the session holds them.
+A workflow instead builds stages, and the session holds them.
 
 **The framework caches sciline intermediates itself.**
 The framework would have to import sciline.
@@ -354,4 +357,6 @@ Caching every intermediate is not affordable with event data, and the graph does
 - Through the client interface a user explores declared outputs only, whereas a notebook can compute any node of a sciline pipeline.
 - Every workflow that ends in events carries a dense twin, which is one histogram call.
 - The view vocabulary is part of the client interface. Dense data needs a chunked layout on disk, so that views on data larger than a cache can read partially.
+- A changed dataset empties the session's whole store, not only the stages that read it. Datasets change rarely, and the rule is simple.
+- A group assembled by hand varies nothing, so its members share no held stage. A form that picks requests one by one calls `apply` once over all of them, as `loki-batch-ui.ipynb` does.
 - How the bound on held stages relates to a memory budget is open. See [open-issues.md](open-issues.md).

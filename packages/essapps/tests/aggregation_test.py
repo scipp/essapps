@@ -4,7 +4,7 @@
 A sum over runs as one request whose run parameter is a list: the binding
 contributes each run and accumulates at the author's accumulation keys.
 
-See docs/developer/proposals/sums-as-list-parameters.md.
+See docs/developer/aggregation.md.
 """
 
 from collections.abc import Iterator

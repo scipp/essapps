@@ -4,18 +4,15 @@ The terms of the design, in alphabetical order, each with a pointer to the docum
 [architecture.md](architecture.md) is the overview these terms come from.
 Where esslivedata uses a word differently, the clash is noted, because the two projects are discussed together often enough for it to matter.
 
-- **Accumulate**: a supplied intermediate whose value is the accumulation of the outputs it lists, `Accumulate(accumulate=[...])`.
-  The binding resolves it with the accumulator its author gave for that intermediate; the framework never adds anything.
-  See [aggregation.md](aggregation.md).
-- **Accumulation key**: sciline's name for an intermediate at which the members of an aggregation are accumulated.
-  This documentation calls it an intermediate to accumulate.
+- **Accumulation key**: sciline's name for a value at which the members of an aggregation are accumulated, such as a numerator.
+  It need not be exposed in the spec, because it never leaves the run.
 - **Accumulator**: sciline's object that takes values by `push` and holds their accumulation as its value.
-  The binding gives one per intermediate that may be accumulated, and `Buffered` makes one from a function.
-  A session holds accumulators between finalize calls.
+  The binding gives one per accumulation key, and `Buffered` makes one from a function.
+  A stage over a list of runs holds its accumulators between calls.
 - **Adapter**: the code, in ess.reduce, that turns a sciline pipeline into a workflow, and each run into a call of a `sciline.Stage`.
-  It maps fields to keys, names the form of each data reference, and gives the accumulators by sciline key, the same dictionary a `sciline.Aggregation` takes.
+  It maps fields to keys, names the form of each data reference, names the member parameters, and gives the accumulators by sciline key, the same dictionary a `sciline.Aggregation` takes.
   See [workflow-contract.md](workflow-contract.md#the-sciline-adapter).
-- **Aggregation**: in the framework, member run records plus a finalize run record that accumulates their intermediates, all agreeing on the parameters they set outside what they vary.
+- **Aggregation**: in the framework, one run request whose member parameter holds a list, such as the runs of a sum; the binding reduces each member and accumulates.
   In sciline, the object that composes a contribute stage, accumulators, and a finalize stage in one process.
   It has no spec of its own.
   See [aggregation.md](aggregation.md).
@@ -30,7 +27,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Batch**: the records under one label, made by a person from a template or by a rule.
   Not a stored unit.
   In esslivedata a batch is a bundle of messages, which is unrelated.
-- **Blank**: a field a template leaves for each use to fill: a parameter the use varies, or an intermediate it supplies.
+- **Blank**: a parameter a template leaves for each use to fill, and varies from use to use.
   The blanks of a template are the inputs of its stage.
   See [stages.md](stages.md#who-names-the-stage).
 - **Client interface**: the backend's Python interface, including validate, apply, views, and the picker.
@@ -49,17 +46,15 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Dataset source**: where datasets are discovered and listed.
   Persists nothing.
   SciCat for a proposal, a folder in local mode, a fake for tests.
-- **Finalize**: the stage of an aggregation from the accumulated intermediates to the outputs.
-  A finalize run request supplies one `Accumulate` per intermediate, which lists every current member, so its request alone says what it sums.
-  See [aggregation.md](aggregation.md#a-growing-series).
+- **Finalize stage**: the stage of an aggregation from the accumulated values to the outputs, built by the adapter inside one run.
 - **Group**: several requests submitted atomically that may reference each other's outputs before those exist.
+  `apply` returns a `Group`, which also carries the template's blanks as what its members vary.
   See [records.md](records.md#scheduling-pending-outputs-as-inputs).
 - **Input**: a parameter of data-reference type.
-  Not the same as a *stage input*, which may also be a literal parameter or a supplied intermediate.
+  Not the same as a *stage input*, which may also be a literal parameter.
   In esslivedata, inputs are data streams and genuinely differ from parameters; here they do not.
-- **Intermediate**: an output the spec exposes that a plain run does not compute, a value inside the pipeline such as a numerator or a beam centre.
-  A request may name it as an output, or supply it in place of what computes it.
-  A supplied value is a reference to an output of a run record, or an `Accumulate`.
+- **Intermediate**: an output the spec exposes that a plain run does not compute, a value inside the pipeline such as a detector image.
+  A request computes it when it names it as an output; over a sum it is the accumulated value.
   See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
 - **Label**: a field on a request, with an optional member key.
   Each record under a label names the record it superseded, and the latest is the one nothing supersedes.
@@ -73,7 +68,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   What ISIS calls a lookup table, a cycle mapping, or a per-row user file.
   See [rules.md](rules.md).
 - **Member**: one record under a label, identified by its **member key**: a name a person chose for a batch made by hand, the dataset identity for a rule's batch.
-  An aggregation's members are the run records whose intermediates its finalize accumulates.
+  The members of a sum are the elements of its **member parameter**, the list the adapter accumulates over.
 - **Origin**: the field on a run request that says where its values came from: the template version, the rule version when a rule filled it, the lookup version and the entry that applied, and the values pinned beyond template and lookup.
   Explanation, not provenance, which is the data the run read.
 - **Pending output**: an output of a record that has not completed yet, usable as input to another request.
@@ -81,7 +76,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Pinned values**: the values of a request set for one member beyond the template and the lookup, the top rung of the precedence ladder.
   The origin keeps them apart from the request's parameters, so a reprocess under a new template or lookup version fills the rest again and leaves them alone.
   See [rules.md](rules.md#templates-and-lookups).
-- **Plain run**: a run that varies nothing and supplies nothing, computing the spec's results, as `client.run(spec, params)` submits it.
+- **Plain run**: a run that varies nothing, computing the spec's results, as `client.run(spec, params)` submits it.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
   See [operations.md](operations.md#scope-instrument-plus-proposal).
 - **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
@@ -103,7 +98,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   Its execution is called a run, never a job, except for the launcher's own job IDs.
   In esslivedata a job is a running streaming workflow.
   See [records.md](records.md#requests-and-records).
-- **Run request**: one run of a spec: the spec, every parameter value in `params`, the supplied intermediates, the outputs to compute, and the names in `vary`.
+- **Run request**: one run of a spec: the spec, every parameter value in `params`, and the outputs to compute.
   Everything needed to run it.
   The backend fills the spec's defaults into `params` at submit, for every parameter not given, and records every value in the form the params model gives it.
   A call of a stage is one run request, made by filling the blanks of a template.
@@ -112,9 +107,9 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **SciCat**: the facility's data catalogue.
   **PID**: SciCat's persistent identifier for a dataset.
 - **Series**: the datasets a rule keys together by a metadata value.
-  `Series(key, accumulate, outputs)` on a rule makes each arrival submit a member run request and a finalize run request.
+  `Series(key)` on a rule makes each arrival submit one request whose dataset field lists every current run of the series.
   See [rules.md](rules.md#series).
-- **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its run records, and the stages and accumulators its requests name, in memory.
+- **Session**: a runner plus a private memory cache, belonging to one client, keeping the outputs of its run records, and the stages it built for them, in memory.
   A cache over records.
   See [records.md](records.md#where-runs-execute-and-where-data-lives).
 - **Slot**: a label an interactive tool owns, with no member key.
@@ -124,13 +119,11 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   Defined in scipp/ess#690 with the extensions in [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
 - **Stage**: the part of a pipeline from named stage inputs to named outputs, cut from a spec with parameters set, like `sciline.Stage`.
   It may hold whatever its inputs cannot affect.
-  The caller names it as a template; the workflow builds it; the session holds it under the name its run requests give it.
+  The caller names it as a template; the workflow builds it; the session holds it under the name its run requests and their varied names give it.
   See [stages.md](stages.md).
-- **Stage inputs**: the values a stage takes on each call: the parameters a request varies, and the intermediates it supplies.
+- **Stage inputs**: the values a stage takes on each call: the parameters a request varies.
   A template names them as its blanks, whether a client cut it for a slider or a rule holds it.
   See [stages.md](stages.md#who-names-the-stage).
-- **Supplied intermediate**: an intermediate a run request holds in `supplied`, a reference or an `Accumulate`, in place of what computes it.
-  Only supplied intermediates and `params` change what a run computes.
 - **Template**: a partial request: a spec, the values set, the blanks each use fills, and the outputs to compute.
   The requests made from one template name one stage, so a template is both the stage a client names for a slider and what a batch or a rule fills.
   Records made from a template carry its name as their label.
@@ -143,19 +136,16 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Trigger loop**: applies the active rules to new datasets and completed records.
   Keeps no state: every decision is a query over the records.
   See [rules.md](rules.md#the-trigger-loop).
-- **Vary**: the field of a run request that names the parameters a caller varies from run to run, each with its value in `params`.
-  They are the blanks of the request's template that are parameters.
-  A hint for the session, like a label: it does not change the result, it is not part of the workflow ID, and provenance does not rely on it.
-  See [records.md](records.md#requests-and-records).
+- **Vary**: the names of the parameters a caller varies from run to run, given with the submission beside the requests, each with its value in `params`.
+  They are the blanks of the request's template.
+  A hint for the session: it does not change the result, and the record does not hold it.
+  See [stages.md](stages.md#who-names-the-stage).
 - **View**: a small piece of an output's data for display, computed by the process holding a copy.
   Not a run.
   See [stages.md](stages.md#views).
 - **Vocabulary**: the set of types the workflow spec allows for parameters and outputs.
-- **Workflow**: the scientific code behind a spec: it builds the stage a run request cuts, and gives accumulators.
+- **Workflow**: the scientific code behind a spec: it builds the stages a session holds, and knows the graph.
   A plain function `(params, inputs) -> outputs` is one.
   Typically a sciline pipeline behind an adapter; the framework does not care.
   See [workflow-contract.md](workflow-contract.md#the-workflow-protocol).
-- **Workflow ID**: a hash of a run request's spec, the parameters it does not vary, instrument, and proposal, which names the configured pipeline the stage is cut from, like a `sciline.Pipeline` with parameters set.
-  Derived from the request, never stored as a record of its own; a session names held stages by it, and the record store indexes run records by it.
-  See [records.md](records.md#requests-and-records).
 - Libraries: **pydantic** (data validation), **sciline** (workflow graphs), **scipp** (scientific arrays, with its own HDF5 file format), **scitacean** (SciCat access), **plopp** (plotting), **FastAPI** (HTTP services).

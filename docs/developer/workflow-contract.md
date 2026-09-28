@@ -45,43 +45,36 @@ See `binding.py`.
 
 ## The workflow protocol
 
-**A spec is the signature of a pipeline, and a run record is one call of a stage cut from it.**
-The workflow is the code behind the spec, and it builds the stage a run request names.
+**A spec is the signature of a pipeline, and a run record is one run of it.**
+The workflow is the code behind the spec, and it builds the stages a session holds.
 The protocol is `Workflow` in `binding.py`:
 
 ```python
 class Workflow(Protocol):
     def stage(self, params: BaseModel, inputs: Collection[str], outputs: Collection[str],
               data: Inputs) -> StageCall: ...
-    def accumulator(self, name: str) -> Accumulator: ...
 
 class StageCall(Protocol):
-    def __call__(self, params: BaseModel, intermediates: Mapping[str, Any],
-                 inputs: Inputs) -> Mapping[str, Any]: ...
+    def __call__(self, params: BaseModel, inputs: Inputs) -> Mapping[str, Any]: ...
 ```
 
-`stage` gets the request's parameters that are not in `vary`, with the spec's defaults filled at submit, and the stage's input and output names.
-The input names are the parameters the request names in `vary` and the intermediates it supplies.
-Each call of the returned `StageCall` gets the varied parameters as a model, and the supplied intermediates already as objects.
-It returns the stage's outputs by field name.
+`stage` gets the request's parameters that were not submitted as varying, with the spec's defaults filled at submit, the names of the varied parameters as `inputs`, and the output names.
+Each call of the returned `StageCall` gets the varied parameters as a model, and returns the stage's outputs by field name.
 A plain run is the stage with no inputs, whose outputs are the spec's results.
 
 **What a stage holds is what its inputs cannot affect**, so holding it is a cache and dropping it is always safe.
 The contract, for every stage and every call:
 
 ```text
-wf.stage(p0, s, o, data)(p_s, i_s, data) == wf.stage(p0 | p_s, (), o, data)(∅, {}, data)
+wf.stage(p0, s, o, data)(p_s, data) == wf.stage(p0 | p_s, (), o, data)(∅, data)
 ```
 
-A stage over parameter inputs returns what a plain run with the same values returns.
-A stage over an intermediate input returns what a plain run returns when that intermediate has the given value.
+A stage returns what a plain run with the same values returns.
+**A sum over runs is a parameter that holds a list of runs, and the stage sums them** ([aggregation.md](aggregation.md)).
+Which parameters a caller varies never decides whether a run succeeds.
 
-**`accumulator(name)` gives a fresh accumulator for an intermediate that an `Accumulate` may fill.**
-An accumulator is sciline's: `push` a value, read `value`.
-The runner pushes the outputs an `Accumulate` lists in the order listed, and asks nothing else of the accumulator ([aggregation.md](aggregation.md#a-growing-series)).
-
-**A plain function is a workflow with parameter stages only.**
-`FunctionWorkflow` wraps `(params, inputs) -> outputs`: its stages compute everything and hold nothing, it drops the outputs not asked for, and it refuses intermediate inputs and accumulators.
+**A plain function is a workflow whose stages hold nothing.**
+`FunctionWorkflow` wraps `(params, inputs) -> outputs`: its stages compute everything and hold nothing, and it drops the outputs not asked for.
 `as_workflow` wraps whatever a factory returns that has no `stage` method.
 
 **The workflow is stateless.**
@@ -90,8 +83,8 @@ A throwaway runner makes the workflow from its factory, builds one stage, calls 
 A session runner makes the workflow once per spec version and holds the stages it built ([stages.md](stages.md)).
 A session holds the code it imported, so a change to workflow code takes effect in a new session, never in a running one.
 
-**Whether a stage's inputs suffice for its outputs is known only here.**
-A stage that leaves a needed parameter unset fails when `stage` builds it or when it is called, and the run fails with a structured reason.
+**Only the workflow code knows the graph**, and it needs it only to decide what a stage can hold and reuse.
+A mistake there can make a held stage return a wrong result, but the request still says exactly what was asked, and publication recomputes any result a held stage served.
 
 **The framework never imports sciline.**
 The adapter that turns a sciline pipeline into a workflow belongs with the workflow packages, in ess.reduce.
@@ -130,7 +123,7 @@ That the NMX product is then held in memory before it is written is a cost accep
 ## The sciline adapter
 
 **An adapter turns a sciline pipeline into a workflow, and each run request into a `sciline.Stage`.**
-`PipelineAdapter` in `adapter.py` does it, and `examples.py` binds the `NORMALIZE` spec with it:
+`PipelineAdapter` in `adapter.py` does it, and `examples.py` binds the `NORMALIZE` spec, a sum over runs, with it:
 
 ```python
 ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
@@ -142,26 +135,35 @@ def normalize_aggregation(pipeline: sciline.Pipeline) -> sciline.Aggregation:
 def normalize_workflow() -> PipelineAdapter:
     return PipelineAdapter(
         normalize_pipeline(),
-        keys={'run': RunFile, 'floor': Floor, 'scale': Scale},
-        resolve={'run': 'path'},
+        keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
+        resolve={'runs': 'path'},
         targets={'normalized': Normalized, 'numerator': Numerator, 'denominator': Denominator},
+        members=('runs',),
         accumulators=ACCUMULATORS,
     )
 ```
 
 `keys` maps each parameter field to the sciline key it sets, and `resolve` names the form in which each data reference is asked for.
 `targets` maps each output field to the key to compute, intermediates included.
-`accumulators` gives, by sciline key, a factory for the accumulator of each intermediate that may be accumulated.
+`members` names the fields that hold a list of members, each element a value of the field's key.
+`accumulators` gives, by sciline key, a factory for the accumulator of each value the members contribute to.
 It is the same dictionary a `sciline.Aggregation` takes, so a package defines it once for notebooks and for the binding.
 
 For `stage` the adapter sets the parameters it is given on a copy of the pipeline and builds a `sciline.Stage` (scipp/sciline#245) from the keys of the stage inputs to the keys of the outputs.
-An intermediate input cuts off its providers and everything upstream of them.
 A `Stage` computes once everything the inputs cannot affect, holds it at its **frontier**, and on each call recomputes only what lies downstream of the inputs.
 References in the parameters not varied are resolved once, when the stage is built; references in the stage inputs on every call.
 Correctness follows from the graph for any choice of stage inputs, so the choice decides only where the frontier sits and what a rerun costs.
 A parameter input that the outputs do not need, which `sciline.Stage` refuses, is held and ignored, because it cannot change the result and which parameters a caller varies must not decide whether a run succeeds.
 
 This matches how notebooks already work: Q bins, d-spacing bins, cut axes and a beam centre enter after the expensive load and coordinate conversion.
+
+For each member parameter that the requested outputs need, the adapter builds a contribute stage.
+It goes from the member key, plus any varied parameter the contributions read, to the accumulation keys that depend on the member.
+One finalize stage goes from all accumulation keys, plus the varied parameters read after them, to the outputs.
+This is `sciline.Aggregation`, with the extra stage inputs that tuning needs.
+The adapter finds which varied parameters the contributions read with `sciline.Stage(...).keys`, when it builds the stage.
+An output that needs each member separately, and not only what the members accumulate to, is refused then.
+The stage holds the accumulation over the members it has seen, so a call whose list extends the previous one contributes only the new members ([stages.md](stages.md#a-stage-over-a-list-of-runs)).
 
 ## Changes to the spec of scipp/ess#690
 
@@ -214,7 +216,7 @@ A spec may also declare named failure reasons, each with a message.
 A workflow that fails for a declared reason returns it, the record carries its name, a UI can explain it, and a rule's retry policy can match it.
 
 **Exposed intermediates.**
-A spec may name some of its outputs as `intermediates`: values inside the pipeline that a plain run does not compute, and that a request may supply in place of what computes them.
+A spec may name some of its outputs as `intermediates`: values inside the pipeline that a plain run does not compute, and that a request may name as outputs.
 
 ```python
 class NormalizeOutputs(BaseModel):
@@ -227,11 +229,12 @@ NORMALIZE = WorkflowSpec(name='normalize', version=1, params=NormalizeParams,
 ```
 
 - A plain run computes the spec's `results`, the outputs that are not intermediates; the serialized spec carries both.
-- A request may name any output as an output and supply any intermediate.
+- A request may name any output as an output. Over a sum, an intermediate is its accumulated value.
 - An intermediate is declared with a format like any output, because it may be stored, referenced, and viewed.
 
-The exposed intermediates are the author's domain types that an app or an aggregation needs, such as a detector image, a beam centre, or a numerator and denominator.
-They are listed once per spec, not once per stage.
+The exposed intermediates are the author's domain types that an app needs, such as a detector image.
+The accumulation keys of a sum need not be exposed, because they never leave the run.
+Intermediates are listed once per spec, not once per stage.
 The spec says nothing about the graph: which parameters an intermediate depends on is known only to the workflow code.
 `WorkflowSpec` in `spec.py` checks that every intermediate is an output.
 This is an extension of this design rather than a field of scipp/ess#690.
@@ -244,15 +247,13 @@ This is an extension of this design rather than a field of scipp/ess#690.
 A parameter the spec does not declare is refused, because a pydantic model ignores unknown fields unless its author forbids them, and a reduction parameter dropped in silence gives a wrong number without an error.
 scipp/ess#690 forbids extra fields only on its empty model, so the backend checks the top-level fields itself.
 Requiring a closed parameter model in the spec would be the better place.
-The same check covers the request's names: a name in `vary` must be a parameter of the spec with a value in `params`, a name in `supplied` an exposed intermediate, and an output an output of the spec.
+The same check covers the names: a name submitted as varying must be a parameter of the spec, and an output an output of the spec.
 The check sees the request with the spec's defaults filled, as it will be recorded.
-A request that supplies no intermediate is validated against the whole parameter model, so a missing required parameter is refused.
-A request that supplies an intermediate is validated field by field, because whether the stage's inputs suffice for its outputs depends on the graph: such a request that leaves a needed parameter unset fails when it runs ([records.md](records.md#what-the-backend-checks)).
+Every request is validated against the whole parameter model, so a missing required parameter is refused, whichever outputs the request names.
 The backend runs this layer by importing the spec module alone, never a factory.
 esslivedata keeps the spec separate from the workflow factory precisely so that specs can be validated without importing workflow code, and scipp/ess#690 must keep that separation.
 
 **Runnability**: every reference resolves to a record the submitter may read and, for a collection element, to a key the producer declares.
-An intermediate supplied from a run record of the same spec agrees with it on every parameter both requests set in `params`, apart from those either request varies.
 Files exist where the launcher would look, and the launcher's environment has the spec.
 Anything past that, such as a file that opens but lacks a monitor, is a run that fails fast, not a validation error.
 
@@ -280,17 +281,18 @@ This is simple and remote-friendly, but it forces every chain through disk, whic
 
 **Two protocols**, one for one-shot execution and one for incremental reruns.
 That gives two execution paths to test and keep consistent.
-With `stage` as the one method, a plain run, a rerun, and an aggregation's member and finalize are all stages, and the only difference between runners is whether the stage is held.
+With `stage` as the one method, a plain run, a rerun, and a sum are all stages, and the only difference between runners is whether the stage is held.
 
 **Contribute and combine specs with `carry`.**
 A pipeline that aggregates is published as two specs cut at the values that add: a contribute spec per run, and a combine spec over a list of references to contributions.
 A `carry` declaration on the combine spec says that its combined output may be passed back into its list.
 The adapter must re-derive the member parameters to check that members agree, and the associativity promise sits on the spec although it is a property of the code.
-Exposed intermediates and `Accumulate` express the same with one spec and no declaration.
+A list parameter with the binding's accumulators expresses the same with one spec and no declaration.
 
 **A summary of the graph in the spec.**
-The spec lists, per output and intermediate, the parameters it depends on, so the backend can decide which parameters a supplied intermediate makes irrelevant and whether a stage's inputs suffice.
+The spec lists, per output, the parameters it reads, so the backend can check that the pieces of a pipeline fit and which parameters a request needs.
 That puts a derived property of the graph into a document meant to be written by hand and read without workflow code, and every change to the pipeline must regenerate it.
+The adapter computes the same from the graph when it builds a stage, where only a session needs it.
 
 **A data field typed as a union of the reference and the materialized value**, a path or a scipp object, with the runner materializing it according to a kind declared on the spec.
 That makes the parameter model wrong in both phases, before and after materialization, and needs a validator that accepts anything not plain data.
@@ -306,8 +308,8 @@ A `Stage` recomputes everything downstream of all its inputs, so a stage whose i
 - The runner loads scipp arrays whole.
 - Reuse through a stage is exact only if providers are pure.
   `assert_stage_equals_workflow` is the check, and the record's `reused` flag lets publication insist on a result computed without a held stage.
-- Authors must expose the intermediates that apps and aggregations use, each with a format.
-- A request that supplies an intermediate and leaves a needed parameter unset fails when it runs, not when it is submitted.
+- Authors must expose the intermediates that apps use, each with a format.
+- A request for an intermediate output must set every required parameter, including those the output does not need.
 - DREAM and imaging masks are Python callables today.
   Each such workflow needs a range vocabulary and a conversion before its requests are plain data.
 - The backend must walk the request's values to find references, and the spec's JSON Schema, including nested models, to check them.

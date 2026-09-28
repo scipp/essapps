@@ -83,7 +83,7 @@ Publication is an explicit, idempotent operation on one output, triggered by a p
 Publishing an output that already has a PID returns that PID.
 
 **The SciCat entry carries a self-contained provenance snapshot.**
-It holds the raw PIDs the output derives from, the parameters, the literal outputs, the spec identity, the names of the supplied intermediates and of the outputs, the package versions, and the environment, and the same for every run record reached through a reference.
+It holds the raw PIDs the output derives from, the parameters, the literal outputs, the spec identity, the names of the outputs, the package versions, and the environment, and the same for every run record reached through a reference.
 Parameters keep their reference form, so the value a literal output fed into a parameter is under the literal outputs of the record it came from.
 It can be read without any service of ours, and our record is then a copy of it.
 `Backend.provenance` builds the snapshot by walking the record's references.
@@ -91,7 +91,7 @@ A publication may name the PID it supersedes, which the snapshot records, since 
 
 **Publication reads a disk copy of a result that was computed cold.**
 An output that exists only in a session is written out first.
-A record whose result came out of a held stage is recomputed in a throwaway process first, so that what enters SciCat was computed from its parameters and supplied intermediates alone and the record describes it exactly.
+A record whose result came out of a held stage is recomputed in a throwaway process first, so that what enters SciCat was computed from its parameters alone and the record describes it exactly.
 A record bound to workflow code in-process from a notebook is refused unless the client overrides, because such a record cannot be reproduced elsewhere.
 
 **The intent to publish is recorded before SciCat is written, and the PID after.**

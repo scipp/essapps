@@ -20,7 +20,7 @@ The recommendation in brackets is mine.
 - **Measurements the decision needs.**
   The feedback loop of a throwaway process in three configurations: cold, with a pool of idle runners that have their imports done, and with a runner that already holds the intermediate in memory.
   The three numbers separate the cost of process start, of the disk read, and of the computation.
-  Also the read of a 4D intermediate of several gigabytes, which a finalize makes once per member on every arrival, and which decides when a series needs a cache of earlier finalizes or the [fold](aggregation.md#the-fold).
+  Also how long the request of a real SANS series under a rule takes, which reduces every run of the series on each arrival, and which decides when a series needs the disk cache of contributions or the [fold](aggregation.md#a-series-under-a-rule).
   [Measure before remote interactive work is designed.]
 - **Retention policy for disk copies in shared mode.**
   How long each kind of run's outputs is kept, and the analysis window after which a proposal's records are dropped together.
@@ -37,19 +37,11 @@ The recommendation in brackets is mine.
 - **Exposed intermediates in ess.reduce.spec.**
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
-- **Per-dataset lookup fills in a series.**
-  `apply` has each member vary only the template's blanks, and a finalize has the template's values, so a member that a lookup fills beyond the blanks is not accumulated.
-  The alternative is to have members vary such fields as well, which the agreement check does not compare, but which lets members differ in a value the finalize may also read.
-- **Validation of a stage that leaves a parameter unset.**
-  A request that supplies no intermediate is checked against the whole parameter model, so the stage of a sample run in a sum with two member tables, which leaves the background run unset, is refused although it never reads it ([user story S6](user-stories.md#s6-sum-sample-runs-and-background-runs)).
-  Telling which parameters a stage reads needs the dependencies of the exposed values, which only the workflow code knows today.
-- **Validation of a request that supplies an intermediate.**
-  Such a request that leaves a needed parameter unset fails when it runs; a request that supplies no intermediate is checked against the whole parameter model at submit.
-  Whether a GUI can learn this before submitting is open: in local mode the backend imports the registry and could ask the workflow, in shared mode it does not.
-- **A rule over a combination that is not an accumulation.**
-  `Series` names the intermediates to accumulate and the outputs of a finalize with the template's values.
-  A stitch over angles is a separate spec over a list of references to the members' outputs, and a rule has no field that names it.
-  A second template on the series, or a second rule whose candidates are the completed member records of the first, would each express it.
+  A list of runs is a plain `list[NexusFile]` field and needs nothing more.
+- **A sum under a rule whose runs must be reduced on separate nodes.**
+  Is there a real case? Interactively, composing two specs over references covers it ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)), but a rule cannot drive that composition.
+- **A sum with one unreadable run.**
+  Do scientists want the series request to fail visibly until the run is excluded, rather than be summed without it?
 - **Where the workflow contract lives once it is stable.**
   `Inputs`, `Workflow`, `StageCall`, `FunctionWorkflow`, and `resolve` are in `ess.apps.binding`, and the sciline adapter is in `ess.apps.adapter`.
   Workflow packages must not depend on the framework in order to publish a workflow.
@@ -71,7 +63,7 @@ See [workflow-contract.md](workflow-contract.md).
 - **Pixel masks are a graph rewrite, so the request is not complete.**
   In the LoKI workflow a list of mask filenames rebuilds the sciline graph, so the masks are fixed in the factory that makes the workflow and never reach the record.
   The same rewrite is what stops the additive half of reflectometry, the sum over runs at one angle, from being bound at all.
-  The way out is a pipeline whose masks are parameters, with the values that add exposed as intermediates, but neither is bound that way yet.
+  The way out is a pipeline whose masks are parameters, which is not bound that way yet.
 - **The beam-centre finder takes a pipeline, not a key.**
   It is therefore a plain function, and the expensive part of it is not shared with the reduction that consumes its result.
 - **Every scalar parameter costs a `NewType` and a provider** in the adapter's setup, whose only job is to turn plain data into a scipp object.
@@ -87,7 +79,7 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 - **Collection keys are the submitter's invention.**
   Nothing ties a key of a collection parameter to the record it came from, and a reference into a pending collection output is not checked for its key, so a transposed dictionary is accepted and fails at run time.
 - **Chaining between specs is checked by format only.**
-  A declared `ArraySpec` is read by nobody, so an output of another spec with a matching format passes validation as a supplied intermediate and fails inside the stage.
+  A declared `ArraySpec` is read by nobody, so an output of another spec with a matching format passes validation as a parameter value and fails inside the stage.
   The runner checks an output's dimensions and coordinate names, but not its unit and not the `binned` flag.
 - **The vocabulary lacks the parameter types real reductions need.**
   A pixel-index range, an angle range, a Q range, and an edges model whose range is derived from the data are all missing.
@@ -97,9 +89,10 @@ See [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess6
 
 See [aggregation.md](aggregation.md).
 
-- **A combination that is not an accumulation has no consistency check over its members.**
-  The members of an accumulation agree with the finalize on every parameter both set, which the backend checks.
-  A stitch takes references to run records of another spec, which the check does not cover, so a stitch over curves reduced with different detector limits passes silently.
+- **A combination over references has no consistency check over its parts.**
+  A spec over a list of references to other records' outputs, such as a stitch over curves (`amor.COMBINE`) or a sum spread over nodes, accepts parts reduced with different parameters, such as different detector limits.
+  A parameter read on both sides is set twice and never compared.
+  A list of runs inside one request has one value per parameter.
 
 ### Rules
 
@@ -107,27 +100,26 @@ See [rules.md](rules.md).
 
 - **Two-level aggregation under a rule is untested.**
   Reflectometry sums same-angle runs and then stitches the angles.
-  The first level is a series, and the second is a spec over a list of references, which a rule cannot yet submit (see [open questions](#open-questions)).
+  A series fills a dataset field with the runs of the series, so a rule drives both levels only as one spec over the list of runs, which `ess.apps.amor` does not have yet.
 - **Roles are named but not defined.**
-  A rule that feeds sample runs into one member stage and background runs into another needs a role per dataset and a mapping from role to the parameter a member varies.
+  A rule that feeds sample runs into one list parameter and background runs into another needs a role per dataset and a mapping from role to the list parameter it fills.
   "A series of fixed roles" names this and says nothing about how it works.
 - **A feedback cycle has no rule shape.**
   Amor fits scale factors over all members and then re-reduces each member with its factor, which is a cycle from members to the stitch and back to members.
-  Three requests express it, but a rule only ever runs members and then one request over them.
+  Three requests express it, but a rule only ever submits one request per series.
 
 ## What the design does not solve
 
 - **Memory policy.**
-  A stage holds its frontier, and a session holds stages, accumulators, and outputs.
-  The session counts its stages and its accumulators and drops the least recently used, but how that bound relates to the memory the session's outputs occupy is open.
+  A stage holds its frontier, and a stage over a list of runs its accumulation, and a session holds stages and outputs.
+  The session counts its stages and drops the least recently used, but how that bound relates to the memory the session's outputs occupy is open.
 - **Migration of the record store to a new schema.**
   The store carries a schema version and a stored parameter set that no longer matches its spec version fails loudly, but nothing says how an existing store is brought to a new schema during a backend upgrade.
-- **Parallelism over members.**
-  Across records, the launcher runs one throwaway process per member.
-  Inside one run, the workflow code may map the contribute stage over the rows with threads.
-  Nothing coordinates the two.
+- **Parallelism over the runs of a sum.**
+  The adapter reduces the runs of one request one after another.
+  Across processes, a client composes two specs over references, and the launcher runs one throwaway process per part.
 - **Static work across processes.**
-  A member stage in a throwaway process computes the part shared by all members again, once per member.
+  A request in a throwaway process computes again what it shares with other requests, such as a loaded direct beam, once per request.
   A [kept runner](stages.md#kept-runners) would remove this cost.
 - **Live streams.**
   A streaming workflow has members that cannot be recomputed from records, which breaks the invariant the session rests on.
@@ -142,20 +134,20 @@ It does not contain:
   This is the next implementation worth building, as a second implementation of the same data-store interface, with the test that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 - A SciCat dataset source.
   The folder source and the in-memory fake are the only implementations, which keeps the tests off SciCat.
-- A rule over a combination that is not an accumulation, and a series over two member tables.
-- A cache in a runner that keeps the accumulated value of an earlier finalize and reads only the members a later finalize adds, under the prefix rule of a session's held accumulator.
-- The fold: a long-lived runner that holds the accumulators of one series, accumulates in memory, and writes a finalize run record every few arrivals.
-  It is not needed until a series arrives faster than its accumulated values can be read and written.
+- A spec over a list of runs for Amor's angle series, and a series over two list parameters.
+- The disk cache of contributions for a series under a rule, keyed by the values the contribute stage reads plus the run's identity and checksum.
+- The fold: a long-lived runner that holds the stage of one series.
+  It is not needed until a series arrives faster than its runs can be reduced.
 - The `paused` status and the runner liveness timeout described in [operations.md](operations.md#failure-handling).
 - A rule that fires on a completed record.
-  The trigger loop iterates datasets only, so a second rule over the completed finalize records of a first rule is untested.
+  The trigger loop iterates datasets only, so a second rule over the completed records of a first rule is untested.
 - The last clause of the trigger loop's firing condition, that the dataset's SciCat entry must not carry our provenance snapshot.
   Local mode has no catalogue to ask.
 - A durable reservation of a rule's label.
   `Backend.reserve` holds reservations in memory, because no store for templates and rules exists.
 - Cancelling a batch by its label.
   `Client.cancel` takes one record.
-- A field on `Rule` that says whether its finalize is published.
+- A field on `Rule` that says whether the results of its series are published.
 - Failure reasons declared on the spec, described in [workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690).
 - The test helper that recomputes a completed record and compares the outputs, described in [workflow-contract.md](workflow-contract.md#test-helpers).
 - The version counter that [operations.md](operations.md#the-client-interface) promises for observing change.
@@ -181,12 +173,7 @@ Resource hints on the spec for the cluster launcher, such as memory as a functio
 These are changes to scipp/sciline#245, the proposal this design's stages and aggregations build on.
 
 - **The design document of the proposal describes essapps as one spec with a declared contribution and three entry points**, and says that the spec declares which parameters the finalize stage reads.
-  It should instead say that essapps records each `Stage.compute` as a run record holding the pipeline's parameters, that a spec exposes the intermediates a stage may take or return, and that the binding reuses the accumulators an `Aggregation` takes.
-- **Finalize inputs need no change to sciline.**
-  `Aggregation` builds its finalize stage with the accumulation keys as its only inputs, so a finalize parameter cannot be given per call.
-  The adapter does not use that stage: a finalize run is a plain `Stage` whose inputs are the supplied intermediates and any finalize parameter the request varies.
-  An argument for naming finalize inputs is therefore not needed.
-- **A parameter read by both stages must reach the finalize stage with the value the members were made with.**
-  Within one process the snapshot guarantees this.
-  Across processes the backend checks that the members and the finalize agree on every parameter both set and neither varies.
-  The proposal could name this as the consumer's responsibility.
+  It should instead say that a run record holds the pipeline's parameters, that a sum over runs is a parameter holding a list, which the binding accumulates with the accumulators an `Aggregation` takes, and that stages are caches a session holds.
+- **Extra stage inputs on `Aggregation`.**
+  The adapter builds the contribute and finalize stages itself, because `Aggregation` takes no extra stage inputs and one member list at a time.
+  `Aggregation` with extra inputs on both stages, the `finalize_inputs=` idea and its contribute counterpart, would let the adapter use it directly.

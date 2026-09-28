@@ -23,7 +23,7 @@ flowchart LR
     data -.-> publisher[Publisher] -.-> scicat[(SciCat)]
 ```
 
-A client submits a **run request**: a spec and its parameter values, any intermediates supplied in place of what computes them, and the outputs to compute.
+A client submits a **run request**: a spec, its parameter values, and the outputs to compute.
 The **backend** validates the request, writes it down as a **run record**, and asks a **launcher** to start a **runner**.
 The runner calls the scientific workflow code and stores the outputs.
 An output of one run record can be an input of the next run request.
@@ -49,9 +49,7 @@ The run record of the second run, abridged:
   "request": {
     "spec": {"name": "histogram", "version": 1},
     "params": {"data": {"record": "b41c22d90a61", "output": "data"}, "threshold": 0.0, "bins": 8},
-    "supplied": {},
     "outputs": ["histogram"],
-    "vary": [],
     "instrument": "dream", "proposal": "p1",
     "submitter": "me"
   },
@@ -73,12 +71,9 @@ stage.compute({QBins: q})                                 # one call of a stage:
 ```
 
 A **run request** is one run of a spec with every parameter value set, like `compute` on a configured `sciline.Pipeline`.
-It holds the spec and its `params`, the intermediates it **supplies** in place of what computes them, and the outputs to compute.
+It holds the spec, its `params`, and the outputs to compute.
 When the backend accepts a request, it fills into `params` the spec's default for every parameter not given, and records every value in the form the params model gives it, so the record holds every value the run used.
-A call of a stage is a run request too: its parameter values go into `params`, and `vary` names them, as a hint for the session that holds the stage ([Interactive work](#interactive-work)).
-The **workflow ID** is a hash of spec, the parameters not varied, instrument, and proposal: two requests that set the same values, given or filled as defaults, name the same configured pipeline.
-It is derived from the request and never stored as a record of its own.
-A session names the stages it holds by it, and the record store indexes run records by it.
+A call of a stage is a run request too, and its record equals the record of a plain run with the same values: where a session cuts the pipeline does not change the result, so the record does not say ([Interactive work](#interactive-work)).
 A run request is plain JSON-serializable data, even when it never leaves a process.
 It never names a session, a process, or a storage location.
 
@@ -138,11 +133,11 @@ def histogram(params: HistogramParams, inputs: Inputs) -> dict[str, Any]:
 ```
 
 - **A spec is the signature of a pipeline**: every parameter, and every value a caller may ask for.
-  Beside its results, a spec may expose **intermediates**, values inside the pipeline that a request may name as outputs or supply in place of what computes them.
+  Beside its results, a spec may expose **intermediates**, values inside the pipeline that a request may name as outputs, such as a detector image.
   The spec says nothing about which value depends on which parameter; only the workflow code knows the graph.
-- **The workflow builds the stages that run requests cut.**
-  Its protocol has two methods: `stage(params, inputs, outputs, data)` takes the parameters not varied and returns a callable from the stage inputs, the varied parameters and the supplied intermediates, to the outputs, and `accumulator(name)` returns a fresh accumulator for an intermediate.
-  A plain function such as `histogram` is a workflow whose only stages take parameters.
+- **The workflow builds the stages a session holds.**
+  Its protocol is one method: `stage(params, inputs, outputs, data)` takes the parameters not varied and returns a callable from the varied parameters to the outputs.
+  A plain run is the stage with no inputs, and a plain function such as `histogram` is a workflow whose stages hold nothing.
 - **Inputs are parameters.**
   A parameter that holds a reference is what this document calls an input.
   Outputs are declared in the same type vocabulary, so checking that an output may feed a parameter is a type check between two fields.
@@ -166,7 +161,7 @@ PipelineAdapter(
 Installed packages provide specs and workflow factories through two entry-point groups.
 The backend loads specs only, so it validates requests without importing workflow code.
 Validation has three layers: JSON Schema, the pydantic parameter model, and runnability (references resolve, the submitter may read them, a launcher has the spec).
-Whether a request that supplies an intermediate has every parameter its outputs need is known only to the workflow code, so such a request that leaves a needed parameter unset fails when it runs.
+Every request is checked against the whole parameter model.
 
 Details: [workflow-contract.md](workflow-contract.md).
 
@@ -185,7 +180,7 @@ A run executes in one of two shapes:
 | Outputs | stay in memory; written only when asked | written to disk before completion is reported |
 | Used for | interactive work | batch, automatic reduction, everything in shared mode |
 
-A **session** belongs to one client and holds the outputs of its run records, and the stages and accumulators its requests name (next section).
+A **session** belongs to one client and holds the outputs of its run records, and the stages it built for them (next section).
 Two invariants keep it safe:
 
 1. Session identity never appears in a record.
@@ -202,7 +197,7 @@ A stage a client names is a **template**, which is plain data: the spec, the val
 `client.run(template, values)` fills the blanks, sends one run request, and returns a run record whose outputs are references.
 Where a value lives and where a stage runs are the backend's choice and invisible to the caller.
 What a stage computes is not: it is in the request as plain data, never as a sciline object, because a record must be recomputable from its request alone and a shared backend must validate what it accepts.
-A long-lived holder of state, such as a runner that keeps a series' accumulator ([aggregation.md](aggregation.md)), satisfies the rule only by writing records it can be rebuilt from.
+A long-lived holder of state, such as a runner that holds the stage of a growing series ([aggregation.md](aggregation.md#a-series-under-a-rule)), satisfies the rule only by writing records it can be rebuilt from.
 The second invariant holds for every value the system keeps in memory, which is what lets a growing sum over runs be accumulated from disk or in memory interchangeably.
 It holds because reduction here consumes datasets.
 It would not hold for a live stream, which is esslivedata's problem and out of scope.
@@ -237,10 +232,11 @@ second = client.run(hist, {'bins': 8})                 # served by the held stag
 assert second.reused and client.latest('hist').id == second.id
 ```
 
-Each call is a run request with `bins` in `params` and named in `vary`, under the template's name as its label.
-The session holds the stage under the name the request gives it: the workflow ID, the varied names, the supplied names, the outputs, and the checksums of the datasets the parameters not varied name.
-`vary` is a hint for the session: it is not part of the workflow ID and does not change the result.
-Every run record is complete on its own, so recomputing it needs nothing from the session.
+Each call is a run request with `bins` in `params`, under the template's name as its label.
+`client.run` submits it with the template's blanks as `vary`, a hint for the session that is not recorded.
+The session holds the stage under a name made of the spec, the values not varied, the varied names, and the outputs.
+The record of each call equals the record of a plain run with the same values, and `reused` says that a held stage served it.
+Recomputing it needs nothing from the session.
 
 **Labels keep hundreds of reruns from being what a person sees.**
 A request may carry a **label**.
@@ -272,21 +268,23 @@ group = client.submit_group({
 The backend validates the group whole, creates all records, and holds each request until every record it references has completed.
 A request fails if a record it references fails, and is cancelled if one is cancelled.
 This **pending output as input** is the only scheduling primitive.
-Vanadium feeding a sample reduction, a temperature scan, an angle series, and a sum over runs all use it.
+Vanadium feeding a sample reduction, a temperature scan followed by a sum, and a sum spread over nodes all use it.
 
 One rule for workflow authors follows: **a value that other requests reference must be an output of a run record.**
-An exposed intermediate can be such an output, so reuse does not force a cut into separate specs.
-A beam centre that one stage computes, or that a person picks, is supplied to the next stage in place of what would compute it:
+An exposed intermediate, such as a detector image, can be such an output, so reuse does not force a cut into separate specs.
+A value from outside is a parameter whose field accepts a reference, as `ess.apps.loki` binds the beam centre:
 
 ```python
-sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db})
-det = client.run(sans.cut(outputs=('detector_image',)))           # an exposed intermediate
-centre = client.run(PICK_CENTRE, {'image': det.ref('detector_image')})
-reduce = sans.cut(blanks=('beam_centre', 'q_bins'), outputs=('iofq',))
-client.run(reduce, {'beam_centre': centre.ref('centre'), 'q_bins': 100})
+class IofQParams(BaseModel):
+    ...
+    beam_center: Quantity | OutputRef          # typed in, or taken from another run
+
+centre = client.run(BEAM_CENTER, {'sample_run': run, ...})
+client.run(IOFQ, {'sample_run': run, 'beam_center': centre.ref('center'), ...})
 ```
 
-The run record says that `beam_centre` was supplied and which run record it came from.
+The run record of the reduction names the run record the beam centre came from.
+Setting a parameter replaces what would compute it, as setting a key does in sciline, so a value from outside needs no mechanism of its own.
 Separate pipelines, such as vanadium processing and the sample reduction, remain separate specs.
 
 Details: [records.md](records.md#scheduling-pending-outputs-as-inputs).
@@ -294,34 +292,31 @@ Details: [records.md](records.md#scheduling-pending-outputs-as-inputs).
 ## Aggregation over runs
 
 Many reductions add up counts from several runs and normalise afterwards.
-Each run needs a run record of its own, so that runs reduce in parallel, a series can grow by one run, and a run can be removed.
-A sum over runs is a stage per run to the intermediates that add, and a finalize stage from their accumulation, both cut from one template:
+A sum over runs is one run request whose run parameter is a list:
 
 ```python
-normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})   # 'run' left unset
-member = normalize.cut(blanks=('run',), outputs=('numerator', 'denominator'))
-finalize = normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',))
-
-members = [client.run(member, {'run': r}) for r in runs]
-total = client.run(finalize, {
-    name: Accumulate(accumulate=[m.ref(name) for m in members])
-    for name in ('numerator', 'denominator')
-})
+total = client.run(NORMALIZE, {'runs': runs, 'floor': 1.5, 'scale': 2.0})
+total.request.params['runs']                   # the record names every run it sums
 ```
 
-This is `sciline.Aggregation`: `member` is its contribute stage and `finalize` its finalize stage.
-The spec exposes `numerator` and `denominator` as intermediates, and the binding gives an accumulator for each.
-**`Accumulate`** is a supplied intermediate whose value is the accumulation of the outputs it lists.
-The binding resolves it with the author's accumulator; the framework never adds arrays and knows nothing about scipp.
-The finalize run request waits for its members as pending outputs, like any other request.
+The spec declares `runs: list[OpaqueFile]`, and the backend validates the request like any other.
+The binding names `runs` as a **member parameter** and gives an accumulator for each value that adds, such as a numerator and a denominator:
 
-Members and finalize cut from one template share their masks and direct beam by construction.
-The backend refuses an intermediate supplied from a run record of the same spec that disagrees with the consuming request on a parameter both set, a comparison of recorded values.
-A parameter either request varies is not compared: each member varies its `run`, and the finalize leaves it unset.
+```python
+PipelineAdapter(normalize_pipeline(), keys=..., targets=...,
+                members=('runs',), accumulators=ACCUMULATORS)
+```
 
-Every finalize lists every current member, so the sum a finalize run record stands for is read off its request alone.
-On the k-th arrival of a growing series the finalize reads k values per intermediate, unless a session holds the accumulator and pushes only the new member.
-A combination that is not an accumulation, such as reflectometry's stitch over angles, is a spec whose parameter is a list of references, recomputed over all members.
+The adapter reduces each run and accumulates, which is `sciline.Aggregation` inside one run.
+The framework never adds arrays and knows nothing about scipp.
+A record holds one value per parameter, so every run of a sum was reduced with the same masks and direct beam.
+Sample runs and background runs are two list parameters of one plain run.
+
+Stages and accumulations are caches.
+In a session, a template whose blank is the list names a stage that holds the accumulation over the runs it has seen, so adding a run to the list reduces only that run.
+A rule with a series submits, on each arrival, one request over every current run of the series.
+To reduce the runs of one sum on separate nodes, a client composes two specs over references, like any chain.
+What the workflow does with a list is its own business, so a stitch over angles is a spec over a list as well.
 
 Details: [aggregation.md](aggregation.md).
 
@@ -351,7 +346,7 @@ group = apply(client, rule, datasets)      # preview through validate, then subm
 
 - **`apply` is the one operation that makes requests.**
   It fills the template for each dataset and returns a group to preview and submit.
-  Each member varies the template's blanks, so members that agree on every other value share a workflow ID and a held stage.
+  The group carries the template's blanks as what its members vary, so in a session members that agree on every other value share a held stage.
   Values come from one ladder: template, then lookup entry, then what the submitter pinned.
   A person at a batch form calls it with a list of datasets, and the trigger loop calls it with each new dataset.
   Backlog, reprocess, and retry call it with a query.
@@ -363,7 +358,7 @@ group = apply(client, rule, datasets)      # preview through validate, then subm
   It fires a rule on a dataset when the selector matches and no record exists under the rule's label for that dataset.
   Every condition is a query over records, so a restart neither loses nor repeats work.
 - **A rule with a series key never waits for a series to be complete**, because nobody at the instrument can say when it is.
-  Each arrival submits the member's run request and a finalize run request over the members so far.
+  Each arrival submits one request over every run of the series so far, which supersedes the previous one.
 
 A rule is to a batch what a template is to a request.
 A template is also the stage a client names for a slider, so the batch form and the notebook use one concept.
@@ -410,9 +405,9 @@ Details: [operations.md](operations.md#failure-handling).
 | Data store | registry of disk copies, disk tier, private memory cache | `datastore` |
 | Launcher | decides where a run executes: session or throwaway process | `launcher` |
 | Runner | calls the workflow, validates and stores outputs | `runner` |
-| Session stages | holds the stages and accumulators that run requests name | `stages` |
+| Session stages | holds the stages the session built, by the name its requests give them | `stages` |
 | Spec and binding | spec extensions, exposed intermediates, entry points, `Inputs`, the workflow protocol | `spec`, `binding` |
-| Sciline adapter | a pipeline as a workflow: each stage a `sciline.Stage`, accumulators by key | `adapter` |
+| Sciline adapter | a pipeline as a workflow: each stage a `sciline.Stage`, member parameters with accumulators by key | `adapter` |
 | Dataset source | lists datasets with metadata; persists nothing | `sources` |
 | Rules | templates, lookups, rules, series; `apply`; trigger loop | `rules`, `batch` |
 | Views | slices and reductions for display | `views` |
@@ -432,15 +427,15 @@ The linked document argues the case and lists the costs.
 | [Stateless records, stateful sessions](records.md#where-runs-execute-and-where-data-lives) | batch and provenance need complete records; interactive work needs memory | stateful jobs as in esslivedata; disk-only runs; shared memory across processes |
 | [A stage is a template, and a template is plain data](#where-a-run-executes) | where values live and where stages run can change without changing a caller; a record stays recomputable from its request | sciline objects or remote proxies of them in the API; client objects that hold a configured pipeline |
 | [Memory caches are private](records.md#the-data-store) | a registry of other processes' memory needs a coherence protocol | a registry that tracks in-memory copies |
-| [Run records, defaults filled at submit](records.md#requests-and-records) | a record holds every value it ran with and the intermediates supplied in place of computing them; where a caller cuts the pipeline is a hint for the session | a stage record that holds the cut; a record per call of a spec with nothing supplied; a stored workflow record holding only the values given |
+| [Run records, defaults filled at submit](records.md#requests-and-records) | a record holds every value it ran with; where a session cuts the pipeline is a hint given with the submission and not recorded | a stage record that holds the cut; the varied names on the record; a stored workflow record holding only the values given |
 | [Reuse means a run record](records.md#reuse-means-a-run-record) | a referenced value needs a record | references to values that no run record outputs |
 | [Own record store, single writer](records.md#the-record-store) | no engine offers a stateless request that a notebook, a loop, and a UI can all emit | AiiDA, Snakemake, Prefect; a message broker |
 | [Pending outputs as inputs](records.md#scheduling-pending-outputs-as-inputs) | the smallest addition that covers chaining and aggregation | a general DAG scheduler |
-| [The workflow builds the stages that run requests cut](workflow-contract.md#the-workflow-protocol) | one execution path for plain runs, reruns, and aggregation, in every runner | a file-based contract; a framework that knows sciline; a spec per part of a pipeline |
+| [The workflow builds the stages a session holds](workflow-contract.md#the-workflow-protocol) | one execution path for plain runs, reruns, and sums, in every runner; only the workflow code knows the graph | a file-based contract; a framework that knows sciline; a summary of the graph in the spec |
 | [The caller names the stage as a template's blanks, the session holds it](stages.md#who-names-the-stage) | the caller knows which parameter will move | stage inputs inferred from successive requests; stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
 | [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
-| [Aggregation is member and finalize stages that agree on their parameters, and every finalize lists every member](aggregation.md) | no specs or declarations of its own; the binding accumulates and the framework stays ignorant of scipp; a finalize record says what it sums without a walk back | contribute and combine specs with `carry`; an aggregation spec; summation in the framework; finalizes that accumulate onto earlier finalizes |
+| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums and holds one value per parameter; the backend needs no graph; the binding accumulates and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |
@@ -448,7 +443,7 @@ The linked document argues the case and lists the costs.
 
 ## Status
 
-The skeleton covers both execution shapes, run records, group submission with pending outputs, the sciline adapter with session-held stages and accumulators, labels, dataset references with a folder source, aggregation through member and finalize stages, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, publication, and the HTTP transport with a server and a CLI.
+The skeleton covers both execution shapes, run records, group submission with pending outputs, the sciline adapter with session-held stages, labels, dataset references with a folder source, sums over runs as list parameters, lookups with as-of fills, rules, `apply`, reprocess, the trigger loop, publication, and the HTTP transport with a server and a CLI.
 LoKI SANS and Amor reflectometry are bound to it.
 Not in it: a SciCat dataset source, a cluster launcher, remote sessions, a UI, and a store for templates and rules.
 What binding the two real workflows found, the open questions, and the deferred items are in [open-issues.md](open-issues.md).

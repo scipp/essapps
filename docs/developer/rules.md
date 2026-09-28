@@ -22,9 +22,10 @@ records = client.submit_group(group)
 batch_table(client, 'scan')
 ```
 
-`apply` fills the template once per member and returns a group, which is validated and submitted whole, so nothing exists before the submit.
-Each member is a run request that holds every filled value in `params` and varies the template's blanks, here `run`.
-The two members above agree on everything but their blanks, so they share one workflow ID, and in a session one held stage.
+`apply` fills the template once per member and returns a `Group`, which is validated and submitted whole, so nothing exists before the submit.
+Each member is a run request that holds every filled value in `params`.
+The group carries the template's blanks, here `run`, as `group.vary`, and `submit_group` passes them on as what the members vary.
+The two members above agree on everything but their blanks, so in a session they share one held stage.
 `batch_table` returns what was reduced with which values: one row per member, with the record, its status, the spec, the template, rule, and lookup version, and the lookup entry that applied.
 The value columns are the fields that differ per member, which are the template's blanks and every field a member pinned.
 Each shows the value the request was made with, whoever supplied it, and the `pinned` column names the fields of the row a person pinned.
@@ -40,7 +41,7 @@ Its blanks are the inputs of a stage, so the requests made from one template nam
 The batch form and the slider therefore use one concept.
 The template of a batch or a rule is stored, immutable, and versioned.
 Records made from a template carry its name as their label unless the caller gives another, and a rule's records carry the rule's name.
-A template comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and what the request varied or supplied, and keeps every other field literal.
+A template comes from a version-controlled file, such as the instrument defaults, or from a user saving a request with `Template.from_request`, which blanks the data-reference fields and the fields the caller names, and keeps every other field literal, the tuned ones included.
 A template moves to a new version, or to a new spec version, by copy through `Template.revise`, and the records say which version filled them.
 Its parameters, like a lookup's fills and the pinned values on a record, are held in the plain JSON form a request's parameters have, whatever objects the author passed, so that stored data compares and displays alike whether it was just made or read back.
 A batch rerun under the copy is a new batch whose records link to the old ones.
@@ -59,8 +60,8 @@ A member with no matching dataset before it is refused, visibly, in the trigger 
 
 **Precedence is one ladder: template, then lookup entry, then the values the submitter pinned.**
 A blank at any rung falls through to the next.
-Every filled value goes into the member's `params`, and the member varies the template's blanks.
-A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a workflow ID of its own.
+Every filled value goes into the member's `params`, and the members vary the template's blanks.
+A lookup entry that fills a value per dataset, such as a Q range per angle, or a value a person pinned for one member, therefore gives that member a held stage of its own.
 The record stores the resolved result, and its `Origin` keeps apart from that result the template version, the rule version, the lookup version and its entry that applied, and the pinned values.
 That is what lets a reprocess under a new template or lookup version carry forward what was pinned and fill again what was filled.
 
@@ -96,7 +97,7 @@ A **slot** is a label with no member key, owned by one interactive tool, so that
 | `lookup` | the table beside it, with its version |
 | `selector` | metadata criteria that pick the datasets, and a lower `Bound` |
 | `retry` | the failure reasons on which a failed record is resubmitted, and a limit |
-| `series` | optional: the dataset field that keys a series, the intermediates to accumulate, and the outputs of the finalize |
+| `series` | optional: the dataset field that keys a series |
 | `exclusions` | member keys the rule must not fire on, each with a reason |
 | `active` | whether the rule fires at all |
 
@@ -163,44 +164,46 @@ A run that silently did not happen is a decision the user cannot see, and [snake
 
 There are two kinds of batching.
 Batching for convenience is many independent requests from one template, made by a person or by a rule without a series.
-Batching for merging is an aggregation: a member run request per run, and a finalize run request that accumulates the members' intermediates ([aggregation.md](aggregation.md)).
+Batching for merging is one request over a list of runs ([aggregation.md](aggregation.md)).
 
-**A rule with a series submits a member run request and a finalize run request per arrival.**
+**A rule with a series submits one request per arrival, whose dataset field lists every current run of the series.**
 
 ```python
 rule = Rule(
-    name='normalize-series',
-    template=Template(name='normalize-defaults', spec=NORMALIZE.id,
-                      params={'floor': 1.5, 'scale': 2.0}, blanks=('run',)),
+    name='sans-series',
+    template=Template(name='sans-defaults', spec=NORMALIZE.id,
+                      params={'floor': 1.5}, blanks=('runs',)),
     selector=Selector(match={'role': Like(pattern='sample')}),
-    series=Series(key='sample_name', accumulate=('numerator', 'denominator'),
-                  outputs=('normalized',)),
+    series=Series(key='sample'),
 )
 ```
 
-`Series(key, accumulate, outputs)` names the dataset field whose value keys datasets into a series, the intermediates to accumulate, and the outputs of the finalize.
-The rule holds one template, and both stages are cut from it.
-Each member is `template.cut(outputs=accumulate)`: it varies the template's blanks and outputs the intermediates to accumulate.
-Each finalize is `template.cut(blanks=accumulate, outputs=outputs)`: its `params` are the template's values, and it supplies one `Accumulate` per intermediate that lists every current member of the series ([aggregation.md](aggregation.md#a-growing-series)).
-Its outputs are the series' outputs only.
-Successive finalizes of one series supersede each other under the rule's label, with the series value as their member key, so a UI shows one curve per sample that grows.
-A series of k runs therefore costs k finalizes, the k-th of which reads k values per intermediate, and the superseded ones are the first evicted.
+`Series(key)` names the dataset field whose value keys datasets into a series.
+The current runs of a series are the datasets with the same value of the key that the selector matches and that are not excluded, in the order the sources list them.
+The series value is the member key, so successive requests of one series supersede each other under the rule's label, and the batch table has one row per sample, whose curve grows.
+A run that arrives again, or out of order, is listed once.
+The bound does not apply to the runs of a series, so a series that began before the bound is one series.
+A series of k runs therefore costs k requests, the k-th of which reduces k runs, and the superseded ones are the first evicted.
 
-**A member must agree with the template on every field it does not vary.**
-A member made with another value, because a lookup entry or a pinned value set a field beyond the blanks, cannot be accumulated with the others.
-The backend refuses such a finalize and names the parameter, and the trigger loop logs the refusal.
+**Every run of a series is filled alike.**
+A series is one request, so one value per parameter.
+If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
+
+**A run that cannot be read fails the whole series request, visibly.**
+The operator excludes the run, and `retry` submits the series without it.
 
 **A rule never waits for a series to be complete**, because nobody at the instrument can say when it is: the user decides to measure one more angle, and none of ISIS's interfaces waits either.
-A series of fixed roles, a scatter and its transmission, is the same rule with the finalize fired only when every role is present.
-The rule says whether its finalize is published, and by default it is not.
+A series of fixed roles, a scatter and its transmission, is the same rule with the request fired only when every role is present.
+The rule says whether the results of a series are published, and by default they are not.
 
 **Series membership is not stored.**
-The members are the records under the rule's label, and which series each belongs to is asked of the dataset source when a finalize is submitted.
-A metadata correction at the instrument therefore moves a run between series and the next finalize reflects it, while earlier records are untouched because they hold resolved references.
-An exclusion added after a member's record exists drops that member from the next finalize the same way.
+Which runs belong to a series is asked of the dataset source when a series request is made.
+A metadata correction at the instrument therefore moves a run between series and the next request reflects it, while earlier records are untouched because they hold resolved references.
+An exclusion drops a run from the next request the same way.
 
-A combination that is not an accumulation, such as a stitch over angles, is not a series.
-It is a spec of its own whose parameter is a list of references ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)), and a rule has no field that names it yet ([open-issues.md](open-issues.md#open-questions)).
+`Series` needs only its key.
+What the workflow does with the list is its own business, so a sum and a stitch look the same to the rule ([aggregation.md](aggregation.md#combinations-that-are-not-accumulations)).
+A rule cannot drive a combination over references to the records of another rule, because a series fills a dataset field with runs.
 
 ## The dataset source
 
@@ -227,7 +230,7 @@ The batch table is a frame, and the pieces above are how it is built:
 | Pinned values beside resolved values | keeping the source frames next to the result frame, instead of writing the result back into the cells |
 | Selector | a boolean mask over the dataset metadata frame, which is `dataset_table` |
 | Series key | `groupby(series_key)` |
-| Finalize of a series | a reduction over the group so far, done again on each arrival; the superseded finalizes are its earlier values |
+| Request of a series | a reduction over the group so far, done again on each arrival; the superseded requests are its earlier values |
 | Latest per label and member key | `groupby(member_key).last()` over the records, where last follows the supersedes links, not the clock |
 
 The picture is exact for the view and wrong for the store.
@@ -272,10 +275,14 @@ Requests are therefore always made, and a superseding record shows the repeat.
 Completeness is not knowable at the instrument, since the user decides to measure one more angle.
 Each arrival therefore accumulates what exists.
 
+**Member and finalize requests per arrival.**
+Each arrival submits a request for the new run, whose outputs are the values that add, and a finalize request that accumulates the outputs of every current member.
+The k-th finalize reads k stored contributions and not k runs.
+But the finalize must check that the members fit, which needs the graph, a member that a lookup filled beyond the blanks cannot be accumulated, and a failed member is left out of the next finalize without anyone seeing it.
+
 **A combine template on the series.**
 The series names a second template, for a combine spec over a list of references to the members' contributions, with the output that is the contribution and the parameter that takes it.
 The rule then holds two templates that share most of their values and can disagree.
-With exposed intermediates, the finalize is the rule's own template cut at the intermediates, so the rule holds one template.
 
 **Fan-out in the scheduler.**
 Splitting a completed output into one request per key, with the keys known only after reading the data, could be a scheduler feature.
@@ -289,5 +296,7 @@ No current workflow needs it, and if one arises it is a rule on the completed pr
   Its default, the newest dataset the source knows, means a rule made mid-beamtime reduces the backlog only when asked.
 - An as-of fill has nothing to resolve to until the first can of a beamtime is measured, so the samples before it are refused, visibly, until a person fills them by hand.
 - The acquisition must write the fields a lookup or a selector matches on into the catalogue, which is a requirement on the instrument to be stated to the instrument teams early.
+- A series request over k runs reduces all k runs in a throwaway process ([aggregation.md](aggregation.md#a-series-under-a-rule)).
+- One run that cannot be read fails its series request until someone excludes it.
 - A series a person defines by hand, "these runs, and keep accumulating as more arrive", has no place here.
   It would be a rule with members a person lists instead of a selector, and it is left out until someone asks for it.

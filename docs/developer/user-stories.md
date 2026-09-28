@@ -71,7 +71,7 @@ Actor: user in a notebook.
 Checks: the result equals the reduction of the summed counts; each run is reduced on its own; the result names the runs it sums.
 
 Outcome: fits.
-The sum is one run whose run parameter lists the runs; the binding reduces each run and accumulates ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#a-sum)).
+The sum is one run whose run parameter lists the runs; the binding reduces each run and accumulates ([aggregation.md](aggregation.md#a-sum-is-one-run-over-a-list-of-runs)).
 
 ### S6. Sum sample runs and background runs
 
@@ -83,7 +83,7 @@ Actor: user in a notebook.
 Checks: each sample run and each background run is reduced on its own; the result names every run.
 
 Outcome: fits.
-Sample runs and background runs are two list parameters of one plain run ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#two-lists)).
+Sample runs and background runs are two list parameters of one plain run ([aggregation.md](aggregation.md#two-lists)).
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -198,7 +198,7 @@ Actor: user in a notebook.
 Checks: adding is fast; removing is correct even if slow; each state has a record that stands on its own.
 
 Outcome: fits.
-Each state is a run over the list of runs; the stage the session holds contributes only an added run, and a shorter list is accumulated again ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#adding-a-run-removing-a-run)).
+Each state is a run over the list of runs; the stage the session holds contributes only an added run, and a shorter list is accumulated again ([aggregation.md](aggregation.md#in-a-session)).
 
 ### B3. Compare two parameter sets side by side
 
@@ -263,7 +263,7 @@ Actor: user in the local or web application.
 Checks: the output is addressable as an input without export or import; the batch form can take it; provenance of the reduction reaches the run the beam centre came from.
 
 Outcome: fits.
-A value that other requests reference is an output of a run record, and a field may hold a literal or a reference; an exposed intermediate, such as a beam centre, may be supplied in place of what computes it ([records.md](records.md#reuse-means-a-run-record)).
+A value that other requests reference is an output of a run record, and a field may hold a literal or a reference, such as a beam centre typed in or taken from another run ([records.md](records.md#reuse-means-a-run-record)).
 
 ### C2. Vanadium from the catalogue
 
@@ -404,7 +404,7 @@ Actor: reflectometry user during a beamtime.
 Checks: a rule can key runs into a group; every arrival reduces the member and combines the members so far; out-of-order and repeated dataset arrival do not produce a duplicate combination; the UI shows one curve per sample, not one per arrival.
 
 Outcome: fits.
-A rule with a series submits one run request per arrival whose dataset field lists every run of the series so far, and successive requests supersede each other under the series value as member key ([proposals/sums-as-list-parameters.md](proposals/sums-as-list-parameters.md#a-series-under-a-rule)).
+A rule with a series submits one run request per arrival whose dataset field lists every run of the series so far, and successive requests supersede each other under the series value as member key ([rules.md](rules.md#series)).
 A sum and a stitch look the same to the rule; the stitch needs a spec over a list of runs, which the skeleton's Amor binding does not have yet.
 
 ### E2. Automatic reduction goes quiet

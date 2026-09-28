@@ -16,219 +16,213 @@ The ESS workflows combine runs in different places, but the additive cases share
 
 ```mermaid
 flowchart LR
-    subgraph member["per member"]
-        run[run] --> contribute[member stage] --> keys(("intermediates<br/>numerator, denominator"))
+    subgraph member["per run"]
+        run[run] --> contribute[contribute stage] --> keys(("accumulation keys<br/>numerator, denominator"))
     end
     keys --> add[accumulators] --> finalize[finalize stage] --> result["I(Q)"]
-    params[finalize parameters] --> finalize
+    params[parameters read after the sum] --> finalize
 ```
 
-A stage per member computes one or more intermediates.
-The intermediates of all members are accumulated.
+A contribute stage per run computes one or more values.
+The values of all runs are accumulated.
 A finalize stage turns the accumulated values into the outputs.
-Normalisation sits in the finalize stage, so there are usually two intermediates, a numerator and a denominator.
+Normalisation sits in the finalize stage, so there are usually two accumulated values, a numerator and a denominator.
 Dimensionality and event mode do not change the shape: a 4D volume adds like a curve, and concatenation is accumulation for binned data.
 
-sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per intermediate, which sciline calls an accumulation key, and a finalize stage.
-An `Aggregation` holds nothing between calls, so whoever loops over the members holds the accumulators.
+sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per **accumulation key**, and a finalize stage.
 
-## Inside one run, or across run records
+## A sum is one run over a list of runs
 
-An aggregation appears in one of two places, never half in each.
-
-**Inside one run**, the workflow code runs `Aggregation.compute` itself, and the framework sees an ordinary spec.
-This is for members the framework has no records for: angle groups inside a Bifrost run, chunks of an NMX file.
-
-**Across run records**, each member has a run record of its own.
-Members then run in parallel, a series grows by one member without reducing the others again, and a member can be removed.
-This is for runs, and the rest of this document is about it.
-
-## Member stages and a finalize stage
-
-An aggregation needs no spec of its own.
-The spec exposes the values that add as intermediates ([workflow-contract.md](workflow-contract.md#changes-to-the-spec-of-scippess690)), and the binding gives an accumulator for each.
-A client writes a template that sets every parameter but the member's, and cuts two stages from it:
+A sum over runs is one run request whose run parameter is a list.
+The spec says that the sum is part of the signature:
 
 ```python
-normalize = Template(spec=NORMALIZE, params={'floor': 1.5, 'scale': 2.0})   # 'run' left unset
-
-member = normalize.cut(blanks=('run',), outputs=('numerator', 'denominator'), name='members')
-members = [client.run(member, {'run': r}) for r in runs]                  # dispatched in parallel
-
-finalize = normalize.cut(blanks=('numerator', 'denominator'), outputs=('normalized',), name='total')
-total = client.run(finalize, {
-    name: Accumulate(accumulate=[m.ref(name) for m in members])
-    for name in ('numerator', 'denominator')
-})
-client.output(total, 'normalized')
+class NormalizeParams(BaseModel):
+    runs: list[OpaqueFile] = Field(min_length=1)
+    floor: float = 0.0
+    scale: float = 1.0
 ```
 
-This is `sciline.Aggregation(pipeline, members=[RunFile])`: `member` is its contribute stage and `finalize` its finalize stage.
-Outside a session each `client.run` is dispatched and returns at once, and the finalize run record waits for its members as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
+```python
+runs = [dataset_ref(instrument='dream', run=n) for n in (1, 2, 3)]
+total = client.run(NORMALIZE, {'runs': runs, 'floor': 1.5, 'scale': 2.0})
+total.request.params['runs']        # the three runs: the record names what it sums
+```
 
-**`Accumulate` is a supplied intermediate whose value is the accumulation of the outputs it lists.**
-The binding resolves it with the accumulator the author gave for that intermediate, in the order listed.
+The backend validates the request against the whole params model, like any other, so an empty list is refused at submit.
+The record holds one value per parameter, so every run of the sum was reduced with the same masks and the same direct beam.
+
+The binding names its member parameters and gives an accumulator per accumulation key:
+
+```python
+ACCUMULATORS = {Numerator: sciline.Buffered(add), Denominator: sciline.Buffered(add)}
+
+PipelineAdapter(
+    normalize_pipeline(),
+    keys={'runs': RunFile, 'floor': Floor, 'scale': Scale},
+    resolve={'runs': 'path'},
+    targets={'normalized': Normalized, 'numerator': Numerator, 'denominator': Denominator},
+    members=('runs',),
+    accumulators=ACCUMULATORS,
+)
+```
+
+`ACCUMULATORS` is the dictionary a `sciline.Aggregation` over the same pipeline takes, so a package defines it once for notebooks and for the binding.
+For each member parameter that the requested outputs need, the adapter builds a contribute stage.
+It goes from the member key, plus any varied parameter the contributions read, to the accumulation keys that depend on the member.
+One finalize stage goes from all accumulation keys, plus the varied parameters read after them, to the outputs.
+This is `sciline.Aggregation` inside one run, with the extra stage inputs that tuning needs ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
+An output that needs each run separately, and not only what the runs accumulate to, is refused when the stage is built.
+An example is the counts of one run in a sum.
+
 The framework never adds arrays, never chooses between summation and concatenation, and never places normalisation.
+The accumulation keys need not be exposed in the spec.
+They never leave the run, so they need no format, and anything the accumulator can combine works, such as essreflectometry's lists of ORSO entries.
+An intermediate the spec does expose, such as `numerator` above, is over a sum its accumulated value.
 
-Whether an intermediate holds events or a histogram is the author's choice.
-Events keep the binning a parameter of the finalize stage, and cost memory and disk.
-A histogram fixes the bins in the member stage, and is small.
+Whether an accumulation key holds events or a histogram is the author's choice.
+Events keep the binning a parameter read after the sum, and cost memory.
+A histogram fixes the bins in the contribute stage, and is small.
 The framework does not see the difference.
 
-A parameter that only the finalize stage reads, and that a person wants to change after the members ran, is varied by the finalize stage:
+### Two lists
+
+A workflow that sums sample runs and background runs separately has two list parameters, as the skeleton's `BACKGROUND` spec does:
 
 ```python
-normalize = Template(spec=NORMALIZE, params={'floor': 1.5})           # 'run' and 'scale' not given
-finalize = normalize.cut(blanks=('numerator', 'denominator', 'scale'), outputs=('normalized',))
+client.run(BACKGROUND, {'sample_runs': samples, 'background_runs': backgrounds})
 ```
 
-The members' records hold the default of `scale`, filled at submit, which their stage does not read.
-The finalize varies `scale`, so the agreement below does not compare it.
-
-## Members agree on their parameters
-
-Members and finalize cut from one template share every parameter they do not vary: the same masks, the same direct beam, the same wavelength bins.
-**The backend refuses an intermediate from a run record of the same spec that disagrees with the consuming request on a parameter both set in `params` and neither varies,** and names the first parameter that disagrees: "made with floor=1.5, this request sets floor=0.0".
-Both sides are compared as recorded, defaults filled, so a member that omitted a default agrees with a finalize that gives it.
-A parameter either side varies, such as the members' `run`, is not compared: members differ in it by intent.
-The check is made at validation and without workflow code.
-
-A correction that changes a shared parameter, such as better masks, gives another workflow ID, and all members run again with it.
-sciline does the same: a changed pipeline parameter means a new `Aggregation`.
-
-A workflow with two member tables, such as sample runs and background runs in ess.sans, is two member stages cut from one template and one finalize stage:
-
-```python
-sans = Template(spec=SANS_WITH_BACKGROUND,
-                params={'masks': masks, 'direct_beam': db, 'q_bins': 100})
-sample = sans.cut(blanks=('sample_run',), outputs=('sample_numerator', 'sample_denominator'))
-background = sans.cut(blanks=('background_run',),
-                      outputs=('background_numerator', 'background_denominator'))
-finalize = sans.cut(blanks=('sample_numerator', 'sample_denominator',
-                            'background_numerator', 'background_denominator'),
-                    outputs=('iofq',))
-```
-
-## A growing series
-
-A series grows by one run per arrival, and each arrival submits a finalize.
-**Every finalize lists every current member of its series** in its `Accumulate`, so the sum a finalize run record stands for is read off its request alone.
-The **current members** of a series are a query: the latest run record per member key under the label, leaving out failed, cancelled, and excluded ones.
-`apply` makes the finalize request from them (`ess.apps.batch._finalize`).
-
-- **A correction is never counted twice.**
-  A corrected member has a new run record, and the next finalize lists it in place of the old one.
-  A member reprocessed under a new rule version is likewise current only through its new record, and an excluded or failed member is not current at all.
-  Removing a member is therefore never a subtraction.
-- **Two arrivals close together cannot lose a member.**
-  Each finalize lists every current member, those submitted in the same group included.
-- **A finalize is a complete run record.**
-  Its references name member run records, which name the files.
-  If disk copies of intermediates were evicted, a recompute runs the member run records again.
-- **The framework asks nothing of an accumulator beyond `push` and `value`.**
-  sciline's `Accumulator` contract asks for associativity, but nothing here relies on it, because no finalize accumulates a value that another finalize accumulated.
-
-The cost is reading: the finalize of the k-th arrival reads k values per intermediate.
-A session pushes only the new member into the accumulator it holds ([In a session](#in-a-session)).
-Without a session, a runner may keep the accumulated value of an earlier finalize as a cache under the same rule: when a finalize's list begins with the list that value was accumulated from, only the rest is read.
-The request stays the same, so such a cache is invisible in the records, like every other cache.
-It is not built.
-Whether a throwaway runner reads the members of a series of 4D intermediates fast enough is a measurement ([open-issues.md](open-issues.md#open-questions)).
-
-## Combinations that are not accumulations
-
-A combination that is not an accumulation, such as reflectometry's stitch over angles with its global fit of scale factors, is a spec whose parameter is a list of references to per-angle curves (`ess.apps.amor.COMBINE`), and a tomographic reconstruction would be another.
-Recomputing it over all members on every arrival is affordable, because such inputs are small.
-A rule's `Series` accumulates only, and how a rule submits such a spec is an [open question](open-issues.md#open-questions).
+The binding names both as member parameters.
 
 ## In a session
 
-In a session an aggregation needs nothing of its own.
-Sessions and stages are explained in [stages.md](stages.md).
-
-- **Member run requests name one stage**, with the same workflow ID, the same varied parameter, and the same outputs, so the session builds it once.
-  What the members share, such as a direct beam, is computed once.
-- **The session holds one accumulator per workflow ID and intermediate**, with the list of outputs pushed so far.
-  A finalize whose `Accumulate` lists every member so far plus a new one pushes only the new one.
-- **A corrected or removed member starts a fresh accumulator**, because the request's list does not begin with what was pushed.
-  Nothing is subtracted.
-- **A finalize call that changes only a finalize parameter it varies** reuses the held finalize stage and the held accumulators.
-
-A series that grows in a session lists every current member in every finalize, as a rule does:
+A template whose blank is the list names the stage a session holds ([stages.md](stages.md)):
 
 ```python
-members = []
-
-def add_run(run):
-    members.append(client.run(member, {'run': run}))
-    return client.run(finalize, {
-        name: Accumulate(accumulate=[m.ref(name) for m in members])
-        for name in ('numerator', 'denominator')
-    })
+total = Template(spec=NORMALIZE, blanks=('runs',), name='sum')
+first = client.run(total, {'runs': [r611, r612]})
+added = client.run(total, {'runs': [r611, r612, r613]})    # contributes only r613
+removed = client.run(total, {'runs': [r611, r613]})        # accumulates both again
 ```
 
-## The fold
+The held stage keeps the accumulation over the runs it has seen.
+A call whose list begins with those runs contributes only the rest.
+Any other list, such as one without a run, is accumulated again from its first run.
+Each record names every run it sums, and recomputing it needs nothing from the session.
 
-The **fold** is an optional addition for a series that arrives faster than its members can be read.
-A long-lived runner holds the accumulators of one series and serves each finalize under the prefix rule of a session's held accumulator, so a finalize that lists one more member reads only that member.
-It may also write a finalize run record only every n arrivals or when the series goes quiet.
-Each finalize request lists every current member, so what the runner holds is recomputable from the request, and held state remains a cache.
-A fold's records carry the `reused` flag, so publication recomputes them from their members.
-The fold needs a runner that is addressed by its series, which does not exist yet, and nothing requires it before such a series appears.
-[stages.md](stages.md#kept-runners) discusses kept runners.
+A parameter varied over a sum reuses the sum when only the finalize stage reads it:
+
+```python
+tune = Template(spec=NORMALIZE, params={'runs': runs, 'floor': 1.5}, blanks=('scale',))
+client.run(tune, {'scale': 2.0})     # normalisation reads scale: the sum is reused
+tune = Template(spec=NORMALIZE, params={'runs': runs, 'scale': 2.0}, blanks=('floor',))
+client.run(tune, {'floor': 0.0})     # each run's numerator reads floor: accumulated again
+```
+
+The binding decides which of the two applies, from the graph.
+The caller only says what varies.
+
+## A series under a rule
+
+On each arrival a rule with a series submits one request whose dataset field lists every current run of the series ([rules.md](rules.md#series)).
+Successive requests supersede each other, and the result a record stands for is read off its request alone.
+
+- **A correction is never counted twice.**
+  A run that arrives again is listed once, and an excluded run is not listed at all.
+- **A run that cannot be read fails the whole series request, visibly.**
+  The operator excludes the run, and `retry` submits the series without it.
+- **Every run of a series is filled alike.**
+  A series is one request, so one value per parameter.
+  If a lookup fills a field differently for two runs of one series, `apply` refuses the series and names the runs.
+
+A rule runs each request in a throwaway process, so the request of the k-th arrival reduces all k runs.
+A disk cache of contributions would remove that cost.
+The binding knows its exact key, the values the contribute stage reads plus the run's identity and checksum, and the cache would be invisible in the records.
+It is not built.
+
+The **fold** is a long-lived runner that holds the stage of one series, as a session does, so a request with one more run contributes only that run.
+It needs a runner addressed by its series, which does not exist yet ([stages.md](stages.md#kept-runners)).
+
+## Reducing the runs of a sum on separate nodes
+
+A sum inside one request runs in one process.
+To spread the runs over nodes, a client composes two specs over references, as `ess.apps.examples.SUM` and the Amor stitch do:
+
+```python
+# CONTRIBUTE and COMBINE are illustrative: one run to numerator and denominator,
+# and a list of numerators and denominators to I(Q).
+member = Template(spec=CONTRIBUTE, params={'floor': 1.5}, blanks=('run',))
+parts = [client.run(member, {'run': r}) for r in runs]    # independent requests
+total = client.run(COMBINE, {
+    'numerators': [p.ref('numerator') for p in parts],
+    'denominators': [p.ref('denominator') for p in parts],
+    'scale': 2.0,
+})
+```
+
+Each record describes only its own computation, and the parts are one reference away.
+The combine waits for the parts as [pending outputs](records.md#scheduling-pending-outputs-as-inputs).
+The costs are in [Costs](#costs).
+A rule cannot drive this, because a series fills a dataset field with runs, not with references to the records of another rule.
+
+## Combinations that are not accumulations
+
+What the workflow does with a list is the workflow's business, so a sum and a stitch look the same to the framework.
+In `ess.apps.amor`, reflectometry's stitch over angles, with its global fit of scale factors, is a spec whose parameter is a list of references to per-angle curves (`COMBINE`).
+Under a rule it needs a spec over a list of runs, which `ess.apps.amor` does not have yet.
+Recomputing a stitch over all angles on every arrival is affordable, because its inputs are small.
 
 ## How this maps onto sciline
 
-sciline composes stages and accumulators in one process, with values in memory.
-The framework records each call as a run record, with values as outputs of run records.
-
 | sciline | Framework |
 |---|---|
-| `Pipeline` with parameters set | spec and the parameters not varied of a run request, named by its workflow ID |
-| `Stage(pipeline, inputs, outputs)` | a template whose blanks are the stage inputs |
+| `Pipeline` with parameters set | a run request's spec and `params` |
+| `Stage(pipeline, inputs, outputs)` | a template whose blanks are the stage inputs, held by a session |
 | `Stage.compute` | a run record |
-| `Aggregation.contribute_stage` | a member stage, varying the member's parameters, with the exposed intermediates as outputs |
-| accumulators | the binding's accumulators, which resolve `Accumulate` |
-| `Aggregation.finalize_stage` | a finalize stage, supplied the intermediates, with the results as outputs |
-| member table | the batch table that `apply` takes |
-| `Aggregation.compute(table)` | a group: one member run request per row, one finalize run request |
-| accumulators held by a loop | accumulators held by a session; without one, a finalize reads every member |
-
-One structure serves adding a run in a notebook, a rule's growing series, a batch summed at once, and a parallel reduction of five hundred runs.
-They differ in where the intermediates come from and whether a process holds the accumulators between finalizes.
+| `Aggregation(pipeline, members=..., accumulators=...)` | a member parameter and the binding's accumulators |
+| `Aggregation.compute(table)` | one run request whose member parameter holds the list |
+| accumulators held by a loop | a stage over the list, held by a session |
 
 ## Alternatives considered
 
 **The framework sums arrays itself.**
 It would import scipp semantics, decide between summation and concatenation, and still could not place normalisation.
 
+**A member record per run and a finalize record over their intermediates.**
+Each run has a record of the stage from the run to the numerator and denominator, and a finalize record supplies the accumulated intermediates as a reference form of its own, `Accumulate`, to the stage that normalises.
+Runs reduce in parallel across processes and a series reads only the new member.
+But pieces must fit together, and checking that needs to know which parameters each piece reads, which only the workflow code knows.
+Without the graph the backend refuses a member of a sum with two run lists, because the member leaves the other list unset.
+A request cut at an intermediate is validated only when it runs.
+A value in `params` means one of three things: the run read it, the cut made it irrelevant, or an agreement check guarantees that the member records read it.
+The agreement check skips every parameter that either side varies, so the names a caller varies decide correctness.
+
+**A summary of the graph in the spec.**
+The spec lists, per output, the parameters it reads, generated by the binding and checked against the pipeline, so the backend can check that the pieces of a sum fit.
+It puts a derived property of the code into a document meant to be written by hand and read without code.
+
 **Contribute and combine specs with `carry`.**
-Every pipeline that aggregates is published as two or three specs cut at the values that add: a contribute spec whose one output is the member's contribution, and a combine spec over a list of references to contributions.
-A `carry` declaration on the combine spec says that its combined contribution may be passed back into that list.
-Members must agree on shared parameters, which only the adapter knows, so it writes them into every contribution and the combine refuses a mismatch after loading.
-The associativity promise sits on the spec although it is a property of the code, and a rule with a series holds two templates.
+Every pipeline that aggregates is published as two or three specs cut at the values that add, and a `carry` declaration on the combine spec says that its combined output may be passed back into its list.
+The adapter writes the member parameters into every contribution so the combine can refuse a mismatch, and the associativity promise sits on the spec although it is a property of the code.
 
 **An aggregation spec.**
 A spec whose signature is `Aggregation.compute(table)`, expanded by the backend into member and finalize records.
-It needs no `carry` and no agreement check either, but adds a second kind of spec and records created on behalf of a request, and it does nothing for stages in general.
+It adds a second kind of spec and records created on behalf of a request.
 
-**Members and finalize share a stored workflow record.**
-A record of the values given, without defaults, which members and finalize must share by ID.
-A member that omitted a default and a finalize that gives it then cannot be accumulated together, although they ran with the same values, and a recompute applies whatever the spec's defaults are at that time.
-
-**Finalizes that accumulate onto earlier finalizes.**
-A finalize also outputs the accumulated values, and the next finalize lists them with the members the previous one does not cover.
-The k-th arrival then reads two values per intermediate instead of k.
-What a finalize run record sums is then found only by walking back through earlier finalizes, a correction is detected only by comparing the records a previous finalize covers with the current members, and every accumulator must be associative.
-A cache in the runner gives the same saving and leaves the request as it is.
+**Series requests that accumulate onto the previous request's result.**
+A series request names the previous total and the new run, so the k-th arrival reads two values instead of k runs.
+What a record sums is then found only by walking back through earlier records, a correction is detected only by comparing lists, and every accumulator must be associative.
+A cache of contributions gives the same saving and leaves the request as it is.
 
 ## Costs
 
-- Authors must expose the intermediates that add, each with a format, and give an accumulator for each.
-- Authors must place normalisation after those intermediates. ess.sans does, ess.powder does not yet.
-- Intermediates are stored outputs in shared mode, and often large. Without a session, the finalize of the k-th arrival reads k of them per intermediate.
-- In a rule's series, a member made with a value other than the template's, because a lookup or a pinned value set a field beyond the blanks, cannot be accumulated ([open-issues.md](open-issues.md#open-questions)).
-- A correction to a shared parameter runs every member again.
-- The agreement rule does not compare a parameter either side varies, so a value a member varies is not checked against a value the finalize sets.
-- An intermediate to accumulate must be storable, because it is an output of each member. essreflectometry accumulates a list of ORSO entries beside its events, which the author must convert.
-- A member stage in a throwaway process computes again what all members share.
+- The runs of one request over a list reduce in one process, one after another.
+- A sum composed of two specs over references exposes its accumulation keys as outputs, with a format the store can write, and reaches the combine through disk.
+  Nothing checks that the parts fit: a combine over parts reduced with different masks is accepted, and a parameter read on both sides is set twice and never compared.
+  Making every part from one template makes them agree by construction.
+- A series under a rule, without a session, reduces all k runs on the k-th arrival.
+- One run that cannot be read fails the series request until someone excludes it.
+- `sciline.Buffered` holds every contribution in memory.
+- Authors must place normalisation after the accumulation keys. ess.sans does, ess.powder does not yet.
+- A correction to a parameter that the contribute stage reads reduces every run again.

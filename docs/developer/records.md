@@ -18,13 +18,13 @@ client.run(tune, {'bins': 16})
 ```
 
 A **run record** is one run of a spec with every parameter value set, like `compute` on a configured `sciline.Pipeline`.
-A call of a stage, like one `sciline.Stage.compute`, is one run record too: the parameter values the call takes are in `params`, and the intermediates it takes are in `supplied`.
+A call of a stage, like one `sciline.Stage.compute`, is one run record too, equal to the record of a plain run with the same values.
 A **template** names the stage: the spec, the values set, the blanks each request fills, and the outputs to compute.
 It is plain data.
 `client.run(template, values)` fills its blanks and submits one run request, and a value for a parameter that is not a blank replaces the template's value.
 A template a client cuts for a slider lives on the client, and every request made from it carries its values, so nothing else of it is stored.
 The templates of batches and rules are stored ([rules.md](rules.md#templates-and-lookups)).
-`client.run(spec, params)` is shorthand for one run record that varies nothing and supplies nothing: a spec stands for a template with nothing set and no blanks.
+`client.run(spec, params)` is shorthand for one run record that varies nothing: a spec stands for a template with nothing set and no blanks.
 
 A **run request** is everything needed to run a workflow once, and its values alone reproduce the outputs.
 It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
@@ -35,23 +35,19 @@ The only path it may name is the identity of a local file that carries no run id
 | Field | Purpose |
 |---|---|
 | `spec` | name and version of the workflow interface |
-| `params` | every parameter value, varied ones included, with data fields holding references; recorded with the spec's defaults filled and in the form the params model gives each value |
-| `supplied` | intermediates the spec exposes, by name, each supplied in place of what computes it |
+| `params` | every parameter value, with data fields holding references; recorded with the spec's defaults filled and in the form the params model gives each value |
 | `outputs` | the outputs to compute; empty means the spec's results, and the record lists them explicitly |
-| `vary` | names of the parameters a caller varies from run to run: the blanks of its template that are parameters |
 | `instrument`, `proposal` | the scope, both mandatory |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
 | `origin` | template version, rule version, lookup version and entry, and what was pinned beyond them |
 
-A parameter holds a literal or a reference.
-A **supplied intermediate** holds a reference to an output of another run record, or an **`Accumulate`**, which lists several such references and stands for their accumulation ([aggregation.md](aggregation.md)).
-`params`, `supplied`, and `outputs` determine what a run computes.
+A parameter holds a literal or a reference, and a sum over runs is a parameter that holds a list of references ([aggregation.md](aggregation.md)).
+`params` and `outputs` determine what a run computes.
 
-**`vary` is a hint for the session, like `label`.**
-It names the parameters whose values change from call to call, so that a session holds the stage cut at them ([stages.md](stages.md)).
-It does not change the result, it is not part of the workflow ID, and provenance does not rely on it.
-`RunRequest.fixed` is `params` without the names in `vary`.
+**What a caller varies is not recorded.**
+The names of the parameters whose values change from call to call travel with the submission, `Backend.submit(group, vary)`, so that a session holds the stage cut at them ([stages.md](stages.md)).
+Where a session cuts the pipeline does not change the result, so the record does not say.
 `label`, `member_key`, and `origin` serve batches and rules ([rules.md](rules.md)).
 The origin is explanation and not provenance, because the resolved request alone reproduces the run.
 
@@ -77,18 +73,11 @@ A run record is immutable once the run completes, except for its status and the 
 
 **Defaults are filled at submit, and every value is recorded in the form the params model gives it.**
 When the backend accepts a request, submitted or re-submitted by a recompute or retry, it adds to `params` the spec's default for every parameter that has one and is not given, and passes `params` through the params model.
-A plain run therefore records the whole params model, and `0` and `0.0` given for one float field are one recorded value and one workflow ID.
+A plain run therefore records the whole params model, and `0` and `0.0` given for one float field are one recorded value.
 The request's `params` is what the run read, so the record keeps no second copy of the parameters.
-Only a required parameter without a default may stay unset, and only when the request supplies an intermediate in place of what needs it.
 A recompute runs with the recorded values, so a spec whose default changed since does not change what the record means.
 
-**The workflow ID names the configured pipeline.**
-`RunRequest.workflow_id` is a hash of spec, the parameters outside `vary`, instrument, and proposal as sorted JSON.
-Two requests that set the same values outside `vary` have the same workflow ID, whether a value was given or filled as the default, and whatever they vary or supply.
-It is derived from the request, never stored as a record of its own; a session names the stages it holds by it ([stages.md](stages.md)), and the record store indexes run records by it.
-To recompute a run record, the runner sets the parameters outside `vary` on the pipeline, builds the stage from the varied names, the supplied names, and the outputs, and calls it with the varied values and the resolved supplied intermediates.
-How the runner cuts the pipeline does not change the result, which is why `vary` is not provenance.
-
+To recompute a run record, the runner sets `params` on the pipeline and computes the outputs.
 **Recorded parameter values, package versions, and the environment are what make "recompute this record" true.**
 Without them a changed default or an upgraded package silently changes what a record means.
 The environment is an opaque name and revision, at ESS a conda environment, which the framework records and compares and does no more with.
@@ -107,20 +96,9 @@ The backend checks a run request against the spec, without workflow code, in the
 
 - **Every name is known.**
   A parameter in `params` must be a parameter of the spec, and an output must be an output of it.
-  A name in `vary` must be a parameter of the spec with a value in `params`.
-  A name in `supplied` must be an intermediate the spec exposes.
-- **Every value is valid for its field**, and a supplied intermediate holds a reference or an `Accumulate`.
-- **A request that supplies no intermediate is checked against the whole params model**, so a plain run or a batch member that leaves a required parameter unset is refused at submit.
-- **An intermediate supplied from a run record of the same spec must agree with the consuming request on every parameter both set in `params`, except the names either request varies.**
-  The refusal names the first parameter that differs: `<ref>: made with floor=1.5, this request sets floor=0.0`.
-  A member of the same group is completed with its defaults before the comparison.
-  It makes one value of every shared parameter a property of the records, not of the binding.
+  A name submitted as varying must be a parameter of the spec.
+- **Every request is checked against the whole params model**, so a request that leaves a required parameter unset is refused at submit, whichever outputs it names.
 - **References resolve**, as in [workflow-contract.md](workflow-contract.md#validation).
-
-**A request that supplies an intermediate is checked field by field, and a parameter it misses fails at run time.**
-Whether its supplied intermediates and `params` suffice for its outputs depends on the graph, which only the workflow code knows.
-A request that leaves a needed parameter unset fails at the start of its run, with a structured reason.
-A supplied intermediate makes the parameters upstream of it irrelevant, and those may stay set in `params`; the run record does not claim they affected the result.
 
 ## References
 
@@ -138,9 +116,8 @@ A reference may name a **pending output**, one whose run record has not complete
 Only an output reference can be pending, so the scheduler has one kind of dependency.
 
 **Provenance is the graph obtained by following references backwards**, from a result to the parameters, datasets, and software versions of every run that contributed.
-A run record's `params` and `supplied` may hold references to outputs of other run records.
-`Backend.provenance` walks it into a self-contained snapshot, which names the parameters, the supplied intermediates, the outputs, and the values of the literal outputs of every run record on the way.
-It leaves out the workflow ID, which depends on what a caller varied and so on a caching choice.
+A run record's `params` may hold references to outputs of other run records.
+`Backend.provenance` walks it into a self-contained snapshot, which names the parameters, the outputs, and the values of the literal outputs of every run record on the way.
 There is no separate provenance model and no "which record produced this" query, because the reference names the record.
 
 ## Datasets
@@ -195,13 +172,13 @@ Two invariants keep that safe.
 2. Everything a session holds can be recomputed from records.
 
 A session is therefore a cache, and losing one costs time and nothing else.
-The second invariant holds for every value the system keeps in memory, including a partial sum over a growing series, because every input to such a value is a dataset or an output that has a record.
+The second invariant holds for every value the system keeps in memory, including the accumulation of a growing sum, because every input to such a value is a dataset or an output that has a record.
 Held state is an optimisation with a recompute fallback, never the only copy of a fact, which is what lets a growing series be aggregated on disk or in memory interchangeably ([aggregation.md](aggregation.md)).
 It holds because reduction here consumes datasets, and it would not hold for a live stream, whose inputs are pulses with no records, which is esslivedata's problem and out of scope.
 Ephemeral identities are dangerous when other things depend on them (scipp/esslivedata#1042), so nothing depends on this one.
 
 A session is defined by its owner, not by where it runs.
-Beside the outputs of its records it holds the **stages** that run requests cut, which are what makes a rerun cheap, and the accumulators of a growing sum ([stages.md](stages.md)).
+Beside the outputs of its records it holds the **stages** it built for them, which are what makes a rerun cheap ([stages.md](stages.md)).
 The workflow itself holds nothing between runs.
 In **local mode**, client, backend, launcher, session, and data store are one Python process: a notebook or a local application.
 In **shared mode** the backend is a service for one instrument, batch and automatic reduction run there without sessions, and the shared web UI submits and inspects.
@@ -254,20 +231,19 @@ Such a copy is dropped only by an explicit operation on it or with its proposal,
 ## Reuse means a run record
 
 **A value that other requests reference must be an output of a run record.**
-A value inside a pipeline becomes such an output when the spec exposes it as an intermediate and a stage names it as an output.
+A value inside a pipeline becomes such an output when the spec exposes it as an intermediate and a request names it as an output.
 Reuse therefore does not force a cut into separate specs, and separate pipelines remain separate specs.
 
 ```python
-sans = Template(spec=SANS, params={'sample_run': run, 'masks': masks, 'direct_beam': db})
+sans = Template(spec=SANS, params={...})                         # every value set
 det = client.run(sans.cut(outputs=('detector_image',)))          # an intermediate as output
 centre = client.run(PICK_CENTRE, {'image': det.ref('detector_image')})
-
-reduce = sans.cut(blanks=('beam_centre', 'q_bins'), outputs=('iofq',))
-client.run(reduce, {'beam_centre': centre.ref('centre'), 'q_bins': 100})
+client.run(IOFQ, {'sample_run': run, 'beam_center': centre.ref('center'), ...})
 ```
 
-The run record made from `reduce` says that `beam_centre` was supplied, and from which run record.
-The parameters of the beam-centre finder that `sans` also sets did not affect this result, and the record does not claim they did: it says "this pipeline, with `beam_centre` supplied".
+A value from outside is a parameter whose field accepts a reference, such as `beam_center: Quantity | OutputRef` in `ess.apps.loki`.
+The run record of the reduction names the run record the beam centre came from.
+In sciline terms, setting a key replaces its provider, so a value from outside needs no mechanism of its own.
 
 Three reasons make a value an output of a run record.
 
@@ -275,13 +251,13 @@ Reuse: one artefact feeds many runs, such as processed vanadium, a beam centre, 
 This reason holds inside a session too, because the artefact needs a record of its own before batch can reuse it.
 
 Iteration without a session: an expensive part whose result is tuned from a throwaway runner or from the shared web UI, such as loading and preprocessing a large run before adjusting its post-processing.
-A stage that outputs the preprocessed data as an intermediate stores it, and a second stage takes it as input.
+A request that names the preprocessed data as an output stores it, and a second spec takes it as a parameter.
 Inside a session this reason disappears, because a held stage recomputes only what lies downstream of what the requests vary, and the loaded data stays a value the stage holds, with no record, no reference, and no life beyond the session.
 
-Aggregation: each member of a sum over runs is a run record whose outputs are the intermediates that add ([aggregation.md](aggregation.md)).
+Aggregation across processes: the runs of a sum spread over nodes are separate run records whose outputs are the values that add, and a combine spec takes references to them ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)).
 
 Storing an intermediate is the only strategy that works on a fire-and-forget remote runner.
-The author decides which values are exposed; the caller decides which templates to cut at them.
+The author decides which values are exposed; the caller decides which outputs to ask for.
 
 ## The record store
 
@@ -326,8 +302,8 @@ A request whose reference names a collection element that the completed producer
 Groups must be acyclic, and a group is validated whole before any record is created.
 A waiting request has no timeout, because every record it waits on reaches a terminal state through its own failure handling.
 
-This one primitive covers a vanadium reduction feeding a sample reduction submitted together, temperature scans, angle series, and aggregation over a series of runs.
-An aggregation is one member run request per run plus one finalize run request whose supplied `Accumulate` values reference an output of each member ([aggregation.md](aggregation.md)).
+This one primitive covers a vanadium reduction feeding a sample reduction submitted together, temperature scans, angle series, and a sum spread over nodes.
+A sum spread over nodes is one request per run plus one combine request whose list parameter references an output of each ([aggregation.md](aggregation.md#reducing-the-runs-of-a-sum-on-separate-nodes)).
 
 **Members of a batch are independent.**
 There is no ordering between them, and rerunning a member is a new record under the same label and member key.
@@ -359,18 +335,24 @@ Reliable command delivery over Kafka was a long struggle in esslivedata (scipp/e
 *Every dataset as a record of a built-in `file` spec*, so that a reference has one form.
 It buys a UUID over an identity SciCat already keeps, a spec with no workflow, and a rule to stop the record store from becoming a catalogue, and gives nothing the two forms do not, because "which records used this dataset" is the same index over references either way.
 
-*A record per call of a spec with all its parameters and nothing supplied*, with a session that infers the stage from successive requests.
-Without `supplied`, aggregation needs specs cut at the values that add, and a supplied intermediate cannot be expressed at all.
-Without `vary`, a caller cannot declare the stage it needs, so the first call of every slider computes everything and holds nothing.
+*A session that infers the stage from successive requests*, with nothing given about what varies.
+A caller cannot declare the stage it needs, so the first call of every slider computes everything and holds nothing.
 
-*A stage record*: one call of a `sciline.Stage`, whose request holds the parameters the call takes in `inputs`, beside the supplied intermediates, and the other parameters in `params`.
+*A stage record*: one call of a `sciline.Stage`, whose request holds the parameters the call takes in `inputs` and the other parameters in `params`.
 Where the caller cut the pipeline then becomes part of what the record says ran, though it does not change the result: the same values give different `params` depending on the cut, and every reader of parameters must merge the two fields.
-Keeping every value in `params` and the cut in `vary` makes the record say what ran, and leaves the cut a hint for the session.
+
+*The varied names on the record*, as a field `vary` beside `params`.
+The record then says something about a caching choice, and a check that compares records must decide whether to trust it.
+Giving the names with the submission keeps the record to what ran.
+
+*Intermediates supplied in place of what computes them*, as a field `supplied` beside `params`.
+It lets a record hold one piece of a pipeline, such as the stage from a sum's accumulated values to I(Q), but then the backend must know which parameters each piece reads to check that pieces fit ([aggregation.md](aggregation.md#alternatives-considered)).
+A parameter that accepts a reference covers a value from outside without it.
 
 *A stored workflow record holding only given values*: a record kind of its own, `WorkflowRecord(spec, params, instrument, proposal)`, embedded in each run request with the values given and no defaults, identified by a hash of its content.
 It gives two identities per configuration: omitting a parameter and giving it at its default are two workflow records, with no shared held stage and no accumulation across them.
 A recompute is unsafe against changed defaults, because the defaults apply at run time.
-Filling defaults at submit makes the run request hold every value that ran, and the workflow ID follows from it.
+Filling defaults at submit makes the run request hold every value that ran.
 
 *References to values that no run record outputs*, so that any node of a pipeline can be reused without exposing it.
 Such a value has no record, no parameters, and no versions, so provenance and recompute would stop at it.
@@ -382,8 +364,8 @@ Remote sessions need a session launcher, an idle timeout, and a cap on the numbe
 Shared mode pays one disk write and one read per output, plus a process start per run.
 Whether a chained consumer exists is known only for requests submitted together as a group, so placement cannot be inferred for a request submitted on its own.
 
-A request that supplies an intermediate and leaves a needed parameter unset fails when it runs, not when it is submitted.
-A default is recorded on every request, so after a spec's default changes, a request with the same given values has another workflow ID, and a held stage or an accumulation does not span the change.
+A request for an intermediate output must set every required parameter, including those the output does not need; an author who wants otherwise makes the parameter optional.
+A default is recorded on every request, so after a spec's default changes, a request with the same given values names another held stage.
 
 The author chooses which intermediates to expose, with their formats, and the choice is not always clean.
 Processed vanadium in diffraction is rebinned onto the sample's edges without interpolation, so a stored dense vanadium is usable only for compatible binning, and the alternative is to keep it as events.
