@@ -141,11 +141,17 @@ def specs(env: Env, as_json: bool) -> None:
 
 
 @main.command()
+@click.option(
+    '--proposal',
+    'proposals',
+    multiple=True,
+    help='A proposal whose datasets to list, repeatable; your own by default.',
+)
 @click.pass_obj
-def datasets(env: Env) -> None:
+def datasets(env: Env, proposals: tuple[str, ...]) -> None:
     """List the datasets the backend's sources know: reference and path."""
     with closing(env.client()) as client:
-        for dataset in client.datasets():
+        for dataset in client.datasets(proposals or None):
             click.echo(f'{dataset.ref}\t{dataset.path}')
 
 

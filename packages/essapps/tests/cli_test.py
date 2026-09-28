@@ -163,6 +163,18 @@ def test_datasets_lists_reference_and_path(
     assert f'{run_ref}\t{run_file}' in result.output.splitlines()
 
 
+def test_datasets_lists_the_proposals_asked_for(
+    runner: CliRunner, env: Mapping[str, str], run_ref: DatasetRef
+) -> None:
+    result = runner.invoke(main, ['datasets', '--proposal', 'p2'], env=env)
+    assert result.exit_code == 0, result.output
+    assert result.output == ''
+    result = runner.invoke(
+        main, ['datasets', '--proposal', 'p2', '--proposal', 'p1'], env=env
+    )
+    assert str(run_ref) in result.output
+
+
 def test_submit_help_lists_the_generated_flags(
     runner: CliRunner, env: Mapping[str, str]
 ) -> None:
