@@ -58,7 +58,8 @@ def apply(
     series they belong to, keyed by the series value, and the template's
     dataset field holds every current member of each, those given included.
     When the dataset field is a column of a list parameter of rows, each
-    dataset is one row, filled from its own lookup entry.
+    dataset is one row, filled from its own lookup entry. A series that fires
+    once complete waits until it is.
 
     The group is returned, not submitted, so that it can be previewed through
     :meth:`Client.validate` and submitted whole. It carries the template's
@@ -82,6 +83,9 @@ def apply(
         members = {key: [] for key in values}
     group: dict[str, RunRequest] = {}
     for key, member in members.items():
+        if series is not None and member and not isinstance(series.fire, str):
+            if (missing := series.fire.missing(member)) is not None:
+                raise Waiting(f'series {key}: {missing}')
         fill, entries = _fill(
             client, template, lookup, member, series=series is not None
         )

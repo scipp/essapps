@@ -8,7 +8,7 @@ See docs/developer/rules.md.
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -43,6 +43,7 @@ from ess.apps.records import RunRecord, Status, Template
 from ess.apps.rules import (
     Between,
     Bound,
+    Complete,
     Like,
     Lookup,
     LookupEntry,
@@ -501,7 +502,9 @@ def test_the_reservation_does_not_affect_other_labels(
 # A series
 
 
-def series_rule(lookup: Lookup | None = None) -> Rule:
+def series_rule(
+    lookup: Lookup | None = None, fire: Literal['each'] | Complete = 'each'
+) -> Rule:
     """A rule whose request per sample sums every run of that sample."""
     return Rule(
         name='series',
@@ -512,7 +515,7 @@ def series_rule(lookup: Lookup | None = None) -> Rule:
             blanks=('runs',),
         ),
         lookup=lookup,
-        series=Series(key='sample'),
+        series=Series(key='sample', fire=fire),
     )
 
 
@@ -606,6 +609,58 @@ def test_an_excluded_run_leaves_the_series(client: Client, tmp_path: Path) -> No
     # 2 counts per point over the remaining run's total of 8, scaled by 2.
     normalized = client.output(latest, 'normalized')
     assert list(normalized.values) == [2.0 / 8.0 * 2.0] * 4
+
+
+def test_a_series_that_fires_when_complete_waits_for_its_count(
+    client: Client, tmp_path: Path
+) -> None:
+    source = FakeDatasetSource()
+    client.backend.sources.append(source)
+    rule = series_rule(fire=Complete(count=3))
+    loop = TriggerLoop(client, rule)
+    for i in (1, 2):
+        source.add(sample(tmp_path / f'{i}.h5', [1.0, 2.0], f'pid/{i}'))
+        assert loop.run_once() == []
+    assert loop.waiting == {
+        f'series pid:pid/{i}': 'series sio2: 2 of 3 members' for i in (1, 2)
+    }
+    status = trigger_status(client, rule, client.datasets()[-1])
+    assert (status.fires, status.waiting) == (False, True)
+
+    source.add(sample(tmp_path / '3.h5', [1.0, 2.0], 'pid/3'))
+    (complete,) = client.wait(loop.run_once())
+    assert listed(complete) == ['pid:pid/1', 'pid:pid/2', 'pid:pid/3']
+    # A run after completion fires like any arrival.
+    source.add(sample(tmp_path / '4.h5', [1.0, 2.0], 'pid/4'))
+    (grown,) = client.wait(loop.run_once())
+    assert listed(grown)[-1] == 'pid:pid/4'
+    assert loop.waiting == {}
+
+
+def test_a_series_of_fixed_roles_fires_when_every_role_is_present(
+    client: Client, tmp_path: Path
+) -> None:
+    """A scatter run waits for its transmission run, and fires with both."""
+    source = FakeDatasetSource(
+        sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1', role='scatter')
+    )
+    client.backend.sources.append(source)
+    loop = TriggerLoop(
+        client, series_rule(fire=Complete(roles=('scatter', 'transmission')))
+    )
+    assert loop.run_once() == []
+    assert "['transmission']" in loop.waiting['series pid:pid/1']
+
+    source.add(sample(tmp_path / 'b.h5', [1.0, 1.0], 'pid/2', role='transmission'))
+    (both,) = client.wait(loop.run_once())
+    assert listed(both) == ['pid:pid/1', 'pid:pid/2']
+
+
+def test_a_series_is_complete_by_a_count_or_by_roles() -> None:
+    with pytest.raises(ValueError, match='not both'):
+        Complete()
+    with pytest.raises(ValueError, match='not both'):
+        Complete(count=2, roles=('sample',))
 
 
 NOISY = LookupEntry(

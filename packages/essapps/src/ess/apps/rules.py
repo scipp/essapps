@@ -240,21 +240,51 @@ class RetryPolicy(BaseModel, frozen=True):
     limit: int = Field(default=2, ge=1)
 
 
+class Complete(BaseModel, frozen=True):
+    """
+    When a series is complete: once it has ``count`` members, or a member of
+    each of ``roles``, the values of the members' ``role`` field.
+    """
+
+    count: int | None = Field(default=None, ge=1)
+    roles: tuple[str, ...] = ()
+
+    @model_validator(mode='after')
+    def _one_criterion(self) -> Complete:
+        if (self.count is None) == (not self.roles):
+            raise ValueError('a series is complete by a count or by roles, not both')
+        return self
+
+    def missing(self, members: Iterable[Dataset]) -> str | None:
+        """What the members lack to be complete, or None."""
+        members = list(members)
+        if self.count is not None:
+            if len(members) < self.count:
+                return f'{len(members)} of {self.count} members'
+            return None
+        lacking = set(self.roles) - {m.fields.get('role') for m in members}
+        return f'no member of role {sorted(lacking)}' if lacking else None
+
+
 class Series(BaseModel, frozen=True):
     """
     How a rule makes one request over several datasets.
 
     ``key`` is the dataset field whose value keys datasets into a series, and
-    is the member key of the series' requests. On each arrival the rule
-    submits one request whose dataset field lists every current member of the
-    series, so successive requests supersede each other, and the result a
-    record stands for is read off its request alone. Each member is filled from
-    its own lookup entry: into its row where the template's dataset field is a
-    column of a list parameter of rows, into the request otherwise. Whether the
+    is the member key of the series' requests. The rule submits one request
+    whose dataset field lists every current member of the series, so
+    successive requests supersede each other, and the result a record stands
+    for is read off its request alone. Each member is filled from its own
+    lookup entry: into its row where the template's dataset field is a column
+    of a list parameter of rows, into the request otherwise. Whether the
     workflow sums the members or stitches them is the workflow's.
+
+    ``fire`` says when: on ``'each'`` arrival, or once the series is
+    :class:`Complete` and on each arrival after; until then the series waits.
     """
 
     key: str
+    fire: Literal['each'] | Complete = 'each'
 
 
 class Rule(BaseModel):
