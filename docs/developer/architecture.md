@@ -304,7 +304,7 @@ total.request.params['runs']                   # the record names every run it s
 ```
 
 The spec declares `runs: list[OpaqueFile]`, and the backend validates the request like any other.
-The package provides a `sciline.Aggregation` over the pipeline, which accumulates the values that add, such as a numerator and a denominator, and the binding wraps it:
+The package provides a `sciline.Aggregation` over the pipeline, which accumulates the values that add, such as a numerator and a denominator, and the binding drives it:
 
 ```python
 PipelineAdapter(normalize_pipeline(), keys=..., targets=...,
@@ -312,6 +312,7 @@ PipelineAdapter(normalize_pipeline(), keys=..., targets=...,
 ```
 
 The adapter contributes each run through the aggregation and accumulates, inside one run.
+It uses only the contribute half and builds its own final stage ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)).
 The framework never adds arrays and knows nothing about scipp or normalisation.
 A value that differs per run makes each element of the list a row, whose fields are the columns of sciline's member table.
 Sample runs and background runs are two list parameters of one plain run.
@@ -442,7 +443,7 @@ The linked document argues the case and lists the costs.
 | [The caller names the stage as a template's blanks, the session holds it](stages.md#who-names-the-stage) | the caller knows which parameter will move | stage inputs inferred from successive requests; stage inputs declared by the workflow author; state kept inside workflow code |
 | [Views are not runs](stages.md#views) | exploring data must not create records or move volumes | views as recorded runs; sending scipp objects to the frontend |
 | [One label field](rules.md#labels-batches-and-slots) | slots, batches, and rules share one query for latest, cancel, and evict | a slot object, a batch object, and a rule status table |
-| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums; the backend needs no graph; the binding wraps the package's aggregation and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
+| [A sum over runs is one run over a list of runs](aggregation.md) | a record says what it sums; the backend needs no graph; the binding drives the package's aggregation and the framework stays ignorant of scipp | member and finalize records with supplied intermediates; contribute and combine specs with `carry`; an aggregation spec; summation in the framework |
 | [A rule is to a batch what a template is to a request](rules.md) | batch and automatic reduction are one mechanism | a separate autoreduction service with its own state |
 | [The trigger loop keeps no memory](rules.md#the-trigger-loop) | a restart can neither lose nor repeat work | a cursor or a table of seen datasets |
 | [Publication is explicit](operations.md#publication) | SciCat entries cannot be removed | writing every output to the catalogue |

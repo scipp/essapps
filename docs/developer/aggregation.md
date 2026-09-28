@@ -32,7 +32,7 @@ Dimensionality and event mode do not change the shape: a 4D volume adds like a c
 
 sciline's `Aggregation` (scipp/sciline#245) is this shape as an object: a contribute stage, one accumulator per **accumulation key**, and a finalize stage.
 Its members are the rows of a **member table**, whose columns are the member keys.
-The package builds the aggregation, and the binding wraps it, so a workflow author uses the model of sciline and nothing is solved twice.
+The package builds the aggregation, and the binding drives its contribute half ([workflow-contract.md](workflow-contract.md#the-sciline-adapter)), so a workflow author uses the model of sciline and nothing is solved twice.
 
 ## A sum is one run over a list of runs
 
@@ -189,7 +189,7 @@ It needs a runner addressed by its series, which does not exist yet ([stages.md]
 
 A sum inside one request runs in one process.
 To spread the runs over nodes, the author splits the sum into two specs, and the client composes them over references.
-The skeleton's `CONTRIBUTE` and `COMBINE` are built from the one aggregation that `NORMALIZE` wraps:
+The skeleton's `CONTRIBUTE` and `COMBINE` are built from the one aggregation that `NORMALIZE`'s binding drives:
 
 ```python
 def contribute(params, inputs):     # CONTRIBUTE: one run -> numerator and denominator
@@ -237,7 +237,7 @@ Recomputing a stitch over all angles on every arrival is affordable, because its
 | `Pipeline` with parameters set | a run request's spec and `params` |
 | `Stage(pipeline, inputs, outputs)` | a template whose blanks are the stage inputs, held by a session |
 | `Stage.compute` | a run record |
-| `Aggregation(pipeline, members=..., accumulators=...)` | built by the package, wrapped by the binding for a list parameter |
+| `Aggregation(pipeline, members=..., accumulators=...)` | built by the package, driven by the binding for a list parameter |
 | member table | a list parameter; a list of rows for several member keys |
 | two aggregations sharing a final stage | two list parameters |
 | `Aggregation.compute(table)` | one run request whose list parameter holds the members |
@@ -286,4 +286,4 @@ A cache of contributions gives the same saving and leaves the request as it is.
 - `sciline.Buffered` holds every contribution in memory.
 - A correction to a parameter that the contribute stage reads reduces every run again, and builds a new aggregation, which computes again what the runs share, such as masks, geometry, or calibration.
   Tuning such a parameter in a session therefore holds nothing upstream of the contributions.
-- The binding wraps `sciline.Aggregation` only. A package driver for nested levels, such as runs times banks, has no place in the binding yet.
+- The binding drives `sciline.Aggregation` only. A package driver for nested levels, such as runs times banks, has no place in the binding yet.

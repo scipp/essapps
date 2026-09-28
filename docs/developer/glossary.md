@@ -50,7 +50,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Field extractor**: an instrument's code that derives a dataset's fields, role, sample, angle, start time, from its catalogue entry and file, and names the field that orders the instrument's datasets.
   Registered per instrument under the entry-point group `ess.apps.fields`.
   See [rules.md](rules.md#the-dataset-source).
-- **Finalize stage**: the stage of an aggregation from the accumulated values to the outputs, built by the adapter inside one run.
+- **Finalize stage**: the stage of a sciline aggregation from the accumulated values to the outputs.
+  The adapter does not use it: it builds its own final stage, which also reads the varied parameters.
 - **Group**: several requests submitted atomically that may reference each other's outputs before those exist.
   `apply` returns a `Group`, which also carries the template's blanks as what its members vary.
   See [records.md](records.md#scheduling-pending-outputs-as-inputs).
