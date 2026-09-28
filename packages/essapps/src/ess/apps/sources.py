@@ -16,9 +16,11 @@ See docs/developer/rules.md.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cache
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -33,9 +35,11 @@ class Dataset:
     A source fills the identity fields it can: ``pid`` for a catalogue dataset,
     ``instrument`` and ``run`` for a file that carries a run identity, neither
     for a file that carries none, whose path is then its identity. ``metadata``
-    is what the source declares for the instrument, an angle, a sample name, a
-    run's role; ``created`` is when the acquisition wrote the dataset, which is
-    the other form a rule's lower bound takes.
+    is what the instrument's :class:`FieldExtractor` derived, an angle, a sample
+    name, a run's role, and ``order`` the one of those fields that orders the
+    instrument's datasets, as the extractor declares; ``created`` is when the
+    acquisition wrote the dataset, which is the other form a rule's lower bound
+    takes.
     """
 
     path: Path
@@ -44,14 +48,15 @@ class Dataset:
     run: int | None = None
     created: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    order: str | None = None
 
     @property
     def fields(self) -> dict[str, Any]:
         """
         What a lookup entry or a selector may match on.
 
-        The metadata the source declares for the instrument, plus the run
-        number, which every source that knows one declares under ``run``.
+        The fields the instrument's extractor derived, plus the run number,
+        which every source that knows one declares under ``run``.
         """
         return ({'run': self.run} if self.run is not None else {}) | self.metadata
 
@@ -63,6 +68,55 @@ class Dataset:
         if self.run is not None:
             return dataset_ref(instrument=self.instrument, run=self.run)
         return dataset_ref(path=self.path)
+
+
+FIELDS_GROUP = 'ess.apps.fields'
+
+
+@dataclass(frozen=True)
+class FieldExtractor:
+    """
+    An instrument's code that derives the fields of its datasets.
+
+    ``derive`` is given what a source has for a dataset, its catalogue entry or
+    journal row (empty when there is none) and its file, and returns the fields
+    lookups, selectors, and series keys match on. Where a role, a sample, or an
+    angle is written differs between instruments, a title prefix, a NeXus
+    field, a variable of the acquisition script, so this is code the instrument
+    team owns, and nothing is required of acquisition. ``order`` names the
+    field that orders the instrument's datasets, typically the start time of
+    the acquisition; without one, datasets are ordered by run number.
+
+    An installed package registers one per instrument under the entry-point
+    group ``ess.apps.fields``, named for the instrument, as it registers specs.
+    """
+
+    derive: Callable[[Mapping[str, Any], Path], Mapping[str, Any]]
+    order: str | None = None
+
+    def dataset(self, entry: Mapping[str, Any], path: Path, **identity: Any) -> Dataset:
+        """The dataset with this identity, its fields derived from ``entry``."""
+        return Dataset(
+            path=path,
+            metadata=dict(self.derive(entry, path)),
+            order=self.order,
+            **identity,
+        )
+
+
+def _entry_as_is(entry: Mapping[str, Any], path: Path) -> Mapping[str, Any]:
+    return entry
+
+
+AS_IS = FieldExtractor(_entry_as_is)
+"""The extractor of an instrument that registers none: the entry's own fields."""
+
+
+@cache
+def field_extractor(instrument: str | None) -> FieldExtractor:
+    """The extractor an installed package registers for an instrument, or AS_IS."""
+    found = entry_points(group=FIELDS_GROUP, name=instrument or '')
+    return next((ep.load() for ep in found), AS_IS)
 
 
 class DatasetSource(Protocol):
@@ -93,10 +147,10 @@ class FolderSource:
     do not carry one. A stem the expression does not match is identified by its
     path.
 
-    A file carries no sample name or run role that a rule could match on, so
-    ``journal`` is what the facility's run journal or catalogue declares about
-    each run: metadata fields by run number. A run the journal does not list
-    has no metadata.
+    ``journal`` is what the facility's run journal or catalogue says about
+    each run, an entry by run number. The instrument's field extractor derives
+    each dataset's fields from its entry and its file; ``fields`` gives one in
+    place of the one an installed package registers for the instrument.
     """
 
     def __init__(
@@ -107,12 +161,14 @@ class FolderSource:
         identity: str | re.Pattern[str] = _RUN_IDENTITY,
         instrument: str | None = None,
         journal: Mapping[int, Mapping[str, Any]] | None = None,
+        fields: FieldExtractor | None = None,
     ) -> None:
         self.path = Path(path)
         self.pattern = pattern
         self.identity = re.compile(identity)
         self.instrument = instrument
         self.journal = journal or {}
+        self.fields = fields
 
     def __repr__(self) -> str:
         return f'FolderSource({str(self.path)!r}, {self.pattern!r})'
@@ -131,9 +187,10 @@ class FolderSource:
         ]
 
     def _dataset(self, path: Path) -> Dataset:
+        created = self._created(path)
         match = self.identity.fullmatch(path.stem)
         if match is None:
-            return Dataset(path=path, created=self._created(path))
+            return self._extractor(self.instrument).dataset({}, path, created=created)
         instrument = match.groupdict().get('instrument') or self.instrument
         if instrument is None:
             raise ValueError(
@@ -141,13 +198,18 @@ class FolderSource:
                 'source an instrument name'
             )
         run = int(match['run'])
-        return Dataset(
-            path=path,
+        return self._extractor(instrument).dataset(
+            self.journal.get(run, {}),
+            path,
             instrument=instrument.lower(),
             run=run,
-            created=self._created(path),
-            metadata=dict(self.journal.get(run, {})),
+            created=created,
         )
+
+    def _extractor(self, instrument: str | None) -> FieldExtractor:
+        if self.fields is not None:
+            return self.fields
+        return field_extractor(None if instrument is None else instrument.lower())
 
     @staticmethod
     def _created(path: Path) -> datetime:

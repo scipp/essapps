@@ -155,13 +155,16 @@ class Lookup(BaseModel, frozen=True):
 
 def precedes(a: Dataset, b: Dataset) -> bool:
     """
-    Whether ``a`` lies before ``b``: by run number when both carry one, by
-    creation time otherwise; the same two forms as :class:`Bound`.
+    Whether ``a`` lies before ``b``, by the first of these both carry: the
+    field their instrument's extractor declares to order datasets, the run
+    number, the creation time.
     """
-    if a.run is not None and b.run is not None:
-        return a.run < b.run
-    if a.created is not None and b.created is not None:
-        return a.created < b.created
+    pairs = [(a.run, b.run), (a.created, b.created)]
+    if a.order is not None and a.order == b.order:
+        pairs.insert(0, (a.fields.get(a.order), b.fields.get(b.order)))
+    for x, y in pairs:
+        if x is not None and y is not None:
+            return bool(x < y)
     return False
 
 
