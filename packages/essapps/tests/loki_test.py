@@ -31,7 +31,7 @@ RUNS = {
     'empty_beam_run': 60392,
 }
 DIRECT_BEAM = 'direct-beam-loki-all-pixels.h5'
-IDENTITY = r'(?P<run>\d+)-.*'
+RUN_NAME = r'(?P<run>\d+)-.*'
 
 
 @pytest.fixture(scope='module')
@@ -54,7 +54,7 @@ def client(cache: Path, tmp_path: Path) -> Iterator[Client]:
         proposal='p1',
         submitter='test',
         registry=loki.registry(),
-        sources=[FolderSource(cache, identity=IDENTITY, instrument='loki')],
+        sources=[FolderSource(cache, proposal='p1', stem=RUN_NAME, instrument='loki')],
     )
     yield session
     session.close()
@@ -71,11 +71,13 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     refs = {
         name: dataset_ref(instrument='loki', run=run) for name, run in RUNS.items()
     } | {'direct_beam': dataset_ref(path=cache / DIRECT_BEAM)}
-    assert sample in [candidate.ref for candidate in client.pick()]
 
     center = client.run(loki.BEAM_CENTER, {'sample_run': sample})
     assert center.failure is None, center.failure
     assert center.outputs['center']['unit'] == 'm'
+    # The run number resolved to the file's identity, which the picker lists.
+    (sample_id,) = center.request.datasets()
+    assert sample_id in [candidate.ref for candidate in client.pick()]
 
     params = refs | {'beam_center': center.ref()}
     rebin = Template(spec=loki.IOFQ, params=params, blanks=('q',), name='iofq')
@@ -105,5 +107,6 @@ def test_beam_centre_feeds_iofq_and_provenance_reaches_the_datasets(
     (upstream,) = provenance['inputs']
     assert upstream['record'] == center.id
     assert upstream['spec'] == str(loki.BEAM_CENTER.id)
-    assert [DatasetRef(**raw) for raw in upstream['raw']] == [sample]
-    assert refs['background_run'] in [DatasetRef(**raw) for raw in provenance['raw']]
+    assert [DatasetRef(**raw) for raw in upstream['raw']] == [sample_id]
+    background = DatasetRef(**first.request.params['background_run'])
+    assert background in [DatasetRef(**raw) for raw in provenance['raw']]

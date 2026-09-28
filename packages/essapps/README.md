@@ -26,19 +26,23 @@ client = local(
     proposal='p1',
     submitter='me',
     registry=registry(),
-    sources=[FolderSource('/tmp/runs', '*.h5')],
+    sources=[FolderSource('/tmp/runs', '*.h5', proposal='p1')],
 )
 
-# Data the framework did not compute is named by its identity, here the run the
-# file name carries; where the bytes are is asked of the folder at dispatch, and
-# nothing is copied or stored. client.pick() is the query behind an input field:
-# the datasets of every source and the outputs of completed records.
+# Data the framework did not compute is named by its identity: the UUID a NeXus
+# file carries, else the sha256 of its bytes. A person may type the run number
+# the file name carries instead, which the backend resolves at submit. Where the
+# bytes are is asked of the folder at dispatch, and nothing is copied or stored.
 run = dataset_ref(instrument='dream', run=1)
-assert run in [candidate.ref for candidate in client.pick()]
 
-# A run in the session: the output stays in memory, the record is complete.
+# A run in the session: the output stays in memory, the record is complete and
+# names the file by its identity.
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 data = loaded.ref('data')
+
+# client.pick() is the query behind an input field: the datasets of every
+# source and the outputs of completed records.
+assert loaded.request.datasets()[0] in [candidate.ref for candidate in client.pick()]
 
 # Interactive reruns of a sciline pipeline: the template sets every parameter
 # but 'bins', its blank, and names the stage over 'bins', the part of the
@@ -84,7 +88,7 @@ The `service` extra brings in FastAPI, httpx, and uvicorn. Serve a backend from 
 ```sh
 mkdir -p /tmp/runs
 python -c "from ess.apps.examples import write_run; write_run('/tmp/runs/dream_1.h5', [1.0, 5.0, 2.0, 6.0])"
-essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs --publisher fake=ess.apps.testing:FakePublisher
+essapps serve --root /tmp/essapps-served --registry ess.apps.examples:registry --datasets /tmp/runs --datasets-proposal p1 --publisher fake=ess.apps.testing:FakePublisher
 ```
 
 Every run it takes executes in a throwaway process, so the registry is named, not passed, and so are the publishers it holds. From another process, `remote` replaces `local` and returns a `Client` whose backend forwards each call:
@@ -100,8 +104,8 @@ The `essapps` command does the same from a shell, with the flags of `submit` gen
 ```sh
 essapps specs                                          # id, title, description per line; --json for the schemas
 export ESSAPPS_INSTRUMENT=dream ESSAPPS_PROPOSAL=p1
-essapps datasets                                       # run:dream/1 and its path
-essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id
+essapps datasets                                       # sha256:<hex> and its path
+essapps submit load/v1 --run run:dream/1 --scale 2.0   # prints the record id; the record names sha256:<hex>
 essapps wait <record>
 essapps output <record>                                # lists the outputs
 essapps output <record> total                          # a literal, as JSON

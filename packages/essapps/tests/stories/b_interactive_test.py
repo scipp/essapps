@@ -167,4 +167,4 @@ def test_b6_find_last_weeks_result(client: Client, measure: Measure) -> None:
     (found,) = [r for r in client.records(since=tuesday) if r.created < wednesday]
 
     assert found == made
-    assert found.request.params == {'run': {'dataset': 'run:dream/1'}, 'scale': 1.0}
+    assert found.request.params == {'run': run.model_dump(), 'scale': 1.0}

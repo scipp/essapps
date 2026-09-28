@@ -18,12 +18,14 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, NewType
 
+import h5py
 import sciline
 import scipp as sc
 from pydantic import BaseModel, Field
 
 from .adapter import PipelineAdapter
 from .binding import Inputs, Registry
+from .sources import UUID_FIELD
 from .spec import Array, ArraySpec, OpaqueFile, OutputRef, Quantity, WorkflowSpec
 
 
@@ -228,13 +230,19 @@ def registry() -> Registry:
     return reg
 
 
-def write_run(path: Path, values: list[float]) -> Path:
-    """A synthetic 'raw' run for examples and tests."""
+def write_run(path: Path, values: list[float], uuid: str | None = None) -> Path:
+    """
+    A synthetic 'raw' run for examples and tests; with ``uuid``, the file
+    carries it where a NeXus file written at ESS does.
+    """
     data = sc.DataArray(
         sc.array(dims=['x'], values=values, unit='counts'),
         coords={'x': sc.arange('x', float(len(values)), unit='m')},
     )
     data.save_hdf5(path)
+    if uuid is not None:
+        with h5py.File(path, 'a') as file:
+            file[UUID_FIELD] = uuid
     return path
 
 

@@ -54,8 +54,8 @@ def runs(datasets: Path) -> list[DatasetRef]:
     for i, values in enumerate(
         [[1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 2.0], [4.0, 3.0, 2.0, 1.0]], start=1
     ):
-        write_run(datasets / f'dream_{i}.h5', values)
-    return [dataset_ref(instrument='dream', run=i) for i in (1, 2, 3)]
+        write_run(datasets / f'dream_{i}.h5', values, uuid=f'dream-{i}')
+    return [dataset_ref(uuid=f'dream-{i}') for i in (1, 2, 3)]
 
 
 @pytest.fixture(params=[False, True], ids=['session', 'subprocess'])
@@ -69,7 +69,7 @@ def client(
         proposal='p1',
         submitter='simon',
         registry='ess.apps.examples:registry' if request.param else registry(),
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets, '*.h5', proposal='p1')],
         throwaway=request.param,
     )
     yield client
@@ -158,7 +158,7 @@ def session(
         proposal='p1',
         submitter='simon',
         registry=counted_registry,
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets, '*.h5', proposal='p1')],
     )
     yield client
     client.close()
@@ -292,7 +292,7 @@ def test_a_run_whose_file_changed_is_contributed_again(
     """A run acquired again keeps its identity; its bytes decide what is held."""
     growing = Template(spec=NORMALIZE, params=PARAMS, blanks=('runs',))
     session.run(growing, {'runs': runs})
-    write_run(datasets / 'dream_2.h5', [5.0, 5.0, 5.0, 5.0])
+    write_run(datasets / 'dream_2.h5', [5.0, 5.0, 5.0, 5.0], uuid='dream-2')
     again = session.run(growing, {'runs': runs})
     assert not again.reused
     assert len(pushed) == 3 + 3

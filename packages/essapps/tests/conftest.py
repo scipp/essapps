@@ -13,6 +13,7 @@ from ess.apps.client import Client, local, local_backend
 from ess.apps.examples import LOAD, registry, write_run
 from ess.apps.remote import remote
 from ess.apps.rules import Template
+from ess.apps.runner import file_checksum
 from ess.apps.server import create_app
 from ess.apps.sources import DatasetSource, FolderSource
 from ess.apps.spec import DatasetRef, dataset_ref
@@ -41,7 +42,7 @@ def make_client(
         proposal='p1',
         submitter='simon',
         registry=registry(),
-        sources=[FolderSource(datasets_folder, '*.h5'), *sources],
+        sources=[FolderSource(datasets_folder, '*.h5', proposal='p1'), *sources],
         **kwargs,
     )
 
@@ -60,8 +61,11 @@ def run_file(datasets: Path) -> Path:
 
 @pytest.fixture
 def run_ref(run_file: Path) -> DatasetRef:
-    """The run identity ``dream_1.h5`` carries; the folder source locates it."""
-    return dataset_ref(instrument='dream', run=1)
+    """
+    The identity of ``dream_1.h5``, which carries no UUID: the sha256 of its
+    bytes. ``run:dream/1`` resolves to it at submit.
+    """
+    return dataset_ref(sha256=file_checksum(run_file))
 
 
 @pytest.fixture
@@ -77,7 +81,7 @@ def server_url(tmp_path: Path, datasets: Path) -> Iterator[str]:
         tmp_path / 'server',
         registry='ess.apps.examples:registry',
         throwaway=True,
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets, '*.h5', proposal='p1')],
         publishers={'fake': FakePublisher()},
     )
     app = create_app(backend, poll_interval=0.05)

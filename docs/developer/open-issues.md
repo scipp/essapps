@@ -26,15 +26,21 @@ The recommendation in brackets is mine.
 - **Retention policy for disk copies in shared mode.**
   How long each kind of run's outputs is kept, and the analysis window after which a proposal's records are dropped together.
   [One order: outputs of superseded records first, then outputs the spec marks as cheap to recompute from their inputs, then the kind of run. Authors know which outputs are throwaway, and Snakemake's `temp` and `protected` flags show that they get it right.]
-- **Local paths after a drop.**
-  A local file's path stays on the record's origin after the bytes are dropped, until the proposal is dropped.
-  [Keep it. A path is not data, and provenance needs it.]
 - **Two notebooks on one machine.**
   Each notebook is its own backend with its own record store, so referencing a result of one notebook from another needs a local transport.
   [Separate stores now. `essapps serve` on one of them and `remote()` from the other is the alternative, at the cost of every run of the served store executing in a throwaway process.]
 - **SciCat push mechanism for new datasets**, if the deployment offers one, and how far ingestion lags the file.
   ISIS's interfaces discover runs from the archive because the catalogue lagged or failed, and their outputs are consequently unknown to it.
   [Measure the lag before [phase 1](roadmap.md#the-three-phases). A filesystem-watching dataset source is the fallback behind the same interface, but a catalogue dataset's identity is its PID, so such a source can only get ahead of the catalogue and wait, never replace it.]
+- **Scope of the NICOS run counter** (a question for ECDC).
+  A person may name a run as `run:<instrument>/<n>`, which assumes a run number is unique within an instrument.
+  If the counter is shared by several instruments this still holds; if it is reset, a run number names several datasets and is refused.
+- **How the SciCat ingestor mints PIDs.**
+  A folder source identifies a NeXus file by its UUID, and SciCat by its PID, so one file reached both ways has two identities, and a record made from each does not reuse the other.
+  [Ask whether the PID is derived from `entry/entry_identifier_uuid`, or whether the entry stores the UUID, so that a source can give both and a reference by UUID resolves to the PID.]
+- **Records that others reference when their proposal is dropped.**
+  A reference may name a record of another proposal the submitter may read, and that record goes when its proposal is dropped.
+  [Accept it: references across proposals go mostly to long-lived commissioning proposals, and a record left without its input is the missing-copy case.]
 - **Exposed intermediates in ess.reduce.spec.**
   The skeleton adds `intermediates` to the spec of scipp/ess#690.
   Whether that belongs upstream, and in which form, is open.
@@ -140,6 +146,9 @@ It does not contain:
   This is the next implementation worth building, as a second implementation of the same data-store interface, with the test that a scipp data array with units, variances, bin edges, and a mask survives the round trip.
 - A SciCat dataset source.
   The folder source and the in-memory fake are the only implementations, which keeps the tests off SciCat.
+- Access control beyond references.
+  The backend asks an `Access` whether a submitter may read a proposal when it checks the references of a request; `FakeAccess` stands in for the user office.
+  It does not authenticate the submitter a client names, and listing records and datasets and serving outputs check no access.
 - A spec over a list of runs for Amor's angle series, and a series over two list parameters.
 - The disk cache of contributions for a series under a rule, keyed by the values the contribute stage reads plus the run's identity and checksum.
 - The fold: a long-lived runner that holds the stage of one series.

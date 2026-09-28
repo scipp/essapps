@@ -95,19 +95,24 @@ def test_e3_reduction_of_our_own_output(
         template=Template(name='load-defaults', spec=LOAD, blanks=('run',)),
     )
     loop = TriggerLoop(client, rule)
-    measure(1)
+    run = measure(1)
     (reduced,) = loop.run_once()
     # allow_reused: the toy workflows are bound in process
     pid = client.publish(reduced.ref('data'), 'scicat', allow_reused=True)
     entry = scicat.entries[pid]
     catalogue.add(
-        Dataset(path=entry['path'], pid=pid, metadata={'provenance': entry['snapshot']})
+        Dataset(
+            path=entry['path'],
+            proposals=['p1'],
+            pid=pid,
+            metadata={'provenance': entry['snapshot']},
+        )
     )
 
     fired = loop.run_once()
 
     assert fired == []
-    assert dataset_table(client).index.tolist() == ['run:dream/1']
+    assert dataset_table(client).index.tolist() == [str(run)]
 
 
 def test_e4_template_improved_during_a_beamtime(
@@ -119,16 +124,16 @@ def test_e4_template_improved_during_a_beamtime(
             name='load-defaults', spec=LOAD, params={'scale': 1.0}, blanks=('run',)
         ),
     )
-    measure(1)
+    first = measure(1)
     (before,) = TriggerLoop(client, rule).run_once()
 
     improved = rule.revise(template=rule.template.revise(scale=2.0))
-    measure(2)
+    second = measure(2)
     TriggerLoop(client, improved).run_once()
 
     assert batch_table(client, improved)[['template', 'rule']].to_dict('index') == {
-        'run:dream/1': {'template': 'load-defaults/v1', 'rule': 'auto-load/v1'},
-        'run:dream/2': {'template': 'load-defaults/v2', 'rule': 'auto-load/v2'},
+        str(first): {'template': 'load-defaults/v1', 'rule': 'auto-load/v1'},
+        str(second): {'template': 'load-defaults/v2', 'rule': 'auto-load/v2'},
     }
     assert client.record(before.id) == before
-    assert list(reprocess(client, improved)) == ['run:dream/1']
+    assert list(reprocess(client, improved)) == [str(first)]

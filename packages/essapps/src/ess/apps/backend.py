@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import shutil
 import time
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import UnionType
@@ -41,7 +41,7 @@ from .records import (
     Status,
 )
 from .runner import Job
-from .sources import Dataset, DatasetSource
+from .sources import Dataset, DatasetSource, find
 from .spec import (
     DataField,
     DatasetRef,
@@ -54,7 +54,6 @@ from .spec import (
     as_ref,
     data_field_at,
     data_fields,
-    dataset_path,
     submodel,
     walk_refs,
 )
@@ -66,6 +65,25 @@ GROUP_PREFIX = '@'
 
 class Publisher(Protocol):
     def publish(self, path: Path, snapshot: dict[str, Any]) -> str: ...
+
+
+class Access(Protocol):
+    """
+    Which proposals a submitter may read beyond the one owning the request.
+
+    A request may name datasets and outputs of records of any proposal its
+    submitter may read, such as a facility vanadium run or a commissioning
+    reference. At a facility the user office answers this.
+    """
+
+    def may_read(self, submitter: str, proposal: str) -> bool: ...
+
+
+class OwnProposalOnly:
+    """The access without a user office: a request reads its own proposal only."""
+
+    def may_read(self, submitter: str, proposal: str) -> bool:
+        return False
 
 
 class ValidationReport(BaseModel, frozen=True):
@@ -113,8 +131,8 @@ class Backend(Protocol):
         """Every spec this backend knows, serialized."""
         ...
 
-    def datasets(self, proposal: str) -> list[Dataset]:
-        """Every dataset the backend's sources know for this proposal, by identity."""
+    def datasets(self, proposals: Collection[str]) -> list[Dataset]:
+        """Every dataset the backend's sources know for these proposals, by identity."""
         ...
 
     def validate(
@@ -226,6 +244,7 @@ class LocalBackend:
         launcher: Launcher,
         sources: Iterable[DatasetSource] = (),
         publishers: Mapping[str, Publisher] = {},
+        access: Access | None = None,
     ) -> None:
         self.record_store = record_store
         self.data = data
@@ -233,6 +252,7 @@ class LocalBackend:
         self.launcher = launcher
         self.sources = list(sources)
         self.publishers = dict(publishers)
+        self.access = access or OwnProposalOnly()
         self._reserved: dict[str, str] = {}
         self._vary: dict[str, tuple[str, ...]] = {}
 
@@ -254,32 +274,37 @@ class LocalBackend:
     def specs(self) -> list[SerializedWorkflowSpec]:
         return [s.serialize() for s in self.registry.specs()]
 
-    def datasets(self, proposal: str) -> list[Dataset]:
+    def datasets(self, proposals: Collection[str]) -> list[Dataset]:
         """
-        Every dataset the sources know for this proposal, by identity.
+        Every dataset the sources know for these proposals, by identity.
 
         Arrival may be repeated and out of order, so the first dataset of
         each identity wins; nothing is stored to make the list.
         """
         seen: dict[DatasetRef, Dataset] = {}
         for source in self.sources:
-            for dataset in source.new_datasets(proposal):
+            for dataset in source.datasets(proposals):
                 seen.setdefault(dataset.ref, dataset)
         return list(seen.values())
+
+    def find(self, ref: DatasetRef) -> Dataset | None:
+        """
+        The dataset an identity or a stand-in names among those the sources
+        know, or None; raises for a stand-in that names several.
+        """
+        return find(filter(None, (s.find(ref) for s in self.sources)), ref)
 
     def locate(self, ref: DatasetRef) -> Path | None:
         """
         Where a dataset's bytes are now, or None if nothing has them.
 
         Identity is not location, so this is asked again at every dispatch and
-        nothing is kept. A path identity is its own location, the one case where
-        a path is an identity.
+        nothing is kept.
         """
         for source in self.sources:
             if (path := source.locate(ref)) is not None:
                 return path
-        path = dataset_path(ref)
-        return path if path is not None and path.is_file() else None
+        return None
 
     # Validation
 
@@ -334,7 +359,7 @@ class LocalBackend:
     ) -> list[str]:
         """Whether a reference may fill the field it is in."""
         if isinstance(ref, DatasetRef):
-            return self._check_dataset(ref, consumer)
+            return self._check_dataset(ref, consumer, request)
         if ref.record.startswith(GROUP_PREFIX):
             name = ref.record[len(GROUP_PREFIX) :]
             if name not in group:
@@ -345,8 +370,11 @@ class LocalBackend:
                 return [f'{ref}: no such record']
             producer_request = self.record_store.get(ref.record).request
         producer_spec = producer_request.spec
-        if producer_request.proposal != request.proposal:
-            return [f'{ref}: belongs to proposal {producer_request.proposal}']
+        if not self._may_read(request, [producer_request.proposal]):
+            return [
+                f'{ref}: belongs to proposal {producer_request.proposal}, which '
+                f'{request.submitter} may not read'
+            ]
         if producer_spec not in self.registry:
             return [f'{ref}: spec {producer_spec} is not known here']
         outputs = self.registry.spec(producer_spec).outputs
@@ -363,19 +391,36 @@ class LocalBackend:
             return [f'{ref}: {produced.format} output into {consumer.format} field']
         return []
 
-    def _check_dataset(self, ref: DatasetRef, consumer: DataField | None) -> list[str]:
+    def _check_dataset(
+        self, ref: DatasetRef, consumer: DataField | None, request: RunRequest
+    ) -> list[str]:
         """
-        A dataset's format is not known here, so only the field it fills is checked.
+        Whether a source knows the dataset and the submitter may read it.
 
-        This is the seam to the catalogue: a PID's SciCat entry is where a
-        dataset's proposal is read and checked against the request's, and where a
-        run number resolves to a PID. The local application has no SciCat, so a
-        dataset reference is accepted as it stands, and whether the bytes are
-        there is found out at dispatch.
+        A dataset's format is not known here, so only the field it fills is
+        checked. Whether the bytes are there is found out at dispatch.
         """
         if consumer is None:
             return [f'{ref}: a dataset cannot fill a literal field']
+        try:
+            dataset = self.find(ref)
+        except ValueError as e:
+            return [str(e)]
+        if dataset is None:
+            return [f'{ref}: no source knows it']
+        if not self._may_read(request, dataset.proposals):
+            return [
+                f'{ref}: belongs to proposals {dataset.proposals}, which '
+                f'{request.submitter} may not read'
+            ]
         return []
+
+    def _may_read(self, request: RunRequest, proposals: Iterable[str]) -> bool:
+        """Whether the request may name data that belongs to any of ``proposals``."""
+        return any(
+            p == request.proposal or self.access.may_read(request.submitter, p)
+            for p in proposals
+        )
 
     # Origin
 
@@ -435,25 +480,35 @@ class LocalBackend:
         request = self._as_recorded(request)
         return request.model_copy(
             update={
-                'params': _rewrite(request.params, named),
+                'params': _rewrite(request.params, lambda ref: _grouped(ref, named)),
                 'outputs': request.outputs or self.registry.spec(request.spec).results,
             }
         )
 
     def _as_recorded(self, request: RunRequest) -> RunRequest:
         """
-        The request with defaults filled and every value in the form the params
-        model gives it, so that ``0`` and ``0.0`` given for one float field are
-        one recorded value and one held stage. Raises for a request whose values
-        do not validate.
+        The request with defaults filled, every value in the form the params
+        model gives it, and every dataset named by its identity.
+
+        So ``0`` and ``0.0`` given for one float field are one recorded value
+        and one held stage, and ``run:dream/1`` and the dataset's identity are
+        one input. Raises for a request whose values do not validate; leaves a
+        stand-in no source resolves as it is, for validation to refuse.
         """
         request = self._with_defaults(request)
         params = self.registry.spec(request.spec).params
-        return request.model_copy(
-            update={
-                'params': params.model_validate(request.params).model_dump(mode='json')
-            }
-        )
+        values = params.model_validate(request.params).model_dump(mode='json')
+        return request.model_copy(update={'params': _rewrite(values, self._identity)})
+
+    def _identity(self, ref: Ref) -> Ref:
+        """The identity of the dataset a stand-in names; any other ref as it is."""
+        if not isinstance(ref, DatasetRef):
+            return ref
+        try:
+            dataset = self.find(ref)
+        except ValueError:
+            return ref
+        return ref if dataset is None else dataset.ref
 
     def _with_defaults(self, request: RunRequest) -> RunRequest:
         """
@@ -843,17 +898,22 @@ def _cycle(group: Mapping[str, RunRequest]) -> set[str]:
     return on_cycle
 
 
-def _rewrite(value: Any, ids: Mapping[str, str]) -> Any:
-    """Point ``@name`` references at the IDs the group's members were given."""
+def _grouped(ref: Ref, ids: Mapping[str, str]) -> Ref:
+    """An ``@name`` reference pointed at the ID the group's member was given."""
+    if isinstance(ref, OutputRef) and ref.record in ids:
+        return ref.model_copy(update={'record': ids[ref.record]})
+    return ref
+
+
+def _rewrite(value: Any, fn: Callable[[Ref], Ref]) -> Any:
+    """Every reference in ``value`` replaced by what ``fn`` makes of it."""
     if isinstance(value, dict):
-        ref = as_ref(value)
-        if isinstance(ref, OutputRef):
-            return ref.model_dump() | {'record': ids.get(ref.record, ref.record)}
-        if ref is not None:
-            return value
-        return {k: _rewrite(v, ids) for k, v in value.items()}
+        if (ref := as_ref(value)) is not None:
+            new = fn(ref)
+            return value if new == ref else new.model_dump()
+        return {k: _rewrite(v, fn) for k, v in value.items()}
     if isinstance(value, list):
-        return [_rewrite(v, ids) for v in value]
+        return [_rewrite(v, fn) for v in value]
     return value
 
 

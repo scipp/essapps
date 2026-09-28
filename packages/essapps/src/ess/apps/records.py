@@ -96,19 +96,22 @@ class RunRequest(BaseModel, frozen=True):
     holds the list of runs. ``outputs`` are the outputs to compute, empty for
     the spec's results.
 
-    A request is complete: it never names a session or a process, and the only
-    path it may name is the identity of a local file that carries no run
-    identity. Nor does it say how a session computes it: the parameters a
-    caller varies from run to run are a hint given with the submission
-    (:meth:`ess.apps.backend.Backend.submit`), since the stage a session cuts
-    at them does not change the result.
+    A request is complete: it never names a session, a process, or a path;
+    as recorded, it names every dataset by its identity. Nor does it say how a
+    session computes it: the parameters a caller varies from run to run are a
+    hint given with the submission (:meth:`ess.apps.backend.Backend.submit`),
+    since the stage a session cuts at them does not change the result.
     """
 
     spec: SpecId
     params: dict[str, Plain] = Field(default_factory=dict)
     outputs: tuple[str, ...] = ()
     instrument: str = Field(min_length=1)
-    proposal: str = Field(min_length=1)
+    proposal: str = Field(
+        min_length=1,
+        description="The owning proposal: where the record is listed, who sees "
+        "it, and when it is deleted.",
+    )
     submitter: str = Field(min_length=1)
     label: str | None = Field(
         default=None,

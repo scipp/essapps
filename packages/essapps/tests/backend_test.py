@@ -11,7 +11,7 @@ import scipp as sc
 from pydantic import BaseModel
 
 from ess.apps.backend import SubmitError
-from ess.apps.client import Client, local
+from ess.apps.client import Client, local, local_backend
 from ess.apps.datastore import MissingCopyError, Serializers
 from ess.apps.examples import (
     COMBINE,
@@ -27,6 +27,7 @@ from ess.apps.examples import (
     write_run,
 )
 from ess.apps.records import RunRequest, Status, Template
+from ess.apps.runner import file_checksum
 from ess.apps.sources import Dataset, FolderSource
 from ess.apps.spec import (
     DatasetRef,
@@ -38,7 +39,7 @@ from ess.apps.spec import (
     as_ref,
     dataset_ref,
 )
-from ess.apps.testing import FakeDatasetSource
+from ess.apps.testing import FakeAccess, FakeDatasetSource
 
 from .conftest import make_client
 
@@ -56,7 +57,7 @@ def test_a_request_holds_plain_params_and_reads_back_equal(
     client: Client, run_ref: DatasetRef
 ) -> None:
     request = client.request(LOAD, {'run': run_ref, 'scale': 2.0})
-    assert request.params == {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0}
+    assert request.params == {'run': run_ref.model_dump(), 'scale': 2.0}
     # A request without outputs is recorded with the spec's results.
     recorded = client.record(client.submit(request).id).request
     assert recorded == request.model_copy(update={'outputs': ('data', 'total')})
@@ -66,7 +67,7 @@ def test_a_plain_run_records_every_parameter_its_default_filled(
     client: Client, run_ref: DatasetRef
 ) -> None:
     record = client.run(LOAD, {'run': run_ref})
-    assert record.request.params == {'run': {'dataset': 'run:dream/1'}, 'scale': 1.0}
+    assert record.request.params == {'run': run_ref.model_dump(), 'scale': 1.0}
     assert client.record(record.id).request.params == record.request.params
 
 
@@ -116,7 +117,7 @@ def test_a_plain_run_records_every_field_of_its_request(
     dumped = client.record(record.id).request.model_dump(mode='json')
     assert dumped == {
         'spec': {'name': 'load', 'version': 1},
-        'params': {'run': {'dataset': 'run:dream/1'}, 'scale': 2.0},
+        'params': {'run': run_ref.model_dump(), 'scale': 2.0},
         'outputs': ['data', 'total'],
         'instrument': 'dream',
         'proposal': 'p1',
@@ -148,7 +149,7 @@ def test_a_recompute_runs_with_the_defaults_recorded_at_submit(
         proposal='p1',
         submitter='simon',
         registry=reg,
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets, '*.h5', proposal='p1')],
     )
     again = client.recompute(record)
     fresh = client.run(LOAD, {'run': run_ref})
@@ -182,9 +183,8 @@ def test_a_dataset_reference_is_located_and_checksummed_at_dispatch(
     assert as_ref(record.request.params['run']) == run_ref
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
-    assert record.request.params['run'] == {'dataset': 'run:dream/1'}
     provenance = client.provenance(record)
-    assert provenance['raw'] == [{'dataset': 'run:dream/1'}]
+    assert provenance['raw'] == [run_ref.model_dump()]
     assert provenance['outputs'] == ['data', 'total']
 
 
@@ -196,13 +196,21 @@ def test_a_dataset_in_a_varied_parameter_is_checksummed(
     assert record.status == Status.COMPLETED, record.failure
     checksum = hashlib.sha256(run_file.read_bytes()).hexdigest()
     assert record.checksums == {str(run_ref): checksum}
-    assert client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
+    assert client.provenance(record)['raw'] == [run_ref.model_dump()]
 
 
 @pytest.fixture
 def counting_source(run_file: Path) -> FakeDatasetSource:
     """A source that records every dataset it was asked to locate."""
-    return FakeDatasetSource(Dataset(path=run_file, instrument='dream', run=1))
+    return FakeDatasetSource(
+        Dataset(
+            path=run_file,
+            proposals=['p1'],
+            sha256=file_checksum(run_file),
+            instrument='dream',
+            run=1,
+        )
+    )
 
 
 @pytest.fixture
@@ -226,25 +234,127 @@ def test_a_dataset_two_parameters_name_is_one_origin(
     record = counting_client.run(SUM, {'runs': [run_ref, run_ref]})
     assert record.status == Status.COMPLETED, record.failure
     assert counting_source.located == [run_ref]
-    assert counting_client.provenance(record)['raw'] == [{'dataset': 'run:dream/1'}]
+    assert counting_client.provenance(record)['raw'] == [run_ref.model_dump()]
 
 
-def test_a_dataset_no_source_has_fails_the_run_naming_the_sources(
+def test_a_run_number_or_a_path_is_recorded_as_the_identity_it_names(
+    client: Client, run_ref: DatasetRef, run_file: Path
+) -> None:
+    for typed in (dataset_ref(instrument='dream', run=1), dataset_ref(path=run_file)):
+        record = client.run(LOAD, {'run': typed})
+        assert record.status == Status.COMPLETED, record.failure
+        assert record.request.params['run'] == run_ref.model_dump()
+
+
+def test_a_dataset_no_source_knows_is_refused_at_submit(
+    client: Client, tmp_path: Path
+) -> None:
+    outside = write_run(tmp_path / 'elsewhere.h5', [1.0, 2.0])
+    for ref in (dataset_ref(instrument='dream', run=77), dataset_ref(path=outside)):
+        with pytest.raises(SubmitError, match='no source knows it'):
+            client.run(LOAD, {'run': ref})
+    assert client.records() == []
+
+
+def test_a_run_number_naming_two_datasets_is_refused(
     client: Client, datasets: Path
 ) -> None:
-    record = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=77)})
+    write_run(datasets / 'dream_7.h5', [1.0])
+    write_run(datasets / 'DREAM_7.h5', [2.0])
+    with pytest.raises(SubmitError, match='names several datasets'):
+        client.run(LOAD, {'run': dataset_ref(instrument='dream', run=7)})
+
+
+def test_a_file_that_moved_is_found_by_its_identity_on_recompute(
+    client: Client, run_ref: DatasetRef, run_file: Path, datasets: Path
+) -> None:
+    record = client.run(LOAD, {'run': run_ref})
+    run_file.rename(datasets / 'renamed.h5')
+    again = client.recompute(record)
+    assert again.status == Status.COMPLETED, again.failure
+    assert again.request == record.request
+
+
+def test_a_dataset_whose_bytes_are_missing_fails_the_run_naming_the_sources(
+    tmp_path: Path, datasets: Path
+) -> None:
+    landing = Dataset(path=tmp_path / 'gone.h5', proposals=['p1'], pid='pid/9')
+    client = make_client(
+        tmp_path / 'store',
+        datasets,
+        sources=[FakeDatasetSource(landing, locates=False)],
+    )
+    record = client.run(LOAD, {'run': landing.ref})
+    client.close()
     assert record.status == Status.FAILED
     assert record.failure.kind == 'missing-dataset'
     assert str(datasets) in record.failure.message
 
 
-def test_a_dataset_identified_by_path_is_its_own_location(
-    client: Client, tmp_path: Path
+@pytest.fixture
+def facility(tmp_path: Path) -> FakeDatasetSource:
+    """A vanadium run of the instrument's commissioning proposal."""
+    path = write_run(tmp_path / 'vanadium.h5', [2.0, 2.0])
+    return FakeDatasetSource(
+        Dataset(path=path, proposals=['commissioning'], pid='pid/vanadium')
+    )
+
+
+@pytest.mark.parametrize(
+    ('grants', 'errors'),
+    [
+        ({'simon': {'commissioning'}}, ()),
+        (
+            {},
+            (
+                "pid:pid/vanadium: belongs to proposals ['commissioning'], which "
+                'simon may not read',
+            ),
+        ),
+    ],
+)
+def test_a_dataset_of_another_proposal_needs_read_access(
+    tmp_path: Path,
+    datasets: Path,
+    facility: FakeDatasetSource,
+    grants: dict[str, set[str]],
+    errors: tuple[str, ...],
 ) -> None:
-    outside = write_run(tmp_path / 'elsewhere.h5', [1.0, 2.0])
-    record = client.run(LOAD, {'run': dataset_ref(path=outside)})
-    assert record.status == Status.COMPLETED, record.failure
-    assert record.outputs['total']['value'] == 3.0
+    client = make_client(
+        tmp_path / 'store', datasets, sources=[facility], access=FakeAccess(grants)
+    )
+    request = client.request(LOAD, {'run': dataset_ref(pid='pid/vanadium')})
+    report = client.validate(request)
+    client.close()
+    assert report.errors == errors
+
+
+def test_an_output_of_another_proposal_needs_read_access(
+    tmp_path: Path, facility: FakeDatasetSource
+) -> None:
+    backend = local_backend(
+        tmp_path / 'store',
+        registry=registry(),
+        sources=[facility],
+        access=FakeAccess({'eve': {'commissioning'}}),
+    )
+    scientist = Client(
+        backend, instrument='dream', proposal='commissioning', submitter='anna'
+    )
+    vanadium = scientist.run(LOAD, {'run': dataset_ref(pid='pid/vanadium')})
+    eve, mallory = (
+        Client(backend, instrument='dream', proposal='p2', submitter=submitter)
+        for submitter in ('eve', 'mallory')
+    )
+    normalize = {'data': vanadium.ref('data')}
+    readable = eve.validate(eve.request(REBIN, normalize))
+    refused = mallory.validate(mallory.request(REBIN, normalize))
+    backend.close()
+    assert readable.ok
+    assert refused.errors == (
+        f'{vanadium.ref("data")}: belongs to proposal commissioning, which '
+        'mallory may not read',
+    )
 
 
 def test_a_dataset_cannot_fill_a_literal_field(client: Client, run_ref: DatasetRef):

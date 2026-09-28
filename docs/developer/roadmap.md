@@ -57,7 +57,7 @@ The skeleton does not contain these, and phase 1 cannot be shown without them:
 Two simplifications are available in phase 1:
 
 - A template can reference its artefacts, such as a direct beam, as published PIDs and not as outputs of records in a commissioning proposal.
-  No reference then crosses a proposal, and the rules for instrument-shared artefacts are not needed yet.
+  No reference to a record then crosses a proposal, and retention need not consider records read from another proposal yet.
 - A view can be the whole output, because automatic reduction produces small final results.
 
 ## Decisions that fall due in phase 2
@@ -75,7 +75,7 @@ In phase 2 a manual reduction from the web page is a batch of one, and a rerun w
 
 These are judgments.
 
-**Defer until a workflow asks**: the view vocabulary beyond the whole output, and instrument-shared artefacts, which are three rules (access, retention exemption, templates) that are not needed while instrument staff are the only users.
+**Defer until a workflow asks**: the view vocabulary beyond the whole output.
 
 **Consider dropping**:
 

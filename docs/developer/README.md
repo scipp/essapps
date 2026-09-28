@@ -9,7 +9,7 @@ Workflows run in a notebook process or on a cluster without changes to workflow 
 
 ```python
 client = local('/tmp/essapps', instrument='loki', proposal='p1', submitter='me',
-               registry=registry(), sources=[FolderSource('/data/loki', '*.hdf')])
+               registry=registry(), sources=[FolderSource('/data/loki', '*.hdf', proposal='p1')])
 
 run = dataset_ref(instrument='loki', run=60339)
 centre = client.run(BEAM_CENTER, {'sample_run': run, ...})

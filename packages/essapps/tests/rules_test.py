@@ -74,8 +74,19 @@ def test_a_template_with_two_blanks_names_the_field_a_dataset_fills() -> None:
 # Lookup
 
 
+def run(number: int, **metadata: object) -> Dataset:
+    return Dataset(
+        path=Path('a'),
+        proposals=['p1'],
+        uuid=f'uuid-{number}',
+        instrument='d',
+        run=number,
+        metadata=metadata,
+    )
+
+
 def dataset(**metadata: object) -> Dataset:
-    return Dataset(path=Path('x.h5'), pid='pid/x', metadata=dict(metadata))
+    return Dataset(path=Path('x.h5'), proposals=['p1'], pid='pid/x', metadata=metadata)
 
 
 def test_a_lookup_entry_holds_plain_fills_and_keeps_a_nearest_fill() -> None:
@@ -112,9 +123,9 @@ def test_lookup_matches_a_pattern_and_a_run_range() -> None:
         ),
     )
     assert lookup.entry(dataset(sample='vanadium-rod')).name == 'vanadium'
-    assert lookup.entry(Dataset(path=Path('a'), instrument='d', run=101)).name == 'late'
-    assert lookup.entry(Dataset(path=Path('a'), instrument='d', run=5)).name == 'early'
-    assert lookup.entry(Dataset(path=Path('a'), instrument='d', run=50)) is None
+    assert lookup.entry(run(101)).name == 'late'
+    assert lookup.entry(run(5)).name == 'early'
+    assert lookup.entry(run(50)) is None
 
 
 def test_the_wildcard_entry_takes_what_nothing_else_matched() -> None:
@@ -143,9 +154,7 @@ def test_a_dataset_matching_two_entries_is_an_error() -> None:
         ),
     )
     with pytest.raises(ValueError, match="entries \\['by-name', 'by-run'\\]"):
-        lookup.entry(
-            Dataset(path=Path('a'), instrument='d', run=7, metadata={'sample': 'van'})
-        )
+        lookup.entry(run(7, sample='van'))
 
 
 # Rules

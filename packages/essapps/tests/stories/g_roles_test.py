@@ -16,26 +16,27 @@ from ess.apps.client import Client, local, local_backend
 from ess.apps.examples import HISTOGRAM, LOAD, REBIN, histogram_workflow, registry
 from ess.apps.records import Status, Template
 from ess.apps.store import StoreLockedError
-from ess.apps.testing import FakeDatasetSource, FakePublisher
+from ess.apps.testing import FakeAccess, FakeDatasetSource, FakePublisher
 
 from .conftest import Measure
 
 
 @pytest.fixture
 def backend(tmp_path: Path, catalogue: FakeDatasetSource) -> Iterator[Backend]:
-    """The instrument's backend, which the clients of every proposal share."""
+    """
+    The instrument's backend, which the clients of every proposal share; eve,
+    a user of p2, may read the instrument's commissioning proposal.
+    """
     backend = local_backend(
-        tmp_path / 'dream', registry=registry(), sources=[catalogue]
+        tmp_path / 'dream',
+        registry=registry(),
+        sources=[catalogue],
+        access=FakeAccess({'eve': {'commissioning'}}),
     )
     yield backend
     backend.close()
 
 
-@pytest.mark.xfail(
-    raises=AttributeError,
-    strict=True,
-    reason='nothing marks an artefact instrument-shared',
-)
 def test_g1_instrument_scientist_prepares_a_beamtime(
     backend: Backend, measure: Measure
 ) -> None:
@@ -43,12 +44,18 @@ def test_g1_instrument_scientist_prepares_a_beamtime(
         backend, instrument='dream', proposal='commissioning', submitter='anna'
     )
     user = Client(backend, instrument='dream', proposal='p2', submitter='eve')
-    vanadium = scientist.run(LOAD, {'run': measure(1)})
+    vanadium_run = measure(1, proposal='commissioning')
+    vanadium = scientist.run(LOAD, {'run': vanadium_run})
 
-    scientist.share(vanadium)
     normalized = user.run(REBIN, {'data': vanadium.ref('data')})
+    loaded = user.run(LOAD, {'run': vanadium_run})
 
     assert normalized.status == Status.COMPLETED
+    assert loaded.status == Status.COMPLETED
+    assert user.records() == [normalized, loaded]
+    assert user.records(proposal='commissioning') == [vanadium]
+    with pytest.raises(SubmitError, match='anna may not read'):
+        scientist.run(REBIN, {'data': normalized.ref('data')})
 
 
 def test_g2_developer_iterates_on_a_workflow(

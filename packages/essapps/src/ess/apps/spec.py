@@ -55,7 +55,6 @@ __all__ = [
     'as_ref',
     'data_field_at',
     'data_fields',
-    'dataset_path',
     'dataset_ref',
     'dataset_refs',
     'field_of',
@@ -70,48 +69,59 @@ __all__ = [
 ]
 
 
+IDENTITIES = ('pid', 'uuid', 'sha256')
+"""What identifies a dataset, in order of preference."""
+
+STAND_INS = ('run', 'path')
+"""What a person may type in place of an identity; resolved at submit."""
+
+
 def dataset_ref(
     *,
     pid: str | None = None,
+    uuid: str | None = None,
+    sha256: str | None = None,
     instrument: str | None = None,
     run: int | None = None,
     path: Path | str | None = None,
 ) -> DatasetRef:
     """
-    A dataset reference from the one identity given.
+    A dataset reference from the one identity or stand-in given.
 
     The spec keeps a dataset's identity as one string whose meaning is the
-    framework's; this is where the framework gives it one. The PID of a
-    catalogue dataset, ``pid:<pid>``; the instrument and run number a local
-    file carries, which is what a PID is minted from, ``run:<instrument>/<run>``;
-    or its path when it carries neither, the one case where a path is an
-    identity, ``path:<path>``. Identity is not location: where the bytes are is
-    asked of a dataset source at dispatch.
+    framework's; this is where the framework gives it one. A dataset is
+    identified by the first of these it has: the PID of its catalogue entry,
+    ``pid:<pid>``; the UUID its NeXus file carries in
+    ``entry/entry_identifier_uuid``, ``uuid:<uuid>``; the sha256 of the bytes
+    of a file that carries neither, ``sha256:<hex>``. A moved file keeps its
+    identity: where the bytes are is asked of a dataset source at dispatch.
+
+    The instrument and run number, ``run:<instrument>/<run>``, and a path,
+    ``path:<path>``, are stand-ins a person may type. The backend resolves a
+    stand-in to the dataset's identity when the request is submitted, and the
+    record holds the identity.
     """
     given = {
         'pid': pid is not None,
+        'uuid': uuid is not None,
+        'sha256': sha256 is not None,
         'instrument and run': instrument is not None or run is not None,
         'path': path is not None,
     }
     forms = [name for name, present in given.items() if present]
     if len(forms) != 1:
         raise ValueError(
-            'a dataset has exactly one identity, a pid, an instrument and a run '
-            f'number, or a path; got {forms or "none"}'
+            'a dataset reference has exactly one of a pid, a uuid, a sha256, '
+            f'an instrument and a run number, or a path; got {forms or "none"}'
         )
-    if pid is not None:
-        return DatasetRef(dataset=f'pid:{pid}')
+    for prefix, value in (('pid', pid), ('uuid', uuid), ('sha256', sha256)):
+        if value is not None:
+            return DatasetRef(dataset=f'{prefix}:{value}')
     if path is not None:
         return DatasetRef(dataset=f'path:{path}')
     if instrument is None or run is None:
-        raise ValueError('an instrument and a run number identify a file together')
+        raise ValueError('an instrument and a run number name a run together')
     return DatasetRef(dataset=f'run:{instrument}/{run}')
-
-
-def dataset_path(ref: DatasetRef) -> Path | None:
-    """The path of a dataset identified by one, the inverse of ``dataset_ref``."""
-    prefix = 'path:'
-    return Path(ref.dataset[len(prefix) :]) if ref.dataset.startswith(prefix) else None
 
 
 _OUTPUT_REF = re.compile(
@@ -124,11 +134,11 @@ def parse_ref(text: str) -> Ref:
     The reference ``text`` denotes, the inverse of ``str(ref)``.
 
     This is how a reference is written on a command line or in a URL: a
-    dataset by its identity, ``pid:...``, ``run:.../...``, or ``path:...``;
+    dataset by its identity or a stand-in, see :func:`dataset_ref`;
     an output of a record, ``<record>.<output>``, or one element of a
     collection output, ``<record>.<output>[<key>]``.
     """
-    if text.startswith(('pid:', 'run:', 'path:')):
+    if text.partition(':')[0] in (*IDENTITIES, *STAND_INS):
         return DatasetRef(dataset=text)
     if (match := _OUTPUT_REF.fullmatch(text)) is not None:
         return OutputRef(

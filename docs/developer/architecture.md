@@ -36,7 +36,7 @@ Publishing a result to SciCat is a separate, deliberate step.
 Two runs from a notebook, the second taking an output of the first:
 
 ```python
-run = dataset_ref(instrument='dream', run=1)            # a dataset, named by identity
+run = dataset_ref(instrument='dream', run=1)            # a run number, resolved at submit
 loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
 hist = client.run(HISTOGRAM, {'data': loaded.ref('data'), 'bins': 8})
 ```
@@ -86,9 +86,10 @@ A **reference** is the only way a request names data. It has two forms:
 | Form | Names | Example |
 |---|---|---|
 | Output reference | output X of run record Y, optionally one element of a collection output | `{"record": "b41c…", "output": "data"}` |
-| Dataset reference | data the framework did not compute: a SciCat dataset or a local file | `{"dataset": "pid:20.500.12269/abc"}`, `{"dataset": "run:dream/1"}` |
+| Dataset reference | data the framework did not compute: a SciCat dataset or a local file | `{"dataset": "pid:20.500.12269/abc"}`, `{"dataset": "uuid:05165700-…"}` |
 
 A reference names data by identity, never by where the bytes are.
+A dataset's identity is its SciCat PID, else the UUID its NeXus file carries, else the sha256 of a local file's bytes; a moved file keeps it.
 Where a dataset's bytes are is asked of SciCat, or of the user's folder, when the run is dispatched.
 Records keep references in reference form.
 **Provenance** is therefore the graph obtained by following references from a result back to datasets, parameters, and software versions.
@@ -97,8 +98,8 @@ No separate provenance model exists.
 Three rules complete the model:
 
 - **Stand-ins resolve at submission.**
-  A user may type a run number, a PID, or a path.
-  The backend turns it into a reference before it writes the record, because provenance must not depend on a search that could give a different answer later.
+  A user may type a run number or a path.
+  The backend replaces it by the identity of the one dataset it names before it writes the record, because provenance must not depend on a search that could give a different answer later.
 - **A missing copy is reported, never silently recomputed.**
   Whether an output is usable is two questions: the record's status, and whether the data store holds a copy.
   Getting a dropped output back is an explicit `recompute`, which makes a new record linked to the old one.
@@ -382,8 +383,8 @@ Details: [rules.md](rules.md).
 - **The record store is not a catalogue.**
   It answers what was computed; SciCat answers what was measured and what was published.
   Nothing is stored per dataset.
-- **Instrument plus proposal scopes everything**: both are mandatory on every record, and access follows SciCat proposal membership.
-  Artefacts from commissioning proposals, such as a direct beam, can be marked instrument-shared.
+- **Instrument plus proposal scopes everything**: both are mandatory on every record, and the proposal owns the record.
+  A request may name datasets and records of any proposal its submitter may read, such as a direct beam from the instrument's commissioning proposal.
 - **One backend per instrument in phase 1**, each with its own record store and data store.
 - **The Python client interface is the API.**
   Every UI reaches the backend through it.

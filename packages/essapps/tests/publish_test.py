@@ -46,7 +46,7 @@ def test_publish_writes_out_and_carries_a_provenance_snapshot(
     assert snapshot['spec'] == 'rebin/v1'
     assert snapshot['params']['bins'] == 4
     assert snapshot['inputs'][0]['spec'] == 'load/v1'
-    assert snapshot['inputs'][0]['raw'] == [{'dataset': 'run:dream/1'}]
+    assert snapshot['inputs'][0]['raw'] == [run_ref.model_dump()]
     assert 'essapps' in snapshot['package_versions']
 
 

@@ -23,7 +23,7 @@ from ess.apps.spec import dataset_ref
 
 SAMPLE_RUNS = (608, 609, 610, 611)
 REFERENCE_RUN = 614
-IDENTITY = r'amor\d+n(?P<run>\d+)'
+RUN_NAME = r'amor\d+n(?P<run>\d+)'
 CRITICAL_EDGE = {'start': 0.01, 'stop': 0.014}
 LABEL = 'reflectivity'
 
@@ -61,7 +61,7 @@ def client(cache: Path, tmp_path: Path) -> Iterator[Client]:
         proposal='p1',
         submitter='test',
         registry=amor.registry(),
-        sources=[FolderSource(cache, identity=IDENTITY, instrument='amor')],
+        sources=[FolderSource(cache, proposal='p1', stem=RUN_NAME, instrument='amor')],
     )
     yield session
     session.close()

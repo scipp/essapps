@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from ess.apps.backend import SubmitError
 from ess.apps.client import Client, local
 from ess.apps.examples import LOAD, registry, write_run
+from ess.apps.runner import file_checksum
 from ess.apps.sources import Dataset, FolderSource
-from ess.apps.spec import DatasetRef
+from ess.apps.spec import DatasetRef, dataset_ref
 from ess.apps.testing import FakeDatasetSource
 
 from .conftest import Measure
@@ -36,7 +36,9 @@ def ingest(tmp_path: Path, catalogue: FakeDatasetSource) -> Ingest:
         pid: str, counts: Sequence[float] = (1.0, 2.0, 3.0, 4.0), run: int | None = None
     ) -> DatasetRef:
         path = write_run(folder / f'{pid.rsplit("/", 1)[-1]}.h5', list(counts))
-        dataset = Dataset(path=path, pid=pid, instrument='dream', run=run)
+        dataset = Dataset(
+            path=path, proposals=['p1'], pid=pid, instrument='dream', run=run
+        )
         catalogue.add(dataset)
         return dataset.ref
 
@@ -58,7 +60,7 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
         proposal='p1',
         submitter='simon',
         registry=registry(),
-        sources=[FolderSource(folder), catalogue],
+        sources=[FolderSource(folder, proposal='p1'), catalogue],
     )
 
     listed = app.datasets()
@@ -68,8 +70,8 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
     app.close()
 
     assert [plot.request.params['run'] for plot in plots] == [
-        {'dataset': f'path:{a}'},
-        {'dataset': f'path:{b}'},
+        {'dataset': f'sha256:{file_checksum(a)}'},
+        {'dataset': f'sha256:{file_checksum(b)}'},
         {'dataset': 'pid:20.500.12269/vanadium'},
     ]
     assert views == [[1.0, 2.0], [3.0, 1.0], [2.0, 2.0]]
@@ -77,16 +79,10 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
     assert catalogue.located == [reference]  # located only when its run needed it
 
 
-@pytest.mark.xfail(
-    raises=SubmitError,
-    strict=True,
-    reason='a run number is not resolved to a dataset at submission; a data '
-    'field takes only a reference',
-)
 def test_a2_run_number_instead_of_file(client: Client, ingest: Ingest) -> None:
     dataset = ingest('20.500.12269/4711', run=4711)
 
-    loaded = client.run(LOAD, {'run': 4711})
+    loaded = client.run(LOAD, {'run': dataset_ref(instrument='dream', run=4711)})
 
     assert loaded.request.datasets() == [dataset]
 

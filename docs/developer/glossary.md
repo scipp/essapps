@@ -41,12 +41,14 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Data store**: where the bytes of large outputs live: a registry of disk copies and a disk tier, owned by the backend.
   Each process that holds data also has a private memory cache, which the store serves from but never registers.
   See [records.md](records.md#the-data-store).
-- **Dataset**: data the framework did not compute: a SciCat dataset, identified by its PID, or a file on a user's disk, identified by the instrument and run number it carries or else by its path.
+- **Dataset**: data the framework did not compute: a SciCat dataset or a file on a user's disk.
+  Identified by its PID, else the UUID its NeXus file carries, else the sha256 of its bytes; its run number is a field, not its identity.
+  Belongs to one or more proposals.
   The second form of reference.
   Not a record: no request, no status, nothing to recompute.
 - **Dataset source**: where datasets are discovered and listed, with the fields the instrument's field extractor derives.
   Persists nothing.
-  SciCat for a proposal, a folder in local mode, a fake for tests.
+  SciCat, a folder of one proposal in local mode, a fake for tests.
 - **Field extractor**: an instrument's code that derives a dataset's fields, role, sample, angle, start time, from its catalogue entry and file, and names the field that orders the instrument's datasets.
   Registered per instrument under the entry-point group `ess.apps.fields`.
   See [rules.md](rules.md#the-dataset-source).
@@ -83,6 +85,7 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
   See [rules.md](rules.md#templates-and-lookups).
 - **Plain run**: a run that varies nothing, computing the spec's results, as `client.run(spec, params)` submits it.
 - **Proposal**: the experiment allocation that owns data and defines who may access it.
+  A record has one owning proposal and may reference datasets and records of any proposal its submitter may read.
   See [operations.md](operations.md#scope-instrument-plus-proposal).
 - **Provenance**: the traceable chain from any result back to the raw data, parameters, and software that produced it.
   The graph obtained by following references.
@@ -129,6 +132,8 @@ Where esslivedata uses a word differently, the clash is noted, because the two p
 - **Stage inputs**: the values a stage takes on each call: the parameters a request varies.
   A template names them as its blanks, whether a client cut it for a slider or a rule holds it.
   See [stages.md](stages.md#who-names-the-stage).
+- **Stand-in**: what a person may type in place of a dataset's identity, a run number `run:<instrument>/<n>` or a path `path:<path>`.
+  Resolved at submission to the identity of the one dataset it names, which is what the record's parameters hold.
 - **Template**: a partial request: a spec, the values set, the blanks each use fills, and the outputs to compute.
   The requests made from one template name one stage, so a template is both the stage a client names for a slider and what a batch or a rule fills.
   Records made from a template carry its name as their label.

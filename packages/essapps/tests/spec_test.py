@@ -17,7 +17,6 @@ from ess.apps.spec import (
     WorkflowSpec,
     as_ref,
     data_fields,
-    dataset_path,
     dataset_ref,
     parse_ref,
     ref_fields,
@@ -98,15 +97,15 @@ def test_as_ref_tells_a_dataset_from_a_params_dict() -> None:
     assert as_ref({'run': OutputRef(record='r1', output='data')}) is None
 
 
-def test_a_dataset_has_exactly_one_identity() -> None:
+def test_a_dataset_reference_has_exactly_one_form() -> None:
     assert str(dataset_ref(pid='20.500/abc')) == 'pid:20.500/abc'
+    assert str(dataset_ref(uuid='0516-5e93')) == 'uuid:0516-5e93'
+    assert str(dataset_ref(sha256='ab12')) == 'sha256:ab12'
     assert str(dataset_ref(instrument='dream', run=4711)) == 'run:dream/4711'
     assert str(dataset_ref(path=Path('/data/x.nxs'))) == 'path:/data/x.nxs'
-    assert dataset_path(dataset_ref(path=Path('/data/x.nxs'))) == Path('/data/x.nxs')
-    assert dataset_path(dataset_ref(pid='20.500/abc')) is None
-    with pytest.raises(ValueError, match='exactly one identity'):
-        dataset_ref(pid='20.500/abc', path=Path('/data/x.nxs'))
-    with pytest.raises(ValueError, match='exactly one identity'):
+    with pytest.raises(ValueError, match='exactly one of'):
+        dataset_ref(pid='20.500/abc', uuid='0516-5e93')
+    with pytest.raises(ValueError, match='exactly one of'):
         dataset_ref()
     with pytest.raises(ValueError, match='together'):
         dataset_ref(instrument='dream')
@@ -169,8 +168,14 @@ def test_serialized_spec_id_matches_the_workflow_specs() -> None:
 
 
 def test_parse_ref_round_trips_a_dataset_and_an_output() -> None:
-    dataset = dataset_ref(instrument='dream', run=4711)
-    assert parse_ref(str(dataset)) == dataset
+    for dataset in (
+        dataset_ref(pid='20.500/abc'),
+        dataset_ref(uuid='0516-5e93'),
+        dataset_ref(sha256='ab12'),
+        dataset_ref(instrument='dream', run=4711),
+        dataset_ref(path='/data/x.nxs'),
+    ):
+        assert parse_ref(str(dataset)) == dataset
     ref = OutputRef(record='r1', output='data')
     assert parse_ref(str(ref)) == ref
     keyed = OutputRef(record='r1', output='banks', key='a')

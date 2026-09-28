@@ -69,8 +69,8 @@ Our record store answers what was computed, and SciCat answers what was measured
 A record holds nothing from SciCat that it did not need in order to make a decision.
 A UI that wants a sample name or the list of a proposal's runs asks SciCat, and a batch member key such as a temperature is supplied by the submitter rather than looked up.
 
-SciCat is needed at two moments, when a stand-in is resolved and when an output is published.
-A resolved reference never needs it again, so work on data that is already referenced continues while the catalogue is slow or down.
+SciCat is needed at two moments: when a request is submitted, to resolve stand-ins and to check who may read each dataset, and when an output is published.
+A submitted request needs it again only to locate the bytes of its datasets.
 Local mode has no catalogue at all: a folder is its dataset source, read when asked, and the store holds nothing about the files in it.
 
 Without these rules the store would become a second catalogue by accretion, one row per dataset discovered, with metadata copied for display and paths that go stale.
@@ -105,17 +105,27 @@ Otherwise automatic reduction would reprocess its own output.
 ## Scope: instrument plus proposal
 
 **Instrument and proposal are mandatory on every run request.**
-Run-number resolution, UI navigation, templates, and authorization by SciCat membership all operate within a proposal, the experiment allocation that owns data and defines who may access it.
-The backend checks proposal access on every reference it resolves or serves, not only at submission.
+The proposal owns the record: it decides where the record is listed, who sees it, and when it is deleted.
+A client has one owning proposal for the requests it makes.
+A rule is owned by one proposal in the same way, and its selector picks that proposal's datasets.
 Cluster jobs run under the submitting user's account.
 
-**Artefacts from commissioning proposals can be marked instrument-shared.**
-Instrument scientists and commissioning use long-lived proposals.
-A direct beam, a beam centre, processed vanadium, masks, and lookup tables are produced there and consumed by every user proposal, so they are readable from any proposal on that instrument.
-Without that, every external user would need membership in the commissioning proposal.
-Their disk copies are exempt from retention, because a recompute would run under a user who cannot read the commissioning inputs.
-Templates and lookups from such a proposal, the instrument defaults, are marked the same way.
-A rule is bound to the proposal whose datasets it selects.
+**A request may read other proposals.**
+A reference may name a dataset or an output of a record of any proposal the submitter may read: a facility vanadium, or a direct beam or beam centre from the instrument's commissioning proposal.
+A dataset may belong to several proposals, as SciCat's `proposalIds` is a list, and is readable if the submitter may read one of them.
+Who may read which proposal is the facility's answer, from the user office; the backend asks it through `Access`, and a request reads only its own proposal without one.
+
+```python
+backend = local_backend(root, sources=[catalogue], access=FakeAccess({'eve': {'commissioning'}}))
+user = Client(backend, instrument='dream', proposal='p2', submitter='eve')
+user.run(REBIN, {'data': vanadium.ref('data')})  # a record owned by 'commissioning'
+user.datasets(['commissioning'])                 # the datasets of another proposal
+```
+
+The backend checks every reference when a request is submitted or recomputed.
+A rule's lookup may fill references of other proposals in the same way, and the check applies to the request it makes.
+Instrument defaults, such as the templates, lookups, and rules a facility runs for every user, are owned by the instrument's commissioning proposal like anything else.
+Commissioning proposals are long-lived, so what users read from them stays.
 
 ## Deployment
 
@@ -223,5 +233,4 @@ Rejected because SciCat entries cannot be removed, so every unreviewed intermedi
 - A local application in one process shares the interpreter between the UI and the runs, so a long run blocks the UI unless the session moves to a subprocess, which needs the remote-session machinery.
 - The client interface carries a view vocabulary, and dense data needs a chunking decision at write time so that views on data larger than a cache can read partially from disk.
 - A result that a held stage served costs a recompute before it can be published.
-- Instrument-shared artefacts are an access-control case that SciCat proposal membership does not cover, and their disk copies are exempt from retention.
 - "No message broker" is a local-mode decision, to be re-examined when the cluster launcher is built.

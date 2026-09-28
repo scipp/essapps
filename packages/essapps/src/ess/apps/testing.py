@@ -4,14 +4,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import scipp as sc
 
 from .binding import Inputs, Workflow
-from .sources import Dataset
+from .sources import Dataset, find
 from .spec import DatasetRef, Ref, WorkflowSpec, submodel
 
 
@@ -104,14 +104,31 @@ class FakeDatasetSource:
     def add(self, dataset: Dataset) -> None:
         self._datasets.append(dataset)
 
-    def new_datasets(self, proposal: str) -> list[Dataset]:
-        return list(self._datasets)
+    def datasets(self, proposals: Collection[str]) -> list[Dataset]:
+        return [d for d in self._datasets if set(d.proposals) & set(proposals)]
+
+    def find(self, ref: DatasetRef) -> Dataset | None:
+        return find(self._datasets, ref)
 
     def locate(self, ref: DatasetRef) -> Path | None:
         self.located.append(ref)
         if not self._locates:
             return None
-        return next((d.path for d in self._datasets if d.ref == ref), None)
+        dataset = find(self._datasets, ref)
+        return None if dataset is None else dataset.path
+
+
+class FakeAccess:
+    """
+    Which proposals each submitter may read beyond the one a request is owned
+    by; stands in for the facility's user office.
+    """
+
+    def __init__(self, grants: Mapping[str, Collection[str]]) -> None:
+        self._grants = grants
+
+    def may_read(self, submitter: str, proposal: str) -> bool:
+        return proposal in self._grants.get(submitter, ())
 
 
 class FakePublisher:

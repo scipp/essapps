@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .backend import Backend, LocalBackend, Publisher, ValidationReport
+from .backend import Access, Backend, LocalBackend, Publisher, ValidationReport
 from .binding import ENTRY_POINT_REGISTRY, Registry, import_object
 from .datastore import DataStore
 from .launcher import Launcher, SessionLauncher, SubprocessLauncher
@@ -44,7 +44,15 @@ class Candidate(BaseModel, frozen=True):
 
 
 class Client:
-    """One user's handle on a backend, with the instrument and proposal fixed."""
+    """
+    One user's handle on a backend, with the instrument and the owning
+    proposal fixed.
+
+    Every request the client makes is owned by ``proposal``: the proposal its
+    record is listed under, visible to, and deleted with. It may name datasets
+    and outputs of any proposal the submitter may read, which the backend
+    checks, and ``datasets`` and ``records`` read other proposals when asked.
+    """
 
     def __init__(
         self, backend: Backend, *, instrument: str, proposal: str, submitter: str
@@ -128,9 +136,14 @@ class Client:
         vary = template.blanks if isinstance(template, Template) else ()
         return self.submit(self.request(template, values, **kwargs), vary)
 
-    def datasets(self) -> list[Dataset]:
-        """Every dataset the backend's sources know for this proposal, by identity."""
-        return self.backend.datasets(self.proposal)
+    def datasets(self, proposals: Collection[str] | None = None) -> list[Dataset]:
+        """
+        Every dataset the backend's sources know for these proposals, by
+        identity; the client's own proposal by default.
+        """
+        return self.backend.datasets(
+            [self.proposal] if proposals is None else list(proposals)
+        )
 
     def pick(self, format: Format | None = None) -> list[Candidate]:
         """
@@ -171,8 +184,11 @@ class Client:
     def record(self, record_id: str) -> RunRecord:
         return self.backend.record(record_id)
 
-    def records(self, **filters: Any) -> list[RunRecord]:
-        return self.backend.records(proposal=self.proposal, **filters)
+    def records(
+        self, *, proposal: str | None = None, **filters: Any
+    ) -> list[RunRecord]:
+        """Records of a proposal, the client's own by default, by the filters."""
+        return self.backend.records(proposal=proposal or self.proposal, **filters)
 
     def latest(self, label: str, member_key: str | None = None) -> RunRecord | None:
         """The record that supersedes the others under a label (a slot)."""
@@ -231,11 +247,14 @@ def local_backend(
     sources: Iterable[DatasetSource] = (),
     throwaway: bool = False,
     publishers: Mapping[str, Publisher] = {},
+    access: Access | None = None,
 ) -> LocalBackend:
     """
     Local mode: backend, launcher, and data store in this process.
 
     ``sources`` is where datasets come from, a folder in the local application.
+    ``access`` says which other proposals a submitter may read; without it, a
+    request reads its own proposal only.
     With ``throwaway`` every run is a subprocess (the shared-mode shape), and
     ``registry`` must then be importable by name, ``module:function``.
     """
@@ -255,7 +274,7 @@ def local_backend(
             else (registry or Registry())
         )
         launcher = SessionLauncher(reg, data)
-    return LocalBackend(records, data, reg, launcher, sources, publishers)
+    return LocalBackend(records, data, reg, launcher, sources, publishers, access)
 
 
 def local(

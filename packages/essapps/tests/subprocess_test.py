@@ -11,6 +11,7 @@ import pytest
 from ess.apps.client import Client, local
 from ess.apps.examples import FAIL, LOAD, REBIN, SUM, write_run
 from ess.apps.records import Status
+from ess.apps.runner import file_checksum
 from ess.apps.sources import FolderSource
 from ess.apps.spec import DatasetRef, OutputRef, dataset_ref
 
@@ -23,7 +24,7 @@ def client(tmp_path: Path, datasets: Path):
         proposal='p1',
         submitter='simon',
         registry='ess.apps.examples:registry',
-        sources=[FolderSource(datasets, '*.h5')],
+        sources=[FolderSource(datasets, '*.h5', proposal='p1')],
         throwaway=True,
     )
     yield client
@@ -32,9 +33,9 @@ def client(tmp_path: Path, datasets: Path):
 
 @pytest.fixture
 def run_ref(datasets: Path) -> DatasetRef:
-    """The run identity ``dream_1.h5`` carries; a subprocess gets a path at dispatch."""
-    write_run(datasets / 'dream_1.h5', [1.0, 2.0, 3.0, 4.0])
-    return dataset_ref(instrument='dream', run=1)
+    """The identity of ``dream_1.h5``; a subprocess gets a path at dispatch."""
+    path = write_run(datasets / 'dream_1.h5', [1.0, 2.0, 3.0, 4.0])
+    return dataset_ref(sha256=file_checksum(path))
 
 
 def test_run_is_dispatched_then_reconciled_from_the_marker(
@@ -64,7 +65,7 @@ def test_a_dataset_is_located_before_the_subprocess_starts(
     checksum = hashlib.sha256(file.read_bytes()).hexdigest()
     assert done.checksums == {str(run_ref): checksum}
     job = json.loads((client.backend.launcher.workdir(done) / 'job.json').read_text())
-    assert job['locations'] == {'run:dream/1': str(file)}
+    assert job['locations'] == {str(run_ref): str(file)}
 
 
 def test_map_combine_runs_through_subprocesses(

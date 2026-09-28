@@ -139,10 +139,10 @@ def test_two_clients_on_one_server_see_only_their_own_proposal(
             remote(server_url, instrument='dream', proposal='p2', submitter='simon')
         ) as p2,
     ):
-        record = p2.run(LOAD, {'run': run_ref})
-        p2.wait([record])
-        assert record.id not in [r.id for r in p1.records()]
-        assert record.id in [r.id for r in p2.records()]
+        record = p1.run(LOAD, {'run': run_ref})
+        p1.wait([record])
+        assert record.id in [r.id for r in p1.records()]
+        assert record.id not in [r.id for r in p2.records()]
 
 
 def test_output_of_a_dropped_copy_raises_lookup_error(

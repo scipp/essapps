@@ -3,10 +3,10 @@
 """
 Dataset sources: where data the framework did not compute comes from.
 
-A source yields the datasets of a proposal and locates the bytes of a dataset
-reference. It persists nothing: which datasets a rule has already fired on is a
-query over the records, and a dataset enters the store only as a reference in
-the requests that name it. SciCat is the implementation for a facility,
+A source yields the datasets of proposals, finds the dataset a reference names,
+and locates its bytes. It persists nothing: which datasets a rule has already
+fired on is a query over the records, and a dataset enters the store only as a
+reference in the requests that name it. SciCat is the implementation for a facility,
 :class:`FolderSource` the one for the local application, and
 :class:`ess.apps.testing.FakeDatasetSource` the fake for tests.
 
@@ -16,7 +16,7 @@ See docs/developer/rules.md.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import cache
@@ -24,6 +24,9 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Protocol
 
+import h5py
+
+from .runner import file_checksum
 from .spec import DatasetRef, dataset_ref
 
 
@@ -32,26 +35,37 @@ class Dataset:
     """
     What a source yields: where the bytes are now, what identifies them, metadata.
 
-    A source fills the identity fields it can: ``pid`` for a catalogue dataset,
-    ``instrument`` and ``run`` for a file that carries a run identity, neither
-    for a file that carries none, whose path is then its identity. ``metadata``
-    is what the instrument's :class:`FieldExtractor` derived, an angle, a sample
-    name, a run's role, and ``order`` the one of those fields that orders the
-    instrument's datasets, as the extractor declares, which two datasets must
-    share for it to order them; ``created`` is when the acquisition wrote the
-    dataset, which is the other form a rule's lower bound takes. ``error`` says
-    why the extractor gave no usable fields, and a rule refuses such a dataset,
-    visibly, rather than the source failing for every dataset.
+    A source fills the identity fields it can, and the first of ``pid``,
+    ``uuid``, ``sha256`` is the dataset's identity, see
+    :func:`ess.apps.spec.dataset_ref`. ``proposals`` are the proposals the
+    dataset belongs to, which decide who may read it; a catalogue may list
+    several. ``instrument`` and ``run`` are the instrument and run number the
+    dataset carries, fields like any other, which a person may type to name
+    it. ``metadata`` is what the instrument's :class:`FieldExtractor` derived,
+    an angle, a sample name, a run's role, and ``order`` the one of those
+    fields that orders the instrument's datasets, as the extractor declares,
+    which two datasets must share for it to order them; ``created`` is when the
+    acquisition wrote the dataset, which is the other form a rule's lower bound
+    takes. ``error`` says why the extractor gave no usable fields, and a rule
+    refuses such a dataset, visibly, rather than the source failing for every
+    dataset.
     """
 
     path: Path
+    proposals: list[str]
     pid: str | None = None
+    uuid: str | None = None
+    sha256: str | None = None
     instrument: str | None = None
     run: int | None = None
     created: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     order: str | None = None
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.pid is None and self.uuid is None and self.sha256 is None:
+            raise ValueError(f'{self.path}: a dataset needs a pid, uuid, or sha256')
 
     @property
     def fields(self) -> dict[str, Any]:
@@ -68,9 +82,47 @@ class Dataset:
         """This dataset's identity, which is how a request names it."""
         if self.pid is not None:
             return dataset_ref(pid=self.pid)
-        if self.run is not None:
-            return dataset_ref(instrument=self.instrument, run=self.run)
-        return dataset_ref(path=self.path)
+        if self.uuid is not None:
+            return dataset_ref(uuid=self.uuid)
+        return dataset_ref(sha256=self.sha256)
+
+
+def find(datasets: Iterable[Dataset], ref: DatasetRef) -> Dataset | None:
+    """
+    The dataset ``ref`` names among ``datasets``, or None.
+
+    ``ref`` is an identity, or a stand-in a person typed,
+    ``run:<instrument>/<run>`` or ``path:<path>``. A stand-in that fits
+    datasets of several identities names none of them, and raises.
+    """
+    kind, _, value = ref.dataset.partition(':')
+    if kind == 'run':
+        instrument, _, run = value.rpartition('/')
+        hits = [d for d in datasets if d.instrument == instrument and str(d.run) == run]
+    elif kind == 'path':
+        path = Path(value).resolve()
+        hits = [d for d in datasets if d.path.resolve() == path]
+    else:
+        hits = [d for d in datasets if d.ref == ref]
+    found = {d.ref: d for d in hits}
+    if len(found) > 1:
+        raise ValueError(f'{ref} names several datasets: {sorted(map(str, found))}')
+    return next(iter(found.values()), None)
+
+
+UUID_FIELD = 'entry/entry_identifier_uuid'
+
+
+def file_identity(path: Path) -> dict[str, str]:
+    """
+    The identity fields of a local file: the UUID a NeXus file carries in
+    ``entry/entry_identifier_uuid``, else the sha256 of its bytes.
+    """
+    if h5py.is_hdf5(path):
+        with h5py.File(path, 'r') as file:
+            if isinstance(uuid := file.get(UUID_FIELD), h5py.Dataset):
+                return {'uuid': str(uuid.asstr()[()])}
+    return {'sha256': file_checksum(path)}
 
 
 FIELDS_GROUP = 'ess.apps.fields'
@@ -101,12 +153,13 @@ class FieldExtractor:
     derive: Callable[[Mapping[str, Any], Path], Mapping[str, Any]]
     order: str | None = None
 
-    def dataset(self, entry: Mapping[str, Any], path: Path, **identity: Any) -> Dataset:
+    def dataset(self, entry: Mapping[str, Any], path: Path, **given: Any) -> Dataset:
         """
-        The dataset with this identity, its fields derived from ``entry``, or
-        with the reason as its ``error`` where they cannot be.
+        The dataset with the fields ``given``, its identity among them, and
+        the fields derived from ``entry``, or with the reason as its ``error``
+        where they cannot be.
         """
-        dataset = Dataset(path=path, order=self.order, **identity)
+        dataset = Dataset(path=path, order=self.order, **given)
         try:
             metadata = dict(self.derive(entry, path))
         # Instrument code: whatever it raises concerns this dataset only.
@@ -145,8 +198,18 @@ def field_extractor(instrument: str | None) -> FieldExtractor:
 
 
 class DatasetSource(Protocol):
-    def new_datasets(self, proposal: str) -> Iterable[Dataset]:
-        """Datasets of this proposal; arrival may be out of order and repeated."""
+    def datasets(self, proposals: Collection[str]) -> Iterable[Dataset]:
+        """
+        Datasets that belong to any of these proposals; arrival may be out of
+        order and repeated.
+        """
+        ...
+
+    def find(self, ref: DatasetRef) -> Dataset | None:
+        """
+        The dataset an identity or a stand-in names, see :func:`find`, whether
+        or not its bytes have landed; None if this source does not know it.
+        """
         ...
 
     def locate(self, ref: DatasetRef) -> Path | None:
@@ -154,23 +217,22 @@ class DatasetSource(Protocol):
         ...
 
 
-_RUN_IDENTITY = re.compile(r'(?P<instrument>[a-zA-Z]+)_(?P<run>\d+)')
+_RUN_NAME = re.compile(r'(?P<instrument>[a-zA-Z]+)_(?P<run>\d+)')
 
 
 class FolderSource:
     """
-    The local application's dataset source: the files of one folder.
+    The local application's dataset source: the files of one folder, which
+    belong to one proposal.
 
-    A file whose name carries an instrument and a run number, ``dream_4711.nxs``,
-    is identified by those, which is what a PID is minted from; any other file is
-    identified by its path. The folder is one proposal's, so ``proposal`` selects
-    nothing here.
-
-    Facilities name files differently, so ``identity`` is the expression matched
-    against a file's stem: a group ``run`` gives the run number and a group
-    ``instrument`` the instrument, which ``instrument`` supplies for names that
-    do not carry one. A stem the expression does not match is identified by its
-    path.
+    A file is identified by the UUID it carries, or else by the sha256 of its
+    bytes, which is read once per file and kept while the file is unchanged.
+    A file whose name carries an instrument and a run number,
+    ``dream_4711.nxs``, has those as fields, so that a person can name it by
+    them. Facilities name files differently, so ``stem`` is the expression
+    matched against a file's stem: a group ``run`` gives the run number and a
+    group ``instrument`` the instrument, which ``instrument`` supplies for
+    names that do not carry one.
 
     ``journal`` is what the facility's run journal or catalogue says about
     each run, an entry by run number. The instrument's field extractor derives
@@ -183,26 +245,33 @@ class FolderSource:
         path: Path | str,
         pattern: str = '*',
         *,
-        identity: str | re.Pattern[str] = _RUN_IDENTITY,
+        proposal: str,
+        stem: str | re.Pattern[str] = _RUN_NAME,
         instrument: str | None = None,
         journal: Mapping[int, Mapping[str, Any]] | None = None,
         fields: FieldExtractor | None = None,
     ) -> None:
         self.path = Path(path)
         self.pattern = pattern
-        self.identity = re.compile(identity)
+        self.proposal = proposal
+        self.stem = re.compile(stem)
         self.instrument = instrument
         self.journal = journal or {}
         self.fields = fields
+        self._identities: dict[tuple[Path, int, int], dict[str, str]] = {}
 
     def __repr__(self) -> str:
         return f'FolderSource({str(self.path)!r}, {self.pattern!r})'
 
-    def new_datasets(self, proposal: str) -> list[Dataset]:
-        return self._scan()
+    def datasets(self, proposals: Collection[str]) -> list[Dataset]:
+        return self._scan() if self.proposal in proposals else []
+
+    def find(self, ref: DatasetRef) -> Dataset | None:
+        return find(self._scan(), ref)
 
     def locate(self, ref: DatasetRef) -> Path | None:
-        return next((d.path for d in self._scan() if d.ref == ref), None)
+        dataset = self.find(ref)
+        return None if dataset is None else dataset.path
 
     def _scan(self) -> list[Dataset]:
         return [
@@ -212,10 +281,18 @@ class FolderSource:
         ]
 
     def _dataset(self, path: Path) -> Dataset:
-        created = self._created(path)
-        match = self.identity.fullmatch(path.stem)
+        stat = path.stat()
+        known = (path, stat.st_mtime_ns, stat.st_size)
+        if known not in self._identities:
+            self._identities[known] = file_identity(path)
+        identity: dict[str, Any] = {
+            **self._identities[known],
+            'proposals': [self.proposal],
+            'created': datetime.fromtimestamp(stat.st_mtime, UTC),
+        }
+        match = self.stem.fullmatch(path.stem)
         if match is None:
-            return self._extractor(self.instrument).dataset({}, path, created=created)
+            return self._extractor(self.instrument).dataset({}, path, **identity)
         instrument = match.groupdict().get('instrument') or self.instrument
         if instrument is None:
             raise ValueError(
@@ -228,14 +305,10 @@ class FolderSource:
             path,
             instrument=instrument.lower(),
             run=run,
-            created=created,
+            **identity,
         )
 
     def _extractor(self, instrument: str | None) -> FieldExtractor:
         if self.fields is not None:
             return self.fields
         return field_extractor(None if instrument is None else instrument.lower())
-
-    @staticmethod
-    def _created(path: Path) -> datetime:
-        return datetime.fromtimestamp(path.stat().st_mtime, UTC)

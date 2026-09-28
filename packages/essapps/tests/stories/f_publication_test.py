@@ -20,7 +20,8 @@ from .conftest import Measure
 def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure, scicat: FakePublisher
 ) -> None:
-    loaded = client.run(LOAD, {'run': measure(1), 'scale': 2.0})
+    run = measure(1)
+    loaded = client.run(LOAD, {'run': run, 'scale': 2.0})
     reduced = client.run(REBIN, {'data': loaded.ref('data'), 'bins': 2})
 
     # allow_reused: the toy workflows are bound in process
@@ -33,7 +34,7 @@ def test_f1_publish_then_trace_six_months_later(
     assert {'essapps', 'scipp', 'sciline'} <= snapshot['package_versions'].keys()
     (source,) = snapshot['inputs']
     assert source['params']['scale'] == 2.0
-    assert source['raw'] == [{'dataset': 'run:dream/1'}]
+    assert source['raw'] == [run.model_dump()]
 
 
 @pytest.mark.xfail(

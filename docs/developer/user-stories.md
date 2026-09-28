@@ -507,7 +507,7 @@ Actor: instrument scientist, then external users.
 Checks: artefacts from a long-lived proposal are readable across proposals on the instrument; everything else is scoped; the artefacts do not expire under the users' feet.
 
 Outcome: fits.
-Artefacts, templates, and lookups from a commissioning proposal are marked instrument-shared, and their disk copies are exempt from retention ([operations.md](operations.md#scope-instrument-plus-proposal)).
+Artefacts, templates, and lookups are owned by a commissioning proposal, which the facility lets the users of the coming proposal read; a user's own proposal stays theirs ([operations.md](operations.md#scope-instrument-plus-proposal)).
 
 ### G2. Developer iterates on a workflow
 
@@ -551,7 +551,7 @@ Each notebook is its own backend with its own record store, so a reference from 
 
 Actor: external user.
 
-1. Submits a request that references an output of a record in another proposal, not instrument-shared.
+1. Submits a request that references an output of a record in another proposal, one the user may not read.
 
 Checks: refused at validation with a clear reason; no record is created.
 
@@ -570,7 +570,7 @@ Actor: operator.
 Checks: retention says what is droppable and what is exempt; dropping loses bytes only, never provenance.
 
 Outcome: question.
-Dropping loses bytes only, the records stay, and store copies of local files and instrument-shared outputs are exempt.
+Dropping loses bytes only, the records stay, and store copies of local files are exempt.
 The retention policy itself, and what the operator is shown when the quota is reached, is undecided ([open-issues.md](open-issues.md#open-questions)).
 
 ### H2. Backend upgrade with runs in flight
@@ -596,7 +596,7 @@ Actor: operator.
 Checks: records and copies go together; nothing dangles; the published entry answers the question on its own.
 
 Outcome: fits.
-A proposal's records and disk copies are dropped together after an export, references do not cross proposals except into long-lived commissioning ones, and the SciCat entry carries its own provenance ([records.md](records.md#lifetimes)).
+A proposal's records and disk copies are dropped together after an export, references into it from other proposals are mostly to long-lived commissioning ones, and the SciCat entry carries its own provenance ([records.md](records.md#lifetimes)).
 
 ## Summary
 

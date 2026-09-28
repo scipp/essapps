@@ -111,6 +111,8 @@ def test_serve_rejects_a_malformed_publisher(runner: CliRunner, tmp_path: Path) 
         'a:b',
         '--datasets',
         str(tmp_path),
+        '--datasets-proposal',
+        'p1',
     ]
     result = runner.invoke(main, [*args, '--publisher', 'fake'])
     assert result.exit_code == 2
@@ -118,10 +120,11 @@ def test_serve_rejects_a_malformed_publisher(runner: CliRunner, tmp_path: Path) 
 
 
 def test_submit_wait_output_round_trip(
-    runner: CliRunner, env: Mapping[str, str], run_ref: DatasetRef
+    runner: CliRunner, env: Mapping[str, str], run_file: Path
 ) -> None:
+    """A person types the run number; the record names the file's identity."""
     result = runner.invoke(
-        main, ['submit', 'load/v1', '--run', str(run_ref), '--scale', '2.0'], env=env
+        main, ['submit', 'load/v1', '--run', 'run:dream/1', '--scale', '2.0'], env=env
     )
     assert result.exit_code == 0, result.output
     record_id = result.output.strip()
@@ -187,9 +190,7 @@ def test_submit_of_an_unknown_spec_is_a_clean_error(
 def test_wait_on_a_failing_run_exits_1(
     runner: CliRunner, env: Mapping[str, str]
 ) -> None:
-    result = runner.invoke(
-        main, ['submit', 'load/v1', '--run', 'run:dream/999', '--scale', '1.0'], env=env
-    )
+    result = runner.invoke(main, ['submit', 'fail/v1'], env=env)
     assert result.exit_code == 0, result.output
     record_id = result.output.strip()
 

@@ -70,12 +70,9 @@ from ess.apps.testing import FakeDatasetSource
 @pytest.fixture
 def scan(datasets: Path) -> dict[str, DatasetRef]:
     """Two more runs in the folder the client's dataset source reads."""
-    write_run(datasets / 'dream_2.h5', [1.0, 2.0])
-    write_run(datasets / 'dream_3.h5', [3.0, 4.0])
-    return {
-        '300K': dataset_ref(instrument='dream', run=2),
-        '310K': dataset_ref(instrument='dream', run=3),
-    }
+    write_run(datasets / 'dream_2.h5', [1.0, 2.0], uuid='dream-2')
+    write_run(datasets / 'dream_3.h5', [3.0, 4.0], uuid='dream-3')
+    return {'300K': dataset_ref(uuid='dream-2'), '310K': dataset_ref(uuid='dream-3')}
 
 
 @pytest.fixture
@@ -83,12 +80,14 @@ def samples(client: Client, tmp_path: Path) -> FakeDatasetSource:
     """Datasets carrying the fields a lookup and a selector match on."""
     source = FakeDatasetSource(
         Dataset(
+            proposals=['p1'],
             path=write_run(tmp_path / 'v1.h5', [1.0, 2.0]),
             pid='pid/1',
             run=11,
             metadata={'sample': 'vanadium', 'angle': 0.4},
         ),
         Dataset(
+            proposals=['p1'],
             path=write_run(tmp_path / 's1.h5', [3.0, 4.0]),
             pid='pid/2',
             run=12,
@@ -113,7 +112,10 @@ def rule(template: Template, client: Client, samples: FakeDatasetSource) -> Rule
 
 
 def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
-    client: Client, template: Template, samples: FakeDatasetSource
+    client: Client,
+    template: Template,
+    run_ref: DatasetRef,
+    samples: FakeDatasetSource,
 ) -> None:
     lookup = Lookup(
         name='by-sample',
@@ -137,7 +139,7 @@ def test_the_ladder_is_template_then_lookup_entry_then_typed_values(
     scales = {key: request.params['scale'] for key, request in group.items()}
     assert scales['pid:pid/1'] == 3.0  # the lookup entry over the template
     assert scales['pid:pid/2'] == 4.0  # what was pinned over both
-    assert scales['run:dream/1'] == 2.0  # the template, matching no entry
+    assert scales[str(run_ref)] == 2.0  # the template, matching no entry
     origin = group['pid:pid/2'].origin
     assert origin.pinned == {'scale': 4.0}
     assert origin.entries == {'pid:pid/2': 'rest'}
@@ -250,9 +252,9 @@ def test_the_backlog_is_what_lies_before_a_new_rules_bound(
         selector=Selector(match={'run': Between(low=2)}),
     )
     assert rule.selector.after == Bound.newest(client.datasets())
-    assert sorted(backlog(client, rule)) == ['run:dream/2', 'run:dream/3']
-    rule.exclude('run:dream/3', 'chopper was off')
-    assert sorted(backlog(client, rule)) == ['run:dream/2']
+    assert sorted(backlog(client, rule)) == ['uuid:dream-2', 'uuid:dream-3']
+    rule.exclude('uuid:dream-3', 'chopper was off')
+    assert sorted(backlog(client, rule)) == ['uuid:dream-2']
 
 
 def test_reprocess_offers_the_members_an_older_rule_version_made(
@@ -341,7 +343,8 @@ def test_retry_offers_the_members_whose_latest_record_failed(
 ) -> None:
     client.backend.sources.append(
         FakeDatasetSource(
-            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+            Dataset(proposals=['p1'], path=tmp_path / 'gone.h5', pid='pid/9'),
+            locates=False,
         )
     )
     rule = Rule(name='auto', template=template)
@@ -399,6 +402,7 @@ def test_the_loop_fires_once_per_dataset_and_a_restart_changes_nothing(
 
     samples.add(
         Dataset(
+            proposals=['p1'],
             path=write_run(tmp_path / 's2.h5', [5.0]),
             pid='pid/3',
             run=13,
@@ -423,7 +427,11 @@ def test_a_refusal_is_visible_and_fires_no_record(
 ) -> None:
     bad = Template(name='bad', spec=REBIN.id, params={'bins': 0}, blanks=('data',))
     client.backend.sources.append(
-        FakeDatasetSource(Dataset(path=write_run(tmp_path / 'r1.h5', [1.0])))
+        FakeDatasetSource(
+            Dataset(
+                path=write_run(tmp_path / 'r1.h5', [1.0]), proposals=['p1'], uuid='r1'
+            )
+        )
     )
     loop = TriggerLoop(client, Rule(name='bad', template=bad))
     assert loop.run_once() == []
@@ -435,7 +443,8 @@ def test_a_failure_the_policy_names_is_retried_up_to_the_limit(
 ) -> None:
     client.backend.sources.append(
         FakeDatasetSource(
-            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+            Dataset(proposals=['p1'], path=tmp_path / 'gone.h5', pid='pid/9'),
+            locates=False,
         )
     )
     rule = Rule(
@@ -457,7 +466,8 @@ def test_a_failure_the_policy_does_not_name_is_not_retried(
 ) -> None:
     client.backend.sources.append(
         FakeDatasetSource(
-            Dataset(path=tmp_path / 'gone.h5', pid='pid/9'), locates=False
+            Dataset(proposals=['p1'], path=tmp_path / 'gone.h5', pid='pid/9'),
+            locates=False,
         )
     )
     loop = TriggerLoop(client, Rule(name='auto', template=template))
@@ -471,16 +481,17 @@ def start_only(entry: Mapping[str, Any], path: Path) -> dict[str, Any]:
 
 
 def test_a_dataset_the_extractor_gives_no_usable_fields_is_refused_alone(
-    client: Client, template: Template, tmp_path: Path
+    client: Client, template: Template, run_ref: DatasetRef, tmp_path: Path
 ) -> None:
     folder = tmp_path / 'loki'
     folder.mkdir()
     for run in (1, 2):
-        write_run(folder / f'loki_{run}.h5', [1.0])
+        write_run(folder / f'loki_{run}.h5', [1.0], uuid=f'loki-{run}')
     client.backend.sources.append(
         FolderSource(
             folder,
             '*.h5',
+            proposal='p1',
             journal={1: {'start': 10}, 2: {'start': '10:00'}},
             fields=FieldExtractor(start_only, order='start'),
         )
@@ -488,12 +499,15 @@ def test_a_dataset_the_extractor_gives_no_usable_fields_is_refused_alone(
     rule = Rule(name='auto', template=template)
     loop = TriggerLoop(client, rule)
     fired = loop.run_once()
-    assert sorted(r.request.member_key for r in fired) == ['run:dream/1', 'run:loki/1']
+    assert sorted(r.request.member_key for r in fired) == [
+        str(run_ref),
+        'uuid:loki-1',
+    ]
     refusal = (
-        "run:loki/2: its order field 'start' is '10:00', not a number or a datetime"
+        "uuid:loki-2: its order field 'start' is '10:00', not a number or a datetime"
     )
-    assert loop.refusals == {'auto run:loki/2': refusal}
-    bad = {str(d.ref): d for d in client.datasets()}['run:loki/2']
+    assert loop.refusals == {'auto uuid:loki-2': refusal}
+    bad = {str(d.ref): d for d in client.datasets()}['uuid:loki-2']
     assert trigger_status(client, rule, bad) == TriggerStatus(
         state='skips', reason=refusal
     )
@@ -563,6 +577,7 @@ def series_rule(
 
 def sample(path: Path, values: list[float], pid: str, **metadata: str) -> Dataset:
     return Dataset(
+        proposals=['p1'],
         path=write_run(path, values),
         pid=pid,
         metadata={'sample': 'sio2'} | metadata,
@@ -627,14 +642,16 @@ def test_a_series_lists_its_runs_in_run_order_whatever_the_arrival(
     for run in (1, 3, 2):
         source.add(
             Dataset(
+                proposals=['p1'],
                 path=write_run(tmp_path / f'{run}.h5', [1.0, 2.0]),
+                uuid=f'loki-{run}',
                 instrument='loki',
                 run=run,
                 metadata={'sample': 'sio2'},
             )
         )
         (latest,) = client.wait(loop.run_once())
-    assert listed(latest) == ['run:loki/1', 'run:loki/2', 'run:loki/3']
+    assert listed(latest) == ['uuid:loki-1', 'uuid:loki-2', 'uuid:loki-3']
 
 
 def test_a_run_acquired_again_is_counted_once(client: Client, tmp_path: Path) -> None:
@@ -960,7 +977,10 @@ def test_a_series_with_a_failed_run_is_retried_without_it_once_excluded(
     client.backend.sources.append(
         FakeDatasetSource(
             Dataset(
-                path=tmp_path / 'gone.h5', pid='pid/1', metadata={'sample': 'sio2'}
+                proposals=['p1'],
+                path=tmp_path / 'gone.h5',
+                pid='pid/1',
+                metadata={'sample': 'sio2'},
             ),
             locates=False,
         )
@@ -1121,7 +1141,9 @@ def test_the_dataset_table_joins_onto_a_rules_batch_table(
 
 def loki(path: Path, run: int, role: str, **fields: str) -> Dataset:
     return Dataset(
+        proposals=['p1'],
         path=write_run(path, [1.0, 2.0]),
+        uuid=f'loki-{run}',
         instrument='loki',
         run=run,
         metadata={'role': role} | fields,
@@ -1190,13 +1212,13 @@ def test_a_nearest_fill_is_by_default_the_nearest_earlier_match(
     fired = loop.run_once()
     assert [r.status for r in fired] == [Status.COMPLETED] * 4
     assert cans(fired) == {
-        'run:loki/4': 'run:loki/3',
-        'run:loki/5': 'run:loki/3',
-        'run:loki/7': 'run:loki/6',
-        'run:loki/8': 'run:loki/6',
+        'uuid:loki-4': 'uuid:loki-3',
+        'uuid:loki-5': 'uuid:loki-3',
+        'uuid:loki-7': 'uuid:loki-6',
+        'uuid:loki-8': 'uuid:loki-6',
     }
-    refusal = loop.refusals['subtract run:loki/1']
-    assert 'run:loki/1: no dataset matching' in refusal
+    refusal = loop.refusals['subtract uuid:loki-1']
+    assert 'uuid:loki-1: no dataset matching' in refusal
     assert "before it for 'can'" in refusal
 
 
@@ -1233,20 +1255,20 @@ def test_a_member_waits_for_a_match_after_it(
     rule = subtract_rule(direction='after')
     loop = TriggerLoop(client, rule)
     assert cans(loop.run_once()) == {
-        'run:loki/1': 'run:loki/2',
-        'run:loki/4': 'run:loki/6',
-        'run:loki/5': 'run:loki/6',
+        'uuid:loki-1': 'uuid:loki-2',
+        'uuid:loki-4': 'uuid:loki-6',
+        'uuid:loki-5': 'uuid:loki-6',
     }
-    assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
-    sample = {str(d.ref): d for d in client.datasets()}['run:loki/7']
+    assert set(loop.waiting) == {'subtract uuid:loki-7', 'subtract uuid:loki-8'}
+    sample = {str(d.ref): d for d in client.datasets()}['uuid:loki-7']
     status = trigger_status(client, rule, sample)
     assert status.state == 'waits'
     assert "after it yet for 'can'" in status.reason
 
     cans_and_samples.add(loki(tmp_path / '9.h5', 9, 'can'))
     assert cans(loop.run_once()) == {
-        'run:loki/7': 'run:loki/9',
-        'run:loki/8': 'run:loki/9',
+        'uuid:loki-7': 'uuid:loki-9',
+        'uuid:loki-8': 'uuid:loki-9',
     }
     assert loop.waiting == {}
 
@@ -1258,11 +1280,11 @@ def test_either_direction_takes_the_nearer_match_and_waits_for_the_one_after(
     other way round: can 6; a tie would go to the can before."""
     loop = TriggerLoop(client, subtract_rule(direction='either'))
     assert cans(loop.run_once()) == {
-        'run:loki/1': 'run:loki/2',
-        'run:loki/4': 'run:loki/3',
-        'run:loki/5': 'run:loki/6',
+        'uuid:loki-1': 'uuid:loki-2',
+        'uuid:loki-4': 'uuid:loki-3',
+        'uuid:loki-5': 'uuid:loki-6',
     }
-    assert set(loop.waiting) == {'subtract run:loki/7', 'subtract run:loki/8'}
+    assert set(loop.waiting) == {'subtract uuid:loki-7', 'subtract uuid:loki-8'}
 
 
 def test_backlog_and_reprocess_leave_out_the_members_that_wait(
@@ -1281,9 +1303,9 @@ def test_backlog_and_reprocess_leave_out_the_members_that_wait(
     )
 
     again = reprocess(client, before_rule.revise(lookup=lookup))
-    assert sorted(again) == ['run:loki/4', 'run:loki/5']
-    assert sorted(again.waiting) == ['run:loki/7', 'run:loki/8']
-    assert "after it yet for 'can'" in again.waiting['run:loki/7']
+    assert sorted(again) == ['uuid:loki-4', 'uuid:loki-5']
+    assert sorted(again.waiting) == ['uuid:loki-7', 'uuid:loki-8']
+    assert "after it yet for 'can'" in again.waiting['uuid:loki-7']
 
     later = Rule.over(
         client.datasets(),
@@ -1295,7 +1317,7 @@ def test_backlog_and_reprocess_leave_out_the_members_that_wait(
         ),
     )
     back = backlog(client, later)
-    assert sorted(back) == ['run:loki/4', 'run:loki/5']
+    assert sorted(back) == ['uuid:loki-4', 'uuid:loki-5']
     assert back.waiting == again.waiting
 
 
@@ -1306,26 +1328,26 @@ def test_a_pinned_can_makes_a_member_that_waits(
     rule = subtract_rule(direction='after')
     loop = TriggerLoop(client, rule)
     loop.run_once()
-    seven = {str(d.ref): d for d in client.datasets()}['run:loki/7']
-    pinned = {'run:loki/7': {'can': dataset_ref(instrument='loki', run=6)}}
+    seven = {str(d.ref): d for d in client.datasets()}['uuid:loki-7']
+    pinned = {'uuid:loki-7': {'can': dataset_ref(instrument='loki', run=6)}}
     (record,) = client.submit_group(apply(client, rule, [seven], pinned)).values()
     assert record.status == Status.COMPLETED, record.failure
-    assert cans([record]) == {'run:loki/7': 'run:loki/6'}
+    assert cans([record]) == {'uuid:loki-7': 'uuid:loki-6'}
     assert list(record.request.origin.pinned) == ['can']
     assert loop.run_once() == []
-    assert set(loop.waiting) == {'subtract run:loki/8'}
+    assert set(loop.waiting) == {'subtract uuid:loki-8'}
 
 
 def test_a_member_refused_for_want_of_a_can_is_made_with_a_pinned_one(
     client: Client, before_rule: Rule
 ) -> None:
-    first = {str(d.ref): d for d in client.datasets()}['run:loki/1']
+    first = {str(d.ref): d for d in client.datasets()}['uuid:loki-1']
     status = trigger_status(client, before_rule, first)
     assert status.state == 'skips'
     assert "before it for 'can'" in status.reason
-    pinned = {'run:loki/1': {'can': dataset_ref(instrument='loki', run=2)}}
+    pinned = {'uuid:loki-1': {'can': dataset_ref(instrument='loki', run=2)}}
     group = apply(client, before_rule, [first], pinned)
-    assert cans(client.submit_group(group).values()) == {'run:loki/1': 'run:loki/2'}
+    assert cans(client.submit_group(group).values()) == {'uuid:loki-1': 'uuid:loki-2'}
     assert trigger_status(client, before_rule, first).reason == (
         '1 record(s) under the label'
     )
@@ -1339,7 +1361,9 @@ def test_either_direction_breaks_a_tie_toward_the_match_before_in_the_extractors
 
     def dataset(run: int, role: str, minute: int) -> Dataset:
         return Dataset(
+            proposals=['p1'],
             path=write_run(tmp_path / f'{run}.h5', [1.0, 2.0]),
+            uuid=f'loki-{run}',
             instrument='loki',
             run=run,
             metadata={
@@ -1355,7 +1379,7 @@ def test_either_direction_breaks_a_tie_toward_the_match_before_in_the_extractors
         )
     )
     fired = TriggerLoop(client, subtract_rule(direction='either')).run_once()
-    assert cans(fired) == {'run:loki/3': 'run:loki/1'}
+    assert cans(fired) == {'uuid:loki-3': 'uuid:loki-1'}
 
 
 def test_a_nearest_fill_pairs_by_the_fields_named_same(
@@ -1371,7 +1395,7 @@ def test_a_nearest_fill_pairs_by_the_fields_named_same(
         )
     )
     fired = TriggerLoop(client, subtract_rule(same=('holder',))).run_once()
-    assert cans(fired) == {'run:loki/3': 'run:loki/1', 'run:loki/4': 'run:loki/2'}
+    assert cans(fired) == {'uuid:loki-3': 'uuid:loki-1', 'uuid:loki-4': 'uuid:loki-2'}
 
 
 # Rules over the completed records of another rule
@@ -1485,7 +1509,10 @@ def test_a_combine_waits_on_a_failed_contribution_until_it_is_excluded(
         FakeDatasetSource(sample(tmp_path / 'a.h5', [1.0, 2.0], 'pid/1')),
         FakeDatasetSource(
             Dataset(
-                path=tmp_path / 'gone.h5', pid='pid/2', metadata={'sample': 'sio2'}
+                proposals=['p1'],
+                path=tmp_path / 'gone.h5',
+                pid='pid/2',
+                metadata={'sample': 'sio2'},
             ),
             locates=False,
         ),

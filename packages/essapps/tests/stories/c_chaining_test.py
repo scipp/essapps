@@ -21,8 +21,9 @@ def test_c1_beam_centre_feeds_a_sample_reduction(
     client: Client, measure: Measure
 ) -> None:
     """LOAD's total stands in for the beam centre, REBIN for the sample reduction."""
-    centre = client.run(LOAD, {'run': measure(1, counts=[0.5, 0.5])})
-    measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
+    centre_run = measure(1, counts=[0.5, 0.5])
+    centre = client.run(LOAD, {'run': centre_run})
+    sample = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
     measure(3, [4.0, 3.0, 2.0, 1.0], role='sample')
     samples = [d for d in client.datasets() if d.metadata.get('role') == 'sample']
     reduce = Template(
@@ -39,8 +40,8 @@ def test_c1_beam_centre_feeds_a_sample_reduction(
         [5.0, 4.0, 3.0, 2.0],
     ]
     provenance = client.provenance(reduced[0])
-    assert provenance['raw'] == [{'dataset': 'run:dream/2'}]
-    assert [i['raw'] for i in provenance['inputs']] == [[{'dataset': 'run:dream/1'}]]
+    assert provenance['raw'] == [sample.model_dump()]
+    assert [i['raw'] for i in provenance['inputs']] == [[centre_run.model_dump()]]
 
 
 def test_c2_vanadium_from_the_catalogue(
@@ -54,7 +55,7 @@ def test_c2_vanadium_from_the_catalogue(
     (vanadium,) = service.wait([service.run(LOAD, {'run': measure(1), 'scale': 0.5})])
     # allow_reused: the toy workflows are bound in process
     pid = service.publish(vanadium.ref('data'), 'scicat', allow_reused=True)
-    catalogue.add(Dataset(path=scicat.entries[pid]['path'], pid=pid))
+    catalogue.add(Dataset(path=scicat.entries[pid]['path'], proposals=['p1'], pid=pid))
 
     reduced = client.run(HISTOGRAM, {'data': dataset_ref(pid=pid), 'bins': 2})
 

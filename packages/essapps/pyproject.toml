@@ -29,6 +29,7 @@ dynamic = ["version"]
 dependencies = [
     "click>=8.1",
     "essreduce @ git+https://github.com/scipp/ess.git@653-minimal-workflow-spec#subdirectory=packages/essreduce",
+    "h5py>=3.10",
     "pandas>=2.0",
     "pydantic>=2.10",
     "sciline>=25.11.0",

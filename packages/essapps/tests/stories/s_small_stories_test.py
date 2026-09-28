@@ -149,4 +149,4 @@ def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None
     assert provenance['params']['bins'] == 2
     (source,) = provenance['inputs']
     assert source['params']['scale'] == 2.0
-    assert source['raw'] == [{'dataset': 'run:dream/1'}]
+    assert source['raw'] == [run.model_dump()]

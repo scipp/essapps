@@ -29,7 +29,7 @@ The templates of batches and rules are stored ([rules.md](rules.md#templates-and
 
 A **run request** is everything needed to run a workflow once, and its values alone reproduce the outputs.
 It is plain JSON-serializable data even when it never leaves the process, and it names no session, process, or storage location.
-The only path it may name is the identity of a local file that carries no run identity.
+As recorded, it names every dataset by its identity, never by a path.
 
 `RunRequest`:
 
@@ -38,7 +38,7 @@ The only path it may name is the identity of a local file that carries no run id
 | `spec` | name and version of the workflow interface |
 | `params` | every parameter value, with data fields holding references; recorded with the spec's defaults filled and in the form the params model gives each value |
 | `outputs` | the outputs to compute; empty means the spec's results, and the record lists them explicitly |
-| `instrument`, `proposal` | the scope, both mandatory |
+| `instrument`, `proposal` | the scope, both mandatory; the proposal owns the record: where it is listed, who sees it, when it is deleted |
 | `submitter` | who asked |
 | `label`, `member_key` | records under one label supersede each other, per member key |
 | `origin` | template version, rule version, lookup version and entry, and what was pinned beyond them |
@@ -125,29 +125,36 @@ There is no separate provenance model and no "which record produced this" query,
 
 **Datasets are the leaves.**
 A **dataset** is data the framework did not compute: a SciCat dataset, or a file on a user's disk.
-`dataset_ref` in `ess.apps.spec` gives it the one identity it has:
+It is identified by the first of these it has:
 
 ```python
-dataset_ref(pid='20.500.12269/abc')          # pid:20.500.12269/abc
-dataset_ref(instrument='dream', run=1)       # run:dream/1
-dataset_ref(path='/data/local.nxs')          # path:/data/local.nxs
+dataset_ref(pid='20.500.12269/abc')          # pid:…      the SciCat PID
+dataset_ref(uuid='05165700-0292-5e93-…')     # uuid:…     entry/entry_identifier_uuid in the NeXus file
+dataset_ref(sha256='9f2c…')                  # sha256:…   the bytes of a local file that carries neither
 ```
 
-A local file that carries its instrument and run number needs no path, and the path is an identity only for a file that carries neither.
-Identity is not location: where a catalogue dataset's bytes are is asked of SciCat at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable.
+The run number is a field of the dataset, like its sample or angle, and not part of its identity: the run counter may span instruments, and a local file may carry none.
+Identity is not location.
+A moved file keeps its identity, and where a dataset's bytes are is asked of the dataset source at dispatch and cached at most, because SciCat moves files to archive and back and edits metadata while our records are immutable.
 
 **Nothing is stored per dataset.**
-Its proposal is checked against the request's at submission, when its SciCat entry is read anyway, and the data store registers a dataset only when it copies its bytes.
-The checksum of a local file goes on the record of the run that read it, so a recompute can tell whether it read the same bytes, and the path the submitter typed stays on the origin.
+At submission the backend asks the dataset sources for the dataset and checks that the submitter may read one of its proposals ([operations.md](operations.md#scope-instrument-plus-proposal)); a dataset no source knows is refused.
+The data store registers a dataset only when it copies its bytes.
+The checksum of a local file goes on the record of the run that read it, so a recompute can tell whether it read the same bytes.
 A dataset has no request, no status, and nothing to recompute, so a dataset reference is never pending.
 Datasets come from a dataset source ([rules.md](rules.md#the-dataset-source)).
 
 **Stand-ins resolve at submission**, because provenance must not depend on a search that could give a different answer later.
-A user may type a run number, a PID, or a path, and the backend turns it into a reference before it persists anything.
-A run number is looked up in SciCat within the instrument and proposal, and a path under the facility filesystem resolves to the PID of the dataset that owns it.
-A PID resolves to the run record named in its provenance snapshot while the store still has it, and otherwise to a dataset reference.
-Any other path becomes a local dataset.
-Nothing is downloaded at submission, and SciCat is not needed again once a reference exists.
+A user may type a run number, `run:dream/1`, or a path, `path:/data/local.nxs`, and the backend replaces it by the identity of the one dataset it names before it persists anything:
+
+```python
+client.run(LOAD, {'run': dataset_ref(instrument='dream', run=1)})
+# the record's params: {"run": {"dataset": "sha256:9f2c…"}, ...}
+```
+
+A stand-in that names no dataset, or several, is refused.
+A PID of a published output resolves to the run record named in its provenance snapshot while the store still has it.
+Nothing is downloaded at submission.
 
 **Whether an output is usable is two questions**: the record's status, and whether the data store holds a copy.
 A missing copy is reported as such, never silently recomputed, because a silent recompute hides both its cost and the loss of the bytes.
@@ -157,7 +164,7 @@ A missing copy is reported as such, never silently recomputed, because a silent 
 |---|---|---|---|
 | An output of a run record | the record: parameters, references, versions | recompute, explicitly | yes |
 | A catalogue dataset | the PID, and SciCat says where the bytes are | download again | yes |
-| A local file | its identity and the user's path | nothing to recover from, unless a store copy was made | only by an explicit drop |
+| A local file | its identity; a dataset source says where it is now | nothing to recover from, unless a store copy was made | only by an explicit drop |
 | A published run record | the PID, whose entry carries the provenance snapshot | download rather than recompute | yes |
 
 ## Where runs execute and where data lives
@@ -222,7 +229,8 @@ Records live as long as their proposal plus an analysis window set by the facili
 
 **Records are not deleted one at a time.**
 A proposal's records and disk copies are dropped together, exported as one JSON bundle first, because every field that can hold a record ID would otherwise be an edge in a garbage collector, and a row per run costs nothing.
-Dropping a whole proposal is safe because references never cross proposals, except into instrument-shared artefacts, whose commissioning proposals are long-lived.
+A reference may name a record of another proposal the submitter may read, mostly a long-lived commissioning proposal.
+When that proposal is dropped, the records that reach its records through references are no longer recomputable, as after a dropped disk copy.
 
 Within a proposal, disk copies have a retention policy per kind of run.
 When it expires the bytes are dropped with `Client.drop` and the record stays, which is the missing-copy case above.

@@ -96,8 +96,9 @@ class RemoteBackend:
         r = _checked(self._client.get('/specs'))
         return TypeAdapter(list[SerializedWorkflowSpec]).validate_python(r.json())
 
-    def datasets(self, proposal: str) -> list[Dataset]:
-        r = _checked(self._client.get('/datasets', params={'proposal': proposal}))
+    def datasets(self, proposals: Collection[str]) -> list[Dataset]:
+        params = {'proposal': list(proposals)}
+        r = _checked(self._client.get('/datasets', params=params))
         return TypeAdapter(list[Dataset]).validate_python(r.json())
 
     def validate(

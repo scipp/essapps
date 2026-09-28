@@ -92,6 +92,9 @@ def _publishers(
 @click.option('--datasets', required=True, type=click.Path(path_type=Path))
 @click.option('--pattern', default='*.h5', show_default=True)
 @click.option(
+    '--datasets-proposal', required=True, help='The proposal the datasets belong to.'
+)
+@click.option(
     '--publisher',
     'publishers',
     multiple=True,
@@ -105,6 +108,7 @@ def serve(
     registry: str,
     datasets: Path,
     pattern: str,
+    datasets_proposal: str,
     publishers: dict[str, Publisher],
     host: str,
     port: int,
@@ -114,7 +118,7 @@ def serve(
         root,
         registry=registry,
         throwaway=True,
-        sources=[FolderSource(datasets, pattern)],
+        sources=[FolderSource(datasets, pattern, proposal=datasets_proposal)],
         publishers=publishers,
     )
     serve_backend(backend, host=host, port=port)
@@ -187,8 +191,8 @@ def _option(
     if data:
         prefix = f'{kwargs["help"]}; ' if kwargs['help'] else ''
         kwargs['help'] = (
-            f'{prefix}a reference: run:<instrument>/<run>, pid:<pid>, '
-            'path:<path>, or <record>.<output>[key]'
+            f'{prefix}a reference: pid:<pid>, uuid:<uuid>, sha256:<hex>, '
+            'run:<instrument>/<run>, path:<path>, or <record>.<output>[key]'
         )
         return click.Option([flag], callback=_parse_ref, **kwargs)
     schema = _unwrap_optional(prop)

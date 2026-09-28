@@ -26,10 +26,10 @@ import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -158,7 +158,7 @@ def create_app(backend: LocalBackend, *, poll_interval: float = 0.2) -> FastAPI:
             return backend.spec(SpecId(name=name, version=version))
 
     @app.get('/datasets')
-    def list_datasets(proposal: str) -> list[Dataset]:
+    def list_datasets(proposal: Annotated[list[str], Query()]) -> list[Dataset]:
         with lock:
             return backend.datasets(proposal)
 

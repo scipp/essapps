@@ -291,8 +291,10 @@ That keeps the loop without memory: the state is the records.
 
 ## The dataset source
 
-**A dataset source yields the datasets of a proposal and persists nothing.**
-Each dataset comes as an identity, a PID or an instrument and run number, plus the fields the instrument's field extractor derives.
+**A dataset source yields the datasets of proposals and persists nothing.**
+Each dataset comes with its identity ([records.md](records.md#datasets)), the proposals it belongs to, its instrument and run number where it has them, and the fields the instrument's field extractor derives.
+A source also finds the dataset an identity or a stand-in names, which is how the backend resolves and checks a reference at submission.
+A rule's candidates are the datasets of its own proposal; a lookup may fill a reference to a dataset or record of another proposal the submitter may read.
 Arrival may be out of order and repeated, and the interface promises no monotonic cursor, which is why the trigger loop asks queries rather than holding a position in a stream.
 
 **A field extractor is instrument code; rules stay data.**
@@ -318,7 +320,7 @@ The framework reads one field by name, `role`, which `Complete(roles=...)` count
 A dataset whose fields the extractor cannot derive, or whose order value is neither, carries the reason, and a rule refuses it, visibly, while the other datasets are fired on.
 A role that is a frame range inside one file is not a dataset field: splitting the file is the workflow's.
 
-A dataset enters the record store only as a reference in the requests a rule submits, like any other stand-in.
+A dataset enters the record store only as a reference in the requests a rule submits.
 Which datasets a rule has already decided on is a query over the records, not memory in the source or the loop.
 Three implementations exist: SciCat for a facility, a folder for the local application (`FolderSource`), and a fake for tests, and having more than one from the start keeps the tests off SciCat.
 

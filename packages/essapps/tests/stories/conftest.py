@@ -11,6 +11,7 @@ workflows the stories name.
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -32,18 +33,31 @@ def catalogue() -> FakeDatasetSource:
 @pytest.fixture
 def measure(tmp_path: Path, catalogue: FakeDatasetSource) -> Measure:
     """
-    Measure a run: its file lands and the catalogue lists it with its metadata.
+    Measure a run of a proposal, p1 by default: its file lands and the
+    catalogue lists it with its metadata.
 
-    Returns the run's identity, which is how a request names it.
+    The catalogue knows the file's UUID, as it does for a NeXus file written
+    at ESS; one per run, so that a run measured again arrives again. Returns
+    the run's identity, which is how a request names it.
     """
     folder = tmp_path / 'raw'
     folder.mkdir()
 
     def measure(
-        run: int, counts: Sequence[float] = (1.0, 2.0, 3.0, 4.0), **metadata: Any
+        run: int,
+        counts: Sequence[float] = (1.0, 2.0, 3.0, 4.0),
+        proposal: str = 'p1',
+        **metadata: Any,
     ) -> DatasetRef:
         path = write_run(folder / f'dream_{run}.h5', list(counts))
-        dataset = Dataset(path=path, instrument='dream', run=run, metadata=metadata)
+        dataset = Dataset(
+            path=path,
+            proposals=[proposal],
+            uuid=str(uuid5(NAMESPACE_URL, f'{proposal}/dream/{run}')),
+            instrument='dream',
+            run=run,
+            metadata=metadata,
+        )
         catalogue.add(dataset)
         return dataset.ref
 
