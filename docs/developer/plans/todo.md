@@ -6,7 +6,10 @@
    Done: requests, records, references, labels, templates, `apply`, the dataset source's queries, sessions with stages and accumulators.
    Holders keep their definition but no computed values yet, so every call computes its full request; D7 takes 10 s for this reason.
    Holding values needs `sciline.Stage` and `sciline.Accumulator` behind the bound workflows (sciline ADR 0003); it changes no record and is what system stories S2, B2, C5, and D7 check.
-2. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
+2. Bindings and software tracking as pluggable implementation details (proposed to Simon, not yet decided):
+   a binding is any callable that takes the parameter values and returns the outputs, with optional capabilities such as staging; bindings are registered in-process or through entry points; a record carries an opaque description of the software, made by a pluggable recorder.
+3. Holders that keep values in memory, through bindings that can stage (sciline `Stage`, `Accumulator`).
+4. The sub-design for provenance and publication, with its own document and stories. Batch and automatic reduction is done (`automatic-reduction.md`).
 
 ## User stories
 
