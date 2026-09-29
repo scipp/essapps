@@ -58,7 +58,7 @@ Submitting it returns a record: the request with every value filled in, defaults
 A record never changes. A rerun is a new record.
 
 ```python
-result = client.run(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit and wait
+result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit and wait
 result.request.params                                                  # every value, defaults included
 client.output(result, 'iofq')
 ```
@@ -89,7 +89,7 @@ client.submit([centre, *samples])
 A member splits a label, one per sample or temperature.
 
 ```python
-client.run(IOFQ, {'run': run, 'bins': 50}, label='iofq', member='250K')
+client.compute(IOFQ, {'run': run, 'bins': 50}, label='iofq', member='250K')
 client.latest('iofq', member='250K')
 ```
 
@@ -143,13 +143,13 @@ It is decided by whoever writes the chain: the package author for the specs it s
 
 ```python
 # 1. a spec that sums internally over a list parameter
-client.run(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})
+client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})
 
 # 2. a chain of requests
 parts = [client.submit(CONTRIBUTE, {'run': r}) for r in (r611, r612)]
 total = client.submit(PARTS_SUM, {'numerator': [p.ref('numerator') for p in parts],
                                   'denominator': [p.ref('denominator') for p in parts]})
-client.run(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
+client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
 
 # 3. the same chain through holders, see below
 ```
@@ -171,12 +171,12 @@ A call through a stage computes only the rest.
 with client.session() as session:
     tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))   # loads the run once
     for bins in (50, 100, 200):
-        client.run(tune, {'bins': bins}, label='iofq')
+        client.compute(tune, {'bins': bins}, label='iofq')
 ```
 
 **Accumulator.** An accumulator holds the combined value of the elements pushed into it.
 Pushing a record pushes its outputs named like the element's fields; its other outputs are not pushed.
-Running an accumulator makes a record of its accumulator spec over the elements pushed so far.
+Computing an accumulator makes a record of its accumulator spec over the elements pushed so far.
 A pushed record may still be pending; `client.submit(total)` returns the record at once, pending until every element is done.
 
 ```python
@@ -187,14 +187,14 @@ with client.session() as session:
     total = session.accumulator(PARTS_SUM)
 
     for run in (r611, r612):
-        total.push(client.run(contribute, {'run': run}))
-    first = client.run(finalize, client.run(total).refs(), label='sum')
+        total.push(client.compute(contribute, {'run': run}))
+    first = client.compute(finalize, client.compute(total).refs(), label='sum')
 
-    total.push(client.run(contribute, {'run': r613}))      # r611 and r612 are not reduced again
-    added = client.run(finalize, client.run(total).refs(), label='sum')
+    total.push(client.compute(contribute, {'run': r613}))      # r611 and r612 are not reduced again
+    added = client.compute(finalize, client.compute(total).refs(), label='sum')
 ```
 
-The second `client.run(total)` makes a record of `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`.
+The second `client.compute(total)` makes a record of `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`.
 It is the record that way 2 makes; the accumulator only computes it faster.
 
 ## Drivers
@@ -264,7 +264,7 @@ Not part of this API, and not visible in user code:
 
 ## Open questions
 
-1. **Names.** "Record" describes storage; "result" is wrong for a failure; "job" is an alternative. `client.run` next to a measurement "run" reads badly in `client.run(IOFQ, {'run': ...})`.
-2. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result.
-3. **Sessions.** Whether a holder can exist without a session the user opened, and how the trigger loop owns one, for a sum that grows with each new dataset under a rule.
-4. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
+1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result.
+2. **Sessions.** Whether a holder can exist without a session the user opened, and how the trigger loop owns one, for a sum that grows with each new dataset under a rule.
+3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
+4. **Rules and driving servers.** How a rule reaches a driving server, for example when a UI adds a rule during a beamtime.
