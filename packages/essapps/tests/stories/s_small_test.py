@@ -87,7 +87,7 @@ def test_s6_sum_sample_runs_and_background_runs(
     assert result.request.datasets() == samples + backgrounds
 
 
-@pytest.mark.xfail(reason='Template, apply, and lookups are not implemented')
+@pytest.mark.xfail(reason='lookups are not implemented')
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:

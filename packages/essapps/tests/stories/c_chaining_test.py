@@ -6,13 +6,12 @@
 
 import pytest
 
-from ess.apps import Client, dataset
+from ess.apps import Client, Template, apply, dataset
 from ess.apps.testing import FakeDatasets
 
 from .conftest import BEAM_CENTRE, EXPORT, IOFQ, STITCH, VANADIUM, Measure
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -69,7 +68,7 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
     assert set(client.provenance(exported).datasets()) == {reference, *angles}
 
 
-@pytest.mark.xfail(reason='sessions, stages, and Template are not implemented')
+@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_c5_vanadium_and_sample_tuned_together(
     client: Client, measure: Measure
 ) -> None:

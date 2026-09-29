@@ -144,6 +144,9 @@ class Backend:
             record_id = ids.get(ref.record, ref.record)
             return OutputRef(record=record_id, output=ref.output, key=ref.key)
 
+        unknown = set(request.params) - set(spec.params.model_fields)
+        if unknown:
+            raise SubmitError(f'{sorted(unknown)}: not parameters of {request.spec}')
         params = _map_refs(request.params, resolve)
         for name, value in params.items():
             for ref in _refs_in(value):

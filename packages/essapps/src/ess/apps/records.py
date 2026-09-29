@@ -11,6 +11,7 @@ it finishes, and a finished record never changes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -76,6 +77,31 @@ class Request(BaseModel, frozen=True):
     def datasets(self) -> list[DatasetRef]:
         """The datasets this request names directly."""
         return [ref for _, ref in walk_refs(self.params) if isinstance(ref, DatasetRef)]
+
+
+@dataclass(frozen=True)
+class Template:
+    """
+    A spec, some values, and blanks that each use fills.
+
+    Naming a field as a blank drops the value given for it, so a template can
+    be made from any request's values. Change a template with
+    ``dataclasses.replace``.
+    """
+
+    spec: WorkflowSpec | SpecId
+    params: dict[str, Any] = field(default_factory=dict)
+    blanks: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        kept = {k: v for k, v in self.params.items() if k not in self.blanks}
+        object.__setattr__(self, 'params', kept)
+
+    def fill(self, values: dict[str, Any]) -> Request:
+        """The request with the blanks filled by ``values``."""
+        if set(values) != set(self.blanks):
+            raise ValueError(f'fill the blanks {self.blanks}, got {tuple(values)}')
+        return Request(self.spec, {**self.params, **values})
 
 
 class Status(StrEnum):

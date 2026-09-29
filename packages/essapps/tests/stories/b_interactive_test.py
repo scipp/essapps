@@ -26,7 +26,7 @@ from .conftest import (
 tuesday = datetime(2026, 9, 8, tzinfo=UTC)
 
 
-@pytest.mark.xfail(reason='sessions, stages, Template, and apply are not implemented')
+@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -94,7 +94,7 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
     assert len(client.records(spec=CONTRIBUTE)) == 3
 
 
-@pytest.mark.xfail(reason='sessions, stages, and Template are not implemented')
+@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_b3_compare_two_parameter_sets_side_by_side(
     client: Client, measure: Measure
 ) -> None:

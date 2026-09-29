@@ -78,6 +78,29 @@ def iofq(
     }
 
 
+class IofQV2Params(BaseModel):
+    run: NexusFile
+    bins: int = 4
+    mask_below: float = 0.0
+    can: NexusFile | None = None
+    beam_centre: Array() | None = None  # type: ignore[valid-type]
+    normalization: Array() | None = None  # type: ignore[valid-type]
+
+
+IOFQ_V2 = WorkflowSpec(
+    name='sans-iofq',
+    version=2,
+    title='sans-iofq',
+    description='toy spec sans-iofq, version 2: threshold renamed mask_below',
+    params=IofQV2Params,
+    outputs=IofQOutputs,
+)
+
+
+def iofq_v2(mask_below: float, **values: Any) -> dict[str, sc.Variable]:
+    return iofq(threshold=mask_below, **values)
+
+
 class RunParams(BaseModel):
     run: NexusFile
 
@@ -241,6 +264,7 @@ def export(data: sc.Variable) -> dict[str, str]:
 
 TOYS = {
     IOFQ: iofq,
+    IOFQ_V2: iofq_v2,
     BEAM_CENTRE: beam_centre,
     VANADIUM: vanadium,
     NORMALIZE: normalize,

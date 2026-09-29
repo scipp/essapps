@@ -10,13 +10,12 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Client, SubmitError
+from ess.apps import Client, SubmitError, Template, apply
 from ess.apps.testing import FakeDatasets
 
-from .conftest import ANGLE, CUT, IOFQ, Measure
+from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Measure
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_d1_temperature_scan(
     client: Client,
     measure: Measure,
@@ -78,7 +77,6 @@ def test_d2_overnight_cluster_batch(
     assert len(morning.records(label='night')) == 31
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_d3_cancel_and_resubmit(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -100,7 +98,6 @@ def test_d3_cancel_and_resubmit(
     assert len(client.records(label='scan')) == 1000
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_d4_typo_caught_before_500_failures(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -113,7 +110,6 @@ def test_d4_typo_caught_before_500_failures(
     assert client.records() == []
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_d5_understand_why_a_run_failed(
     client: Client,
     measure: Measure,
@@ -142,7 +138,6 @@ def test_d5_understand_why_a_run_failed(
     assert failed.status == 'failed'
 
 
-@pytest.mark.xfail(reason='Template and apply are not implemented')
 def test_d6_rerun_a_batch_with_a_new_workflow_version(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -171,9 +166,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     assert len(client.records(label='scan')) == 6
 
 
-@pytest.mark.xfail(
-    reason='sessions, SUM.of accumulators, and datasets.watch are not implemented'
-)
+@pytest.mark.xfail(reason='sessions and accumulators are not implemented')
 def test_d7_rotation_scan_over_a_thousand_angles(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:

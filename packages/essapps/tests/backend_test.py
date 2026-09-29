@@ -182,3 +182,8 @@ def test_reading_an_output_of_a_failed_record_raises(
 
     with pytest.raises(RuntimeError, match='negative run'):
         client.output(failed, 'value')
+
+
+def test_an_unknown_parameter_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match="'scale'"):
+        client.submit(LOAD, {'run': dataset(run=1), 'scale': 2.0})
