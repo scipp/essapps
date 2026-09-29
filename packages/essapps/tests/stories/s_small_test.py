@@ -5,11 +5,20 @@
 # ruff: noqa: F821
 
 import pytest
+import scipp as sc
 
-from ess.apps import Client
+from ess.apps import Client, Request, Selector, Template, apply
 from ess.apps.testing import FakeDatasets
 
-from .conftest import BACKGROUND, IOFQ, NORMALIZE, VANADIUM, Measure
+from .conftest import (
+    BACKGROUND,
+    CONTRIBUTE,
+    IOFQ,
+    NORMALIZE,
+    PARTS_SUM,
+    VANADIUM,
+    Measure,
+)
 
 
 def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
@@ -21,7 +30,6 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
     assert result.request.datasets() == [run]
 
 
-@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     with client.session() as session:
@@ -32,7 +40,7 @@ def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     assert client.latest('iofq') == result
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
     plain = client.compute(IOFQ, result.request.params)
-    assert client.output(plain, 'iofq') == client.output(result, 'iofq')
+    assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))
 
 
 def test_s3_look_at_a_value_inside_a_reduction(
@@ -45,7 +53,6 @@ def test_s3_look_at_a_value_inside_a_reduction(
     assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
 
 
-@pytest.mark.xfail(reason='accumulator specs (PARTS_SUM) are not implemented')
 def test_s4_submit_a_chain_in_one_go(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]

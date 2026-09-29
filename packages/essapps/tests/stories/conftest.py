@@ -10,6 +10,7 @@ hand.
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -20,7 +21,7 @@ import scipp as sc
 from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client
+from ess.apps import SUM, Backend, Client, accumulator_spec, combine
 from ess.apps.testing import FakeDatasets
 
 
@@ -200,11 +201,19 @@ def finalize(
     return {'normalized': numerator / denominator * scale}
 
 
-class CountsOutputs(BaseModel):
+class NormalizationParts(BaseModel):
+    numerator: Array()  # type: ignore[valid-type]
+    denominator: Array()  # type: ignore[valid-type]
+
+
+PARTS_SUM = accumulator_spec('sans-parts-sum', 1, NormalizationParts)
+
+
+class Counts(BaseModel):
     counts: Array()  # type: ignore[valid-type]
 
 
-ANGLE = _spec('angle', RunParams, CountsOutputs)
+ANGLE = _spec('angle', RunParams, Counts)
 
 
 def angle(run: Any) -> dict[str, sc.Variable]:
@@ -275,6 +284,8 @@ TOYS = {
     CUT: cut,
     STITCH: stitch,
     EXPORT: export,
+    PARTS_SUM: combine(operator.add),
+    SUM.of(Counts): combine(operator.add),
 }
 
 

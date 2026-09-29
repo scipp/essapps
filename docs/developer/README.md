@@ -353,7 +353,7 @@ Not part of this API, and not visible in user code:
 
 ## Open questions
 
-1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result.
+1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
 2. **Sessions.** Whether a holder can exist without a session the user opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
 4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.

@@ -3,7 +3,9 @@
 ## Next steps, in order
 
 1. Implement the core, with the API-tier story tests as the acceptance suite.
-   Records, execution, references, and labels first, then datasets and the dataset source, then sessions with stages and accumulators.
+   Done: requests, records, references, labels, templates, `apply`, the dataset source's queries, sessions with stages and accumulators.
+   Holders keep their definition but no computed values yet, so every call computes its full request; D7 takes 10 s for this reason.
+   Holding values needs `sciline.Stage` and `sciline.Accumulator` behind the bound workflows (sciline ADR 0003); it changes no record and is what system stories S2, B2, C5, and D7 check.
 2. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
 
 ## User stories

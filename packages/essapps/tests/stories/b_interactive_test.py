@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ess.apps import Client
+from ess.apps import Client, Template, apply
 from ess.apps.testing import FakeDatasets
 
 from .conftest import (
@@ -19,6 +19,7 @@ from .conftest import (
     FINALIZE,
     IOFQ,
     NORMALIZE,
+    PARTS_SUM,
     FakeClock,
     Measure,
 )
@@ -26,7 +27,6 @@ from .conftest import (
 tuesday = datetime(2026, 9, 8, tzinfo=UTC)
 
 
-@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -51,7 +51,6 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]
 
 
-@pytest.mark.xfail(reason='sessions, stages, and accumulators are not implemented')
 def test_b2_add_a_run_to_a_sum_then_remove_one(
     client: Client, measure: Measure
 ) -> None:
@@ -86,15 +85,17 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
     assert [
         client.output(r, 'normalized').values.tolist() for r in (first, added, removed)
     ] == [[0.25, 0.75], [0.375, 0.625], [0.5, 0.5]]
-    assert client.output(
-        client.compute(NORMALIZE, {'runs': [r611, r612]}), 'normalized'
-    ) == client.output(first, 'normalized')
+    assert (
+        client.output(
+            client.compute(NORMALIZE, {'runs': [r611, r612]}), 'normalized'
+        ).values.tolist()
+        == client.output(first, 'normalized').values.tolist()
+    )
     assert client.provenance(removed).datasets() == [r611, r613]
     assert client.records(label='sum') == [first, added, removed]
     assert len(client.records(spec=CONTRIBUTE)) == 3
 
 
-@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_b3_compare_two_parameter_sets_side_by_side(
     client: Client, measure: Measure
 ) -> None:
@@ -128,7 +129,7 @@ def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     assert client.records() == [volume, fit]
 
 
-@pytest.mark.xfail(reason='sessions and stages are not implemented')
+@pytest.mark.xfail(reason='a crash of the notebook process is not simulated')
 def test_b5_notebook_kernel_dies_mid_session(
     client: Client, measure: Measure, connect: Callable[..., Client]
 ) -> None:

@@ -95,7 +95,7 @@ with client.session() as session:
 assert client.latest('iofq') == result
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
 plain = client.compute(IOFQ, result.request.params)                  # the record alone reproduces it
-assert client.output(plain, 'iofq') == client.output(result, 'iofq')
+assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))
 ```
 
 That the run is not loaded again for each binning is system story S2.
@@ -315,8 +315,8 @@ removed = client.compute(FINALIZE, summed.refs(), label='sum')
 
 assert [client.output(r, 'normalized').values.tolist() for r in (first, added, removed)] == [
     [0.25, 0.75], [0.375, 0.625], [0.5, 0.5]]
-assert client.output(client.compute(NORMALIZE, {'runs': [r611, r612]}), 'normalized') == \
-    client.output(first, 'normalized')
+way_1 = client.compute(NORMALIZE, {'runs': [r611, r612]})
+assert client.output(way_1, 'normalized').values.tolist() == [0.25, 0.75]
 assert client.provenance(removed).datasets() == [r611, r613]
 assert client.records(label='sum') == [first, added, removed]
 assert len(client.records(spec=CONTRIBUTE)) == 3                     # each run reduced once

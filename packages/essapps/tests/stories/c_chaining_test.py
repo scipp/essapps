@@ -68,7 +68,6 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
     assert set(client.provenance(exported).datasets()) == {reference, *angles}
 
 
-@pytest.mark.xfail(reason='sessions and stages are not implemented')
 def test_c5_vanadium_and_sample_tuned_together(
     client: Client, measure: Measure
 ) -> None:

@@ -63,6 +63,9 @@ class Backend:
     ) -> None:
         self._datasets = datasets
         self._specs = {SpecId.of(spec): spec for spec in bind}
+        self._output_fields = {
+            SpecId.of(spec): data_fields(spec.outputs) for spec in bind
+        }
         self._workflows = {SpecId.of(spec): fn for spec, fn in bind.items()}
         self._clock = clock
         self._executor = ThreadPoolExecutor(max_workers=workers)
@@ -170,18 +173,18 @@ class Backend:
         proposal: str,
     ) -> None:
         if ref.record in specs:
-            spec = specs[ref.record]
+            spec_id = SpecId.of(specs[ref.record])
         elif (record := self._records.get(ref.record)) is not None:
             if record.proposal != proposal:
                 raise SubmitError(
                     f'record {ref.record} belongs to proposal {record.proposal}'
                 )
-            spec = self.spec(record.request.spec)
+            spec_id = record.request.spec
         else:
             raise SubmitError(f'unknown record {ref.record}')
-        outputs = data_fields(spec.outputs)
+        outputs = self._output_fields[spec_id]
         if ref.output not in outputs:
-            raise SubmitError(f'{SpecId.of(spec)} has no output {ref.output!r}')
+            raise SubmitError(f'{spec_id} has no output {ref.output!r}')
         if field is not None and not _agree(outputs[ref.output], field):
             raise SubmitError(f'{ref} does not fit the field it fills')
 
@@ -207,8 +210,9 @@ class Backend:
             request = self._records[record_id].request
             if self._records[record_id].status.finished:
                 return
+            values = _map_refs(request.params, self._read_output)
         try:
-            values = _map_refs(request.params, self._read)
+            values = _map_refs(values, self._datasets.read)
             outputs = self._workflows[request.spec](**values)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
@@ -219,11 +223,11 @@ class Backend:
                 self._outputs[(record_id, name)] = value
             self._finish(record_id, Status.COMPLETED)
 
-    def _read(self, ref: OutputRef | DatasetRef) -> Any:
+    def _read_output(self, ref: OutputRef | DatasetRef) -> Any:
+        """The value of an output; a dataset is read later, outside the lock."""
         if isinstance(ref, DatasetRef):
-            return self._datasets.read(ref)
-        with self._changed:
-            return self._outputs[(ref.record, ref.output)]
+            return ref
+        return self._outputs[(ref.record, ref.output)]
 
     def _finish(
         self, record_id: str, status: Status, failure: str | None = None

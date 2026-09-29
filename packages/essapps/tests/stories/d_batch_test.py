@@ -2,18 +2,16 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section D of docs/developer/user-stories.md: batch reduction."""
 
-# ruff: noqa: F821
-
 from collections.abc import Callable
 from dataclasses import replace
 from itertools import islice
 
 import pytest
 
-from ess.apps import Client, SubmitError, Template, apply
+from ess.apps import SUM, Client, Selector, SubmitError, Template, apply
 from ess.apps.testing import FakeDatasets
 
-from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Measure
+from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
 
 
 def test_d1_temperature_scan(
@@ -166,7 +164,6 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     assert len(client.records(label='scan')) == 6
 
 
-@pytest.mark.xfail(reason='sessions and accumulators are not implemented')
 def test_d7_rotation_scan_over_a_thousand_angles(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:

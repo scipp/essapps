@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from .backend import Backend, Workflow
 from .datasets import DatasetSource
 from .records import Record, Request, SpecId, Status
+from .sessions import Accumulator, Session, Stage
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -71,15 +72,20 @@ class Client:
         member: str | None = None,
     ) -> Any:
         """
-        Submit a spec with its values, a request, a list, or a dict of requests.
+        Submit a spec or a stage with values, an accumulator, or requests.
 
-        The records come back pending, in the shape given. Under a label, the
-        keys of a dict become the members of their records.
+        Requests may be one, a list, or a dict. The records come back pending,
+        in the shape given. Under a label, the keys of a dict become the
+        members of their records.
         """
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params)
+        elif isinstance(what, Stage):
+            what = what.request(params or {})
+        elif isinstance(what, Accumulator):
+            what = what.request()
         elif params is not None:
-            raise TypeError('params go with a spec, not with requests')
+            raise TypeError('params go with a spec or a stage, not with requests')
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -107,6 +113,16 @@ class Client:
         elif not isinstance(records, list | tuple):
             records = [records]
         self._backend.cancel(r.id for r in records)
+
+    def session(self, where: str | None = None) -> Session:
+        """
+        A session for stages and accumulators, released when it ends.
+
+        ``where`` places the session's process; only this process is supported.
+        """
+        if where not in (None, 'local'):
+            raise NotImplementedError(f'sessions {where!r}')
+        return Session(where)
 
     # Reading
 
