@@ -508,7 +508,7 @@ assert {t: r.status for t, r in scan.items()} == {
 assert client.members('scan') == scan
 ```
 
-Gap: `member_field` and `client.members` are tentative (core-api.md open question 6).
+Gap: `member_field` and `client.members` are tentative (core-api.md open question 5).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -895,10 +895,9 @@ What the design leaves open or defers, with the stories each item affects.
 - **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): core-api.md open question 3.
-- **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is core-api.md open question 5.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; core-api.md open question 6.
+- **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is core-api.md open question 4.
+- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; core-api.md open question 5.
 - **Generic accumulator specs** (system story D7): how a record names the element model, and how an author declares that grouping does not change the result; core-api.md open question 1.
 - **Placing a session** (system story G3): the name and values of the placement argument; core-api.md open question 2.
-- **Record lifetime** (system stories B6, H3): whether the API promises the medium term or nothing; core-api.md open question 4.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing a correction** (F4): deferred.

@@ -88,6 +88,7 @@ Both take a record, a list, or a dict of records, like `client.submit`, and `wai
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, before any record exists: an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
 
 Records are working state for running experiments and are kept for the medium term.
+They outlive sessions: most requests run without one, and a batch's failures, a rule's progress, and a beam centre for tomorrow's batch are read later, by other users or programs.
 What lasts is what `publish` puts in the catalogue.
 Reading an output the system has dropped raises an error, and a request that references it is refused at submission.
 
@@ -150,7 +151,7 @@ dataset(pid='20.500.12269/vanadium')     # for example a result published elsewh
 ```
 
 **Dataset source.** Listing datasets, waiting for new ones, and reading their metadata are queries of a dataset source, an object separate from the client.
-Forms and drivers take a dataset source next to the client; a test gives them a fake one.
+Forms and drivers take a dataset source next to the client; a test gives them a fake one, and a deployment may serve it as it serves the backend.
 A dataset has a kind, such as raw, derived, mask, or calibration, and a selector matches raw datasets unless it names another kind.
 
 ```python
@@ -339,7 +340,7 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 Not part of this API, and not visible in user code:
 
-- how records and outputs are stored, copied, dropped, and located, and for how long
+- how records and outputs are stored, copied, dropped, and located, and for how long; the store may be as plain as output files with their requests next to them and an index for labels, pending requests, and failures
 - how records that share most of their references are stored without repeating them
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
@@ -353,6 +354,5 @@ Not part of this API, and not visible in user code:
 1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result.
 2. **Sessions.** Whether a holder can exist without a session the user opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
-4. **Record lifetime.** Whether the API promises the medium term, or nothing, and what the record store is for beyond sessions (see `plans/findings-questions.md`, Q1).
-5. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
-6. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
+5. **Labels and members** on records, `member_field`, and `client.members` are tentative.

@@ -324,7 +324,7 @@ datasets.metadata(run)['sample']
 The client stays about requests and records, and a test injects a fake source.
 Where a notebook gets a dataset source from, and whether it must agree with the backend's, is a deployment question.
 
-> Simon:
+> Simon: agree, sounds like we could later "serve" the dataset-source
 
 **P10. Current metadata (finding 11; A5).**
 A5: after reduction, the catalogue corrects the sample name of a run. The user wants to see the corrected name next to the old result:
@@ -367,7 +367,7 @@ beamtime = Template(final.request.spec, params=final.request.params, blanks=('ru
 
 Naming a field as a blank drops the value given for it. `Template.from_request` goes.
 
-> Simon:
+> Simon: agree
 
 **P13. Changing a template (finding 18; D3, D6, E4).**
 D3 fixes a shared parameter, D6 moves a template to a new spec version, and E4 improves a rule's template during a beamtime. The stories write `template.revise(params={'threshold': 0.5})`.
@@ -433,7 +433,7 @@ Answer: agreed on all points. The WorkflowSpec already has `code_revision` "so t
 Our system records what ran, honestly: the spec, the code revision, and that the implementation was bound in the process. It does not refuse to publish; whoever reads the published entry sees the same information.
 A hosted backend runs only installed workflows. A backend in the notebook's process may bind a workflow defined there.
 
-> Simon:
+> Simon: agree
 
 **P19. F3 repeats S2 and F1 (finding 33).**
 F3 checks that a record made through a stage can be published like the plain request's record.
@@ -462,4 +462,4 @@ core-api.md would hold the core and the holders, which are designed, and one par
 Answer: I read "the first couple of rows" as core, holders, and datasets. Then the core is requests, records, references, labels, sessions with stages and accumulators, and naming datasets. Listing, watching, and metadata go to the dataset source object (P9), which I would also count as core, since batch, automatic reduction, and browsing all need it.
 core-api.md then covers the core in full, and has one paragraph each on batch and automatic reduction, and on provenance and publication.
 
-> Simon:
+> Simon: seems reasonable, but feel free to restructure during writing if it turns out to be more useful to change partitioning.
