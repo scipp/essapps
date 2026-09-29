@@ -51,8 +51,10 @@ class PipelineBinding:
         for name, value in fixed.items():
             pipeline[self._params[name]] = value
         targets = tuple(self._outputs.values())
-        used = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
-        fed = {n: self._params[n] for n in blanks if self._params[n] in used}
+        fed: dict[str, Key] = {}
+        if blanks:
+            used = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
+            fed = {n: self._params[n] for n in blanks if self._params[n] in used}
         stage = sciline.Stage(pipeline, outputs=targets, inputs=tuple(fed.values()))
 
         def call(**values: Any) -> dict[str, Any]:

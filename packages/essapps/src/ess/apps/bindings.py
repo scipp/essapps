@@ -34,7 +34,10 @@ class Binding(Protocol):
         """
         A callable over ``blanks`` that computes the outputs with ``fixed``.
 
-        The callable may be called from several threads at once.
+        Both this method and the callable may be called from several threads
+        at once. Neither may modify the values it is given, and the callable
+        may return the same object in several calls: records made through one
+        stage share what does not depend on the blanks.
         """
         ...
 

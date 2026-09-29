@@ -5,7 +5,7 @@
 from .accumulators import SUM, AccumulatorSpec, combine
 from .backend import Backend
 from .batch import LastBefore, Lookup, apply
-from .bindings import Binding, Function
+from .bindings import Binding
 from .client import Client, Provenance, local
 from .datasets import DatasetSource, Selector, dataset
 from .records import Failure, Record, Request, SpecId, Status, SubmitError, Template
@@ -21,7 +21,6 @@ __all__ = [
     'Client',
     'DatasetSource',
     'Failure',
-    'Function',
     'LastBefore',
     'Lookup',
     'Provenance',

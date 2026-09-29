@@ -9,7 +9,9 @@ is the only scheduling there is.
 
 A request runs through its spec's binding. A request through a stage in a
 session runs through the callable the binding returned for the stage's
-first call, so it computes only what depends on the blanks.
+first call, so a binding that holds values computes only what depends on
+the blanks. A stage lives until its session ends and the requests made
+through it have run.
 """
 
 from __future__ import annotations
@@ -53,35 +55,41 @@ class Entry:
 
     ``name`` says where the request came from in the call, a key or an index,
     and prefixes the reasons it is refused. A reference to the record ``@<i>``
-    names the record the i-th entry becomes. ``holder`` names the held stage
-    the request goes through, if any.
+    names the record the i-th entry becomes. ``stage`` names the stage the
+    request goes through, if any.
     """
 
     request: Request
     label: str | None = None
     member: str | None = None
     name: str | None = None
-    holder: str | None = None
+    stage: str | None = None
 
     def refused(self, error: SubmitError) -> SubmitError:
         return SubmitError(f'{self.name}: {error}' if self.name else str(error))
 
 
-class _Held:
+class _Stage:
     """
-    A stage held in a session: the binding's callable and the fixed values it has.
+    A stage in a session: the binding's callable and the fixed values it has.
 
-    The first call stages it. A call with other fixed values, such as a dataset
-    name that now resolves to another dataset, stages it again.
+    The first call stages the binding. A call with other fixed values, such as
+    a dataset name that now resolves to another dataset, stages it again.
     """
 
-    def __init__(self, blanks: tuple[str, ...]) -> None:
+    def __init__(
+        self, session: str, proposal: str, spec: SpecId, blanks: tuple[str, ...]
+    ) -> None:
+        self.session = session
+        self.proposal = proposal
+        self.spec = spec
         self.blanks = blanks
         self._lock = threading.Lock()
         self._fixed: dict[str, Any] | None = None
         self._call: Function | None = None
 
-    def call(self, fixed: dict[str, Any], stage: Callable[[], Function]) -> Function:
+    def staged(self, fixed: dict[str, Any], stage: Callable[[], Function]) -> Function:
+        """The binding's callable for ``fixed``; ``stage`` makes it if needed."""
         with self._lock:
             if self._call is None or fixed != self._fixed:
                 self._call, self._fixed = stage(), fixed
@@ -114,9 +122,9 @@ class Backend:
         self._outputs: dict[tuple[str, str], Any] = {}
         self._waiting: dict[str, set[str]] = {}
         self._dependents: dict[str, set[str]] = {}
-        self._sessions: dict[str, set[str]] = {}
-        self._held: dict[str, _Held] = {}
-        self._through: dict[str, str] = {}  # record ID to holder ID
+        self._sessions: dict[str, str] = {}  # session ID to proposal
+        self._stages: dict[str, _Stage] = {}  # the stages of open sessions
+        self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
 
     def close(self) -> None:
         self._executor.shutdown(wait=True)
@@ -144,6 +152,7 @@ class Backend:
         with self._changed:
             for entry, request in zip(entries, prepared, strict=True):
                 self._check_reads(entry, request, submitted, proposal)
+                self._check_stage(entry, request, proposal)
             records = [
                 Record(
                     id=record_id,
@@ -160,10 +169,10 @@ class Backend:
                 )
             ]
             self._records.update((r.id, r) for r in records)
-            self._through.update(
-                (r.id, e.holder)
+            self._stage_of.update(
+                (r.id, self._stages[e.stage])
                 for r, e in zip(records, entries, strict=True)
-                if e.holder is not None
+                if e.stage is not None
             )
             for record in records:
                 self._schedule(record.id)
@@ -248,6 +257,18 @@ class Backend:
         except SubmitError as error:
             raise entry.refused(error) from None
 
+    def _check_stage(self, entry: Entry, request: Request, proposal: str) -> None:
+        """Check the stage a request goes through; lock held."""
+        if entry.stage is None:
+            return
+        stage = self._stages.get(entry.stage)
+        if stage is None or stage.proposal != proposal:
+            raise entry.refused(SubmitError('the stage has ended or is unknown'))
+        if stage.spec != request.spec:
+            raise entry.refused(
+                SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
+            )
+
     def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
         """The spec of a record a request may read; lock held."""
         record = self._records.get(ref.record)
@@ -280,9 +301,8 @@ class Backend:
                 request = self._records[record_id].request
                 if self._records[record_id].status.finished:
                     return
-                holder = self._through.get(record_id)
-                held = None if holder is None else self._held.get(holder)
-            outputs = dict(self._compute(request, held))
+                stage = self._stage_of.get(record_id)
+            outputs = dict(self._compute(request, stage))
             self._check_returned(request.spec, outputs)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
@@ -295,14 +315,16 @@ class Backend:
                 self._outputs[(record_id, name)] = value
             self._finish(record_id, Status.COMPLETED)
 
-    def _compute(self, request: Request, held: _Held | None) -> Mapping[str, Any]:
-        """The outputs of a request, through a held stage if there is one."""
+    def _compute(self, request: Request, stage: _Stage | None) -> Mapping[str, Any]:
+        """The outputs of a request, through its stage if it has one."""
         binding = self._bindings[request.spec]
-        if held is None:  # also a request whose session has ended
+        if stage is None:
             return binding.stage(self._read(request.params), ())()
-        fixed = {k: v for k, v in request.params.items() if k not in held.blanks}
-        call = held.call(fixed, lambda: binding.stage(self._read(fixed), held.blanks))
-        return call(**self._read({k: request.params[k] for k in held.blanks}))
+        fixed = {k: v for k, v in request.params.items() if k not in stage.blanks}
+        call = stage.staged(
+            fixed, lambda: binding.stage(self._read(fixed), stage.blanks)
+        )
+        return call(**self._read({k: request.params[k] for k in stage.blanks}))
 
     def _read(self, values: dict[str, Any]) -> dict[str, Any]:
         """``values`` with the outputs and datasets they reference read."""
@@ -348,7 +370,7 @@ class Backend:
                 }
             )
             self._waiting.pop(finished_id, None)
-            self._through.pop(finished_id, None)
+            self._stage_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
                 inputs = self._waiting.get(dependent)
                 if inputs is None:  # finished meanwhile
@@ -365,25 +387,34 @@ class Backend:
 
     # Sessions
 
-    def open_session(self) -> str:
+    def open_session(self, proposal: str) -> str:
         session = uuid.uuid4().hex
         with self._changed:
-            self._sessions[session] = set()
+            self._sessions[session] = proposal
         return session
 
-    def hold(self, session: str, blanks: tuple[str, ...]) -> str:
-        """Hold a stage with ``blanks`` in the session; its first call stages it."""
-        holder = uuid.uuid4().hex
+    def open_stage(self, session: str, spec_id: SpecId, blanks: tuple[str, ...]) -> str:
+        """A stage in the session; its first call stages the binding."""
+        unknown = set(blanks) - set(self.spec(spec_id).params.model_fields)
+        if unknown:
+            raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
+        stage_id = uuid.uuid4().hex
         with self._changed:
-            self._sessions[session].add(holder)
-            self._held[holder] = _Held(blanks)
-        return holder
+            proposal = self._sessions[session]
+            self._stages[stage_id] = _Stage(session, proposal, spec_id, blanks)
+        return stage_id
 
     def close_session(self, session: str) -> None:
-        """Release the session's holders; requests through them run in full."""
+        """
+        End the session: its stages take no more requests.
+
+        A stage is released once the requests made through it have run.
+        """
         with self._changed:
-            for holder in self._sessions.pop(session):
-                del self._held[holder]
+            self._sessions.pop(session, None)
+            ended = [i for i, s in self._stages.items() if s.session == session]
+            for stage_id in ended:
+                del self._stages[stage_id]
 
     # Queries and control, within one proposal
 

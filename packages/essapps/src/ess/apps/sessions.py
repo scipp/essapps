@@ -7,7 +7,7 @@ A holder never changes what a record says: a call through a stage makes the
 record of the filled template, and computing an accumulator makes the record
 of its accumulator spec over the elements pushed so far.
 
-A stage is held in the backend, which keeps what its binding computed from
+A stage lives in the backend, which keeps what its binding computed from
 the template's values. An accumulator keeps its elements, not their combined
 value, so every call combines all of them.
 """
@@ -26,25 +26,29 @@ if TYPE_CHECKING:
 
 
 class Session:
-    """A lifetime for holders; ending it releases them."""
+    """A lifetime for holders; ending it releases them once their requests have run."""
 
-    def __init__(self, backend: Backend, where: str | None = None) -> None:
+    def __init__(
+        self, backend: Backend, proposal: str, where: str | None = None
+    ) -> None:
         self.where = where
         self.open = True
         self._backend = backend
-        self._id = backend.open_session()
+        self._id = backend.open_session(proposal)
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self.open = False
-        self._backend.close_session(self._id)
+        if self.open:
+            self.open = False
+            self._backend.close_session(self._id)
 
     def stage(self, template: Template) -> Stage:
         if not self.open:
             raise RuntimeError('this session has ended')
-        return Stage(self, template, self._backend.hold(self._id, template.blanks))
+        stage_id = self._backend.open_stage(self._id, template.spec, template.blanks)
+        return Stage(self, template, stage_id)
 
     def accumulator(self, spec: AccumulatorSpec) -> Accumulator:
         if not isinstance(spec, AccumulatorSpec):
@@ -65,13 +69,13 @@ class Stage(_Holder):
     """
     A template held in a session; a call fills its blanks.
 
-    ``id`` names the held stage in the backend.
+    ``id`` names the stage in the backend.
     """
 
-    def __init__(self, session: Session, template: Template, holder: str) -> None:
+    def __init__(self, session: Session, template: Template, stage_id: str) -> None:
         super().__init__(session)
         self.template = template
-        self.id = holder
+        self.id = stage_id
 
     def request(self, values: dict[str, Any]) -> Request:
         self._check_open()

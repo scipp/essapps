@@ -86,7 +86,8 @@ def iofq(run, bins, beam_centre=None) -> dict:
 
 local(proposal='p1', bind={IOFQ: iofq})
 local(proposal='p1', bind={IOFQ: PipelineBinding(pipeline,
-                                                 params={'run': Filename[SampleRun], 'bins': QBins},
+                                                 params={'run': Filename[SampleRun], 'bins': QBins,
+                                                         'beam_centre': BeamCenter},
                                                  outputs={'iofq': BackgroundSubtractedIofQ})})
 ```
 
@@ -243,7 +244,7 @@ The framework does not prevent any of them; a package decides which specs it off
 A holder keeps something in memory so that the next call computes less.
 There are two, and both live in a session.
 Holders in one session share a process, so values pass between them in memory.
-Ending the session releases them.
+Ending the session releases them once the requests made through them have run.
 A session runs in a backend process unless it is placed elsewhere, for example next to a desktop application with `client.session(where='local')`; its records still go to the backend.
 
 **Stage.** A stage holds a template with everything that does not depend on its blanks computed.
@@ -349,11 +350,11 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference. A finished record never changes.
 - A holder never changes what a record says. A record made through a stage or an accumulator is the record of the plain request.
-- Every connection between requests is a reference. A value passed in memory is a copy of the referenced output.
+- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
 - A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - Records are kept for the medium term. A published entry answers what produced it without access to the records.
-- Only holders keep memory on a user's behalf, and ending their session releases them.
+- Only holders keep memory on a user's behalf, and ending their session releases them once the requests made through them have run.
 
 ## Left to the system
 

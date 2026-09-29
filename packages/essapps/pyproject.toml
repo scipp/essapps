@@ -29,6 +29,8 @@ dynamic = ["version"]
 dependencies = [
     "essreduce @ git+https://github.com/scipp/ess.git@653-minimal-workflow-spec#subdirectory=packages/essreduce",
     "pydantic>=2.10",
+    # sciline.Stage (ADR 0003) is not released yet; only ess.apps.pipeline imports it.
+    "sciline @ git+https://github.com/scipp/sciline.git@map-reduce-outside-the-graph",
 ]
 
 [project.optional-dependencies]

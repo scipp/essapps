@@ -9,6 +9,7 @@ requests accept one, a list, or a dict, and return the same shape.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -79,10 +80,8 @@ class Provenance(BaseModel, frozen=True):
         return list(self.upstream)
 
     def datasets(self) -> list[DatasetRef]:
-        found: list[DatasetRef] = []
-        for request in (self.request, *(r.request for r in self.upstream)):
-            found.extend(d for d in request.datasets() if d not in found)
-        return found
+        requests = (self.request, *(r.request for r in self.upstream))
+        return list(dict.fromkeys(d for r in requests for d in r.datasets()))
 
 
 class Client:
@@ -108,11 +107,11 @@ class Client:
         in the shape given. Under a label, the keys of a dict become the
         members of their records.
         """
-        holder = None
+        stage = None
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params)
         elif isinstance(what, Stage):
-            holder, what = what.id, what.request(params or {})
+            stage, what = what.id, what.request(params or {})
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
@@ -124,7 +123,7 @@ class Client:
         else:
             members = [member] * len(_items(what))
         entries = [
-            Entry(request, label=label, member=m, name=name, holder=holder)
+            Entry(request, label=label, member=m, name=name, stage=stage)
             for request, m, name in zip(
                 _numbered(_items(what)), members, _names(what), strict=True
             )
@@ -155,7 +154,7 @@ class Client:
         """
         if where not in (None, 'local'):
             raise NotImplementedError(f'sessions {where!r}')
-        return Session(self._backend, where)
+        return Session(self._backend, self.proposal, where)
 
     # Reading
 
@@ -200,9 +199,9 @@ class Client:
 
     def provenance(self, record: Record) -> Provenance:
         upstream: dict[str, Record] = {}
-        todo = [ref.record for ref in record.request.refs()]
+        todo = deque(ref.record for ref in record.request.refs())
         while todo:
-            record_id = todo.pop(0)
+            record_id = todo.popleft()
             if record_id not in upstream:
                 upstream[record_id] = self._backend.record(record_id, self.proposal)
                 todo.extend(ref.record for ref in upstream[record_id].request.refs())
