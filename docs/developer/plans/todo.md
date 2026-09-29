@@ -2,10 +2,11 @@
 
 ## Next steps, in order
 
-1. Decide the findings at the end of `user-stories.md` and fold the decisions into `core-api.md` and the stories.
+1. Simon to read the six answers added to `plans/findings-questions.md` (Q1 on what the record store is for, P1, P9, P12, P18, Part 3). Delete that file once they are settled.
 2. Promote `core-api.md` to `docs/developer/README.md`; retire `plans/restart.md` and `proposals/accumulating-inputs-draft.md`.
-3. Implement, with the API-tier story tests as the acceptance suite.
-   Records, execution, and references first, then stages and sessions, then accumulators.
+3. Implement the core, with the API-tier story tests as the acceptance suite.
+   Records, execution, references, and labels first, then datasets and the dataset source, then sessions with stages and accumulators.
+4. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
 
 ## User stories
 
@@ -14,12 +15,7 @@
 
 ## Core API proposal
 
-Open questions in `proposals/core-api.md`:
-
-- Generic accumulator specs: how a record tells `SUM` over one model from `SUM` over another; how an author declares that grouping does not change the result.
-- Sessions: whether a holder can exist without one the user opened; how the trigger loop owns one.
-- Removing a member from an accumulator.
-- How a rule reaches a driving server, for example when a UI adds a rule during a beamtime.
+The open questions are listed at the end of `proposals/core-api.md`.
 
 ## Dependencies outside this repository
 

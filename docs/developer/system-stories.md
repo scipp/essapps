@@ -54,7 +54,7 @@ Property: records completed before the crash are kept, and requests submitted be
 ### B6. Find last week's result
 
 Actor: user after a week. Goal: last week's records and outputs are still there.
-Property: records and their outputs survive restarts of the client and of the backend, at least until the proposal ends (H3).
+Property: records and their outputs survive restarts of the client and of the backend, until they expire (H3).
 
 ## C. Chaining
 
@@ -84,7 +84,8 @@ Property: a cancel stops the started requests within seconds and frees their wor
 
 Actor: spectroscopy user. Goal: each run is reduced on its own node as it arrives, and the volume so far is ready within seconds of each angle.
 Property: each `ANGLE` request starts when its run arrives, on any free node. Pushing a finished angle into the accumulator combines one contribution and reads no earlier one.
-A request of `SUM.of(Counts)` over a thousand elements, made outside a session, runs as a tree of partial sums, and no process reads more than a configured number of contributions.
+Each read of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of reads.
+A request of `SUM.of(Counts)` over a thousand elements, made outside a session, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
 
 ## F. Publication and provenance
 
@@ -103,12 +104,12 @@ Property: an operator lets one proposal read another's records and datasets by c
 ### G2. Developer iterates on a workflow
 
 Actor: workflow developer. Goal: edit a workflow in a notebook and see the result within seconds.
-Property: a backend in the notebook's process runs a workflow bound there, and uses an edited binding for the next request without a restart.
+Property: a backend in the notebook's process runs a workflow bound there, and uses an edited binding for the next request without a restart. A hosted backend runs only installed workflows.
 
 ### G3. Local application, remote compute
 
 Actor: user of a desktop application. Goal: the expensive reduction runs on the cluster; the cheap post-processing is tuned on the laptop with sub-second feedback.
-Property: a session's process runs on the laptop while its stages read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop.
+Property: a session's process runs on the laptop while its stages read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records the session makes go to the cluster's backend.
 
 ### G4. Two notebooks on one machine
 
@@ -125,14 +126,15 @@ Property: the backend checks every reference against the submitter's proposal an
 ### H1. Disk fills up
 
 Actor: operator. Goal: free disk space without losing provenance.
-Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay. The operator sees the space used per proposal before the disk is full.
+Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay until the records expire (H3). The operator sees the space used per proposal before the disk is full.
 
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
 Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema.
 
-### H3. Proposal ends
+### H3. Records expire
 
-Actor: operator. Goal: remove a proposal's records and stored outputs together.
-Property: dropping a proposal removes its records and outputs. Its published entries still answer what produced them.
+Actor: operator. Goal: records and outputs are kept while an experiment needs them and removed afterwards; what was published lasts.
+Property: records and their outputs are kept for a configured period that covers a running experiment, and then expire. A published entry still answers what produced it after the records behind it have expired.
+A record that read an expired record keeps its own request, and its provenance loses that step.
