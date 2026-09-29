@@ -27,8 +27,6 @@ Another session may be working in `/workspace/essapps`; do not switch branches t
   - `user-stories.md`: each story has an actor and a goal, the client code that does it, and its checks. No "Outcome" paragraphs that explain mechanisms.
   - one story test per story, running that code; a story the code cannot do yet is a strict xfail.
   - `README.md`: one or two pages, the handful of concepts, each with a code example of three to five lines, and the invariants. No alternatives, no history, no decision numbers.
-- **The first PR has no implementation**: README and user stories with code, so that the API is reviewed on paper.
-- Later PRs are a few hundred lines each and bring code over until the next group of story tests passes.
 - Delegate mechanical work (porting a module, turning a story into a test) to subagents, Sonnet for mechanical edits and Opus where design judgment is needed; keep design and review in the main session.
 - Follow the writing style in Simon's CLAUDE.md and the memory note on design docs without history.
 
@@ -44,10 +42,9 @@ These were settled on 2026-09-28 (see the commit messages on `architecture-sketc
 - **Nothing is held unless the user creates a holder.** `client.hold(stage)` and `client.release`, when sessions come; no `vary` hint and no implicit cache of stages.
 - A sum over runs in one request is a list parameter, **computed flat**, holding nothing afterwards. The adapter's incremental part (`_Sum`, comparing lists, tracking which varied parameters the contributions read) does not come over.
 - A cut that crosses a record boundary is made by the workflow author, where the graph is known; the backend never needs the graph.
-
-Deferred, not rejected: the accumulator proposal (accumulator specs as operations, `Held`/`Flat`/`Tree`, push log, `Current`, `Into`).
-Simon says spectroscopy needs fan-out across processes and wants accumulating outputs of one spec into another unplanned spec to stay possible.
-Add a spectroscopy fan-out story now, as a strict xfail, and keep the core compatible with the proposal: records, references, stand-ins, pending outputs, and labels are what it builds on.
+- The accumulator proposal (accumulator specs as operations, `Held`/`Flat`/`Tree`, push log, `Current`, `Into`) -> need to think more and discuss with Simon. See also `accumulating-inputs-draft.md` in the worktree about some immediate problems we ran into in a first attempt. There are likely some sharp edges or sub-decisions that need to be revisited. In particular we need clarity that there is (probably) no 1:1 correspondence between workflow-spec and stage -- most workflows would be running without a stage. Secondly, "stage" and "hold" might be the same thing -- a context that holds a caching stage, explicitly released.
+- Simon says spectroscopy needs fan-out across processes and wants accumulating outputs of one spec into another unplanned spec to stay possible.
+  Add a spectroscopy fan-out story now.
 
 ## Plan
 
