@@ -1,6 +1,8 @@
-# Proposal: the core API
+# ESS data-reduction framework: the API
 
-**Status: draft for discussion. Nothing here is implemented.**
+**Status: the design of the API. Implementation starts with the core.**
+
+[scoping.md](scoping.md) states the goals. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
 
 This document describes the API we want: what users and workflow authors write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.

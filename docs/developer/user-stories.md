@@ -1,7 +1,7 @@
 # User stories
 
 Each story has an actor, a goal, the client code that reaches it, and its checks as assertions.
-The code uses only the API of [proposals/core-api.md](proposals/core-api.md) and the calls listed under [Conventions](#conventions).
+The code uses only the API of [README.md](README.md) and the calls listed under [Conventions](#conventions).
 The checks observe only what that API shows: values, records, labels, provenance, and errors.
 What a story needs from the system, such as cost, placement, or persistence, is a separate story in [system-stories.md](system-stories.md).
 A story that needs what the design leaves open or defers says so in a "Gap" line, and [Open](#open) lists these.
@@ -40,7 +40,7 @@ In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the 
 Every backend in the stories, including one that `local(...)` makes, reads the same datasets and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw dataset with the given counts and metadata, and returns its reference.
 The metadata of such a dataset also holds its run number, as `run`; `measure(..., proposal=...)` makes the dataset belong to another proposal.
-`datasets` is a fake dataset source for `client`'s proposal, with `list`, `watch`, and `metadata` as in core-api.md; the backends resolve `dataset(...)` against the same datasets.
+`datasets` is a fake dataset source for `client`'s proposal, with `list`, `watch`, and `metadata` as in README.md; the backends resolve `dataset(...)` against the same datasets.
 It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a dataset's metadata, and `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance` and `.supersedes`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
@@ -49,7 +49,7 @@ It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a da
 `upgrade(specs=..., versions=...)` replaces the backend's workflow packages: the specs it offers and the software versions its records name.
 `replace` is `dataclasses.replace`.
 
-Besides the calls in core-api.md, the stories use these:
+Besides the calls in README.md, the stories use these:
 
 ```python
 client.records(spec=IOFQ)    # records, oldest first; filters by spec= as by label=, since=, until=
@@ -142,7 +142,7 @@ assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]   # [2, 
 assert total.request.datasets() == runs
 ```
 
-This is way 1 of "One sum, three ways" in core-api. B2 uses ways 2 and 3.
+This is way 1 of "One sum, three ways" in the README. B2 uses ways 2 and 3.
 
 ### S6. Sum sample runs and background runs
 
@@ -322,7 +322,7 @@ assert client.records(label='sum') == [first, added, removed]
 assert len(client.records(spec=CONTRIBUTE)) == 3                     # each run reduced once
 ```
 
-Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (core-api.md open question 3).
+Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (README.md open question 3).
 That adding 613 costs about one run is system story B2.
 
 ### B3. Compare two parameter sets side by side
@@ -508,7 +508,7 @@ assert {t: r.status for t, r in scan.items()} == {
 assert client.members('scan') == scan
 ```
 
-Gap: `member_field` and `client.members` are tentative (core-api.md open question 5).
+Gap: `member_field` and `client.members` are tentative (README.md open question 5).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -894,10 +894,10 @@ What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
-- **Removing an element from an accumulator** (B2): core-api.md open question 3.
-- **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is core-api.md open question 4.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; core-api.md open question 5.
-- **Generic accumulator specs** (system story D7): how a record names the element model, and how an author declares that grouping does not change the result; core-api.md open question 1.
-- **Placing a session** (system story G3): the name and values of the placement argument; core-api.md open question 2.
+- **Removing an element from an accumulator** (B2): README.md open question 3.
+- **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is README.md open question 4.
+- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 5.
+- **Generic accumulator specs** (system story D7): how a record names the element model, and how an author declares that grouping does not change the result; README.md open question 1.
+- **Placing a session** (system story G3): the name and values of the placement argument; README.md open question 2.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing a correction** (F4): deferred.

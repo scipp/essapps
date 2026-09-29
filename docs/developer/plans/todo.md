@@ -2,19 +2,30 @@
 
 ## Next steps, in order
 
-1. Promote `core-api.md` to `docs/developer/README.md`; retire `plans/restart.md` and `proposals/accumulating-inputs-draft.md`.
-2. Implement the core, with the API-tier story tests as the acceptance suite.
+1. Implement the core, with the API-tier story tests as the acceptance suite.
    Records, execution, references, and labels first, then datasets and the dataset source, then sessions with stages and accumulators.
-3. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
+2. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
 
 ## User stories
 
-- `user-stories.md` (API tier) and `system-stories.md` (system tier) are written against `core-api.md`.
+- `user-stories.md` (API tier) and `system-stories.md` (system tier) are written against `README.md`.
 - System-tier stories get code once a system document exists.
 
-## Core API proposal
+## API
 
-The open questions are listed at the end of `proposals/core-api.md`.
+The open questions are listed at the end of `README.md`.
+
+## Implementation notes
+
+The previous design and skeleton are on branch `architecture-sketch` (tip `b840b1f`); read a file with `git show architecture-sketch:<path>`.
+Bring code over only when a story test needs it.
+A review of that branch (2026-09-28) found:
+
+- Nearly unchanged: records, references, store, data store, spec, binding, dataset sources (about 2,900 lines).
+- Rework: runner and launcher (session path), the adapter (its incremental sum goes), the HTTP server and CLI.
+- Obsolete: the aggregation toy specs.
+- `backend.py` (1,071 lines) does everything; split it rather than rewrite it.
+- `batch.py` (885 lines) holds special cases from real stories (a can measured after the sample, a dataset that gains a PID); use the test names in `batch_test.py` as a checklist when the batch sub-design starts, and decide each case rather than copying.
 
 ## Dependencies outside this repository
 

@@ -1,6 +1,6 @@
 # System stories
 
-These stories check what the system must provide beyond the API of [proposals/core-api.md](proposals/core-api.md): cost, placement, persistence, recovery, and operations.
+These stories check what the system must provide beyond the API of [README.md](README.md): cost, placement, persistence, recovery, and operations.
 Each has an actor, a goal, and the property to check.
 Where a story shares a goal with an API story in [user-stories.md](user-stories.md), it has the same identifier.
 The stories get code once a system document says what the system is.
