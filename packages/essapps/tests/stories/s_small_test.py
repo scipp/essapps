@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""Section S of docs/developer/user-stories.md: small stories, one concept each."""
+
+# ruff: noqa: F821
+
+import pytest
+
+from ess.apps import Client
+from ess.apps.testing import FakeDatasets
+
+from .conftest import BACKGROUND, IOFQ, NORMALIZE, VANADIUM, Measure
+
+
+def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
+    run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
+    result = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
+
+    assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]
+    assert result.request.params['bins'] == 2
+    assert result.request.datasets() == [run]
+
+
+@pytest.mark.xfail(reason='sessions and stages are not implemented')
+def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
+    run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
+    with client.session() as session:
+        tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
+        for bins in (1, 2, 4):
+            result = client.compute(tune, {'bins': bins}, label='iofq')
+
+    assert client.latest('iofq') == result
+    assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
+    plain = client.compute(IOFQ, result.request.params)
+    assert client.output(plain, 'iofq') == client.output(result, 'iofq')
+
+
+def test_s3_look_at_a_value_inside_a_reduction(
+    client: Client, measure: Measure
+) -> None:
+    run = measure(1, [1.0, 2.0, 3.0, 4.0])
+    result = client.compute(IOFQ, {'run': run, 'threshold': 2.5})
+
+    assert client.output(result, 'masked').values.tolist() == [0.0, 0.0, 3.0, 4.0]
+    assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
+
+
+@pytest.mark.xfail(reason='accumulator specs (PARTS_SUM) are not implemented')
+def test_s4_submit_a_chain_in_one_go(client: Client, measure: Measure) -> None:
+    r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
+    parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]
+    total = Request(
+        PARTS_SUM,
+        {
+            'numerator': [p.ref('numerator') for p in parts],
+            'denominator': [p.ref('denominator') for p in parts],
+        },
+    )
+    c611, c612, pending = client.submit([*parts, total])
+
+    (summed,) = client.wait([pending])
+    assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
+    assert summed.request.params['numerator'] == [
+        c611.ref('numerator'),
+        c612.ref('numerator'),
+    ]
+
+
+def test_s5_sum_runs(client: Client, measure: Measure) -> None:
+    runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
+    total = client.compute(NORMALIZE, {'runs': runs, 'scale': 2.0})
+
+    assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
+    assert total.request.datasets() == runs
+
+
+def test_s6_sum_sample_runs_and_background_runs(
+    client: Client, measure: Measure
+) -> None:
+    samples = [measure(1, [5.0, 5.0]), measure(2, [7.0, 5.0])]
+    backgrounds = [measure(3, [1.0, 1.0]), measure(4, [1.0, 2.0])]
+    result = client.compute(
+        BACKGROUND, {'sample_runs': samples, 'background_runs': backgrounds}
+    )
+
+    assert client.output(result, 'subtracted').values.tolist() == [10.0, 7.0]
+    assert result.request.datasets() == samples + backgrounds
+
+
+@pytest.mark.xfail(reason='Template, apply, and lookups are not implemented')
+def test_s7_reduce_each_sample_with_the_can_measured_before_it(
+    client: Client, measure: Measure, datasets: FakeDatasets
+) -> None:
+    can_1 = measure(1, [1.0, 1.0], role='can')
+    first = measure(2, [5.0, 6.0], role='sample')
+    can_3 = measure(3, [2.0, 2.0], role='can')
+    second = measure(4, [6.0, 9.0], role='sample')
+    template = Template(IOFQ, blanks=('run', 'can'))
+    cans = Lookup(can=LastBefore(Selector(role='can')))
+
+    requests = apply(
+        template, [first, second], datasets, member_field='run', lookup=cans
+    )
+    reduced = list(client.wait(client.submit(requests, label='iofq')).values())
+
+    assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
+        [4.0, 5.0],
+        [4.0, 7.0],
+    ]
+    assert [r.request.datasets() for r in reduced] == [
+        [first, can_1],
+        [second, can_3],
+    ]
+
+
+def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None:
+    vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
+    vanadium = client.compute(VANADIUM, {'run': vanadium_run, 'scale': 2.0})
+    result = client.compute(
+        IOFQ, {'run': sample, 'normalization': vanadium.ref('normalization')}
+    )
+
+    provenance = client.provenance(result)
+    assert set(provenance.datasets()) == {sample, vanadium_run}
+    (upstream,) = provenance.records()
+    assert upstream.request.params['scale'] == 2.0
+    assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
