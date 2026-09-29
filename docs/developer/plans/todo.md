@@ -2,11 +2,10 @@
 
 ## Next steps, in order
 
-1. Simon to read the six answers added to `plans/findings-questions.md` (Q1 on what the record store is for, P1, P9, P12, P18, Part 3). Delete that file once they are settled.
-2. Promote `core-api.md` to `docs/developer/README.md`; retire `plans/restart.md` and `proposals/accumulating-inputs-draft.md`.
-3. Implement the core, with the API-tier story tests as the acceptance suite.
+1. Promote `core-api.md` to `docs/developer/README.md`; retire `plans/restart.md` and `proposals/accumulating-inputs-draft.md`.
+2. Implement the core, with the API-tier story tests as the acceptance suite.
    Records, execution, references, and labels first, then datasets and the dataset source, then sessions with stages and accumulators.
-4. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
+3. The sub-designs for batch and automatic reduction, and for provenance and publication, each with their own document and stories.
 
 ## User stories
 
