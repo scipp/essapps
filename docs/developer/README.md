@@ -73,6 +73,23 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
 An intermediate value is visible only if the author declares it as an output; a request does not select outputs.
 Other intermediates are inspected by running the package's workflow in a notebook.
 
+**Binding.** The package binds each spec to code.
+A binding is staged with the values that stay fixed and returns a callable over the rest; a request outside a stage is staged with no blanks and called once.
+A plain function is a binding that computes everything on each call.
+A sciline pipeline, through `sciline.Stage`, computes what does not depend on the blanks once.
+Records do not depend on which.
+
+```python
+def iofq(run, bins, beam_centre=None) -> dict:
+    ...
+    return {'iofq': result}
+
+local(proposal='p1', bind={IOFQ: iofq})
+local(proposal='p1', bind={IOFQ: PipelineBinding(pipeline,
+                                                 params={'run': Filename[SampleRun], 'bins': QBins},
+                                                 outputs={'iofq': BackgroundSubtractedIofQ})})
+```
+
 **Request and record.** A request is a spec and its parameter values.
 Submitting it returns a record: the request with every value filled in, defaults included, plus status and outputs.
 A record's status is `pending`, `completed`, `failed`, or `cancelled`. A finished record never changes; a rerun is a new record.

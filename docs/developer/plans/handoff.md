@@ -6,22 +6,22 @@ This is the handoff for the next session on branch `core`. Read it first, then `
 
 | What | Where |
 |---|---|
-| Branch and worktree | `core` in `/workspace/essapps-core` (not pushed since `9c8bcbe`; local commits up to `a2d5574` and this file) |
+| Branch | `core`, checked out in `/workspace/essapps` (not pushed since `9c8bcbe`) |
 | The API design | `docs/developer/README.md` (was `proposals/core-api.md`) |
 | API-tier stories | `docs/developer/user-stories.md`: 47 stories as client code; an "Open" section at the end |
 | System-tier stories | `docs/developer/system-stories.md`: actor, goal, property; no code yet |
 | Sub-design: batch and automatic reduction | `docs/developer/automatic-reduction.md` |
 | To-do list | `docs/developer/plans/todo.md` |
 | Scoping | `docs/developer/scoping.md` |
-| Code | `packages/essapps/src/ess/apps/`: `records.py`, `backend.py`, `client.py`, `datasets.py`, `batch.py`, `accumulators.py`, `sessions.py`, `rules.py`, `testing.py` (about 1,100 lines) |
-| Tests | `packages/essapps/tests/`: `backend_test.py`, `sessions_test.py`, `stories/*_test.py` (one test per API-tier story), toy specs and fixtures in `stories/conftest.py` |
+| Code | `packages/essapps/src/ess/apps/`: `records.py`, `backend.py`, `client.py`, `bindings.py`, `pipeline.py`, `datasets.py`, `batch.py`, `accumulators.py`, `sessions.py`, `rules.py`, `testing.py` (about 1,550 lines) |
+| Tests | `packages/essapps/tests/`: `backend_test.py`, `sessions_test.py`, `pipeline_test.py`, `stories/*_test.py` (one test per API-tier story), toy specs and fixtures in `stories/conftest.py` |
 | The previous attempt of this session's work | branch `core-old` (README with 8 terms, stories with the old vocabulary, the accumulating-inputs draft) |
 | The previous design and skeleton | branch `architecture-sketch`, tip `b840b1f`; see "Implementation notes" in `todo.md` |
 | sciline ADR 0003 (Stage, Aggregation, Accumulator) | `/workspace/sciline`, branch `map-reduce-outside-the-graph`; `docs/developer/adr/0003-*.md` and `docs/developer/architecture-and-design/map-reduce-outside-the-graph.md` |
 | ess.reduce workflow spec (ADR 0001) | `/workspace/ess`, branch `653-minimal-workflow-spec`, `packages/essreduce/src/ess/reduce/spec/` |
 
 Environment: `.venv` in the worktree, made with `python3 -m venv --system-site-packages .venv`, then `pip install -e /workspace/ess/packages/essreduce --no-deps` and `pip install -e 'packages/essapps[test]' --no-deps`.
-Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (50 pass, 11 strict xfails, about 11 s, of which story D7 takes 10 s).
+Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (55 pass, 11 strict xfails, about 11 s, of which story D7 takes 10 s).
 Lint: `ruff check . && ruff format .` (ruff from conda base; no pre-commit hooks are installed in this repository).
 
 ## How Simon wants to work
@@ -64,13 +64,17 @@ Done, with story tests passing:
 - In-process backend: atomic submission (dataset names resolved outside the lock; unknown parameters, references to missing or failed or foreign-proposal records, element references, and misfitting fields refused with a message naming the request and the field); scheduling on pending references with failures passed to dependents through a worklist; cancel ends every unfinished record; outputs checked against the spec's outputs model.
 - Client: shapes, placeholders renumbered to `@<index>` before the backend sees them, labels, members, `records(since=, until=)`, provenance with `.datasets()` and `.records()`.
 - Templates, `apply`, lookups (`LastBefore`), rules with series, `TriggerLoop` (`step`, `status`, `run`), reading what it handled from the records under the rule's label.
-- Sessions with stages and accumulators, which hold their definition but no computed values: every call computes the full request. This is why D7 is slow and quadratic.
+- Bindings (`bindings.py`, `pipeline.py`): every binding has `stage(fixed, blanks)`; a plain function computes everything on each call.
+- Sessions with stages and accumulators. Stages are held in the backend and keep what their binding computed. Accumulators keep their elements but not their combined value, so every call combines all of them. This is why D7 is slow and quadratic.
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
 
 Provisional choices in the code, easy to change: generic accumulator specs are named `sum[Counts]` (README open question 1); `apply` and rules key members by `run` unless told otherwise; order means run order.
 
-## Pending question to Simon (last message of the session)
+## Pending question to Simon
+
+Settled on 2026-09-29: every binding has `stage(fixed, blanks)`, and the fallback for a plain function is to compute everything. The sciline adapter lives in essapps until it moves to ess.reduce. Implemented. What a record says about software is still open; it is item 3 in `todo.md`. The text below is the question as it was asked.
+
 
 Simon wrote, while I was working: "I feel both should actually be implementation details, abstracted away -- a spec does not necessarily need to wrap a sciline workflow, it could just be a Python function. Can this be a pluggable system, or something generic where the bindings can be registered? Similar for the software question -- we'd want something generic that hides away any details/decisions about how different kinds of environments are tracked."
 
@@ -88,12 +92,9 @@ Simon wrote, while I was working: "I feel both should actually be implementation
 >
 > If that shape is right, I'll build it next. After that come holders that keep values in memory through sciline, then the provenance and publication sub-design.
 
-## Next steps (also in todo.md)
+## Next steps
 
-1. Once Simon agrees: the binding protocol and registry (in-process `bind=` and entry points), and the pluggable software recorder with `record.software`. Keep sciline out of the backend. Unblocks G2 partly and provenance `.software`.
-2. Holders that keep values: a binding capability to stage (and for accumulator specs, to accumulate in memory), used by sessions; the records stay the same. Needs sciline from the `map-reduce-outside-the-graph` branch installed into the venv (`pip install -e /workspace/sciline --no-deps`). Check D7's time drops.
-3. The sub-design for provenance and publication: its own document and stories (F1 to F4, C2, E3, G2), including what `publish` needs from the backend and a fake publisher.
-4. Later: grants (G1), views (B4, form waits for plotting), a hosted backend and `connect(url)`, the system document and code for system stories, real workflows (LoKI, then Amor).
+In `todo.md`.
 
 Open questions in the README: generic accumulator spec identity and the declaration that grouping does not change a result; sessions (a holder without a user-opened session, the trigger loop owning one, the placement argument); removing a member from an accumulator; where a notebook's dataset source comes from; labels and members are tentative.
 

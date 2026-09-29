@@ -3,8 +3,9 @@
 """Framework for ESS data-reduction applications."""
 
 from .accumulators import SUM, AccumulatorSpec, combine
-from .backend import Backend, Workflow
+from .backend import Backend
 from .batch import LastBefore, Lookup, apply
+from .bindings import Binding, Function
 from .client import Client, Provenance, local
 from .datasets import DatasetSource, Selector, dataset
 from .records import Failure, Record, Request, SpecId, Status, SubmitError, Template
@@ -16,9 +17,11 @@ __all__ = [
     'Accumulator',
     'AccumulatorSpec',
     'Backend',
+    'Binding',
     'Client',
     'DatasetSource',
     'Failure',
+    'Function',
     'LastBefore',
     'Lookup',
     'Provenance',
@@ -34,7 +37,6 @@ __all__ = [
     'SubmitError',
     'Template',
     'TriggerLoop',
-    'Workflow',
     'apply',
     'combine',
     'dataset',

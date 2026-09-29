@@ -6,6 +6,10 @@ The backend checks requests, keeps records, and runs requests.
 This backend runs in the client's process and keeps records and outputs in
 memory. A request waits until every record it references has completed; this
 is the only scheduling there is.
+
+A request runs through its spec's binding. A request through a stage in a
+session runs through the callable the binding returned for the stage's
+first call, so it computes only what depends on the blanks.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from typing import Any
 from ess.reduce.spec import DataField, DatasetRef, OutputRef, WorkflowSpec, data_fields
 from pydantic import ValidationError
 
+from .bindings import Binding, Function, as_binding
 from .datasets import DatasetSource
 from .records import (
     Failure,
@@ -32,9 +37,6 @@ from .records import (
     map_refs,
     output_refs,
 )
-
-Workflow = Callable[..., Mapping[str, Any]]
-"""A bound workflow: takes parameter values, with data read, and returns outputs."""
 
 
 def _agree(output: DataField, param: DataField) -> bool:
@@ -51,23 +53,46 @@ class Entry:
 
     ``name`` says where the request came from in the call, a key or an index,
     and prefixes the reasons it is refused. A reference to the record ``@<i>``
-    names the record the i-th entry becomes.
+    names the record the i-th entry becomes. ``holder`` names the held stage
+    the request goes through, if any.
     """
 
     request: Request
     label: str | None = None
     member: str | None = None
     name: str | None = None
+    holder: str | None = None
 
     def refused(self, error: SubmitError) -> SubmitError:
         return SubmitError(f'{self.name}: {error}' if self.name else str(error))
+
+
+class _Held:
+    """
+    A stage held in a session: the binding's callable and the fixed values it has.
+
+    The first call stages it. A call with other fixed values, such as a dataset
+    name that now resolves to another dataset, stages it again.
+    """
+
+    def __init__(self, blanks: tuple[str, ...]) -> None:
+        self.blanks = blanks
+        self._lock = threading.Lock()
+        self._fixed: dict[str, Any] | None = None
+        self._call: Function | None = None
+
+    def call(self, fixed: dict[str, Any], stage: Callable[[], Function]) -> Function:
+        with self._lock:
+            if self._call is None or fixed != self._fixed:
+                self._call, self._fixed = stage(), fixed
+            return self._call
 
 
 class Backend:
     def __init__(
         self,
         datasets: DatasetSource,
-        bind: Mapping[WorkflowSpec, Workflow],
+        bind: Mapping[WorkflowSpec, Binding | Function],
         *,
         workers: int = 4,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -78,7 +103,7 @@ class Backend:
             if (spec_id := SpecId.of(spec)) in self._specs:
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._specs[spec_id] = spec
-        self._workflows = {SpecId.of(spec): fn for spec, fn in bind.items()}
+        self._bindings = {SpecId.of(spec): as_binding(b) for spec, b in bind.items()}
         self._output_fields = {
             spec_id: data_fields(spec.outputs) for spec_id, spec in self._specs.items()
         }
@@ -89,6 +114,9 @@ class Backend:
         self._outputs: dict[tuple[str, str], Any] = {}
         self._waiting: dict[str, set[str]] = {}
         self._dependents: dict[str, set[str]] = {}
+        self._sessions: dict[str, set[str]] = {}
+        self._held: dict[str, _Held] = {}
+        self._through: dict[str, str] = {}  # record ID to holder ID
 
     def close(self) -> None:
         self._executor.shutdown(wait=True)
@@ -132,6 +160,11 @@ class Backend:
                 )
             ]
             self._records.update((r.id, r) for r in records)
+            self._through.update(
+                (r.id, e.holder)
+                for r, e in zip(records, entries, strict=True)
+                if e.holder is not None
+            )
             for record in records:
                 self._schedule(record.id)
             return [self._records[r.id] for r in records]
@@ -247,9 +280,9 @@ class Backend:
                 request = self._records[record_id].request
                 if self._records[record_id].status.finished:
                     return
-                values = map_refs(request.params, self._read_output)
-            values = map_refs(values, self._datasets.read)
-            outputs = dict(self._workflows[request.spec](**values))
+                holder = self._through.get(record_id)
+                held = None if holder is None else self._held.get(holder)
+            outputs = dict(self._compute(request, held))
             self._check_returned(request.spec, outputs)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
@@ -261,6 +294,21 @@ class Backend:
             for name, value in outputs.items():
                 self._outputs[(record_id, name)] = value
             self._finish(record_id, Status.COMPLETED)
+
+    def _compute(self, request: Request, held: _Held | None) -> Mapping[str, Any]:
+        """The outputs of a request, through a held stage if there is one."""
+        binding = self._bindings[request.spec]
+        if held is None:  # also a request whose session has ended
+            return binding.stage(self._read(request.params), ())()
+        fixed = {k: v for k, v in request.params.items() if k not in held.blanks}
+        call = held.call(fixed, lambda: binding.stage(self._read(fixed), held.blanks))
+        return call(**self._read({k: request.params[k] for k in held.blanks}))
+
+    def _read(self, values: dict[str, Any]) -> dict[str, Any]:
+        """``values`` with the outputs and datasets they reference read."""
+        with self._changed:
+            values = map_refs(values, self._read_output)
+        return map_refs(values, self._datasets.read)
 
     def _read_output(self, ref: OutputRef | DatasetRef) -> Any:
         """The value of an output; a dataset is read later, outside the lock."""
@@ -300,6 +348,7 @@ class Backend:
                 }
             )
             self._waiting.pop(finished_id, None)
+            self._through.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
                 inputs = self._waiting.get(dependent)
                 if inputs is None:  # finished meanwhile
@@ -313,6 +362,28 @@ class Backend:
                     del self._waiting[dependent]
                     self._executor.submit(self._run, dependent)
         self._changed.notify_all()
+
+    # Sessions
+
+    def open_session(self) -> str:
+        session = uuid.uuid4().hex
+        with self._changed:
+            self._sessions[session] = set()
+        return session
+
+    def hold(self, session: str, blanks: tuple[str, ...]) -> str:
+        """Hold a stage with ``blanks`` in the session; its first call stages it."""
+        holder = uuid.uuid4().hex
+        with self._changed:
+            self._sessions[session].add(holder)
+            self._held[holder] = _Held(blanks)
+        return holder
+
+    def close_session(self, session: str) -> None:
+        """Release the session's holders; requests through them run in full."""
+        with self._changed:
+            for holder in self._sessions.pop(session):
+                del self._held[holder]
 
     # Queries and control, within one proposal
 

@@ -16,7 +16,8 @@ from typing import Any
 from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
-from .backend import Backend, Entry, Workflow
+from .backend import Backend, Entry
+from .bindings import Binding, Function
 from .datasets import DatasetSource
 from .records import Record, Request, SpecId, Status, SubmitError, map_refs
 from .sessions import Accumulator, Session, Stage
@@ -107,10 +108,11 @@ class Client:
         in the shape given. Under a label, the keys of a dict become the
         members of their records.
         """
+        holder = None
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params)
         elif isinstance(what, Stage):
-            what = what.request(params or {})
+            holder, what = what.id, what.request(params or {})
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
@@ -122,7 +124,7 @@ class Client:
         else:
             members = [member] * len(_items(what))
         entries = [
-            Entry(request, label=label, member=m, name=name)
+            Entry(request, label=label, member=m, name=name, holder=holder)
             for request, m, name in zip(
                 _numbered(_items(what)), members, _names(what), strict=True
             )
@@ -153,7 +155,7 @@ class Client:
         """
         if where not in (None, 'local'):
             raise NotImplementedError(f'sessions {where!r}')
-        return Session(where)
+        return Session(self._backend, where)
 
     # Reading
 
@@ -211,7 +213,7 @@ def local(
     *,
     proposal: str,
     datasets: DatasetSource,
-    bind: Mapping[WorkflowSpec, Workflow],
+    bind: Mapping[WorkflowSpec, Binding | Function],
     submitter: str = 'user',
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Client:

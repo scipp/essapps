@@ -7,37 +7,44 @@ A holder never changes what a record says: a call through a stage makes the
 record of the filled template, and computing an accumulator makes the record
 of its accumulator spec over the elements pushed so far.
 
-These holders keep their definition, not computed values: every call computes
-the full request. Keeping values in memory, so that the next call computes
-less, needs ``sciline.Stage`` and ``sciline.Accumulator`` behind the bound
-workflows, and changes no record.
+A stage is held in the backend, which keeps what its binding computed from
+the template's values. An accumulator keeps its elements, not their combined
+value, so every call combines all of them.
 """
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from ess.reduce.spec import OutputRef
 
 from .accumulators import AccumulatorSpec
 from .records import Record, Request, Template
 
+if TYPE_CHECKING:
+    from .backend import Backend
+
 
 class Session:
     """A lifetime for holders; ending it releases them."""
 
-    def __init__(self, where: str | None = None) -> None:
+    def __init__(self, backend: Backend, where: str | None = None) -> None:
         self.where = where
         self.open = True
+        self._backend = backend
+        self._id = backend.open_session()
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.open = False
+        self._backend.close_session(self._id)
 
     def stage(self, template: Template) -> Stage:
-        return Stage(self, template)
+        if not self.open:
+            raise RuntimeError('this session has ended')
+        return Stage(self, template, self._backend.hold(self._id, template.blanks))
 
     def accumulator(self, spec: AccumulatorSpec) -> Accumulator:
         if not isinstance(spec, AccumulatorSpec):
@@ -55,11 +62,16 @@ class _Holder:
 
 
 class Stage(_Holder):
-    """A template held in a session; a call fills its blanks."""
+    """
+    A template held in a session; a call fills its blanks.
 
-    def __init__(self, session: Session, template: Template) -> None:
+    ``id`` names the held stage in the backend.
+    """
+
+    def __init__(self, session: Session, template: Template, holder: str) -> None:
         super().__init__(session)
         self.template = template
+        self.id = holder
 
     def request(self, values: dict[str, Any]) -> Request:
         self._check_open()
