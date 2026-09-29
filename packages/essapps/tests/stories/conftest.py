@@ -320,6 +320,22 @@ def backend(datasets: FakeDatasets, clock: FakeClock) -> Iterator[Backend]:
 
 
 @pytest.fixture
+def upgrade(
+    datasets: FakeDatasets, clock: FakeClock
+) -> Iterator[Callable[..., Client]]:
+    """A client of a new backend that offers only the given toy specs."""
+    backends: list[Backend] = []
+
+    def upgrade(specs: list[WorkflowSpec]) -> Client:
+        backends.append(Backend(datasets, {s: TOYS[s] for s in specs}, clock=clock))
+        return Client(backends[-1], proposal='p1', submitter='anna')
+
+    yield upgrade
+    for backend in backends:
+        backend.close()
+
+
+@pytest.fixture
 def connect(backend: Backend) -> Callable[..., Client]:
     """A new client of the same backend, by default for proposal p1."""
 

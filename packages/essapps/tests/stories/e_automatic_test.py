@@ -4,19 +4,19 @@
 
 # ruff: noqa: F821
 
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
 
-from ess.apps import Client
+from ess.apps import Client, Rule, Selector, Template, TriggerLoop
 from ess.apps.testing import FakeDatasets
 
-from .conftest import IOFQ, STITCH, Measure
+from .conftest import IOFQ, IOFQ_V2, STITCH, Measure
 
-NO_LOOP = 'rules and the trigger loop are not implemented'
+NO_PUBLISH = 'publication is not implemented'
 
 
-@pytest.mark.xfail(reason=NO_LOOP)
 def test_e1_series_grows_reduction_follows(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -51,9 +51,8 @@ def test_e1_series_grows_reduction_follows(
     ]
 
 
-@pytest.mark.xfail(reason=NO_LOOP)
 def test_e2_automatic_reduction_goes_quiet(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    upgrade: Callable[..., Client], measure: Measure, datasets: FakeDatasets
 ) -> None:
     rule = Rule(
         'auto-iofq',
@@ -61,15 +60,15 @@ def test_e2_automatic_reduction_goes_quiet(
         selector=Selector(role='sample'),
         label='iofq',
     )
-    loop = TriggerLoop(client, datasets, rules=[rule])
-    upgrade(specs=[IOFQ_V2])
+    upgraded = upgrade(specs=[IOFQ_V2])  # a backend without version 1
+    loop = TriggerLoop(upgraded, datasets, rules=[rule])
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == []
-    assert loop.status(rule).reason == 'unknown spec sans-iofq version 1'
+    assert loop.status(rule).reason == 'unknown spec sans-iofq/v1'
 
 
-@pytest.mark.xfail(reason=NO_LOOP)
+@pytest.mark.xfail(reason=NO_PUBLISH)
 def test_e3_reduction_of_our_own_output(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -88,7 +87,6 @@ def test_e3_reduction_of_our_own_output(
     assert loop.step() == []
 
 
-@pytest.mark.xfail(reason=NO_LOOP)
 def test_e4_template_improved_during_a_beamtime(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:

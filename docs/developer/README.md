@@ -292,7 +292,7 @@ with client.session() as session:
 
 ## Batch and automatic reduction
 
-This sub-design builds on the core and needs from it only that records show their label and member, and a dataset source.
+This sub-design builds on the core and needs from it only that records show their label and member, and a dataset source. It is described in [automatic-reduction.md](automatic-reduction.md).
 
 A **rule** is plain data: a template, a selector, and a label.
 A lookup fills a blank per dataset, such as the can measured most recently before a sample.

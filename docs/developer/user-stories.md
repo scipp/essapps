@@ -46,7 +46,7 @@ It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a da
 `folder` is a directory with files that hold counts, as `measure` datasets do.
 `clock` is a fake clock the backend reads; `crash()` ends the notebook's process without cleanup.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` replaces the backend's workflow packages: the specs it offers and the software versions its records name.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets: the specs it offers and the software versions its records name.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use these:
@@ -689,12 +689,12 @@ Actor: instrument operator. Goal: after an upgrade removed the template's spec v
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
             label='iofq')
-loop = TriggerLoop(client, datasets, rules=[rule])
-upgrade(specs=[IOFQ_V2])                                       # version 1 is gone
+upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
+loop = TriggerLoop(upgraded, datasets, rules=[rule])
 measure(1, [1.0, 1.0], role='sample')
 
 assert loop.step() == []
-assert loop.status(rule).reason == 'unknown spec sans-iofq version 1'
+assert loop.status(rule).reason == 'unknown spec sans-iofq/v1'
 ```
 
 ### E3. Reduction of our own output

@@ -4,10 +4,11 @@
 
 from .accumulators import SUM, accumulator_spec, combine
 from .backend import Backend, Workflow
-from .batch import apply
+from .batch import LastBefore, Lookup, apply
 from .client import Client, Provenance, local
 from .datasets import DatasetSource, Selector, dataset
 from .records import Failure, Record, Request, SpecId, Status, SubmitError, Template
+from .rules import Rule, RuleStatus, TriggerLoop
 from .sessions import Accumulator, Session, Stage
 
 __all__ = [
@@ -17,9 +18,13 @@ __all__ = [
     'Client',
     'DatasetSource',
     'Failure',
+    'LastBefore',
+    'Lookup',
     'Provenance',
     'Record',
     'Request',
+    'Rule',
+    'RuleStatus',
     'Selector',
     'Session',
     'SpecId',
@@ -27,6 +32,7 @@ __all__ = [
     'Status',
     'SubmitError',
     'Template',
+    'TriggerLoop',
     'Workflow',
     'accumulator_spec',
     'apply',

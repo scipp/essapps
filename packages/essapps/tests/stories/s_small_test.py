@@ -2,12 +2,17 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section S of docs/developer/user-stories.md: small stories, one concept each."""
 
-# ruff: noqa: F821
-
-import pytest
 import scipp as sc
 
-from ess.apps import Client, Request, Selector, Template, apply
+from ess.apps import (
+    Client,
+    LastBefore,
+    Lookup,
+    Request,
+    Selector,
+    Template,
+    apply,
+)
 from ess.apps.testing import FakeDatasets
 
 from .conftest import (
@@ -94,7 +99,6 @@ def test_s6_sum_sample_runs_and_background_runs(
     assert result.request.datasets() == samples + backgrounds
 
 
-@pytest.mark.xfail(reason='lookups are not implemented')
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
