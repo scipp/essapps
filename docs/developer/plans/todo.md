@@ -2,24 +2,15 @@
 
 ## Next steps, in order
 
-1. Rewrite the user stories against `proposals/core-api.md` (next section).
-   Findings go back into `core-api.md`.
+1. Decide the findings at the end of `user-stories.md` and fold the decisions into `core-api.md` and the stories.
 2. Promote `core-api.md` to `docs/developer/README.md`; retire `plans/restart.md` and `proposals/accumulating-inputs-draft.md`.
 3. Implement, with the API-tier story tests as the acceptance suite.
    Records, execution, and references first, then stages and sessions, then accumulators.
 
 ## User stories
 
-- Rewrite the stories of `core-old` against `proposals/core-api.md`.
-  Toy specs must be reductions that take runs directly.
-  The old stories chain `LOAD` into nearly everything; outside a session that writes the loaded events and reads them back.
-  A separate record is only for a result worth keeping by itself: a beam centre, a vanadium, a contribution.
-  Avoiding reloads while tuning is the stage's job.
-- Split the stories into two tiers:
-  - API tier: checks observe values, provenance, labels, and errors only.
-  - System tier: checks observe cost, placement, persistence, and operations.
-  A story with both, such as B2 (right sum, and adding costs about one run) or D7 (volume so far, and one node per run), is split.
-- System-tier stories get an actor, a goal, and the property to check, but no code until the system document exists.
+- `user-stories.md` (API tier) and `system-stories.md` (system tier) are written against `core-api.md`.
+- System-tier stories get code once a system document exists.
 
 ## Core API proposal
 
