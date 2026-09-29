@@ -11,27 +11,56 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from typing import Any, TypeVar
+from typing import Any
 
-from ess.reduce.spec import DatasetRef, WorkflowSpec
+from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
-from .backend import Backend, Workflow
+from .backend import Backend, Entry, Workflow
 from .datasets import DatasetSource
-from .records import Record, Request, SpecId, Status
+from .records import Record, Request, SpecId, Status, SubmitError, map_refs
 from .sessions import Accumulator, Session, Stage
 
-T = TypeVar('T')
-U = TypeVar('U')
 
-
-def _each(what: Any, fn: Callable[[list[T]], list[U]]) -> Any:
-    """Apply ``fn`` to the items of a single item, a list, or a dict; keep the shape."""
+def _items(what: Any) -> list[Any]:
+    """The items of one item, a list, a tuple, or a dict."""
     if isinstance(what, Mapping):
-        return dict(zip(what, fn(list(what.values())), strict=True))
+        return list(what.values())
     if isinstance(what, list | tuple):
-        return fn(list(what))
-    return fn([what])[0]
+        return list(what)
+    return [what]
+
+
+def _reshape(what: Any, items: list[Any]) -> Any:
+    """``items`` in the shape of ``what``."""
+    if isinstance(what, Mapping):
+        return dict(zip(what, items, strict=True))
+    if isinstance(what, list | tuple):
+        return type(what)(items)
+    return items[0]
+
+
+def _names(what: Any) -> list[str | None]:
+    """How each item of ``what`` is named in messages: its key or its index."""
+    if isinstance(what, Mapping):
+        return [str(key) for key in what]
+    if isinstance(what, list | tuple):
+        return [f'[{i}]' for i in range(len(what))]
+    return [None]
+
+
+def _numbered(requests: list[Request]) -> list[Request]:
+    """The requests with references to each other rewritten as ``@<index>``."""
+    index = {r.placeholder: f'@{i}' for i, r in enumerate(requests)}
+    if len(index) != len(requests):
+        raise SubmitError('a request appears twice in one submission')
+
+    def renumber(ref: Any) -> Any:
+        if isinstance(ref, OutputRef) and ref.record in index:
+            return OutputRef(record=index[ref.record], output=ref.output, key=ref.key)
+        return ref
+
+    return [Request(r.spec, map_refs(r.params, renumber)) for r in requests]
 
 
 class Provenance(BaseModel, frozen=True):
@@ -82,21 +111,26 @@ class Client:
             what = Request(what, params)
         elif isinstance(what, Stage):
             what = what.request(params or {})
+        elif params is not None:
+            raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
             what = what.request()
-        elif params is not None:
-            raise TypeError('params go with a spec or a stage, not with requests')
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
-            entries = [(r, label, key if label else None) for key, r in what.items()]
+            members = [str(k) if label is not None else None for k in what]
         else:
-            requests = what if isinstance(what, list | tuple) else [what]
-            entries = [(r, label, member) for r in requests]
+            members = [member] * len(_items(what))
+        entries = [
+            Entry(request, label=label, member=m, name=name)
+            for request, m, name in zip(
+                _numbered(_items(what)), members, _names(what), strict=True
+            )
+        ]
         records = self._backend.submit(
             entries, proposal=self.proposal, submitter=self.submitter
         )
-        return _each(what, lambda _: records)
+        return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
         """Submit and wait."""
@@ -104,15 +138,12 @@ class Client:
 
     def wait(self, records: Any) -> Any:
         """The records once finished; a failed record is returned, not raised."""
-        return _each(records, lambda rs: self._backend.wait(r.id for r in rs))
+        ids = [r.id for r in _items(records)]
+        return _reshape(records, self._backend.wait(ids, self.proposal))
 
     def cancel(self, records: Any) -> None:
-        """Cancel the records that have not started."""
-        if isinstance(records, Mapping):
-            records = list(records.values())
-        elif not isinstance(records, list | tuple):
-            records = [records]
-        self._backend.cancel(r.id for r in records)
+        """End the unfinished records as cancelled."""
+        self._backend.cancel([r.id for r in _items(records)], self.proposal)
 
     def session(self, where: str | None = None) -> Session:
         """
@@ -127,10 +158,10 @@ class Client:
     # Reading
 
     def output(self, record: Record, name: str) -> Any:
-        (record,) = self._backend.wait([record.id])
+        (record,) = self._backend.wait([record.id], self.proposal)
         if record.status is not Status.COMPLETED:
             raise RuntimeError(f'record {record.id} {record.status}: {record.failure}')
-        return self._backend.output(record.id, name)
+        return self._backend.output(record.id, name, self.proposal)
 
     def records(
         self,
@@ -166,14 +197,14 @@ class Client:
         return sorted({r.label for r in self.records() if r.label is not None})
 
     def provenance(self, record: Record) -> Provenance:
-        upstream: list[Record] = []
+        upstream: dict[str, Record] = {}
         todo = [ref.record for ref in record.request.refs()]
         while todo:
-            read = self._backend.record(todo.pop(0))
-            if read not in upstream:
-                upstream.append(read)
-                todo.extend(ref.record for ref in read.request.refs())
-        return Provenance(request=record.request, upstream=tuple(upstream))
+            record_id = todo.pop(0)
+            if record_id not in upstream:
+                upstream[record_id] = self._backend.record(record_id, self.proposal)
+                todo.extend(ref.record for ref in upstream[record_id].request.refs())
+        return Provenance(request=record.request, upstream=tuple(upstream.values()))
 
 
 def local(

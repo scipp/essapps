@@ -11,17 +11,34 @@ it finishes, and a finished record never changes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec, walk_refs
+from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, walk_refs
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubmitError(ValueError):
     """A request that cannot run, refused before any record exists."""
+
+
+def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
+    """``value`` with each reference in dicts and lists replaced by ``fn(ref)``."""
+    if (ref := as_ref(value)) is not None:
+        return fn(ref)
+    if isinstance(value, dict):
+        return {k: map_refs(v, fn) for k, v in value.items()}
+    if isinstance(value, list):
+        return [map_refs(v, fn) for v in value]
+    return value
+
+
+def output_refs(value: Any) -> list[OutputRef]:
+    """The references to outputs in ``value``."""
+    return [ref for _, ref in walk_refs(value) if isinstance(ref, OutputRef)]
 
 
 class SpecId(BaseModel, frozen=True):
@@ -55,12 +72,9 @@ class Request(BaseModel, frozen=True):
     params: dict[str, Any] = Field(default_factory=dict)
 
     def __init__(
-        self,
-        spec: WorkflowSpec | SpecId,
-        params: dict[str, Any] | None = None,
-        **data: Any,
+        self, spec: WorkflowSpec | SpecId, params: dict[str, Any] | None = None
     ) -> None:
-        super().__init__(spec=SpecId.of(spec), params=params or {}, **data)
+        super().__init__(spec=SpecId.of(spec), params=params or {})
 
     @property
     def placeholder(self) -> str:
@@ -72,7 +86,7 @@ class Request(BaseModel, frozen=True):
 
     def refs(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
-        return [ref for _, ref in walk_refs(self.params) if isinstance(ref, OutputRef)]
+        return output_refs(self.params)
 
     def datasets(self) -> list[DatasetRef]:
         """The datasets this request names directly."""
@@ -89,12 +103,13 @@ class Template:
     ``dataclasses.replace``.
     """
 
-    spec: WorkflowSpec | SpecId
+    spec: SpecId
     params: dict[str, Any] = field(default_factory=dict)
     blanks: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         kept = {k: v for k, v in self.params.items() if k not in self.blanks}
+        object.__setattr__(self, 'spec', SpecId.of(self.spec))
         object.__setattr__(self, 'params', kept)
 
     def fill(self, values: dict[str, Any]) -> Request:

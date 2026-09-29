@@ -65,7 +65,7 @@ def test_e2_automatic_reduction_goes_quiet(
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == []
-    assert loop.status(rule).reason == 'unknown spec sans-iofq/v1'
+    assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'
 
 
 @pytest.mark.xfail(reason=NO_PUBLISH)

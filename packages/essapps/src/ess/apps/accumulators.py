@@ -15,28 +15,49 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Annotated, Any, Self
 
 from ess.reduce.spec import WorkflowSpec
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, create_model, model_validator
 
 
-def accumulator_spec(
-    name: str, version: int, element: type[BaseModel], *, description: str = ''
-) -> WorkflowSpec:
+class _Lists(BaseModel):
+    """Params of an accumulator spec: position i of each list is one element."""
+
+    @model_validator(mode='after')
+    def _same_length(self) -> Self:
+        lengths = {len(getattr(self, name)) for name in type(self).model_fields}
+        if len(lengths) != 1 or lengths == {0}:
+            raise ValueError(
+                'every field needs the same number of elements, at least 1'
+            )
+        return self
+
+
+def _lists(element: type[BaseModel]) -> type[BaseModel]:
+    fields: dict[str, Any] = {
+        name: (list[Annotated[info.annotation, *info.metadata]], ...)
+        for name, info in element.model_fields.items()
+    }
+    return create_model(f'{element.__name__}Lists', __base__=_Lists, **fields)
+
+
+class AccumulatorSpec(WorkflowSpec, frozen=True):
     """A spec whose params are one list per field of ``element``, combined into one."""
-    params = create_model(
-        f'{element.__name__}Lists',
-        **{f: (list[info.annotation], ...) for f, info in element.model_fields.items()},  # type: ignore[call-overload,name-defined]
-    )
-    return WorkflowSpec(
-        name=name,
-        version=version,
-        title=name,
-        description=description or f'combines lists of {element.__name__}',
-        params=params,
-        outputs=element,
-    )
+
+    element: type[BaseModel]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _derive(cls, data: dict[str, Any]) -> dict[str, Any]:
+        element = data['element']
+        return {
+            'title': data['name'],
+            'description': f'combines lists of {element.__name__}',
+            'params': _lists(element),
+            'outputs': element,
+            **data,
+        }
 
 
 def combine(operation: Callable[[Any, Any], Any]) -> Callable[..., Mapping[str, Any]]:
@@ -56,10 +77,12 @@ class GenericAccumulator:
         self.version = version
 
     @functools.cache  # noqa: B019 - one spec per element; generic accumulators live forever
-    def of(self, element: type[BaseModel]) -> WorkflowSpec:
+    def of(self, element: type[BaseModel]) -> AccumulatorSpec:
         """The accumulator spec for ``element``; its name names the element model."""
-        return accumulator_spec(
-            f'{self.name}[{element.__name__}]', self.version, element
+        return AccumulatorSpec(
+            name=f'{self.name}[{element.__name__}]',
+            version=self.version,
+            element=element,
         )
 
 

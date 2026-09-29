@@ -694,7 +694,7 @@ loop = TriggerLoop(upgraded, datasets, rules=[rule])
 measure(1, [1.0, 1.0], role='sample')
 
 assert loop.step() == []
-assert loop.status(rule).reason == 'unknown spec sans-iofq/v1'
+assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
 ```
 
 ### E3. Reduction of our own output

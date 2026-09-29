@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Framework for ESS data-reduction applications."""
 
-from .accumulators import SUM, accumulator_spec, combine
+from .accumulators import SUM, AccumulatorSpec, combine
 from .backend import Backend, Workflow
 from .batch import LastBefore, Lookup, apply
 from .client import Client, Provenance, local
@@ -14,6 +14,7 @@ from .sessions import Accumulator, Session, Stage
 __all__ = [
     'SUM',
     'Accumulator',
+    'AccumulatorSpec',
     'Backend',
     'Client',
     'DatasetSource',
@@ -34,7 +35,6 @@ __all__ = [
     'Template',
     'TriggerLoop',
     'Workflow',
-    'accumulator_spec',
     'apply',
     'combine',
     'dataset',

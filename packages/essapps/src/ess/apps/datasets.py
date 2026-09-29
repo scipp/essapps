@@ -38,11 +38,21 @@ class Selector:
     """
 
     def __init__(self, kind: str = 'raw', **fields: Any) -> None:
-        self.fields = {'kind': kind, **fields}
+        self._fields = tuple(sorted({'kind': kind, **fields}.items()))
+
+    @property
+    def fields(self) -> dict[str, Any]:
+        return dict(self._fields)
 
     def matches(self, metadata: dict[str, Any]) -> bool:
         metadata = {'kind': 'raw', **metadata}
-        return all(metadata.get(k) == v for k, v in self.fields.items())
+        return all(metadata.get(k) == v for k, v in self._fields)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Selector) and self._fields == other._fields
+
+    def __hash__(self) -> int:
+        return hash(self._fields)
 
     def __repr__(self) -> str:
         return f'Selector({self.fields})'
@@ -65,7 +75,12 @@ class DatasetSource(Protocol):
         ...
 
     def metadata(self, ref: DatasetRef) -> dict[str, Any]:
-        """The dataset's current metadata."""
+        """
+        The dataset's current metadata.
+
+        The field ``proposal`` names the proposal whose requests may read the
+        dataset; a dataset without it, such as published data, is open to all.
+        """
         ...
 
     def list(self, selector: Selector) -> list[DatasetRef]:

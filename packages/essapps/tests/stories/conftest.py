@@ -21,7 +21,7 @@ import scipp as sc
 from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import SUM, Backend, Client, accumulator_spec, combine
+from ess.apps import SUM, AccumulatorSpec, Backend, Client, combine
 from ess.apps.testing import FakeDatasets
 
 
@@ -206,7 +206,9 @@ class NormalizationParts(BaseModel):
     denominator: Array()  # type: ignore[valid-type]
 
 
-PARTS_SUM = accumulator_spec('sans-parts-sum', 1, NormalizationParts)
+PARTS_SUM = AccumulatorSpec(
+    name='sans-parts-sum', version=1, element=NormalizationParts
+)
 
 
 class Counts(BaseModel):

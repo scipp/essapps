@@ -41,6 +41,7 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
 
 LOAD = _spec('load', RunParams)
 ADD = _spec('add', AddParams)
+NOTHING = _spec('nothing', RunParams)  # its workflow returns no outputs
 
 
 class Gate:
@@ -75,7 +76,7 @@ def datasets() -> FakeDatasets:
 
 @pytest.fixture
 def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
-    backend = Backend(datasets, {LOAD: gate.load, ADD: add})
+    backend = Backend(datasets, {LOAD: gate.load, ADD: add, NOTHING: lambda run: {}})
     yield backend
     gate.open.set()
     backend.close()
@@ -187,3 +188,64 @@ def test_reading_an_output_of_a_failed_record_raises(
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match="'scale'"):
         client.submit(LOAD, {'run': dataset(run=1), 'scale': 2.0})
+
+
+def test_a_workflow_that_leaves_out_an_output_fails(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    nothing = Request(NOTHING, {'run': dataset(run=1)})
+    reader = Request(ADD, {'a': nothing.ref('value'), 'b': nothing.ref('value')})
+
+    nothing, reader = client.compute([nothing, reader])
+    assert "missing ['value']" in nothing.failure.message
+    assert reader.failure.message == f'input {nothing.id} failed'
+
+
+def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
+    chain = [load(3)]
+    for _ in range(1500):
+        chain.append(
+            Request(ADD, {'a': chain[-1].ref('value'), 'b': chain[0].ref('value')})
+        )
+    records = client.submit(chain)
+    gate.open.set()
+
+    assert {r.status for r in client.wait(records)} == {Status.FAILED}
+
+
+def test_the_same_request_twice_is_refused(client: Client) -> None:
+    a = load(1)
+
+    with pytest.raises(SubmitError, match='twice'):
+        client.submit([a, a])
+
+
+def test_a_reference_to_an_element_of_an_output_is_refused(client: Client) -> None:
+    a = load(1)
+    element = {'record': a.placeholder, 'output': 'value', 'key': '0'}
+
+    with pytest.raises(SubmitError, match='element'):
+        client.submit([a, Request(ADD, {'a': element, 'b': a.ref('value')})])
+
+
+def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
+    running = client.submit(load(1))
+    client.cancel(running)
+    gate.open.set()
+
+    (cancelled,) = client.wait([running])
+    assert cancelled.status is Status.CANCELLED
+    with pytest.raises(RuntimeError, match='cancelled'):
+        client.output(cancelled, 'value')
+
+
+def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    failed = client.compute(load(3))
+
+    with pytest.raises(SubmitError, match=f'a: record {failed.id} failed'):
+        client.submit(ADD, {'a': failed.ref('value'), 'b': failed.ref('value')})
+
+
+def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^second: run: unknown dataset run:9$'):
+        client.submit({'first': load(1), 'second': load(9)})

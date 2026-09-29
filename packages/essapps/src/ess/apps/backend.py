@@ -14,35 +14,27 @@ import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ess.reduce.spec import (
-    DataField,
-    DatasetRef,
-    OutputRef,
-    WorkflowSpec,
-    as_ref,
-    data_fields,
-)
+from ess.reduce.spec import DataField, DatasetRef, OutputRef, WorkflowSpec, data_fields
 from pydantic import ValidationError
 
 from .datasets import DatasetSource
-from .records import Failure, Record, Request, SpecId, Status, SubmitError
+from .records import (
+    Failure,
+    Record,
+    Request,
+    SpecId,
+    Status,
+    SubmitError,
+    map_refs,
+    output_refs,
+)
 
 Workflow = Callable[..., Mapping[str, Any]]
 """A bound workflow: takes parameter values, with data read, and returns outputs."""
-
-
-def _map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
-    """``value`` with every reference in it replaced by ``fn(reference)``."""
-    if (ref := as_ref(value)) is not None:
-        return fn(ref)
-    if isinstance(value, dict):
-        return {k: _map_refs(v, fn) for k, v in value.items()}
-    if isinstance(value, list | tuple):
-        return [_map_refs(v, fn) for v in value]
-    return value
 
 
 def _agree(output: DataField, param: DataField) -> bool:
@@ -50,6 +42,25 @@ def _agree(output: DataField, param: DataField) -> bool:
     if output.format != param.format:
         return False
     return output.array is None or param.array is None or output.array == param.array
+
+
+@dataclass(frozen=True)
+class Entry:
+    """
+    A request of a submission, with its label and member.
+
+    ``name`` says where the request came from in the call, a key or an index,
+    and prefixes the reasons it is refused. A reference to the record ``@<i>``
+    names the record the i-th entry becomes.
+    """
+
+    request: Request
+    label: str | None = None
+    member: str | None = None
+    name: str | None = None
+
+    def refused(self, error: SubmitError) -> SubmitError:
+        return SubmitError(f'{self.name}: {error}' if self.name else str(error))
 
 
 class Backend:
@@ -62,18 +73,22 @@ class Backend:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._datasets = datasets
-        self._specs = {SpecId.of(spec): spec for spec in bind}
-        self._output_fields = {
-            SpecId.of(spec): data_fields(spec.outputs) for spec in bind
-        }
+        self._specs: dict[SpecId, WorkflowSpec] = {}
+        for spec in bind:
+            if (spec_id := SpecId.of(spec)) in self._specs:
+                raise ValueError(f'two specs are bound as {spec_id}')
+            self._specs[spec_id] = spec
         self._workflows = {SpecId.of(spec): fn for spec, fn in bind.items()}
+        self._output_fields = {
+            spec_id: data_fields(spec.outputs) for spec_id, spec in self._specs.items()
+        }
         self._clock = clock
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
         self._records: dict[str, Record] = {}
         self._outputs: dict[tuple[str, str], Any] = {}
         self._waiting: dict[str, set[str]] = {}
-        self._started: set[str] = set()
+        self._dependents: dict[str, set[str]] = {}
 
     def close(self) -> None:
         self._executor.shutdown(wait=True)
@@ -87,138 +102,162 @@ class Backend:
     # Submission
 
     def submit(
-        self,
-        entries: list[tuple[Request, str | None, str | None]],
-        *,
-        proposal: str,
-        submitter: str,
+        self, entries: list[Entry], *, proposal: str, submitter: str
     ) -> list[Record]:
         """
         Check every request, then create a pending record for each.
 
-        ``entries`` are requests with their label and member. If one request
-        is refused, none is submitted.
+        If one request is refused, none is submitted. Dataset names are
+        resolved before the backend's lock is taken.
         """
+        ids = [uuid.uuid4().hex for _ in entries]
+        prepared = [self._prepare(e, ids, proposal) for e in entries]
+        submitted = {i: r.spec for i, r in zip(ids, prepared, strict=True)}
         with self._changed:
-            ids = {req.placeholder: uuid.uuid4().hex[:12] for req, _, _ in entries}
-            specs = {ids[req.placeholder]: self.spec(req.spec) for req, _, _ in entries}
-            checked = [self._check(req, ids, specs, proposal) for req, _, _ in entries]
-            records = []
-            for (request, label, member), filled in zip(entries, checked, strict=True):
-                record_id = ids[request.placeholder]
-                records.append(
-                    Record(
-                        id=record_id,
-                        request=filled,
-                        proposal=proposal,
-                        submitter=submitter,
-                        created=self._clock(),
-                        outputs=tuple(specs[record_id].outputs.model_fields),
-                        label=label,
-                        member=member,
-                    )
+            for entry, request in zip(entries, prepared, strict=True):
+                self._check_reads(entry, request, submitted, proposal)
+            records = [
+                Record(
+                    id=record_id,
+                    request=request,
+                    proposal=proposal,
+                    submitter=submitter,
+                    created=self._clock(),
+                    outputs=tuple(self._specs[request.spec].outputs.model_fields),
+                    label=entry.label,
+                    member=entry.member,
                 )
+                for record_id, entry, request in zip(
+                    ids, entries, prepared, strict=True
+                )
+            ]
             self._records.update((r.id, r) for r in records)
             for record in records:
                 self._schedule(record.id)
             return [self._records[r.id] for r in records]
 
-    def _check(
-        self,
-        request: Request,
-        ids: Mapping[str, str],
-        specs: Mapping[str, WorkflowSpec],
-        proposal: str,
-    ) -> Request:
-        """The request with references resolved and defaults filled."""
-        spec = self.spec(request.spec)
-        param_fields = data_fields(spec.params)
+    def _prepare(self, entry: Entry, ids: list[str], proposal: str) -> Request:
+        """The request with names resolved and defaults filled; needs no lock."""
+        request = entry.request
+        try:
+            spec = self.spec(request.spec)
+            unknown = set(request.params) - set(spec.params.model_fields)
+            if unknown:
+                raise SubmitError(
+                    f'{sorted(unknown)}: not parameters of {request.spec}'
+                )
+            params = {
+                field: map_refs(value, self._resolver(field, ids, proposal))
+                for field, value in request.params.items()
+            }
+            try:
+                model = spec.params.model_validate(params)
+            except ValidationError as error:
+                problems = '; '.join(
+                    f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
+                    for e in error.errors()
+                )
+                raise SubmitError(f'{request.spec}: {problems}') from None
+        except SubmitError as error:
+            raise entry.refused(error) from None
+        values = {f: getattr(model, f) for f in type(model).model_fields}
+        return Request(request.spec, values)
 
+    def _resolver(
+        self, field: str, ids: list[str], proposal: str
+    ) -> Callable[[OutputRef | DatasetRef], OutputRef | DatasetRef]:
         def resolve(ref: OutputRef | DatasetRef) -> OutputRef | DatasetRef:
             if isinstance(ref, DatasetRef):
                 try:
                     identity = self._datasets.resolve(ref)
                 except KeyError:
-                    raise SubmitError(f'unknown dataset {ref}') from None
+                    raise SubmitError(f'{field}: unknown dataset {ref}') from None
                 owner = self._datasets.metadata(identity).get('proposal', proposal)
                 if owner != proposal:
-                    raise SubmitError(f'dataset {ref} belongs to proposal {owner}')
+                    raise SubmitError(
+                        f'{field}: dataset {ref} belongs to proposal {owner}'
+                    )
                 return identity
-            record_id = ids.get(ref.record, ref.record)
-            return OutputRef(record=record_id, output=ref.output, key=ref.key)
+            if ref.key is not None:
+                raise SubmitError(f'{field}: {ref} names an element of an output')
+            if not ref.record.startswith('@'):
+                return ref
+            index = ref.record[1:]
+            if not index.isdigit() or int(index) >= len(ids):
+                raise SubmitError(f'{field}: {ref} names a request not in this call')
+            return OutputRef(record=ids[int(index)], output=ref.output)
 
-        unknown = set(request.params) - set(spec.params.model_fields)
-        if unknown:
-            raise SubmitError(f'{sorted(unknown)}: not parameters of {request.spec}')
-        params = _map_refs(request.params, resolve)
-        for name, value in params.items():
-            for ref in _refs_in(value):
-                if isinstance(ref, OutputRef):
-                    self._check_output(ref, param_fields.get(name), specs, proposal)
-        try:
-            model = spec.params.model_validate(params)
-        except ValidationError as error:
-            problems = '; '.join(
-                f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors()
-            )
-            raise SubmitError(f'{request.spec}: {problems}') from None
-        values = {name: getattr(model, name) for name in type(model).model_fields}
-        return Request(request.spec, values)
+        return resolve
 
-    def _check_output(
+    def _check_reads(
         self,
-        ref: OutputRef,
-        field: DataField | None,
-        specs: Mapping[str, WorkflowSpec],
+        entry: Entry,
+        request: Request,
+        submitted: Mapping[str, SpecId],
         proposal: str,
     ) -> None:
-        if ref.record in specs:
-            spec_id = SpecId.of(specs[ref.record])
-        elif (record := self._records.get(ref.record)) is not None:
-            if record.proposal != proposal:
-                raise SubmitError(
-                    f'record {ref.record} belongs to proposal {record.proposal}'
-                )
-            spec_id = record.request.spec
-        else:
-            raise SubmitError(f'unknown record {ref.record}')
-        outputs = self._output_fields[spec_id]
-        if ref.output not in outputs:
-            raise SubmitError(f'{spec_id} has no output {ref.output!r}')
-        if field is not None and not _agree(outputs[ref.output], field):
-            raise SubmitError(f'{ref} does not fit the field it fills')
+        """Check the outputs a request reads; lock held."""
+        param_fields = data_fields(self._specs[request.spec].params)
+        try:
+            for field, value in request.params.items():
+                for ref in output_refs(value):
+                    spec_id = submitted.get(ref.record) or self._readable(
+                        ref, field, proposal
+                    )
+                    outputs = self._output_fields[spec_id]
+                    if ref.output not in outputs:
+                        raise SubmitError(
+                            f'{field}: {spec_id} has no output {ref.output!r}'
+                        )
+                    target = param_fields.get(field)
+                    if target is not None and not _agree(outputs[ref.output], target):
+                        raise SubmitError(f'{field}: {ref} does not fit the field')
+        except SubmitError as error:
+            raise entry.refused(error) from None
+
+    def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
+        """The spec of a record a request may read; lock held."""
+        record = self._records.get(ref.record)
+        if record is None:
+            raise SubmitError(f'{field}: unknown record {ref.record}')
+        if record.proposal != proposal:
+            raise SubmitError(
+                f'{field}: record {ref.record} belongs to proposal {record.proposal}'
+            )
+        if record.status in (Status.FAILED, Status.CANCELLED):
+            raise SubmitError(f'{field}: record {ref.record} {record.status}')
+        return record.request.spec
 
     # Execution
 
     def _schedule(self, record_id: str) -> None:
-        """Start the record if its inputs are done, or wait for them; lock held."""
+        """Start the record, or let it wait for its unfinished inputs; lock held."""
         inputs = {ref.record for ref in self._records[record_id].request.refs()}
-        for input_id in inputs:
-            status = self._records[input_id].status
-            if status.finished and status is not Status.COMPLETED:
-                self._finish(record_id, Status.FAILED, f'input {input_id} {status}')
-                return
         waiting = {i for i in inputs if not self._records[i].status.finished}
-        if waiting:
-            self._waiting[record_id] = waiting
-        else:
-            self._started.add(record_id)
+        if not waiting:
             self._executor.submit(self._run, record_id)
+            return
+        self._waiting[record_id] = waiting
+        for input_id in waiting:
+            self._dependents.setdefault(input_id, set()).add(record_id)
 
     def _run(self, record_id: str) -> None:
-        with self._changed:
-            request = self._records[record_id].request
-            if self._records[record_id].status.finished:
-                return
-            values = _map_refs(request.params, self._read_output)
         try:
-            values = _map_refs(values, self._datasets.read)
-            outputs = self._workflows[request.spec](**values)
+            with self._changed:
+                request = self._records[record_id].request
+                if self._records[record_id].status.finished:
+                    return
+                values = map_refs(request.params, self._read_output)
+            values = map_refs(values, self._datasets.read)
+            outputs = dict(self._workflows[request.spec](**values))
+            self._check_returned(request.spec, outputs)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
-                self._finish(record_id, Status.FAILED, str(error))
+                self._finish(record_id, Status.FAILED, str(error) or repr(error))
             return
         with self._changed:
+            if self._records[record_id].status.finished:  # cancelled while running
+                return
             for name, value in outputs.items():
                 self._outputs[(record_id, name)] = value
             self._finish(record_id, Status.COMPLETED)
@@ -227,70 +266,89 @@ class Backend:
         """The value of an output; a dataset is read later, outside the lock."""
         if isinstance(ref, DatasetRef):
             return ref
-        return self._outputs[(ref.record, ref.output)]
+        try:
+            return self._outputs[(ref.record, ref.output)]
+        except KeyError:
+            raise LookupError(
+                f'record {ref.record} has no output {ref.output}'
+            ) from None
+
+    def _check_returned(self, spec_id: SpecId, outputs: dict[str, Any]) -> None:
+        fields = self._specs[spec_id].outputs.model_fields
+        extra = set(outputs) - set(fields)
+        missing = {n for n, f in fields.items() if f.is_required()} - set(outputs)
+        if extra or missing:
+            raise ValueError(
+                f'the workflow of {spec_id} returned {sorted(outputs)}: '
+                f'missing {sorted(missing)}, not in the spec {sorted(extra)}'
+            )
 
     def _finish(
         self, record_id: str, status: Status, failure: str | None = None
     ) -> None:
         """Finish a record and start or fail what waits for it; lock held."""
-        record = self._records[record_id]
-        if record.status.finished:
-            return
-        self._records[record_id] = record.model_copy(
-            update={
-                'status': status,
-                'failure': None if failure is None else Failure(message=failure),
-            }
-        )
+        todo = [(record_id, status, failure)]
+        while todo:
+            finished_id, finished, reason = todo.pop()
+            record = self._records[finished_id]
+            if record.status.finished:
+                continue
+            self._records[finished_id] = record.model_copy(
+                update={
+                    'status': finished,
+                    'failure': None if reason is None else Failure(message=reason),
+                }
+            )
+            self._waiting.pop(finished_id, None)
+            for dependent in self._dependents.pop(finished_id, set()):
+                inputs = self._waiting.get(dependent)
+                if inputs is None:  # finished meanwhile
+                    continue
+                if finished is not Status.COMPLETED:
+                    reason = f'input {finished_id} {finished}'
+                    todo.append((dependent, Status.FAILED, reason))
+                    continue
+                inputs.discard(finished_id)
+                if not inputs:
+                    del self._waiting[dependent]
+                    self._executor.submit(self._run, dependent)
         self._changed.notify_all()
-        dependents = [w for w, inputs in self._waiting.items() if record_id in inputs]
-        for waiting_id in dependents:
-            inputs = self._waiting.get(waiting_id)
-            if inputs is None:  # failed meanwhile through another input
-                continue
-            if status is not Status.COMPLETED:
-                del self._waiting[waiting_id]
-                self._finish(waiting_id, Status.FAILED, f'input {record_id} {status}')
-                continue
-            inputs.discard(record_id)
-            if not inputs:
-                del self._waiting[waiting_id]
-                self._started.add(waiting_id)
-                self._executor.submit(self._run, waiting_id)
 
-    # Queries and control
+    # Queries and control, within one proposal
 
-    def wait(self, ids: Iterable[str]) -> list[Record]:
+    def _mine(self, record_id: str, proposal: str) -> Record:
+        record = self._records.get(record_id)
+        if record is None or record.proposal != proposal:
+            raise KeyError(f'no record {record_id} in proposal {proposal}')
+        return record
+
+    def wait(self, ids: Iterable[str], proposal: str) -> list[Record]:
         ids = list(ids)
         with self._changed:
+            for record_id in ids:
+                self._mine(record_id, proposal)
             self._changed.wait_for(
                 lambda: all(self._records[i].status.finished for i in ids)
             )
             return [self._records[i] for i in ids]
 
-    def cancel(self, ids: Iterable[str]) -> None:
-        """Cancel the records that have not started; those that have run to the end."""
+    def cancel(self, ids: Iterable[str], proposal: str) -> None:
+        """Cancel the unfinished records; a running workflow's outputs are dropped."""
         with self._changed:
             for record_id in ids:
-                if record_id not in self._started:
-                    self._waiting.pop(record_id, None)
-                    self._finish(record_id, Status.CANCELLED)
+                self._mine(record_id, proposal)
+                self._finish(record_id, Status.CANCELLED)
 
-    def record(self, record_id: str) -> Record:
+    def record(self, record_id: str, proposal: str) -> Record:
         with self._changed:
-            return self._records[record_id]
+            return self._mine(record_id, proposal)
 
     def records(self, proposal: str) -> list[Record]:
         """Every record of a proposal, oldest first."""
         with self._changed:
             return [r for r in self._records.values() if r.proposal == proposal]
 
-    def output(self, record_id: str, name: str) -> Any:
+    def output(self, record_id: str, name: str, proposal: str) -> Any:
         with self._changed:
-            return self._outputs[(record_id, name)]
-
-
-def _refs_in(value: Any) -> list[OutputRef | DatasetRef]:
-    found: list[OutputRef | DatasetRef] = []
-    _map_refs(value, found.append)
-    return found
+            self._mine(record_id, proposal)
+            return self._read_output(OutputRef(record=record_id, output=name))

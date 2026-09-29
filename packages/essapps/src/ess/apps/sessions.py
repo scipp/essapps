@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from typing import Any, Self
 
-from ess.reduce.spec import OutputRef, WorkflowSpec
+from ess.reduce.spec import OutputRef
 
+from .accumulators import AccumulatorSpec
 from .records import Record, Request, Template
 
 
@@ -38,7 +39,9 @@ class Session:
     def stage(self, template: Template) -> Stage:
         return Stage(self, template)
 
-    def accumulator(self, spec: WorkflowSpec) -> Accumulator:
+    def accumulator(self, spec: AccumulatorSpec) -> Accumulator:
+        if not isinstance(spec, AccumulatorSpec):
+            raise TypeError(f'{spec.name} is not an accumulator spec')
         return Accumulator(self, spec)
 
 
@@ -66,10 +69,10 @@ class Stage(_Holder):
 class Accumulator(_Holder):
     """The combination of the elements pushed into it, under an accumulator spec."""
 
-    def __init__(self, session: Session, spec: WorkflowSpec) -> None:
+    def __init__(self, session: Session, spec: AccumulatorSpec) -> None:
         super().__init__(session)
         self.spec = spec
-        self._fields = tuple(spec.outputs.model_fields)
+        self._fields = tuple(spec.element.model_fields)
         self._elements: list[dict[str, OutputRef]] = []
 
     def push(self, element: Record | dict[str, OutputRef]) -> None:
