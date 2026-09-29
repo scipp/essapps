@@ -5,11 +5,19 @@
 1. Implement the core, with the API-tier story tests as the acceptance suite.
    Done: requests, records, references, labels, templates, `apply`, the dataset source's queries, sessions with stages and accumulators, bindings.
    A binding is staged with the fixed values and returns a callable over the blanks (`bindings.py`); a plain function computes everything on each call, and `PipelineBinding` (`pipeline.py`) cuts a sciline pipeline with `sciline.Stage`.
-   Stages in a session hold what their binding computed; accumulators keep their elements but not their combined value, so every call combines all of them. D7 takes 10 s for this reason.
-2. Accumulators that keep their combined value in memory, so that D7's time drops. Same pattern as stages: every binding of an accumulator spec can accumulate, and a plain function falls back to combining all elements. Uses `sciline.Accumulator` for a sciline `Aggregation`.
-3. What a record says about software (proposed to Simon, not decided): a `software` mapping from name to string, filled by a pluggable recorder on the backend. Open points: the backend, not the binding, records where a binding came from (in-process or installed); a flat mapping may not be enough to recompute in a recorded environment later.
-4. Registration of installed bindings through entry points, together with the first real workflow (LoKI).
-5. The sub-design for provenance and publication, with its own document and stories. Batch and automatic reduction is done (`automatic-reduction.md`).
+   Stages live in the backend and keep what their binding computed; a request names its stage, which is checked at submission and kept until the requests through it have run.
+   Accumulators keep their elements but not their combined value. D7 takes 7 to 10 s, and the cause is not the arithmetic: every read of the accumulator makes a record that lists every element so far, so every layer does quadratic work.
+2. Decide how a growing accumulator is recorded: a chain of totals, array records, or a named list of elements (`proposals/array-records.md` and the questions in `handoff.md`). Then implement it, with D7's per-angle cuts as views if Simon agrees.
+3. The sub-design for provenance and publication, with its own document and stories. It waits for step 2, since it depends on what a record says about its inputs.
+4. After Simon's decisions in `handoff.md`: real workflows (LoKI, then Amor) with entry-point registration, or the system tier.
+
+Known quadratic paths, to fix with or after step 2: `TriggerLoop` reads every record under a rule's label on each step (an index by label, or one record per rule if array records are chosen); a series record lists every dataset so far.
+
+## Deferred
+
+- Retention: deleting records by age cuts the provenance of later records that read them, whether an accumulator's reads are flat or chained. A system rule such as "a record is kept while a kept record reads it" fixes it.
+
+- What a record says about software. An implementation detail that holds up nothing else. Proposed shape: a `software` mapping from name to string, filled by a pluggable recorder on the backend; the backend, not the binding, records where a binding came from (in-process or installed); a flat mapping may not be enough to recompute in a recorded environment later.
 
 ## User stories
 

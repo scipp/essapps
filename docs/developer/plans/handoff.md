@@ -1,14 +1,15 @@
-# Handoff: after implementing the core (2026-09-29)
+# Handoff
 
-This is the handoff for the next session on branch `core`. Read it first, then `docs/developer/README.md`, then `plans/todo.md`. Delete this file once its pending question is settled and folded into `todo.md`.
+A living document for the next session on branch `core`. Read it first, then `docs/developer/README.md`, then `plans/todo.md`. At the start of a session, ask Simon the questions under "Decisions to ask Simon"; fold his answers into the README or `todo.md` and remove them here. Update this file at the end of each session.
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Branch | `core`, checked out in `/workspace/essapps` (not pushed since `9c8bcbe`) |
+| Branch | `core`, checked out in `/workspace/essapps`; pushed to origin as a backup, not reviewed |
 | The API design | `docs/developer/README.md` (was `proposals/core-api.md`) |
-| API-tier stories | `docs/developer/user-stories.md`: 47 stories as client code; an "Open" section at the end |
+| API-tier stories | `docs/developer/user-stories.md`: 45 stories as client code; an "Open" section at the end |
+| Proposal awaiting decision | `docs/developer/proposals/array-records.md`: how a growing accumulator is recorded (array records against a chain of totals) |
 | System-tier stories | `docs/developer/system-stories.md`: actor, goal, property; no code yet |
 | Sub-design: batch and automatic reduction | `docs/developer/automatic-reduction.md` |
 | To-do list | `docs/developer/plans/todo.md` |
@@ -21,7 +22,7 @@ This is the handoff for the next session on branch `core`. Read it first, then `
 | ess.reduce workflow spec (ADR 0001) | `/workspace/ess`, branch `653-minimal-workflow-spec`, `packages/essreduce/src/ess/reduce/spec/` |
 
 Environment: `.venv` in the worktree, made with `python3 -m venv --system-site-packages .venv`, then `pip install -e /workspace/ess/packages/essreduce --no-deps` and `pip install -e 'packages/essapps[test]' --no-deps`.
-Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (55 pass, 11 strict xfails, about 11 s, of which story D7 takes 10 s).
+Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (62 pass, 11 strict xfails, about 11 s, of which story D7 takes 7 to 10 s).
 Lint: `ruff check . && ruff format .` (ruff from conda base; no pre-commit hooks are installed in this repository).
 
 ## How Simon wants to work
@@ -65,32 +66,76 @@ Done, with story tests passing:
 - Client: shapes, placeholders renumbered to `@<index>` before the backend sees them, labels, members, `records(since=, until=)`, provenance with `.datasets()` and `.records()`.
 - Templates, `apply`, lookups (`LastBefore`), rules with series, `TriggerLoop` (`step`, `status`, `run`), reading what it handled from the records under the rule's label.
 - Bindings (`bindings.py`, `pipeline.py`): every binding has `stage(fixed, blanks)`; a plain function computes everything on each call.
-- Sessions with stages and accumulators. Stages are held in the backend and keep what their binding computed. Accumulators keep their elements but not their combined value, so every call combines all of them. This is why D7 is slow and quadratic.
+- Sessions with stages and accumulators. Stages live in the backend and keep what their binding computed; a request names its stage, which the backend checks at submission (open, same proposal, same spec) and keeps until the requests through it have run. Accumulators keep their elements but not their combined value.
+- D7 is quadratic, and not because of the arithmetic: every read of the accumulator makes a record listing every element so far, so the client, the checks, the scheduler, and provenance each handle about 500,000 references for 1000 angles. Holding the combined value in memory would not fix it. Decision A below.
+- A start on accumulators that keep their combined value (a `binding.accumulator()` capability, `combine` as a running fold) was set aside, uncommitted, when the cause turned out to be the record shape. Whether it is needed depends on decision A: with a chain, each read combines two values and needs no held value.
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
 
 Provisional choices in the code, easy to change: generic accumulator specs are named `sum[Counts]` (README open question 1); `apply` and rules key members by `run` unless told otherwise; order means run order.
 
-## Pending question to Simon
+## Decisions to ask Simon
 
-Settled on 2026-09-29: every binding has `stage(fixed, blanks)`, and the fallback for a plain function is to compute everything. The sciline adapter lives in essapps until it moves to ess.reduce. Implemented. What a record says about software is still open; it is item 3 in `todo.md`. The text below is the question as it was asked.
+Each affects more than one area. Ask them in this order at the start of the next session.
 
+### A. How a growing accumulator is recorded (blocks the next step)
 
-Simon wrote, while I was working: "I feel both should actually be implementation details, abstracted away -- a spec does not necessarily need to wrap a sciline workflow, it could just be a Python function. Can this be a pluggable system, or something generic where the bindings can be registered? Similar for the software question -- we'd want something generic that hides away any details/decisions about how different kinds of environments are tracked."
+Read `docs/developer/proposals/array-records.md` first; its "Decisions" section has five questions with `> Simon:` lines.
+Context in short:
 
-"Both" refers to my note that the next candidates were how a sciline workflow is bound to a spec, and what a record says about software. My answer, awaiting his reply:
+- Every submission makes a record, and an accumulator already makes a record only when it is read (a push makes none). "Records only on read" is therefore today's behaviour and does not help D7, which reads after every push (a CUT references the current total).
+- The cause is what each read's record lists: every element so far, because the README fixes it to the flat request of way 2. Measured for 1000 angles: flat 6.7 s and 502,500 references; a chain 0.55 s and 2,999; one read at the end 0.57 s and 1,000. The flat time grows 4x per doubling.
+- Three ways out: a chain of totals (each read is the spec over the previous read and the elements since; about 20 lines, no new concept, but the record says how the value was computed); array records (a holder's records share one stored template, and a read names a range of them; keeps the flat meaning, about 270 lines, a new reference form in ess.reduce, and D7's angles must go through a stage); a named list of elements shared in every layer (keeps everything, the largest).
+- The proposal recommends the chain, and storing a holder's template once as a matter of the store, not the API.
 
-> Yes, both can be pluggable, and the core already treats bindings that way.
->
-> **Bindings.** A binding is any callable that takes the parameter values and returns the outputs, so a plain Python function already qualifies; that is how the toy specs are bound.
-> - Registration: in-process through `bind=`, as now. For installed packages, through entry points, one group for specs and one for bindings, as ess.reduce ADR 0001 suggests.
-> - Optional capabilities: a binding may offer extra abilities that the backend asks for. `stage(fixed, blanks)` returns a callable that computes only what depends on the blanks. A plain function falls back to computing everything, so it still gives the same records, only slower. A sciline adapter, which could live in ess.reduce, would use `sciline.Stage`. The backend never imports sciline.
->
-> **Software.** A record carries a `software` mapping from name to string that the framework stores and compares but never interprets.
-> - A pluggable recorder on the backend fills it: for example package versions from `importlib.metadata`, a conda environment hash, or a container image digest.
-> - A binding may add entries such as the spec's `code_revision`, or that it was bound in the notebook. Provenance and publication show whatever is there.
->
-> If that shape is right, I'll build it next. After that come holders that keep values in memory through sciline, then the provenance and publication sub-design.
+Two more questions that the proposal does not ask:
+
+**A6. Should D7's per-angle cuts be views instead of records?**
+They are there to watch the volume grow. Every read that makes a record also stores its output, so D7 as written stores 1000 volumes; for a real 4D volume that is the larger cost. As views of the accumulator (no record), D7 makes one read at the end, and `total.request == plain.request` holds under any representation. A total that other programs read under a label, such as an automatic rule's running sum, still makes a record per read. The form of a view waits for the plotting work (B4).
+Recommendation: yes; change D7's story and keep the durable per-arrival total for a rule.
+
+> Simon:
+
+**A7. The README guarantee on values passed in memory changed in `795651b`.**
+It said "a value passed in memory is a copy of the referenced output", but nothing copied, and a stage returns the same object in every record for what does not depend on its blanks. It now says the value is the referenced output itself, so a workflow must not modify its inputs; the binding contract says the same. Copying would cancel the saving a stage exists for.
+
+> Simon:
+
+### B. Earlier questions (asked on 2026-09-29, deferred)
+
+**1. How to review what is on `core`.**
+`core` holds about 5,200 added lines since `main` (docs, about 1,550 lines of source, tests), reviewed only in conversation.
+It builds on sciline ADR 0003 (`Stage`, `Accumulator`; branch `map-reduce-outside-the-graph`, still proposed), and `AccumulatorSpec` and `PipelineBinding` are meant to move to ess.reduce.
+Question: one PR or several (for example docs, core, bindings and holders), and when the proposals to sciline and ess.reduce go out.
+
+> Simon:
+
+**2. What a binding receives in place of a reference, and what `None` means.**
+Now a binding gets whatever `DatasetSource.read` returns, and outputs of other records as objects in memory; that works only for the toy specs.
+LoKI's pipeline needs a NeXus file path, and a hosted backend keeps outputs as files.
+The old skeleton let each field ask for a form (`Inputs.path` or `Inputs.array`, `Wiring.resolve` in `adapter.py` on `architecture-sketch`).
+Proposal, one rule with nothing to configure per field:
+
+```python
+# dataset reference              -> a local path; loading is the workflow's job (sciline's NeXus loaders take a filename)
+# output reference, Format.SCIPP -> the loaded scipp object; the framework loads it by the output's declared format
+```
+
+Also `None`: the backend fills every default at submission, so a binding cannot tell "not given" from "given as `None`". `PipelineBinding` sets every value on the pipeline, so `beam_centre=None` replaces the pipeline's beam-centre provider. Leaving the key unset for `None` is wrong in general: esssans sets the direct beam to `None` to skip that correction. Options: `PipelineBinding` takes the fields for which `None` means "leave it to the pipeline"; or the spec marks such fields; or submission keeps "not given" apart from `None`. Recommendation: the first, since it keeps the question inside the sciline adapter.
+
+> Simon:
+
+**3. What comes after the accumulators: real workflows, the system tier, or provenance and publication.**
+The system tier is the store, a hosted backend with `connect(url)`, sessions placed in a backend process, and a served dataset source; README open questions 2 (session placement, the trigger loop owning a session) and 4 (where a notebook's dataset source comes from) belong to it.
+The in-process backend hides all of it.
+Proposal: LoKI first (then Amor), which tests the binding contract and decision 2 on real data before infrastructure is built around them; entry-point registration comes with it.
+
+> Simon:
+
+**4. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
+Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. If decision A chooses the chain, every accumulator spec must not depend on grouping, which settles the second half.
+
+> Simon:
 
 ## Next steps
 
