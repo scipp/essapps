@@ -474,17 +474,19 @@ vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
 with client.session() as session:
     vanadium = session.stage(Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',)))
     reduce = session.stage(Template(IOFQ, params={'run': sample}, blanks=('normalization',)))
+    reduced = []
     for scale in (1.0, 2.0):
         processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
-        reduced = client.compute(reduce, {'normalization': processed.ref('normalization')},
-                                 label='iofq')
+        reduced.append(client.compute(reduce, {'normalization': processed.ref('normalization')},
+                                      label='iofq'))
 
-assert [client.output(r, 'iofq').values.tolist() for r in client.records(label='iofq')] == [
+assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
     [2.0, 4.0], [1.0, 2.0]]                      # [4, 8] divided by 2, then by 4
-assert reduced.request.params['normalization'] == client.latest('vanadium').ref('normalization')
+assert client.records(label='iofq') == reduced
+assert reduced[-1].request.params['normalization'] == client.latest('vanadium').ref('normalization')
 ```
 
-The notebook is the driver: it reruns the sample after each vanadium change. That the change comes back quickly is system story C5.
+The notebook is the driver: it reruns the sample after each vanadium change. It keeps the records whose outputs it reads later, since a label keeps no values. That the change comes back quickly is system story C5.
 
 ## D. Batch
 
@@ -623,6 +625,8 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
+Gap: reading `before[0]`'s output weeks later needs it to have been saved, since only history is kept that long ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+
 ### D7. Rotation scan over a thousand angles
 
 Actor: spectroscopy user. Goal: reduce a crystal rotation scan of a thousand runs, one run per angle, into one volume, and look at cuts through the volume while the scan continues.
@@ -633,25 +637,26 @@ for n in range(1, 1001):
     if n == 500:
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
+cuts = []
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
     for run in islice(datasets.watch(Selector(scan='17')), 1000):
         volume.push(client.submit(ANGLE, {'run': run}))
-        client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'index': 0},
-                      label='cut', member='17')
+        cuts.append(client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'index': 0},
+                                  label='cut', member='17'))
     total = client.compute(volume)
 
 angles = client.records(spec=ANGLE)
-cuts = client.wait(client.records(label='cut'))
-plain = client.compute(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
-assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
+plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
+assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-assert total.request == plain.request                          # the record of the plain request
+assert total.request == plain                                  # the request of the plain sum
 assert len(angles) == 1000                                     # run 5 is reduced once
 assert len(client.provenance(total).datasets()) == 1000
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
+The notebook keeps the cuts it reads; the volume of each read is released once its cut has run.
 That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
 
 ## E. Automatic reduction
@@ -681,6 +686,8 @@ assert client.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 
 ```
 
 Each record stitches every angle so far. A stitch is not an accumulation (C4).
+
+Gap: no client holds the curve the loop made, so reading its output needs the rule to save what it makes ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 
 ### E2. Automatic reduction goes quiet
 
@@ -761,7 +768,7 @@ assert [r.request.params for r in provenance.records()] == [centre.request.param
 assert {'essapps', 'scipp'} <= provenance.software.keys()
 ```
 
-The entry carries what lasts. The records behind it expire after the medium term (system story H3).
+The entry carries what lasts. The history behind it expires after the retention period (system story H3).
 
 ### F2. Reproduce after two upgrades
 
@@ -893,6 +900,7 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
+- **Saving** (D6, E1): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 3.
 - **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is README.md open question 4.

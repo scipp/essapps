@@ -7,22 +7,22 @@
    A binding is staged with the fixed values and returns a callable over the blanks (`bindings.py`); a plain function computes everything on each call, and `PipelineBinding` (`pipeline.py`) cuts a sciline pipeline with `sciline.Stage`.
    Stages live in the backend and keep what their binding computed; a request names its stage, which is checked at submission and kept until the requests through it have run.
    The backend keeps its history as an event log (`log.py`), and records are views of it (`views.py`). Accumulators live in the backend, keep their combined value, and a read is logged as the accumulator and a count; D7 is linear (0.86 s for 1000 angles with one worker).
-2. Simon's decisions on `proposals/event-log.md`, then fold it: into README.md as listed there, and into a system document if he agrees. The chain of totals and array records are superseded by it.
-3. The sub-design for provenance and publication, with its own document and stories. It builds on what a record says about its inputs, which the log settles.
+2. Done: history as an event log (ADR 0001, `system.md`), with README.md, the stories, and the system stories changed to match.
+3. The sub-design for provenance and publication, with its own document and stories. It now also covers saving: a value that must outlive its client is saved, and D6 and E1 read outputs that only a save keeps (their Gap lines). Publishing is saving to the catalogue with the provenance flattened from the log.
 4. After Simon's decisions in `handoff.md`: real workflows (LoKI, then Amor) with entry-point registration, or the system tier.
 
 Known quadratic paths: `TriggerLoop` reads every record under a rule's label on each step (now through a view by label, still every record handled so far); a series record lists every dataset so far.
 
 ## Deferred
 
-- Retention: deleting history by age cuts the provenance of later records that read it. `proposals/event-log.md` proposes keeping an event while a kept event depends on it.
+- Dropping values (the in-process backend keeps every value in memory) and retention of history: designed in `system.md`, not implemented. They come with a backend that stores values.
 
 - What a record says about software. An implementation detail that holds up nothing else. Proposed shape: a `software` mapping from name to string, filled by a pluggable recorder on the backend; the backend, not the binding, records where a binding came from (in-process or installed); a flat mapping may not be enough to recompute in a recorded environment later.
 
 ## User stories
 
 - `user-stories.md` (API tier) and `system-stories.md` (system tier) are written against `README.md`.
-- System-tier stories get code once a system document exists.
+- System-tier stories get code as `system.md` grows.
 
 ## API
 

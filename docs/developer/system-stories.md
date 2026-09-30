@@ -3,7 +3,7 @@
 These stories check what the system must provide beyond the API of [README.md](README.md): cost, placement, persistence, recovery, and operations.
 Each has an actor, a goal, and the property to check.
 Where a story shares a goal with an API story in [user-stories.md](user-stories.md), it has the same identifier.
-The stories get code once a system document says what the system is.
+[system.md](system.md) describes the part of the system that keeps history and values; the stories get code as the system document grows.
 
 ## S. Small stories
 
@@ -53,8 +53,8 @@ Property: records completed before the crash are kept, and requests submitted be
 
 ### B6. Find last week's result
 
-Actor: user after a week. Goal: last week's records and outputs are still there.
-Property: records and their outputs survive restarts of the client and of the backend, until they expire (H3).
+Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
+Property: records survive restarts of the client and of the backend for the retention period (H3). Saved outputs survive as long as their store keeps them.
 
 ## C. Chaining
 
@@ -126,7 +126,7 @@ Property: the backend checks every reference against the submitter's proposal an
 ### H1. Disk fills up
 
 Actor: operator. Goal: free disk space without losing provenance.
-Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay until the records expire (H3). The operator sees the space used per proposal before the disk is full.
+Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay for the retention period (H3). The operator sees the space used per proposal before the disk is full.
 
 ### H2. Backend upgrade with runs in flight
 
@@ -135,6 +135,5 @@ Property: every record pending at the upgrade finishes after it, including reque
 
 ### H3. Records expire
 
-Actor: operator. Goal: records and outputs are kept while an experiment needs them and removed afterwards; what was published lasts.
-Property: records and their outputs are kept for a configured period that covers a running experiment, and then expire. A published entry still answers what produced it after the records behind it have expired.
-A record that read an expired record keeps its own request, and its provenance loses that step.
+Actor: operator. Goal: history is kept while an experiment needs it and removed afterwards; what was published lasts.
+Property: history is kept for a configured period that covers a running experiment. An older event is kept while a kept event depends on it, so a kept record's provenance is complete. A published entry still answers what produced it after the history behind it has expired.

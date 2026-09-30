@@ -8,7 +8,7 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import SUM, Client, Selector, SubmitError, Template, apply
+from ess.apps import SUM, Client, Request, Selector, SubmitError, Template, apply
 from ess.apps.testing import FakeDatasets
 
 from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
@@ -172,27 +172,27 @@ def test_d7_rotation_scan_over_a_thousand_angles(
         if n == 500:
             measure(5, [1.0, 5.0], scan='17')
 
+    cuts = []
     with client.session() as session:
         volume = session.accumulator(SUM.of(Counts))
         for run in islice(datasets.watch(Selector(scan='17')), 1000):
             volume.push(client.submit(ANGLE, {'run': run}))
-            client.submit(
-                CUT,
-                {'data': client.submit(volume).ref('counts'), 'index': 0},
-                label='cut',
-                member='17',
+            cuts.append(
+                client.submit(
+                    CUT,
+                    {'data': client.submit(volume).ref('counts'), 'index': 0},
+                    label='cut',
+                    member='17',
+                )
             )
         total = client.compute(volume)
 
     angles = client.records(spec=ANGLE)
-    cuts = client.wait(client.records(label='cut'))
-    plain = client.compute(
-        SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]}
-    )
-    assert [client.output(c, 'cut').value for c in cuts] == [
+    plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
+    assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [
         float(k) for k in range(1, 1001)
     ]
     assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-    assert total.request == plain.request
+    assert total.request == plain  # the request of the plain sum
     assert len(angles) == 1000
     assert len(client.provenance(total).datasets()) == 1000

@@ -6,7 +6,8 @@
 
 This document describes the API we want: what users and workflow authors write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
-Those belong in a separate system document, and the system may change them without changing any code shown here.
+Those belong in the system document, [system.md](system.md), and the system may change them without changing any code shown here.
+[adr/](adr/index.md) records the decisions behind both.
 
 The core, described here in full, is specs, requests, records, references, labels, datasets, and the holders in a session.
 Two sub-designs build on it and get one section each here: batch and automatic reduction, and provenance and publication.
@@ -77,6 +78,7 @@ Other intermediates are inspected by running the package's workflow in a noteboo
 A binding is staged with the values that stay fixed and returns a callable over the rest; a request outside a stage is staged with no blanks and called once.
 A plain function is a binding that computes everything on each call.
 A sciline pipeline, through `sciline.Stage`, computes what does not depend on the blanks once.
+The binding of an accumulator spec may also make element accumulators (`accumulator()`), so that an accumulator keeps its combined value; `combine(operator.add)` does.
 Records do not depend on which.
 
 ```python
@@ -107,10 +109,11 @@ client.output(result, 'iofq')
 Both take a record, a list, or a dict of records, like `client.submit`, and `wait` returns the same shape.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, before any record exists: an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
 
-Records are working state for running experiments and are kept for the medium term.
-They outlive sessions: most requests run without one, and a batch's failures, a rule's progress, and a beam centre for tomorrow's batch are read later, by other users or programs.
+A record is history: what ran, with which inputs, and what came of it.
+Records outlive sessions and are kept for a retention period: most requests run without a session, and a batch's failures and a rule's progress are read later, by other users or programs.
+An output's value is not history. It is kept while a pending request reads it, while a record handle in a client holds it, while a holder in a session holds it, or once it is saved; a value that must outlive its client, such as a beam centre for tomorrow's batch, is saved.
+Reading an output that is no longer kept raises an error, and a request that references it is refused at submission.
 What lasts is what `publish` puts in the catalogue.
-Reading an output the system has dropped raises an error, and a request that references it is refused at submission.
 
 **Reference.** An input is named by reference: an output of a record, or a dataset.
 An output field fulfils a params field when the two agree.
@@ -135,7 +138,7 @@ samples = {name: Request(IOFQ, {'run': run, 'beam_centre': centre.ref('centre')}
 records = client.submit({'centre': centre, **samples})    # pending records, same keys
 ```
 
-**Label.** A label names a sequence of records; the latest is the current value.
+**Label.** A label names a sequence of records; the latest is the current one. A label keeps no values.
 A member splits a label, one per sample or temperature.
 Label and member are given at submission, not in the request, since they do not change the result; a record shows both.
 Submitting a dict of requests under a label makes each key the member of its record.
@@ -259,6 +262,7 @@ with client.session() as session:
 
 **Accumulator.** An accumulator holds the combined value of the elements pushed into it.
 Pushing a record pushes its outputs named like the element's fields; its other outputs are not pushed.
+A push is checked when it is made, as a request over that element alone would be.
 Computing an accumulator makes a record of its accumulator spec over the elements pushed so far.
 A pushed record may still be pending; `client.submit(total)` returns the record at once, pending until every element is done.
 
@@ -353,15 +357,14 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
 - A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
-- Records are kept for the medium term. A published entry answers what produced it without access to the records.
-- Only holders keep memory on a user's behalf, and ending their session releases them once the requests made through them have run.
+- Records are kept for a retention period, together with the older records they depend on. A published entry answers what produced it without access to the records.
+- An output's value is kept only while a pending request reads it, a record handle in a client holds it, or a holder in a session holds it, or once it is saved. Ending a session releases its holders once the requests made through them have run.
 
 ## Left to the system
 
 Not part of this API, and not visible in user code:
 
-- how records and outputs are stored, copied, dropped, and located, and for how long; the store may be as plain as output files with their requests next to them and an index for labels, pending requests, and failures
-- how records that share most of their references are stored without repeating them
+- how history is stored and for how long, and how outputs are stored, copied, dropped, and located ([system.md](system.md))
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
@@ -371,8 +374,9 @@ Not part of this API, and not visible in user code:
 
 ## Open questions
 
-1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
+1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result, which a tree of partial sums over a plain request needs. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
 2. **Sessions.** Whether a holder can exist without a session the user opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
 4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
 5. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+6. **Requests.** Whether "request" is still the abstraction a record needs. Users rerun a record's request, make templates from it, read its values, and compare it with a plain request.

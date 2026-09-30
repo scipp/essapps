@@ -9,8 +9,9 @@ A living document for the next session on branch `event-log`. Read it first, the
 | Branch | `event-log`, off `main`, checked out in `/workspace/essapps`; `main` holds the reviewed-in-conversation `core` (merged 2026-09-30) |
 | The API design | `docs/developer/README.md` (was `proposals/core-api.md`) |
 | API-tier stories | `docs/developer/user-stories.md`: 45 stories as client code; an "Open" section at the end |
-| Proposal awaiting decision | `docs/developer/proposals/event-log.md`: the backend's history as an append-only event log, records as views, values with their own lifetime; implemented in the in-process backend |
-| Simon's review notes | `simon-notes.md` in the checkout, not in git: questions on the README and stories. B6 (is a long-lived record store core, is it replicating SciCat) led to the event log; A2, A5, B2 to B5, and the README batch example are not yet answered. He parks the SciCat question until the log is settled |
+| The system design | `docs/developer/system.md`: history as an append-only event log, records as views, which rules keep a value, retention; the in-process backend implements the history and holders |
+| Decisions | `docs/developer/adr/`: ADR 0001 (history as an event log, apart from values); new load-bearing decisions get an ADR in the esslivedata format, short and without implementation detail |
+| Simon's review notes | `simon-notes.md` in the checkout, not in git: questions on the README and stories. B6 (is a long-lived record store core, is it replicating SciCat) led to the event log; with labels keeping no values, the SciCat part is answered by saving. A2, A5, B2 to B5, and the README batch example are not yet answered |
 | System-tier stories | `docs/developer/system-stories.md`: actor, goal, property; no code yet |
 | Sub-design: batch and automatic reduction | `docs/developer/automatic-reduction.md` |
 | To-do list | `docs/developer/plans/todo.md` |
@@ -49,7 +50,7 @@ The essentials, all in the README with code:
 
 - A spec is an `ess.reduce.spec.WorkflowSpec`: params model and outputs model, both pydantic. An output field fulfils a params field when their `DataField`s agree.
 - `client.submit` (pending) and `client.compute` (submit and wait) take a spec with values, a stage with values, an accumulator, a request, a list, or a dict, and return the same shape. Under a label, a dict's keys become members. Label and member are given at submission; they are not part of the request.
-- A record holds the request with every value filled in; statuses `pending`, `completed`, `failed`, `cancelled`; a finished record never changes. Records are medium-term working state and outlive sessions; long-term provenance is what `publish` puts in the catalogue. Provenance stops at datasets (what lies behind a dataset belongs to its source).
+- A record holds the request with every value filled in; statuses `pending`, `completed`, `failed`, `cancelled`; a finished record never changes. Records are history, kept for a retention period, and outlive sessions; an output's value is kept only while a pending request, a client's record handle, or a holder holds it, or once saved (system.md); long-term provenance is what `publish` puts in the catalogue. Provenance stops at datasets (what lies behind a dataset belongs to its source).
 - Every connection between requests is a reference; a reference to a pending record is a valid input, which is the only scheduling mechanism.
 - Datasets are named by `dataset(run=/path=/pid=)`; the record names the identity. A dataset source (separate from the client, injected into drivers and forms) lists, watches, and reads metadata. Selectors match raw datasets unless they name another kind.
 - An accumulator spec (`AccumulatorSpec(name=, version=, element=)`) takes one list per element field and outputs the element model, so a combined value can be pushed again. A package derives CONTRIBUTE, the accumulator spec, and FINALIZE from its sciline `Aggregation`. `SUM.of(element)` is a generic one.
@@ -68,7 +69,7 @@ Done, with story tests passing:
 - Templates, `apply`, lookups (`LastBefore`), rules with series, `TriggerLoop` (`step`, `status`, `run`), reading what it handled from the records under the rule's label.
 - Bindings (`bindings.py`, `pipeline.py`): every binding has `stage(fixed, blanks)`; a plain function computes everything on each call.
 - Sessions with stages and accumulators. Stages live in the backend and keep what their binding computed; a request names its stage, which the backend checks at submission (open, same proposal, same spec) and keeps until the requests through it have run.
-- The event log (`log.py`, `views.py`, `proposals/event-log.md`): every change the backend accepts is checked, appended as one event, and applied to the views (`Views.apply`); what is not history (outputs, staged callables, held values, what waits for what) stays in the backend; a backend given an existing log (a JSON-lines file) replays it, closes sessions left open, and runs what was pending. Output values are not in the log and live in memory.
+- The event log (`log.py`, `views.py`, `system.md`): every change the backend accepts is checked, appended as one event, and applied to the views (`Views.apply`); what is not history (outputs, staged callables, held values, what waits for what) stays in the backend; a backend given an existing log (a JSON-lines file) replays it, closes sessions left open, and runs what was pending. Output values are not in the log and live in memory.
 - Accumulators live in the backend. A push is checked when made; a read is logged as `Read(spec, accumulator, upto)` and `record.request` builds the flat request when accessed. A binding with `accumulator()` (`combine`) keeps the combined value, and reads of one accumulator run in order, one at a time. D7: 0.86 s for 1000 angles with one worker (5.6 s before), 1000 stored element references (501,500 before).
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
@@ -79,12 +80,7 @@ Provisional choices in the code, easy to change: generic accumulator specs are n
 
 Each affects more than one area. Ask them in this order at the start of the next session.
 
-### A. The event log (blocks the next step)
-
-Read `docs/developer/proposals/event-log.md`; its "Decisions" section has six questions with `> Simon:` lines.
-Simon agreed on 2026-09-30 to keep a time machine for history (for a retention period) and none for values (kept while held or saved), and to a log of accepted calls with records as views. The proposal works this out and the code implements it; what remains is the rules that keep a value, retention, and where the document goes.
-
-Still open from the earlier accumulator questions:
+### A. Still open from the accumulator questions
 
 **A7. The README guarantee on values passed in memory changed in `795651b`.**
 It said "a value passed in memory is a copy of the referenced output", but nothing copied, and a stage returns the same object in every record for what does not depend on its blanks. It now says the value is the referenced output itself, so a workflow must not modify its inputs; the binding contract says the same. Copying would cancel the saving a stage exists for.
@@ -93,14 +89,7 @@ It said "a value passed in memory is a copy of the referenced output", but nothi
 
 ### B. Earlier questions (asked on 2026-09-29, deferred)
 
-**1. How to review what is on `core`.**
-`core` holds about 5,200 added lines since `main` (docs, about 1,550 lines of source, tests), reviewed only in conversation.
-It builds on sciline ADR 0003 (`Stage`, `Accumulator`; branch `map-reduce-outside-the-graph`, still proposed), and `AccumulatorSpec` and `PipelineBinding` are meant to move to ess.reduce.
-Question: one PR or several (for example docs, core, bindings and holders), and when the proposals to sciline and ess.reduce go out.
-
-> Simon:
-
-**2. What a binding receives in place of a reference, and what `None` means.**
+**1. What a binding receives in place of a reference, and what `None` means.**
 Now a binding gets whatever `DatasetSource.read` returns, and outputs of other records as objects in memory; that works only for the toy specs.
 LoKI's pipeline needs a NeXus file path, and a hosted backend keeps outputs as files.
 The old skeleton let each field ask for a form (`Inputs.path` or `Inputs.array`, `Wiring.resolve` in `adapter.py` on `architecture-sketch`).
@@ -115,14 +104,14 @@ Also `None`: the backend fills every default at submission, so a binding cannot 
 
 > Simon:
 
-**3. What comes after the accumulators: real workflows, the system tier, or provenance and publication.**
+**2. What comes after the accumulators: real workflows, the system tier, or provenance and publication.**
 The system tier is the store, a hosted backend with `connect(url)`, sessions placed in a backend process, and a served dataset source; README open questions 2 (session placement, the trigger loop owning a session) and 4 (where a notebook's dataset source comes from) belong to it.
 The in-process backend hides all of it.
 Proposal: LoKI first (then Amor), which tests the binding contract and decision 2 on real data before infrastructure is built around them; entry-point registration comes with it.
 
 > Simon:
 
-**4. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
+**3. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
 Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. With the event log, accumulator reads no longer need grouping independence; a tree of partial sums over a plain request still does.
 
 > Simon:
