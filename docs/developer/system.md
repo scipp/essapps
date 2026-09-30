@@ -7,6 +7,9 @@ This document describes how the system provides what the API promises about reco
 Other parts of the system, such as the store of values, a hosted backend, and where sessions run, get sections here when they are designed.
 [ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart.
 
+Terms from README.md used here: a *spec*, and its *binding*, the code that computes it; a *record*; a *session* and the *holders* in it, stages and accumulators.
+A *read* of an accumulator is what `client.submit(accumulator)` makes: a record of the accumulator spec over the elements pushed so far.
+
 ## History and values
 
 The system keeps two things with different lifetimes:
@@ -60,7 +63,8 @@ What the log records:
 - **Only what applies.** A change is checked before its event is appended. A refused call writes nothing, so the log can always be read again.
 - **One event per submission.** A submission of 500 requests is one `submitted` event, so a backend that stops half-way has all of it or none of it.
 - **No values.** Output values, what a stage computed from its fixed values, and an accumulator's combined value are not history.
-- **Plain data.** Events are JSON. Request values already are, since references in `ess.reduce.spec` are plain dicts. The backend applies each event as it reads back from its JSON, so a record holds its values the same way whether it was just made or read from a file: a tuple given as a parameter is a list in the record. A binding gets the values validated by the spec's params model again, in the types the model declares.
+- **Plain data.** Events are JSON. Request values already are, since references in `ess.reduce.spec` are plain dicts.
+- **The same values, live or read back.** The backend applies each event as it reads back from its JSON, so a record holds its values the same way whether it was just made or read from a file: a tuple given as a parameter is a list in the record. A binding gets the values validated by the spec's params model again, in the types the model declares.
 
 ### Where the log lives
 
@@ -71,7 +75,7 @@ The design depends on the log being append-only and ordered, not on where it is 
 - A hosted backend: a file, a database table used only by appending, or Kafka.
 
 One log per backend; each event names its proposal.
-Only the order of pushes within one accumulator and the order of a record's own events matter.
+If the log is ever split, for example by proposal, only two orders must be kept: the pushes into one accumulator, and the events of one record.
 
 ## Views
 
@@ -82,27 +86,27 @@ The backend applies each event to its views (`Views.apply` in `views.py`), the s
 | records by ID, with status and failure | `client.wait`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
 | open sessions, their stages and accumulators | calls through holders |
-| each accumulator's elements, and how many leading elements have completed | reads |
-| for each unfinished record, where it was pushed as an element | releasing the reads that wait for it |
+| each accumulator's elements, and how many of them, from the first on, have completed | reads (see Accumulators) |
+| for each unfinished record, the accumulators it was pushed into | starting or failing the reads that wait for it |
 
 A view changes only when an event is applied, and how it changes depends on nothing but the events.
 Queries read the views, never the log.
-What is not history is not a view either: output values, a stage's staged callable, an accumulator's held value, what waits for what, and the queue of runnable work.
+What is not history is not a view either: output values, what a stage computed from its fixed values, an accumulator's combined value, which records wait for which, and the queue of work ready to run.
 The backend keeps it apart from the views, and it is lost when the backend stops.
 
 ### Records
 
 A record stores what the log holds: a request, or a read `Read(spec, accumulator, upto)`.
-`record.request` is the full request either way; for a read it is built from the accumulator's first `upto` elements when accessed.
+`record.request` is the full request either way. For a read, the backend builds it from the accumulator's first `upto` elements when someone accesses it:
 
 ```python
-total = client.submit(volume)             # logs: read of a1, upto=1000
-total.request.params['counts']            # the 1000 references, built from a1's elements
-total.request == plain.request            # the record of the plain request
+total = client.submit(volume)        # the log holds: a read of volume, upto=1000
+total.request.params['counts']       # the 1000 references, built now
 ```
 
-Only provenance, a comparison, or a user reading the request builds the list, at O(k); scheduling, checks, and the client never do.
-The backend binds each record of a read to its accumulator's elements. A copy made from the record's plain data alone, such as one sent over a network, has no elements; a client that receives records binds them to itself.
+Only provenance, a comparison, or code that reads the request builds this list; scheduling and checks work with `upto` alone.
+To build the list, a record of a read keeps a reference to its accumulator's elements in the backend.
+A copy made from the record's plain data alone, such as one sent over a network, cannot build it; a client that receives records over a network would have to fetch the elements itself.
 
 ### Restart
 
@@ -119,27 +123,50 @@ This is what system stories B5 and H2 need from history; H2 also needs every eve
 
 ## Accumulators
 
-An accumulator is opened in the backend, and a push is a backend call that the log records.
-
-- **A push is checked when it is made**, as a request over that element alone would be: the element's fields, readable records of the same proposal, outputs that fit. A read therefore needs no check per element.
-- **A read waits until the records of its first k elements have completed.** The accumulator counts how many leading elements have completed, so waiting costs O(1) per event rather than a set of k inputs per read.
-- **A read over an element that did not complete fails**, and later reads are refused at submission, naming the element.
-- **The accumulator keeps the combined value.** Each read combines only the elements pushed since the previous read. The reads of one accumulator run one at a time and in order, since each continues from where the previous one stopped. A read whose combining fails drops the held value, and the next read combines from the first element.
-
-A binding keeps a combined value if it can make element accumulators, like `sciline.Accumulator` for a whole element:
+This section follows one accumulator through three pushes and two reads:
 
 ```python
-class AccumulatorBinding(Binding, Protocol):
-    def accumulator(self) -> ElementAccumulator: ...   # push(element), value
-
-held = SUM_BINDING.accumulator()
-held.push({'counts': a1})
-held.push({'counts': a2})
-held.value                                           # {'counts': a1 + a2}
+with client.session() as session:
+    volume = session.accumulator(SUM.of(Counts))
+    volume.push(a1)                    # a1, a2, a3: records of ANGLE, possibly still pending
+    volume.push(a2)
+    first = client.submit(volume)      # a read over a1 and a2
+    volume.push(a3)
+    second = client.submit(volume)     # a read over a1, a2, and a3
 ```
 
-`combine(operator.add)` is such a binding. It folds the elements in order for a plain request too, so both give the same value.
-A binding without `accumulator()` combines all elements on every read.
+`volume` in the notebook is a handle.
+The accumulator itself lives in the backend: its elements, and the combined value it keeps.
+Each push is a call to the backend and a `pushed` event in the log.
+Each read is a `submitted` event holding `Read(spec, accumulator, upto)`, where `upto` is the number of elements pushed before the read: 2 for `first`, 3 for `second`.
+
+**Checking a push.** The backend checks a push as it would check a request over that one element: the element has the fields of the accumulator spec's element model, its references name records of the same proposal that have not failed or been cancelled, and their outputs fit the fields. A push that does not fit is refused at the push, so a read need not check its elements again.
+
+**When a read runs.** A pushed record may still be pending, and a read runs once every record it covers has completed: `first` waits for a1 and a2, `second` for a1, a2, and a3.
+For each accumulator the backend keeps one number, how many elements, from the first on, have completed, and starts a read when that number reaches the read's `upto`.
+The bookkeeping for a read therefore does not grow with the number of elements it covers.
+
+**When an element fails.** If a2 fails or is cancelled, `first` and `second` fail, since both cover it.
+Any later read would cover a2 too, so it is refused at submission, naming the element.
+
+**The combined value.** The backend keeps the combined value of the elements up to the last read.
+`second` adds a3 to the value that `first` computed, instead of combining a1, a2, and a3 again.
+For this, the reads of one accumulator run one at a time, in the order they were submitted.
+If combining fails part-way through a read, the backend drops the combined value, and the next read starts again from the first element.
+
+**Where the combining code comes from.** The binding of an accumulator spec may be a plain function over lists, which combines all elements in one call.
+To keep a combined value, the backend needs a binding that can also make element accumulators: objects that take one element at a time and give the combined value so far, as `sciline.Accumulator` does for one key.
+
+```python
+held = binding.accumulator()              # nothing pushed yet
+held.push({'counts': counts_1})           # values, not references
+held.push({'counts': counts_2})
+held.value                                # {'counts': counts_1 + counts_2}
+```
+
+`combine(operator.add)` is such a binding; the stories bind `SUM.of(Counts)` to it.
+It combines the elements in the same order for a plain request, so a read and the plain request over the same elements give the same value.
+With a binding that is only a function, every read calls the function with all the elements pushed so far.
 
 ## Values
 
@@ -162,7 +189,7 @@ How the stories fare:
 | B1, S2: tuning steps | the handle of the latest step (2); the stage's fixed part (3) |
 | C5: two stages tuned together, both results read afterwards | the handles the notebook keeps in a list (2) |
 | C1, G4: a beam centre used by other requests or another notebook | the handles of the notebooks that hold it (2); for tomorrow's batch, save it (4) |
-| D2: overnight batch, laptop closed | the requests submitted with a place to save to (4); without one, only the records survive the night |
+| D2: overnight batch, laptop closed | the requests submitted with a place to save to (4), not designed yet; without one, only the records survive the night |
 | D6: a batch's results read weeks later | saved (4); not designed yet |
 | D7: a read per angle, a cut per read | each read until its cut has run (1); the accumulator's combined value (3); the cuts the notebook keeps in a list (2). The volumes of earlier reads are not kept |
 | E1: the curve a rule made, read later | the rule saves what it makes (4); not designed yet |
