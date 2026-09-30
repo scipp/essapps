@@ -3,9 +3,9 @@
 """
 Sessions and the holders in them: stages and accumulators.
 
-A holder never changes what a record says: a call through a stage makes the
-record of the filled template, and computing an accumulator makes the record
-of its accumulator spec over the elements pushed so far.
+A stage never changes what a record says: a call through it makes the record
+of the filled template. Computing an accumulator makes a snapshot, a record of
+the combined value of the elements pushed so far.
 
 Both live in the backend: a stage keeps what its binding computed from the
 template's values, and an accumulator keeps its elements and their combined
@@ -96,7 +96,7 @@ class Accumulator(_Holder):
     The combination of the elements pushed into it, under an accumulator spec.
 
     ``id`` names the accumulator in the backend; submitting it makes a
-    snapshot, a record of the accumulator spec over the elements pushed so far.
+    snapshot, a record of the combined value of the elements pushed so far.
     """
 
     def __init__(

@@ -17,6 +17,8 @@ from ess.apps import (
     Backend,
     Client,
     Request,
+    Snapshot,
+    SpecId,
     Status,
     SubmitError,
     Template,
@@ -300,7 +302,9 @@ def test_an_accumulator_pushes_only_the_element_fields(client: Client) -> None:
             total.push(load)  # 'extra' is not pushed
         combined = client.compute(total)
 
-    assert combined.request.params == {'value': [load.ref('value') for load in loads]}
+    assert combined.submitted == Snapshot(
+        spec=SpecId.of(TOTAL), accumulator=total.id, upto=2
+    )
     assert client.output(combined, 'value') == 3.0
 
 
@@ -376,8 +380,11 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
 
     assert [r.status for r in (first, second)] == [Status.COMPLETED] * 2
     assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
-    assert first.request.params == {'value': [x.ref('value') for x in loads[:2]]}
-    assert second.request.params == {'value': [x.ref('value') for x in loads]}
+    assert [r.submitted.upto for r in (first, second)] == [2, 3]
+    with pytest.raises(TypeError, match='snapshot'):
+        first.request
+    assert client.provenance(first).records() == loads[:2]
+    assert client.provenance(second).records() == loads
 
 
 def test_a_record_that_has_not_completed_is_refused_at_the_push(
@@ -399,7 +406,7 @@ def test_a_record_that_has_not_completed_is_refused_at_the_push(
         total.push(client.wait(pending))
         snapshot = client.submit(total)
 
-    assert snapshot.request.params == {'value': [pending.ref('value')]}
+    assert [r.id for r in client.provenance(snapshot).records()] == [pending.id]
     assert client.output(snapshot, 'value') == 1.0
 
 
@@ -416,7 +423,8 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
         for push in pushes:
             push.join()
         snapshot = client.compute(digits)
-    plain = client.compute(DIGITS, snapshot.request.params)
+    pushed = client.provenance(snapshot).records()  # in the order they were logged
+    plain = client.compute(DIGITS, {'value': [x.ref('value') for x in pushed]})
 
     assert client.output(snapshot, 'value') == client.output(plain, 'value')
 

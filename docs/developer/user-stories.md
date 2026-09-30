@@ -649,10 +649,9 @@ with client.session() as session:
                                   label='cut', member='17'))
     total = client.compute(volume)
 
-plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in pushed]})
 assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-assert total.request == plain                                  # the plain sum, in push order
+assert client.provenance(total).records() == pushed            # the angles, in push order
 assert len(client.records(spec=ANGLE)) == 1000                 # run 5 is reduced once
 assert len(client.provenance(total).datasets()) == 1000
 ```

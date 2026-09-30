@@ -8,7 +8,7 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import SUM, Client, Request, Selector, SubmitError, Template, apply
+from ess.apps import SUM, Client, Selector, SubmitError, Template, apply
 from ess.apps.testing import FakeDatasets
 
 from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
@@ -192,11 +192,10 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             )
         total = client.compute(volume)
 
-    plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in pushed]})
     assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [
         float(k) for k in range(1, 1001)
     ]
     assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-    assert total.request == plain  # the request of the plain sum, in push order
+    assert client.provenance(total).records() == pushed  # the angles, in push order
     assert len(client.records(spec=ANGLE)) == 1000
     assert len(client.provenance(total).datasets()) == 1000

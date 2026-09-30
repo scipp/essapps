@@ -8,7 +8,7 @@ Other parts of the system, such as the store of values, a hosted backend, and wh
 [ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart.
 
 Terms from README.md used here: a *spec*, and its *binding*, the code that computes it; a *record*; a *session* and the *holders* in it, stages and accumulators.
-A *snapshot* of an accumulator is what `client.submit(accumulator)` makes: a record of the accumulator spec over the elements pushed so far.
+A *snapshot* of an accumulator is what `client.submit(accumulator)` makes: a record of the combined value of the elements pushed so far.
 
 ## History and values
 
@@ -86,7 +86,7 @@ The backend applies each event to its views (`Views.apply` in `views.py`), the s
 | records by ID, with status and failure | `client.wait`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
 | open sessions, their stages and accumulators | calls through holders |
-| each accumulator's elements | the requests of its snapshots (see Records) |
+| each accumulator's elements | what its snapshots read (see Records) |
 
 A view changes only when an event is applied, and how it changes depends on nothing but the events.
 Queries read the views, never the log.
@@ -96,16 +96,15 @@ The backend keeps it apart from the views, and it is lost when the backend stops
 ### Records
 
 A record stores what the log holds: a request, or a snapshot `Snapshot(spec, accumulator, upto)`.
-`record.request` is the full request either way. For a snapshot, the backend builds it from the accumulator's first `upto` elements when someone accesses it:
+A snapshot does not list what it read: that is the first `upto` elements in its accumulator's view.
+Provenance asks the backend what each record read (`Backend.inputs`), so it reaches through a snapshot like through a request:
 
 ```python
-total = client.submit(volume)        # the log holds: a snapshot of volume, upto=1000
-total.request.params['counts']       # the 1000 references, built now
+total = client.submit(volume)          # a snapshot of volume, upto=1000
+total.submitted                        # Snapshot(spec=sum[Counts]/v1, accumulator=volume.id, upto=1000)
+client.provenance(total).records()     # the 1000 angles, from the accumulator's view
+total.request                          # TypeError: a snapshot is not a request
 ```
-
-Only provenance, a comparison, code that reads the request, or a snapshot run again after a restart builds this list.
-To build the list, a snapshot's record keeps a reference to its accumulator's elements in the backend.
-A copy made from the record's plain data alone, such as one sent over a network, cannot build it; a client that receives records over a network would have to fetch the elements itself.
 
 ### Restart
 
@@ -116,7 +115,7 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the ev
 ```
 
 A pending record runs from scratch, without its stage, since sessions do not survive a restart.
-A snapshot is pending only if the backend stopped between its `submitted` and `finished` events; it runs as the plain request over its elements.
+A snapshot is pending only if the backend stopped between its `submitted` and `finished` events; it fails, since its accumulator did not survive the restart.
 A pending record whose inputs' values were not kept fails with "no output"; the in-process backend keeps values in memory, so this happens to every pending record whose inputs completed before the restart.
 This is what system stories B5 and H2 need from history; H2 also needs every event format to stay readable across versions.
 
@@ -151,7 +150,7 @@ A long combine holds up only the pushes into the same accumulator, which are log
 Its value is the value of the plain request over the same list, since both combine the elements in list order.
 The list is in push order, which in D7 is the order in which the angles finished, so two runs over the same scan may list the angles in different orders.
 The `submitted` event names the accumulator and a count instead of the list, since the elements are already in the log as the accumulator's `pushed` events (ADR 0001).
-The section Records above describes how `record.request` builds the list.
+The section Records above describes how provenance reads the elements.
 
 **Binding.** An accumulator needs a binding that makes element accumulators, like `sciline.Accumulator` for one key; opening one with any other binding is refused.
 A plain request over a list works with any binding.

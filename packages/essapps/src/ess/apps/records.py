@@ -4,21 +4,22 @@
 Requests and records: what a user asks for and what the backend made of it.
 
 Both are plain data. A request names a spec and parameter values; a record is
-the request with every value filled in, plus what happened. A record returned
-to a client is a copy as of the call: a pending record is replaced by a newer
-copy as it finishes, and a finished record never changes.
+the request with every value filled in, or a snapshot of an accumulator, plus
+what happened. A record returned to a client is a copy as of the call: a
+pending record is replaced by a newer copy as it finishes, and a finished
+record never changes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any
 
 from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, walk_refs
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubmitError(ValueError):
@@ -138,12 +139,13 @@ class Failure(BaseModel, frozen=True):
 
 class Snapshot(BaseModel, frozen=True):
     """
-    What submitting an accumulator makes: its spec over the first elements.
+    What submitting an accumulator makes: the combined value of its first elements.
 
-    ``upto`` counts the elements pushed before the submission. The request
-    this stands for, the accumulator spec over those elements, is built only
-    when someone asks for it, so a snapshot costs the same however many
-    elements it covers.
+    ``upto`` counts the elements pushed before the submission. The elements
+    are the accumulator's pushes, which the backend's log holds; a snapshot
+    does not list them, so it costs the same however many elements it covers.
+    Its value is the output of the accumulator spec over those elements, in
+    push order.
     """
 
     spec: SpecId
@@ -163,13 +165,12 @@ a request takes any values.
 
 class Record(BaseModel, frozen=True):
     """
-    A request with every value filled in, and what happened to it.
+    What ran, and what happened to it.
 
-    ``submitted`` is what the backend's log holds: the request, or for a
-    snapshot of an accumulator a :class:`Snapshot`; :attr:`request` is the
-    request either way. ``outputs`` lists the output names the spec declares;
-    ``label`` and ``member`` are given at submission and do not change the
-    result.
+    ``submitted`` is what the backend's log holds: a request with every value
+    filled in, or a :class:`Snapshot` of an accumulator. ``outputs`` lists the
+    output names the spec declares; ``label`` and ``member`` are given at
+    submission and do not change the result.
     """
 
     id: str
@@ -182,26 +183,6 @@ class Record(BaseModel, frozen=True):
     label: str | None = None
     member: str | None = None
     failure: Failure | None = None
-    _elements: Sequence[Element] = PrivateAttr(default=())
-
-    def with_elements(self, elements: Sequence[Element]) -> Record:
-        """
-        This record, building the request of a snapshot from ``elements``.
-
-        ``elements`` are the accumulator's elements in push order; they may
-        grow, since a snapshot uses only the first ``upto``.
-        """
-        record = self.model_copy()
-        record._elements = elements
-        return record
-
-    def __eq__(self, other: object) -> bool:
-        # Where a snapshot finds its elements is not part of what a record says.
-        if not isinstance(other, Record):
-            return NotImplemented
-        return self.__dict__ == other.__dict__
-
-    __hash__ = None  # type: ignore[assignment]
 
     @property
     def spec(self) -> SpecId:
@@ -209,16 +190,13 @@ class Record(BaseModel, frozen=True):
 
     @property
     def request(self) -> Request:
-        """The request with every value filled in; a snapshot's, over its elements."""
-        if isinstance(self.submitted, Request):
-            return self.submitted
-        if len(self._elements) < self.submitted.upto:
-            raise LookupError(
+        """The request with every value filled in; a snapshot has none."""
+        if isinstance(self.submitted, Snapshot):
+            raise TypeError(
                 f'record {self.id} is a snapshot of accumulator '
-                f'{self.submitted.accumulator}, whose elements are not known here'
+                f'{self.submitted.accumulator}, not a request'
             )
-        elements = self._elements[: self.submitted.upto]
-        return Request(self.spec, {f: [e[f] for e in elements] for f in elements[0]})
+        return self.submitted
 
     def ref(self, output: str) -> OutputRef:
         if output not in self.outputs:

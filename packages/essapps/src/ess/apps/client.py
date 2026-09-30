@@ -22,7 +22,15 @@ from pydantic import BaseModel
 from .backend import Backend, Entry
 from .bindings import Binding, Function
 from .datasets import DatasetSource
-from .records import Record, Request, SpecId, Status, SubmitError, map_refs
+from .records import (
+    Record,
+    Request,
+    SpecId,
+    Status,
+    Submission,
+    SubmitError,
+    map_refs,
+)
 from .sessions import Accumulator, Session, Stage
 
 
@@ -69,20 +77,21 @@ def _numbered(requests: list[Request]) -> list[Request]:
 
 class Provenance(BaseModel, frozen=True):
     """
-    Where a record came from: its request, the records it read, and their datasets.
+    Where a record came from: what it ran, the records it read, and their datasets.
 
-    ``records`` lists every record read through all inputs, nearest first; it
-    stops at datasets.
+    ``submitted`` is the record's request or snapshot. ``records`` lists every
+    record read through all inputs, nearest first; it stops at datasets.
     """
 
-    request: Request
+    submitted: Submission
     upstream: tuple[Record, ...]
 
     def records(self) -> list[Record]:
         return list(self.upstream)
 
     def datasets(self) -> list[DatasetRef]:
-        requests = (self.request, *(r.request for r in self.upstream))
+        ran = (self.submitted, *(r.submitted for r in self.upstream))
+        requests = [r for r in ran if isinstance(r, Request)]
         return list(dict.fromkeys(d for r in requests for d in r.datasets()))
 
 
@@ -247,13 +256,17 @@ class Client:
 
     def provenance(self, record: Record) -> Provenance:
         upstream: dict[str, Record] = {}
-        todo = deque(ref.record for ref in record.request.refs())
+        todo = deque(self._inputs(record.id))
         while todo:
             record_id = todo.popleft()
             if record_id not in upstream:
                 upstream[record_id] = self._backend.record(record_id, self.proposal)
-                todo.extend(ref.record for ref in upstream[record_id].request.refs())
-        return Provenance(request=record.request, upstream=tuple(upstream.values()))
+                todo.extend(self._inputs(record_id))
+        return Provenance(submitted=record.submitted, upstream=tuple(upstream.values()))
+
+    def _inputs(self, record_id: str) -> list[str]:
+        """The IDs of the records a record read."""
+        return [ref.record for ref in self._backend.inputs(record_id, self.proposal)]
 
 
 def local(

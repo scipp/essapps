@@ -8,7 +8,16 @@ from .batch import LastBefore, Lookup, apply
 from .bindings import Binding
 from .client import Client, Provenance, local
 from .datasets import DatasetSource, Selector, dataset
-from .records import Failure, Record, Request, SpecId, Status, SubmitError, Template
+from .records import (
+    Failure,
+    Record,
+    Request,
+    Snapshot,
+    SpecId,
+    Status,
+    SubmitError,
+    Template,
+)
 from .rules import Rule, RuleStatus, TriggerLoop
 from .sessions import Accumulator, Session, Stage
 
@@ -30,6 +39,7 @@ __all__ = [
     'RuleStatus',
     'Selector',
     'Session',
+    'Snapshot',
     'SpecId',
     'Stage',
     'Status',

@@ -240,7 +240,7 @@ client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every out
 # 3. the same chain through holders, see below
 ```
 
-Ways 2 and 3 make the same records; way 1 makes one record of a different spec.
+Ways 2 and 3 give the same values; in way 3 the total is a snapshot of an accumulator (see Holders). Way 1 makes one record of a different spec.
 The framework does not prevent any of them; a package decides which specs it offers.
 
 ## Holders
@@ -266,7 +266,7 @@ Pushing a record pushes its outputs named like the element's fields; its other o
 A push is checked when it is made, as a request over that element alone would be.
 A pushed record must have completed; pushing a pending record is refused.
 Pushing combines the element into the held value, in the order of the pushes, as the plain request over the same list would.
-Computing an accumulator makes a record of its accumulator spec over the elements pushed so far, completed at once with the held value.
+Computing an accumulator makes a *snapshot*: a record of the held value, completed at once.
 
 ```python
 with client.session() as session:
@@ -283,8 +283,14 @@ with client.session() as session:
     added = client.compute(finalize, client.compute(total).refs(), label='sum')
 ```
 
-The second `client.compute(total)` makes a record of `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`.
-It is the record that way 2 makes; the accumulator only computes it faster.
+A snapshot's record names the accumulator and how many elements it covers, not the elements themselves.
+Its value is the output of the plain request over those elements, in push order: for the second snapshot, `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`, the request that way 2 makes.
+
+```python
+snapshot = client.compute(total)
+snapshot.submitted                       # Snapshot(spec=sans-parts-sum/v1, accumulator=total.id, upto=3)
+client.provenance(snapshot).records()    # [c611, c612, c613]: the records it read, in push order
+```
 
 ## Drivers
 
@@ -342,7 +348,7 @@ Templates and rules serialize to JSON; the core keeps no store of them, and reco
 
 This sub-design builds on the core.
 
-`client.provenance(record)` is plain data: the record's request, the records it read through all its inputs, the datasets they read, and the software versions.
+`client.provenance(record)` is plain data: what the record ran (its request or snapshot), the records it read through all its inputs, the datasets they read, and the software versions.
 It stops at datasets: what lies behind a dataset, raw or published, belongs to the dataset's source.
 
 ```python
@@ -357,8 +363,8 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 ## Guarantees
 
-- A record holds the spec, every parameter value including defaults, and its inputs by reference. A finished record never changes.
-- A holder never changes what a record says. A record made through a stage or an accumulator is the record of the plain request.
+- A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A finished record never changes.
+- A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
 - A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
@@ -384,4 +390,3 @@ Not part of this API, and not visible in user code:
 3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
 4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
 5. **Labels and members** on records, `member_field`, and `client.members` are tentative.
-6. **Requests.** Whether "request" is still the abstraction a record needs. Users rerun a record's request, make templates from it, read its values, and compare it with a plain request.

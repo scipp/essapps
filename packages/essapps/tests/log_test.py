@@ -167,10 +167,8 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
 
     assert again.records() == first.records()
     assert again.members('loads') == loads
-    assert again.latest('total').request.params == {
-        'value': [load.ref('value') for load in loads.values()]
-    }
-    assert again.latest('total').request == snapshot.request
+    assert again.provenance(again.latest('total')) == first.provenance(snapshot)
+    assert again.provenance(snapshot).records() == list(loads.values())
 
 
 def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
@@ -313,7 +311,7 @@ def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
 
     assert snapshot.status == Status.FAILED
     assert snapshot.failure is not None
-    assert 'no output' in snapshot.failure.message
+    assert 'accumulator ended' in snapshot.failure.message
 
 
 def test_a_refused_call_writes_nothing_to_the_log(

@@ -8,7 +8,7 @@ appended as one event and then applied to its views (see ``views.py``). A
 change is checked before its event is appended, so the log holds only events
 that apply. A backend given a log that already has events applies them first,
 closes the sessions left open, and runs the records left pending, without
-their stages.
+their stages; a snapshot left pending fails, since its accumulator is gone.
 
 Output values, what stages and accumulators hold, and what waits for what are
 not history. This backend keeps them in memory, so a backend started from an
@@ -187,7 +187,13 @@ class Backend:
             for session in list(self._views.sessions):
                 self._append(SessionClosed(session=session))
             for record in list(self._views.records.values()):
-                if not record.status.finished:
+                if record.status.finished:
+                    continue
+                if isinstance(record.submitted, Snapshot):
+                    self._finish(
+                        record.id, Status.FAILED, 'the accumulator ended at a restart'
+                    )
+                else:
                     self._schedule(record.id)
 
     def close(self) -> None:
@@ -696,6 +702,16 @@ class Backend:
     def record(self, record_id: str, proposal: str) -> Record:
         with self._changed:
             return self._mine(record_id, proposal)
+
+    def inputs(self, record_id: str, proposal: str) -> list[OutputRef]:
+        """What a record read: a request's references, or a snapshot's elements."""
+        with self._changed:
+            record = self._mine(record_id, proposal)
+            if isinstance(record.submitted, Request):
+                return record.submitted.refs()
+            snapshot = record.submitted
+            elements = self._views.accumulators[snapshot.accumulator].elements
+            return [ref for e in elements[: snapshot.upto] for ref in e.values()]
 
     def records(self, proposal: str, label: str | None = None) -> list[Record]:
         """The records of a proposal, oldest first, under ``label`` if given."""

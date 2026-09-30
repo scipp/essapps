@@ -24,7 +24,7 @@ from .log import (
     StageOpened,
     Submitted,
 )
-from .records import Element, Failure, Record, Snapshot, SpecId
+from .records import Element, Failure, Record, SpecId
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,7 @@ class AccumulatorView:
     """
     An accumulator's history: its elements in push order.
 
-    ``elements`` only grows, so the record of a snapshot keeps it and uses the
-    first ``upto``.
+    A snapshot of it covers the first ``upto``.
     """
 
     session: str
@@ -75,9 +74,6 @@ class Views:
                         label=new.label,
                         member=new.member,
                     )
-                    if isinstance(new.submitted, Snapshot):
-                        accumulator = self.accumulators[new.submitted.accumulator]
-                        record = record.with_elements(accumulator.elements)
                     self.records[new.id] = record
                     if new.label is not None:
                         key = (event.proposal, new.label)
