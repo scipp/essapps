@@ -15,6 +15,17 @@ stage is staged with no blanks and called once::
 A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
+
+A binding of an accumulator spec may also make element accumulators, which an
+accumulator in a session holds, like ``sciline.Accumulator`` for a whole
+element::
+
+    held = binding.accumulator()
+    held.push({'numerator': n1, 'denominator': d1})
+    held.value                       # {'numerator': ..., 'denominator': ...}
+
+Its value after the elements are pushed in order is the output of the plain
+request over them. Without one, every read combines all elements.
 """
 
 from __future__ import annotations
@@ -38,6 +49,29 @@ class Binding(Protocol):
         at once. Neither may modify the values it is given, and the callable
         may return the same object in several calls: records made through one
         stage share what does not depend on the blanks.
+        """
+        ...
+
+
+class ElementAccumulator(Protocol):
+    def push(self, element: Mapping[str, Any]) -> None:
+        """Add an element: a value for each field of the element model."""
+        ...
+
+    @property
+    def value(self) -> Mapping[str, Any]:
+        """The combination of the elements pushed so far."""
+        ...
+
+
+@runtime_checkable
+class AccumulatorBinding(Binding, Protocol):
+    def accumulator(self) -> ElementAccumulator:
+        """
+        A new element accumulator with nothing pushed.
+
+        Its ``value`` may be read between pushes, and a later push must not
+        modify a value read before it.
         """
         ...
 

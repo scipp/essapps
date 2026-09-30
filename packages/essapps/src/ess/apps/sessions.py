@@ -7,19 +7,19 @@ A holder never changes what a record says: a call through a stage makes the
 record of the filled template, and computing an accumulator makes the record
 of its accumulator spec over the elements pushed so far.
 
-A stage lives in the backend, which keeps what its binding computed from
-the template's values. An accumulator keeps its elements, not their combined
-value, so every call combines all of them.
+Both live in the backend: a stage keeps what its binding computed from the
+template's values, and an accumulator keeps its elements and, if its binding
+can accumulate, their combined value.
 """
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Self
 
-from ess.reduce.spec import OutputRef
-
 from .accumulators import AccumulatorSpec
-from .records import Record, Request, Template
+from .records import Element, Record, Request, SpecId, Template
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -34,6 +34,7 @@ class Session:
         self.where = where
         self.open = True
         self._backend = backend
+        self._proposal = proposal
         self._id = backend.open_session(proposal)
 
     def __enter__(self) -> Self:
@@ -47,13 +48,21 @@ class Session:
     def stage(self, template: Template) -> Stage:
         if not self.open:
             raise RuntimeError('this session has ended')
-        stage_id = self._backend.open_stage(self._id, template.spec, template.blanks)
+        stage_id = self._backend.open_stage(
+            self._id, template.spec, template.blanks, self._proposal
+        )
         return Stage(self, template, stage_id)
 
     def accumulator(self, spec: AccumulatorSpec) -> Accumulator:
         if not isinstance(spec, AccumulatorSpec):
             raise TypeError(f'{spec.name} is not an accumulator spec')
-        return Accumulator(self, spec)
+        if not self.open:
+            raise RuntimeError('this session has ended')
+        accumulator_id = self._backend.open_accumulator(
+            self._id, SpecId.of(spec), self._proposal
+        )
+        pushing = functools.partial(self._backend.push, proposal=self._proposal)
+        return Accumulator(self, spec, accumulator_id, pushing)
 
 
 class _Holder:
@@ -83,15 +92,27 @@ class Stage(_Holder):
 
 
 class Accumulator(_Holder):
-    """The combination of the elements pushed into it, under an accumulator spec."""
+    """
+    The combination of the elements pushed into it, under an accumulator spec.
 
-    def __init__(self, session: Session, spec: AccumulatorSpec) -> None:
+    ``id`` names the accumulator in the backend; submitting it reads it over
+    the elements pushed so far.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        spec: AccumulatorSpec,
+        accumulator_id: str,
+        push: Callable[[str, Element], None],
+    ) -> None:
         super().__init__(session)
         self.spec = spec
+        self.id = accumulator_id
         self._fields = tuple(spec.element.model_fields)
-        self._elements: list[dict[str, OutputRef]] = []
+        self._push = push
 
-    def push(self, element: Record | dict[str, OutputRef]) -> None:
+    def push(self, element: Record | Element) -> None:
         """
         Push a record's outputs named like the element's fields, or references.
 
@@ -100,13 +121,4 @@ class Accumulator(_Holder):
         self._check_open()
         if isinstance(element, Record):
             element = {f: element.ref(f) for f in self._fields}
-        if set(element) != set(self._fields):
-            raise ValueError(f'an element has the fields {self._fields}')
-        self._elements.append(element)
-
-    def request(self) -> Request:
-        """The accumulator spec over the elements pushed so far."""
-        self._check_open()
-        return Request(
-            self.spec, {f: [e[f] for e in self._elements] for f in self._fields}
-        )
+        self._push(self.id, element)

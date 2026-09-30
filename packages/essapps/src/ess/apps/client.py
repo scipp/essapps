@@ -115,7 +115,11 @@ class Client:
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
-            what = what.request()
+            entry = Entry(None, label=label, member=member, accumulator=what.id)
+            (record,) = self._backend.submit(
+                [entry], proposal=self.proposal, submitter=self.submitter
+            )
+            return record
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -176,9 +180,8 @@ class Client:
         spec_id = None if spec is None else SpecId.of(spec)
         return [
             r
-            for r in self._backend.records(self.proposal)
-            if (label is None or r.label == label)
-            and (spec_id is None or r.request.spec == spec_id)
+            for r in self._backend.records(self.proposal, label=label)
+            if (spec_id is None or r.spec == spec_id)
             and (since is None or r.created >= since)
             and (until is None or r.created < until)
         ]

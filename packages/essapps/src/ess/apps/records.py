@@ -11,14 +11,14 @@ it finishes, and a finished record never changes.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, walk_refs
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class SubmitError(ValueError):
@@ -48,10 +48,12 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec | SpecId) -> SpecId:
+    def of(cls, spec: WorkflowSpec | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
-        return cls(name=spec.name, version=spec.version)
+        if isinstance(spec, WorkflowSpec):
+            return cls(name=spec.name, version=spec.version)
+        return cls.model_validate(spec)
 
     def __str__(self) -> str:
         return f'{self.name}/v{self.version}'
@@ -134,16 +136,43 @@ class Failure(BaseModel, frozen=True):
     message: str
 
 
+class Read(BaseModel, frozen=True):
+    """
+    What a read of an accumulator submits: its spec over the first elements.
+
+    ``upto`` counts the elements pushed before the read. The request this
+    stands for, the accumulator spec over those elements, is built only when
+    someone asks for it, so a read costs the same however many elements it
+    covers.
+    """
+
+    spec: SpecId
+    accumulator: str
+    upto: int = Field(ge=1)
+
+
+Element = dict[str, OutputRef]
+"""One element of an accumulator: a reference for each field of the element model."""
+
+Submission = Annotated[Read | Request, Field(union_mode='left_to_right')]
+"""
+How a record stores its request. Plain data is tried as a read first, since a
+request takes any values.
+"""
+
+
 class Record(BaseModel, frozen=True):
     """
     A request with every value filled in, and what happened to it.
 
-    ``outputs`` lists the output names the spec declares; ``label`` and
+    ``submitted`` is what the backend's log holds: the request, or for a read
+    of an accumulator a :class:`Read`; :attr:`request` is the request either
+    way. ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
     """
 
     id: str
-    request: Request
+    submitted: Submission
     proposal: str
     submitter: str
     created: datetime
@@ -152,10 +181,47 @@ class Record(BaseModel, frozen=True):
     label: str | None = None
     member: str | None = None
     failure: Failure | None = None
+    _elements: Sequence[Element] = PrivateAttr(default=())
+
+    def with_elements(self, elements: Sequence[Element]) -> Record:
+        """
+        This record, building the request of a read from ``elements``.
+
+        ``elements`` are the accumulator's elements in push order; they may
+        grow, since a read uses only the first ``upto``.
+        """
+        record = self.model_copy()
+        record._elements = elements
+        return record
+
+    def __eq__(self, other: object) -> bool:
+        # Where a read finds its elements is not part of what a record says.
+        if not isinstance(other, Record):
+            return NotImplemented
+        return self.__dict__ == other.__dict__
+
+    __hash__ = None  # type: ignore[assignment]
+
+    @property
+    def spec(self) -> SpecId:
+        return self.submitted.spec
+
+    @property
+    def request(self) -> Request:
+        """The request with every value filled in; for a read, over its elements."""
+        if isinstance(self.submitted, Request):
+            return self.submitted
+        if len(self._elements) < self.submitted.upto:
+            raise LookupError(
+                f'record {self.id} reads accumulator {self.submitted.accumulator}, '
+                'whose elements are not known here'
+            )
+        elements = self._elements[: self.submitted.upto]
+        return Request(self.spec, {f: [e[f] for e in elements] for f in elements[0]})
 
     def ref(self, output: str) -> OutputRef:
         if output not in self.outputs:
-            raise KeyError(f'{self.request.spec} has no output {output!r}')
+            raise KeyError(f'{self.spec} has no output {output!r}')
         return OutputRef(record=self.id, output=output)
 
     def refs(self) -> dict[str, OutputRef]:
