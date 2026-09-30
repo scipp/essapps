@@ -249,17 +249,48 @@ User stories do not change. System story D7's property on storage holds by const
 
 **1. Adopt the log.** Records are views of an append-only log of accepted changes; a read of an accumulator is logged as the accumulator and a count. The chain of totals and array records are dropped.
 
-> Simon:
+> Simon: agree
 
 **2. Which rules keep a value.** Recommendation: all four above. Rule 3 can be decided separately if it belongs with the catalogue question.
+
+> Simon: agree, but should also think about whether making this explicit would make sense -- we already have `Accumulator` as a server-side handle for keeping data, and iirc sciline also discussed a more general `Forwarder`, which we might adopt here?
+
+Follow-up: in sciline, a connector (`Accumulator`, `Forwarder`) is an object between stages that holds a value, so that "every held value is an object the driver can inspect, clear, serialize, or send to another process" (map-reduce-outside-the-graph.md, section 8.1).
+In essapps terms, a forwarder in a session would hold the outputs of the last record pushed into it; reading it needs no new record, since the value is that record's output:
+
+```python
+with client.session() as session:
+    current = session.forwarder()
+    for scale in (1.0, 2.0):
+        current.push(client.compute(vanadium, {'scale': scale}))   # the previous value is released
+```
+
+Holders would then keep values explicitly: a stage its fixed part, an accumulator its combined value, a forwarder its last value.
+That replaces rule 3 (the latest under a label keeps its value) with an explicit object, and labels become history only, which also removes the part that touched the catalogue question.
+It cannot replace rules 1 and 2:
+
+- Rule 1 (a pending request reads it) is what makes a chain work at all.
+- Rule 2 (a record handle in a client) is what lets a notebook compute and then look at the output (S1, S3, S8). The explicit alternative, a session keeping every output made in it, keeps D7's thousand angles and thousand volumes until the session ends. With handles, a volume goes once its cut has run, and an angle once it has been combined; the accumulator would still need the angles to start again after a failed fold, which system.md has to settle.
+
+A forwarder lives in a session, so it dies with the client. What must outlive the client (C1's beam centre for tomorrow, D2's overnight batch) is saved, as you suggested for C1.
+Proposal: values are kept by rules 1, 2, and 4, and by holders in a session. A forwarder joins the holders when a story needs one; none does yet (a driving server that shows the latest curve per sample would).
 
 > Simon:
 
 **3. Pushes are checked when made, and an accumulator's reads run in order.** Both follow from the log; the first changes when a misfitting push is refused.
 
-> Simon:
+> Simon: seems obvious, but maybe I am missing an underlying question here?
+
+Follow-up: no underlying question. I listed it because the first changes what a user sees (an element that does not fit is refused at the push, not at the next read), and the second means reads of one accumulator never run in parallel. Both go into the design without a decision.
 
 **4. Retention keeps an event while a kept event depends on it.**
+
+> Simon: Not sure what a "kept event" is. Is there a risk of having orphaned sets of events that a prevent from being dropped?
+
+Follow-up: it works like a garbage collector. The roots are the events younger than the retention period. An older event is kept if a root depends on it, directly or through other kept events; everything else is dropped. "Depends on" means: a record's submission depends on the submissions of the records it references, and a read depends on its accumulator's opening and on the pushes it covers.
+Dependencies point only backwards in time, so there are no cycles: a set of old events that no young event reaches is dropped as a whole, however it is connected inside. Only a young event can keep an old one.
+What it can do is keep a long history alive: an accumulator read every day during a whole cycle keeps all its pushes for as long as its latest read is young. Pushes are small (one reference each), so this is bounded by the number of pushes.
+The simpler alternative is to drop by age only. A record whose input expired then loses that step of its provenance, as system story H3 already accepts, but a read whose pushes expired cannot even state its own request. So at least a read's pushes must follow the rule above. Recommendation: the whole rule, since it is one rule instead of two.
 
 > Simon:
 
@@ -269,8 +300,15 @@ Now the backend binds each such record to the elements when it makes the record;
 The alternative is `client.request(record)` for every record, with `record.request` gone: records are then plain data without exception, at the cost of changing every `record.request` in README.md and the stories (about 35 places).
 Recommendation: keep `record.request`, and let a client bind the records it receives to itself when a transport exists. Records are views now, and the request is the field users read most.
 
-> Simon:
+> Simon: no strong opinion here, but we should ask ourselves (when the time comes) which parts of the record/request system we actually need. Is "request" still the abstraction we want?
+
+Follow-up: noted as an open question for later. What users do with `record.request` today: rerun it (D2, D5), make a template from it (B1), read its values (S1, B6), and compare it with a plain request (S2, D7), which is how the stories check that holders do not change a record.
 
 **6. Where this goes when adopted.** Recommendation: this document becomes the first part of a system document, `docs/developer/system.md`, since it describes how the system stores history, not the API. README.md changes as listed above.
 
-> Simon:
+> Simon: Agreed, we should also adopt writing ADRs (same style as in /workspace/scipp or /workspace/esslivedata), you may decide whether this should be one of a system document (pitfall from the past: too long ADRs that discussed implementation details).
+
+Follow-up: I would write both, split by what changes how often.
+ADR 0001 in `docs/developer/adr/` (the esslivedata format, with an index that says accepted text is not rewritten): the decision only, about 80 to 120 lines. Context: records as snapshots made a time machine for values; D7. Decision: history is a log of accepted changes, records are views of it, a read is an accumulator and a count, values are kept apart. Alternatives: flat lists, the chain of totals, array records, a record store with snapshots. Consequences.
+`docs/developer/system.md`: the design as it is, and changed as the design changes: the events, the views, recovery, where the log lives, which rules keep a value, retention.
+The proposal is then removed, and README.md changes as listed. I would do this once you have answered the two follow-ups above (decisions 2 and 4), since both land in system.md.
