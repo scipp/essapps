@@ -8,8 +8,8 @@ record of the filled template, and computing an accumulator makes the record
 of its accumulator spec over the elements pushed so far.
 
 Both live in the backend: a stage keeps what its binding computed from the
-template's values, and an accumulator keeps its elements and, if its binding
-can accumulate, their combined value.
+template's values, and an accumulator keeps its elements and their combined
+value.
 """
 
 from __future__ import annotations

@@ -78,7 +78,7 @@ Other intermediates are inspected by running the package's workflow in a noteboo
 A binding is staged with the values that stay fixed and returns a callable over the rest; a request outside a stage is staged with no blanks and called once.
 A plain function is a binding that computes everything on each call.
 A sciline pipeline, through `sciline.Stage`, computes what does not depend on the blanks once.
-The binding of an accumulator spec may also make element accumulators (`accumulator()`), so that an accumulator keeps its combined value; `combine(operator.add)` does.
+The binding of an accumulator spec may also make element accumulators (`accumulator()`), as `combine(operator.add)` does; an accumulator in a session needs such a binding.
 Records do not depend on which.
 
 ```python

@@ -421,23 +421,19 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
     assert client.output(snapshot, 'value') == client.output(plain, 'value')
 
 
-def test_a_snapshot_through_a_plain_function_runs_as_the_request(
-    client: Client,
-) -> None:
+def test_an_accumulator_needs_a_binding_that_accumulates(client: Client) -> None:
     loads = client.wait([client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
-    with client.session() as session:
-        both = session.accumulator(PAIRS)
-        for load in loads:
-            both.push(load)
-        snapshot = client.submit(both)
-    done = client.wait(snapshot)
+    with client.session() as session, pytest.raises(SubmitError, match='accumulate'):
+        session.accumulator(PAIRS)
+    plain = client.compute(
+        PAIRS,
+        {
+            'value': [x.ref('value') for x in loads],
+            'extra': [x.ref('extra') for x in loads],
+        },
+    )
 
-    assert snapshot.status is Status.PENDING
-    assert done.request.params == {
-        'value': [x.ref('value') for x in loads],
-        'extra': [x.ref('extra') for x in loads],
-    }
-    assert [client.output(done, name) for name in ('value', 'extra')] == [3.0, -3.0]
+    assert [client.output(plain, name) for name in ('value', 'extra')] == [3.0, -3.0]
 
 
 class Sum:

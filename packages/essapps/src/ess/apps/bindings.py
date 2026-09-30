@@ -16,16 +16,16 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of an accumulator spec may also make element accumulators, which an
-accumulator in a session holds, like ``sciline.Accumulator`` for a whole
-element::
+A binding of an accumulator spec may also make element accumulators, like
+``sciline.Accumulator`` for a whole element. An accumulator in a session holds
+one, so it needs such a binding::
 
     held = binding.accumulator()
     held.push({'numerator': n1, 'denominator': d1})
     held.value                       # {'numerator': ..., 'denominator': ...}
 
 Its value after the elements are pushed in order is the output of the plain
-request over them. Without one, every snapshot combines all elements.
+request over them.
 """
 
 from __future__ import annotations

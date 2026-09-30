@@ -23,12 +23,11 @@ first call, so a binding that holds values computes only what depends on
 the blanks. A stage lives until its session ends and the requests made
 through it have run.
 
-An accumulator takes only elements whose records have completed. If its
-binding can accumulate, a push combines the element into the value the
-accumulator holds, and a snapshot's record completes at submission with that
-value; otherwise a snapshot runs as the request over its elements. A
-snapshot's record names the accumulator and how many elements it covers, so
-it costs the same however many elements that is.
+An accumulator takes only elements whose records have completed. A push
+combines the element into the value the accumulator holds, and a snapshot's
+record completes at submission with that value. A snapshot's record names the
+accumulator and how many elements it covers, so it costs the same however
+many elements that is.
 """
 
 from __future__ import annotations
@@ -138,12 +137,11 @@ class _Held:
     A push combines its element into ``accumulator``, the binding's, under
     ``lock`` and outside the backend's lock. ``value`` is the combined value of
     the elements in the accumulator's view; it changes under the backend's lock
-    together with them, so a snapshot reads the two as one. Both stay ``None``
-    for a binding that cannot accumulate. ``stopped`` says why the accumulator
-    takes no more pushes or snapshots.
+    together with them, so a snapshot reads the two as one. ``stopped`` says
+    why the accumulator takes no more pushes or snapshots.
     """
 
-    def __init__(self, accumulator: ElementAccumulator | None) -> None:
+    def __init__(self, accumulator: ElementAccumulator) -> None:
         self.lock = threading.Lock()
         self.accumulator = accumulator
         self.value: Mapping[str, Any] | None = None
@@ -264,13 +262,12 @@ class Backend:
                 if entry.stage is not None:
                     self._stage_of[record_id] = self._staged[entry.stage]
             for record_id, entry in zip(ids, entries, strict=True):
-                held = None
-                if entry.accumulator is not None:
-                    held = self._held[entry.accumulator].value
-                if held is None:
+                if entry.accumulator is None:
                     self._schedule(record_id)
                 else:
-                    self._complete(record_id, dict(held))
+                    value = self._held[entry.accumulator].value
+                    assert value is not None  # noqa: S101 - an empty one was refused
+                    self._complete(record_id, dict(value))
             return [self._views.records[i] for i in ids]
 
     def _prepare(self, entry: Entry, ids: list[str], proposal: str) -> Request:
@@ -535,13 +532,21 @@ class Backend:
         return stage_id
 
     def open_accumulator(self, session: str, spec_id: SpecId, proposal: str) -> str:
-        """An accumulator in the session, with nothing pushed."""
+        """
+        An accumulator in the session, with nothing pushed.
+
+        Its binding must make element accumulators; a plain request over a
+        list works with any binding.
+        """
         if not isinstance(self.spec(spec_id), AccumulatorSpec):
             raise SubmitError(f'{spec_id} is not an accumulator spec')
         binding = self._bindings[spec_id]
-        held = _Held(
-            binding.accumulator() if isinstance(binding, AccumulatorBinding) else None
-        )
+        if not isinstance(binding, AccumulatorBinding):
+            raise SubmitError(
+                f'{spec_id} is bound to code that cannot accumulate; '
+                'submit the request over a list instead'
+            )
+        held = _Held(binding.accumulator())
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             self._check_session(session, proposal)
@@ -573,17 +578,15 @@ class Backend:
         with held.lock:
             with self._changed:
                 position, values = self._pushable(accumulator_id, element, proposal)
-            value = held.value
-            if held.accumulator is not None:
-                try:
-                    held.accumulator.push(values)
-                    value = held.accumulator.value
-                except Exception as error:  # the binding may hold part of the element
-                    reason = str(error) or repr(error)
-                    failure = f'element {position} failed to combine: {reason}'
-                    with self._changed:
-                        held.stopped = f'the accumulator stopped: {failure}'
-                    raise SubmitError(failure) from error
+            try:
+                held.accumulator.push(values)
+                value = held.accumulator.value
+            except Exception as error:  # the binding may hold part of the element
+                reason = str(error) or repr(error)
+                failure = f'element {position} failed to combine: {reason}'
+                with self._changed:
+                    held.stopped = f'the accumulator stopped: {failure}'
+                raise SubmitError(failure) from error
             with self._changed:
                 self._open_accumulator(accumulator_id, proposal)
                 self._append(Pushed(accumulator=accumulator_id, element=element))
