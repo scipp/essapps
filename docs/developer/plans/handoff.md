@@ -1,28 +1,29 @@
 # Handoff
 
-A living document for the next session on branch `core`. Read it first, then `docs/developer/README.md`, then `plans/todo.md`. At the start of a session, ask Simon the questions under "Decisions to ask Simon"; fold his answers into the README or `todo.md` and remove them here. Update this file at the end of each session.
+A living document for the next session on branch `event-log`. Read it first, then `docs/developer/README.md`, then `plans/todo.md`. At the start of a session, ask Simon the questions under "Decisions to ask Simon"; fold his answers into the README or `todo.md` and remove them here. Update this file at the end of each session.
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Branch | `core`, checked out in `/workspace/essapps`; pushed to origin as a backup, not reviewed |
+| Branch | `event-log`, off `main`, checked out in `/workspace/essapps`; `main` holds the reviewed-in-conversation `core` (merged 2026-09-30) |
 | The API design | `docs/developer/README.md` (was `proposals/core-api.md`) |
 | API-tier stories | `docs/developer/user-stories.md`: 45 stories as client code; an "Open" section at the end |
-| Proposal awaiting decision | `docs/developer/proposals/array-records.md`: how a growing accumulator is recorded (array records against a chain of totals) |
+| Proposal awaiting decision | `docs/developer/proposals/event-log.md`: the backend's history as an append-only event log, records as views, values with their own lifetime; implemented in the in-process backend |
+| Simon's review notes | `simon-notes.md` in the checkout, not in git: questions on the README and stories. B6 (is a long-lived record store core, is it replicating SciCat) led to the event log; A2, A5, B2 to B5, and the README batch example are not yet answered. He parks the SciCat question until the log is settled |
 | System-tier stories | `docs/developer/system-stories.md`: actor, goal, property; no code yet |
 | Sub-design: batch and automatic reduction | `docs/developer/automatic-reduction.md` |
 | To-do list | `docs/developer/plans/todo.md` |
 | Scoping | `docs/developer/scoping.md` |
-| Code | `packages/essapps/src/ess/apps/`: `records.py`, `backend.py`, `client.py`, `bindings.py`, `pipeline.py`, `datasets.py`, `batch.py`, `accumulators.py`, `sessions.py`, `rules.py`, `testing.py` (about 1,550 lines) |
-| Tests | `packages/essapps/tests/`: `backend_test.py`, `sessions_test.py`, `pipeline_test.py`, `stories/*_test.py` (one test per API-tier story), toy specs and fixtures in `stories/conftest.py` |
+| Code | `packages/essapps/src/ess/apps/`: `records.py`, `log.py`, `views.py`, `backend.py`, `client.py`, `bindings.py`, `pipeline.py`, `datasets.py`, `batch.py`, `accumulators.py`, `sessions.py`, `rules.py`, `testing.py` (about 2,000 lines) |
+| Tests | `packages/essapps/tests/`: `backend_test.py`, `log_test.py`, `sessions_test.py`, `pipeline_test.py`, `stories/*_test.py` (one test per API-tier story), toy specs and fixtures in `stories/conftest.py` |
 | The previous attempt of this session's work | branch `core-old` (README with 8 terms, stories with the old vocabulary, the accumulating-inputs draft) |
 | The previous design and skeleton | branch `architecture-sketch`, tip `b840b1f`; see "Implementation notes" in `todo.md` |
 | sciline ADR 0003 (Stage, Aggregation, Accumulator) | `/workspace/sciline`, branch `map-reduce-outside-the-graph`; `docs/developer/adr/0003-*.md` and `docs/developer/architecture-and-design/map-reduce-outside-the-graph.md` |
 | ess.reduce workflow spec (ADR 0001) | `/workspace/ess`, branch `653-minimal-workflow-spec`, `packages/essreduce/src/ess/reduce/spec/` |
 
 Environment: `.venv` in the worktree, made with `python3 -m venv --system-site-packages .venv`, then `pip install -e /workspace/ess/packages/essreduce --no-deps` and `pip install -e 'packages/essapps[test]' --no-deps`.
-Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (62 pass, 11 strict xfails, about 11 s, of which story D7 takes 7 to 10 s).
+Run tests from `packages/essapps`: `../../.venv/bin/python -m pytest tests -q -n auto` (83 pass, 11 strict xfails, about 4 s).
 Lint: `ruff check . && ruff format .` (ruff from conda base; no pre-commit hooks are installed in this repository).
 
 ## How Simon wants to work
@@ -66,9 +67,9 @@ Done, with story tests passing:
 - Client: shapes, placeholders renumbered to `@<index>` before the backend sees them, labels, members, `records(since=, until=)`, provenance with `.datasets()` and `.records()`.
 - Templates, `apply`, lookups (`LastBefore`), rules with series, `TriggerLoop` (`step`, `status`, `run`), reading what it handled from the records under the rule's label.
 - Bindings (`bindings.py`, `pipeline.py`): every binding has `stage(fixed, blanks)`; a plain function computes everything on each call.
-- Sessions with stages and accumulators. Stages live in the backend and keep what their binding computed; a request names its stage, which the backend checks at submission (open, same proposal, same spec) and keeps until the requests through it have run. Accumulators keep their elements but not their combined value.
-- D7 is quadratic, and not because of the arithmetic: every read of the accumulator makes a record listing every element so far, so the client, the checks, the scheduler, and provenance each handle about 500,000 references for 1000 angles. Holding the combined value in memory would not fix it. Decision A below.
-- A start on accumulators that keep their combined value (a `binding.accumulator()` capability, `combine` as a running fold) was set aside, uncommitted, when the cause turned out to be the record shape. Whether it is needed depends on decision A: with a chain, each read combines two values and needs no held value.
+- Sessions with stages and accumulators. Stages live in the backend and keep what their binding computed; a request names its stage, which the backend checks at submission (open, same proposal, same spec) and keeps until the requests through it have run.
+- The event log (`log.py`, `views.py`, `proposals/event-log.md`): every change the backend accepts is checked, appended as one event, and applied to the views (`Views.apply`); what is not history (outputs, staged callables, held values, what waits for what) stays in the backend; a backend given an existing log (a JSON-lines file) replays it, closes sessions left open, and runs what was pending. Output values are not in the log and live in memory.
+- Accumulators live in the backend. A push is checked when made; a read is logged as `Read(spec, accumulator, upto)` and `record.request` builds the flat request when accessed. A binding with `accumulator()` (`combine`) keeps the combined value, and reads of one accumulator run in order, one at a time. D7: 0.86 s for 1000 angles with one worker (5.6 s before), 1000 stored element references (501,500 before).
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
 
@@ -78,23 +79,12 @@ Provisional choices in the code, easy to change: generic accumulator specs are n
 
 Each affects more than one area. Ask them in this order at the start of the next session.
 
-### A. How a growing accumulator is recorded (blocks the next step)
+### A. The event log (blocks the next step)
 
-Read `docs/developer/proposals/array-records.md` first; its "Decisions" section has five questions with `> Simon:` lines.
-Context in short:
+Read `docs/developer/proposals/event-log.md`; its "Decisions" section has six questions with `> Simon:` lines.
+Simon agreed on 2026-09-30 to keep a time machine for history (for a retention period) and none for values (kept while held or saved), and to a log of accepted calls with records as views. The proposal works this out and the code implements it; what remains is the rules that keep a value, retention, and where the document goes.
 
-- Every submission makes a record, and an accumulator already makes a record only when it is read (a push makes none). "Records only on read" is therefore today's behaviour and does not help D7, which reads after every push (a CUT references the current total).
-- The cause is what each read's record lists: every element so far, because the README fixes it to the flat request of way 2. Measured for 1000 angles: flat 6.7 s and 502,500 references; a chain 0.55 s and 2,999; one read at the end 0.57 s and 1,000. The flat time grows 4x per doubling.
-- Three ways out: a chain of totals (each read is the spec over the previous read and the elements since; about 20 lines, no new concept, but the record says how the value was computed); array records (a holder's records share one stored template, and a read names a range of them; keeps the flat meaning, about 270 lines, a new reference form in ess.reduce, and D7's angles must go through a stage); a named list of elements shared in every layer (keeps everything, the largest).
-- The proposal recommends the chain, and storing a holder's template once as a matter of the store, not the API.
-
-Two more questions that the proposal does not ask:
-
-**A6. Should D7's per-angle cuts be views instead of records?**
-They are there to watch the volume grow. Every read that makes a record also stores its output, so D7 as written stores 1000 volumes; for a real 4D volume that is the larger cost. As views of the accumulator (no record), D7 makes one read at the end, and `total.request == plain.request` holds under any representation. A total that other programs read under a label, such as an automatic rule's running sum, still makes a record per read. The form of a view waits for the plotting work (B4).
-Recommendation: yes; change D7's story and keep the durable per-arrival total for a rule.
-
-> Simon:
+Still open from the earlier accumulator questions:
 
 **A7. The README guarantee on values passed in memory changed in `795651b`.**
 It said "a value passed in memory is a copy of the referenced output", but nothing copied, and a stage returns the same object in every record for what does not depend on its blanks. It now says the value is the referenced output itself, so a workflow must not modify its inputs; the binding contract says the same. Copying would cancel the saving a stage exists for.
@@ -133,7 +123,7 @@ Proposal: LoKI first (then Amor), which tests the binding contract and decision 
 > Simon:
 
 **4. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
-Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. If decision A chooses the chain, every accumulator spec must not depend on grouping, which settles the second half.
+Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. With the event log, accumulator reads no longer need grouping independence; a tree of partial sums over a plain request still does.
 
 > Simon:
 
