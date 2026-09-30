@@ -35,7 +35,6 @@ from ess.apps.log import (
     NewRecord,
     Pushed,
     SessionOpened,
-    StageOpened,
     Submitted,
 )
 from ess.apps.records import Snapshot
@@ -161,13 +160,14 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
         total = session.accumulator(TOTAL)
         for load in loads.values():
             total.push(load)
-        snapshot = first.compute(total, label='total')
+        snapshot = first.compute(total)
 
     again = restart(tmp_path / 'log')
 
     assert again.records() == first.records()
     assert again.members('loads') == loads
-    assert again.provenance(again.latest('total')) == first.provenance(snapshot)
+    assert again.records(spec=TOTAL) == [snapshot]
+    assert again.provenance(snapshot) == first.provenance(snapshot)
     assert again.provenance(snapshot).records() == list(loads.values())
 
 
@@ -223,24 +223,6 @@ def test_a_record_pending_in_the_log_runs_after_a_restart(
 
     assert done.status == Status.COMPLETED
     assert again.output(done, 'value') == 2.0
-
-
-def test_a_record_pending_through_a_stage_runs_without_it_after_a_restart(
-    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
-) -> None:
-    run = datasets.resolve(dataset(run=2))
-    _write(
-        tmp_path / 'log',
-        SessionOpened(session='s', proposal='p1'),
-        StageOpened(stage='t', session='s', spec=SpecId.of(LOAD), blanks=('window',)),
-        _submitted('x', Request(LOAD, {'run': run, 'window': [0.0, 1.0]}), stage='t'),
-    )
-
-    client = start(tmp_path / 'log')
-    done = client.wait(_record(client, 'x'))
-
-    assert done.status == Status.COMPLETED
-    assert client.output(done, 'value') == 2.0
 
 
 def test_a_restart_closes_the_sessions_left_open(
@@ -312,6 +294,31 @@ def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
     assert snapshot.status == Status.FAILED
     assert snapshot.failure is not None
     assert 'accumulator ended' in snapshot.failure.message
+
+
+def test_provenance_refuses_a_snapshot_whose_elements_the_log_lacks(
+    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
+) -> None:
+    run = datasets.resolve(dataset(run=1))
+    _write(
+        tmp_path / 'log',
+        SessionOpened(session='s', proposal='p1'),
+        AccumulatorOpened(accumulator='a', session='s', spec=SpecId.of(TOTAL)),
+        _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
+        Finished(record='load', status=Status.COMPLETED),
+        Pushed(
+            accumulator='a', element={'value': OutputRef(record='load', output='value')}
+        ),
+        _submitted(
+            'snapshot', Snapshot(spec=SpecId.of(TOTAL), accumulator='a', upto=2)
+        ),
+        Finished(record='snapshot', status=Status.COMPLETED),
+    )
+
+    client = start(tmp_path / 'log')
+
+    with pytest.raises(LookupError, match='lacks elements'):
+        client.provenance(_record(client, 'snapshot'))
 
 
 def test_a_refused_call_writes_nothing_to_the_log(

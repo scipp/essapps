@@ -352,6 +352,15 @@ def test_a_snapshot_with_nothing_pushed_is_refused(client: Client) -> None:
             client.submit(total)
 
 
+def test_a_snapshot_takes_no_label(client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    with client.session() as session:
+        total = session.accumulator(TOTAL)
+        total.push(load)
+        with pytest.raises(TypeError, match='no label'):
+            client.submit(total, label='total')
+
+
 def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
     with client.session() as session:

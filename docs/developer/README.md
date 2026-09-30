@@ -141,7 +141,7 @@ records = client.submit({'centre': centre, **samples})    # pending records, sam
 
 **Label.** A label names a sequence of records; the latest is the current one. A label keeps no values.
 A member splits a label, one per sample or temperature.
-Label and member are given at submission, not in the request, since they do not change the result; a record shows both.
+Label and member are given at submission, not in the request, since they do not change the result; a record shows both. A snapshot of an accumulator (see Holders) takes neither.
 Submitting a dict of requests under a label makes each key the member of its record.
 
 ```python

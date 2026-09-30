@@ -90,8 +90,7 @@ class TriggerLoop:
         handled = {
             ref
             for record in self._client.records(label=rule.label)
-            if isinstance(record.submitted, Request)
-            for ref in record.submitted.datasets()
+            for ref in record.request.datasets()
         }
         matching = self._source.list(rule.selector)
         new = [ref for ref in matching if ref not in handled]

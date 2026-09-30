@@ -26,7 +26,7 @@ Every change the backend accepts is one event:
 
 | Event | Holds | Appended when |
 |---|---|---|
-| `submitted` | time, proposal, submitter, and for each record: its ID, its request or snapshot, its output names, label, member, stage | a submission is accepted |
+| `submitted` | time, proposal, submitter, and for each record: its ID, its request or snapshot, its output names, label, member | a submission is accepted |
 | `finished` | record ID, status, failure message | a record completes, fails, or is cancelled |
 | `session-opened`, `session-closed` | session ID, proposal | a session opens or ends |
 | `stage-opened` | stage ID, session, spec, blanks | a stage opens |
@@ -147,6 +147,7 @@ The accumulator does not keep its elements' values after combining them.
 A long combine holds up only the pushes into the same accumulator, which are logged in the order they were combined.
 
 **Snapshot.** The `finished` event of a snapshot follows its `submitted` event at once.
+A snapshot takes no label or member; the requests that read it do.
 Its value is the value of the plain request over the same list, since both combine the elements in list order.
 The list is in push order, which in D7 is the order in which the angles finished, so two runs over the same scan may list the angles in different orders.
 The `submitted` event names the accumulator and a count instead of the list, since the elements are already in the log as the accumulator's `pushed` events (ADR 0001).

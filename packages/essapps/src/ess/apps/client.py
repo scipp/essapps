@@ -116,7 +116,8 @@ class Client:
 
         Requests may be one, a list, or a dict. The records come back pending,
         in the shape given. Under a label, the keys of a dict become the
-        members of their records.
+        members of their records. An accumulator makes a snapshot, which is
+        completed at once and takes no label or member.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -126,11 +127,11 @@ class Client:
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
-            entry = Entry(None, label=label, member=member, accumulator=what.id)
-            (record,) = self._backend.submit(
-                [entry], proposal=self.proposal, submitter=self.submitter
+            if label is not None or member is not None:
+                raise TypeError('a snapshot takes no label or member')
+            return self._backend.snapshot(
+                what.id, proposal=self.proposal, submitter=self.submitter
             )
-            return record
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')

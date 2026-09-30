@@ -88,21 +88,19 @@ def _agree(output: DataField, param: DataField) -> bool:
 @dataclass(frozen=True)
 class Entry:
     """
-    A request of a submission or a snapshot of an accumulator, and its label and member.
+    A request of a submission, and its label and member.
 
     ``name`` says where the request came from in the call, a key or an index,
     and prefixes the reasons it is refused. A reference to the record ``@<i>``
     names the record the i-th entry becomes. ``stage`` names the stage the
-    request goes through, if any. An entry with ``accumulator`` and no request
-    is a snapshot of that accumulator over the elements pushed so far.
+    request goes through, if any.
     """
 
-    request: Request | None
+    request: Request
     label: str | None = None
     member: str | None = None
     name: str | None = None
     stage: str | None = None
-    accumulator: str | None = None
 
     def refused(self, error: SubmitError) -> SubmitError:
         return SubmitError(f'{self.name}: {error}' if self.name else str(error))
@@ -223,25 +221,15 @@ class Backend:
         Check every request, then create a record for each.
 
         If one request is refused, none is submitted. Dataset names are
-        resolved before the backend's lock is taken. The records are pending,
-        except a snapshot of an accumulator that holds its combined value,
-        which completes with that value.
+        resolved before the backend's lock is taken. The records are pending.
         """
         ids = [uuid.uuid4().hex for _ in entries]
-        prepared = [
-            None if e.accumulator is not None else self._prepare(e, ids, proposal)
-            for e in entries
-        ]
+        requests = [self._prepare(e, ids, proposal) for e in entries]
         with self._changed:
-            submitted: list[Request | Snapshot] = [
-                self._snapshot_of(e, proposal) if request is None else request
-                for e, request in zip(entries, prepared, strict=True)
-            ]
-            specs = {i: r.spec for i, r in zip(ids, submitted, strict=True)}
-            for entry, request in zip(entries, submitted, strict=True):
-                if isinstance(request, Request):
-                    self._check_reads(entry, request, specs, proposal)
-                    self._check_stage(entry, request, proposal)
+            specs = {i: r.spec for i, r in zip(ids, requests, strict=True)}
+            for entry, request in zip(entries, requests, strict=True):
+                self._check_reads(entry, request, specs, proposal)
+                self._check_stage(entry, request, proposal)
             self._append(
                 Submitted(
                     time=self._clock(),
@@ -256,10 +244,9 @@ class Backend:
                             ),
                             label=entry.label,
                             member=entry.member,
-                            stage=entry.stage,
                         )
                         for record_id, entry, request in zip(
-                            ids, entries, submitted, strict=True
+                            ids, entries, requests, strict=True
                         )
                     ),
                 )
@@ -267,19 +254,44 @@ class Backend:
             for record_id, entry in zip(ids, entries, strict=True):
                 if entry.stage is not None:
                     self._stage_of[record_id] = self._staged[entry.stage]
-            for record_id, entry in zip(ids, entries, strict=True):
-                if entry.accumulator is None:
-                    self._schedule(record_id)
-                else:
-                    value = self._held[entry.accumulator].value
-                    assert value is not None  # noqa: S101 - an empty one was refused
-                    self._complete(record_id, dict(value))
+                self._schedule(record_id)
             return [self._views.records[i] for i in ids]
+
+    def snapshot(self, accumulator_id: str, *, proposal: str, submitter: str) -> Record:
+        """
+        A record of the accumulator's combined value, completed at once.
+
+        It covers the elements pushed so far, and names the accumulator and how
+        many elements that is.
+        """
+        record_id = uuid.uuid4().hex
+        with self._changed:
+            accumulator = self._open_accumulator(accumulator_id, proposal)
+            value = self._held[accumulator_id].value
+            if value is None:
+                raise SubmitError('nothing has been pushed')
+            snapshot = Snapshot(
+                spec=accumulator.spec,
+                accumulator=accumulator_id,
+                upto=len(accumulator.elements),
+            )
+            outputs = tuple(self._specs[accumulator.spec].outputs.model_fields)
+            self._append(
+                Submitted(
+                    time=self._clock(),
+                    proposal=proposal,
+                    submitter=submitter,
+                    records=(
+                        NewRecord(id=record_id, submitted=snapshot, outputs=outputs),
+                    ),
+                )
+            )
+            self._complete(record_id, dict(value))
+            return self._views.records[record_id]
 
     def _prepare(self, entry: Entry, ids: list[str], proposal: str) -> Request:
         """The request with names resolved and defaults filled; needs no lock."""
         request = entry.request
-        assert request is not None  # noqa: S101 - snapshots are made under the lock
         try:
             spec = self.spec(request.spec)
             unknown = set(request.params) - set(spec.params.model_fields)
@@ -367,15 +379,6 @@ class Backend:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
             )
-
-    def _snapshot_of(self, entry: Entry, proposal: str) -> Snapshot:
-        """A snapshot of the entry's accumulator over the elements so far; lock held."""
-        assert entry.accumulator is not None  # noqa: S101
-        accumulator = self._open_accumulator(entry.accumulator, proposal)
-        upto = len(accumulator.elements)
-        if upto == 0:
-            raise entry.refused(SubmitError('nothing has been pushed'))
-        return Snapshot(spec=accumulator.spec, accumulator=entry.accumulator, upto=upto)
 
     def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
         """The spec of a record a request may read; lock held."""
@@ -711,6 +714,11 @@ class Backend:
                 return record.submitted.refs()
             snapshot = record.submitted
             elements = self._views.accumulators[snapshot.accumulator].elements
+            if len(elements) < snapshot.upto:
+                raise LookupError(
+                    f'the log lacks elements of accumulator {snapshot.accumulator} '
+                    f'that record {record_id} covers'
+                )
             return [ref for e in elements[: snapshot.upto] for ref in e.values()]
 
     def records(self, proposal: str, label: str | None = None) -> list[Record]:

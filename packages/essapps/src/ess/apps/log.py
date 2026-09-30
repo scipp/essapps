@@ -35,7 +35,6 @@ class NewRecord(BaseModel, frozen=True):
     outputs: tuple[str, ...]
     label: str | None = None
     member: str | None = None
-    stage: str | None = None
 
 
 class Submitted(BaseModel, frozen=True):
