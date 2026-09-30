@@ -67,10 +67,13 @@ What the log records:
 The design depends on the log being append-only and ordered, not on where it is stored.
 
 - In-process backend: in memory, or a file of JSON lines. A write that fails, as on a full disk (system story H1), leaves the file as it was. A last line cut short by a crash while it was written is dropped when the file is read; any other line that is not an event is an error.
-- A local backend shared by two notebooks (system story G4): a file appended under a lock (not implemented).
 - A hosted backend: a file, a database table used only by appending, or Kafka.
 
-One log per backend.
+One log per backend, and one backend per log.
+A backend holds its log file from start to close with an exclusive lock (`flock`), and a second backend on the same file, in any process, is refused at start.
+The operating system lets go of the lock when the process ends, so a backend started after a crash or for an upgrade (system story H2) takes the file over.
+Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
+The lock needs `fcntl`, so a log file does not work on Windows; a log in memory does.
 The views depend on three orders, and a log split by proposal keeps all three, since each lies within one proposal:
 
 - a record's `submitted` before its `finished`;

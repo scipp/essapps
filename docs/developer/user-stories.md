@@ -865,7 +865,9 @@ assert found == centre
 assert second.output(result, 'iofq').values.tolist() == [3.0, 7.0]
 ```
 
-That both notebooks run on one machine without locking each other out is system story G4.
+Both notebooks are clients of one backend, such as a hosted one; a backend in each notebook shares nothing.
+
+Gap: without a shared backend, the first notebook saves the centre to a folder both can read, and the second names the file as a dataset, `dataset(path=...)`, instead of referencing the output. Saving belongs to the provenance and publication sub-design.
 
 ### G5. Reference across proposals refused
 
@@ -902,7 +904,7 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
-- **Saving** (D6, E1): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+- **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 3.
 - **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is README.md open question 4.

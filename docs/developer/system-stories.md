@@ -111,11 +111,6 @@ Property: a backend in the notebook's process runs a workflow bound there, and u
 Actor: user of a desktop application. Goal: the expensive reduction runs on the cluster; the cheap post-processing is tuned on the laptop with sub-second feedback.
 Property: a session's process runs on the laptop while its stages read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records the session makes go to the cluster's backend.
 
-### G4. Two notebooks on one machine
-
-Actor: user with two notebooks. Goal: both notebooks work at the same time on one machine.
-Property: two clients on one machine share one store, and neither locks the other out.
-
 ### G5. Reference across proposals refused
 
 Actor: operator. Goal: no user reads another proposal's data, whatever client they use.
@@ -131,7 +126,7 @@ Property: stored outputs can be dropped by proposal, label, or age. Every record
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema.
+Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on a log that another backend still holds is refused, so the old and the new version never write the same log.
 
 ### H3. Records expire
 

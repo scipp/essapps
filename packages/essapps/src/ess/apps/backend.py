@@ -199,7 +199,9 @@ class Backend:
                     self._schedule(record.id)
 
     def close(self) -> None:
+        """Wait for the running requests, then let go of the log."""
         self._executor.shutdown(wait=True)
+        self._log.close()
 
     def spec(self, spec_id: SpecId) -> WorkflowSpec:
         try:

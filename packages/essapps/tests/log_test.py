@@ -113,9 +113,9 @@ def restart(
 
 
 def _write(path: Path, *events: Event) -> None:
-    log = Log(path)
-    for event in events:
-        log.append(event)
+    with Log(path) as log:
+        for event in events:
+            log.append(event)
 
 
 def _submitted(
@@ -191,7 +191,7 @@ def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
             total.push(client.compute(LOAD, {'run': dataset(run=n)}))
         snapshot = client.submit(total)
 
-    *_, logged, finished = Log(tmp_path / 'log')
+    *_, logged, finished = Log.read(tmp_path / 'log')
     assert isinstance(logged, Submitted)
     assert logged.records[0].submitted == Snapshot(
         spec=snapshot.spec, accumulator=total.id, upto=3
@@ -318,7 +318,11 @@ def test_the_log_holds_submissions_finished_records_and_pushes_only(
         total = session.accumulator(TOTAL)
         total.push(client.compute(LOAD, {'run': dataset(run=1)}))
 
-    assert [type(e) for e in Log(tmp_path / 'log')] == [Submitted, Finished, Pushed]
+    assert [type(e) for e in Log.read(tmp_path / 'log')] == [
+        Submitted,
+        Finished,
+        Pushed,
+    ]
 
 
 def test_a_refused_call_writes_nothing_to_the_log(
@@ -326,7 +330,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
 ) -> None:
     client = start(tmp_path / 'log')
     load = client.compute(LOAD, {'run': dataset(run=1)})
-    written = len(Log(tmp_path / 'log'))
+    written = len(Log.read(tmp_path / 'log'))
 
     with pytest.raises(SubmitError, match='not parameters'):
         client.submit(LOAD, {'run': dataset(run=1), 'bins': 2})
@@ -337,7 +341,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
         with pytest.raises(SubmitError, match='fields'):
             total.push({'other': load.ref('value')})
 
-    assert len(Log(tmp_path / 'log')) == written
+    assert len(Log.read(tmp_path / 'log')) == written
 
 
 def test_a_write_that_fails_leaves_the_log_as_it_was(
@@ -346,35 +350,40 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
     resource = pytest.importorskip('resource')
     path = tmp_path / 'log'
     run = datasets.resolve(dataset(run=1))
-    log = Log(path)
-    log.append(_submitted('load', Request(LOAD, {'run': run})))
-    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
-    # A file limit that a second event exceeds, as a full disk would.
-    resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 10, hard))
-    try:
-        with pytest.raises(OSError, match='too large'):
-            log.append(_submitted('again', Request(LOAD, {'run': run})))
-    finally:
-        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
-    log.append(Finished(record='load', status=Status.COMPLETED))
+    with Log(path) as log:
+        log.append(_submitted('load', Request(LOAD, {'run': run})))
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        # A file limit that a second event exceeds, as a full disk would.
+        resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 10, hard))
+        try:
+            with pytest.raises(OSError, match='too large'):
+                log.append(_submitted('again', Request(LOAD, {'run': run})))
+        finally:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        log.append(Finished(record='load', status=Status.COMPLETED))
 
-    assert [type(e) for e in Log(path)] == [Submitted, Finished]
+    assert [type(e) for e in Log.read(path)] == [Submitted, Finished]
+
+
+def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
+    path = tmp_path / 'log'
+    with Log(path), pytest.raises(RuntimeError, match='held by another log'):
+        Log(path)
+    Log(path).close()  # free once the first has let go
 
 
 def test_a_last_line_cut_short_is_dropped(
-    tmp_path: Path,
-    start: Callable[[Path], Client],
-    restart: Callable[[Path], Client],
+    tmp_path: Path, datasets: FakeDatasets
 ) -> None:
-    first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=1)})
-    with (tmp_path / 'log').open('ab') as file:
+    path = tmp_path / 'log'
+    run = datasets.resolve(dataset(run=1))
+    _write(path, _submitted('load', Request(LOAD, {'run': run})))
+    with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing
 
-    again = start(tmp_path / 'log')
-    later = again.compute(LOAD, {'run': dataset(run=2)})
+    _write(path, Finished(record='load', status=Status.COMPLETED))
 
-    assert restart(tmp_path / 'log').records() == [load, later]
+    assert [type(e) for e in Log.read(path)] == [Submitted, Finished]
 
 
 def test_a_line_that_is_not_an_event_is_refused(
@@ -385,4 +394,4 @@ def test_a_line_that_is_not_an_event_is_refused(
     (tmp_path / 'log').write_bytes(b''.join([lines[0], b'{}\n', *lines[1:]]))
 
     with pytest.raises(ValueError, match='kind'):
-        Log(tmp_path / 'log')
+        Log.read(tmp_path / 'log')

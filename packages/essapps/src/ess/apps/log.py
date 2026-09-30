@@ -20,8 +20,9 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from datetime import datetime
+from io import FileIO
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -86,17 +87,39 @@ def _parse(line: bytes) -> Event:
     return _with_refs(_event.validate_json(line))
 
 
-def _append_line(path: Path, line: bytes) -> None:
+def _complete_lines(data: bytes) -> list[bytes]:
+    """The lines of ``data``, without a last line cut short by a crash."""
+    lines = data.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(b'\n'):
+        lines.pop()
+    return lines
+
+
+def _hold(path: Path) -> FileIO:
+    """``path`` opened to read and append, held against every other open."""
+    try:
+        import fcntl
+    except ImportError:
+        raise NotImplementedError('a log file needs fcntl; Windows lacks it') from None
+    file = path.open('a+b', buffering=0)
+    try:
+        fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        file.close()
+        raise RuntimeError(f'{path} is held by another log') from None
+    return file
+
+
+def _append_line(file: FileIO, line: bytes) -> None:
     """Append ``line`` whole, or leave the file as it was."""
-    with path.open('ab', buffering=0) as file:
-        size = file.seek(0, os.SEEK_END)
-        try:
-            written = 0
-            while written < len(line):
-                written += file.write(line[written:])
-        except BaseException:
-            file.truncate(size)
-            raise
+    size = file.seek(0, os.SEEK_END)
+    try:
+        written = 0
+        while written < len(line):
+            written += file.write(line[written:])
+    except BaseException:
+        file.truncate(size)
+        raise
 
 
 class Log:
@@ -104,30 +127,47 @@ class Log:
     Events in the order they were appended.
 
     Without a path the log lives in memory. With a path it is a file of one
-    JSON event per line; the events already in the file are read first. A
+    JSON event per line, and the log holds the file until :meth:`close`: a
+    second log on the same file, in this process or another, is refused, so
+    a file has one writer. The events already in the file are read first. A
     last line cut short, by a crash while it was written, is dropped. A write
     that fails, for example on a full disk, leaves the file as it was, so no
     later event follows a line cut short.
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path
+        self._file = None if path is None else _hold(path)
         self._events: list[Event] = []
-        if path is not None and path.exists():
-            self._events = self._read(path)
+        if self._file is not None:
+            try:
+                self._file.seek(0)
+                lines = _complete_lines(self._file.readall())
+                self._file.truncate(sum(map(len, lines)))
+                self._events = [_parse(line) for line in lines]
+            except BaseException:
+                self._file.close()
+                raise
 
     @staticmethod
-    def _read(path: Path) -> list[Event]:
-        events = []
-        with path.open('rb') as file:
-            lines = file.readlines()
-        for i, line in enumerate(lines):
-            if i == len(lines) - 1 and not line.endswith(b'\n'):
-                with path.open('r+b') as file:
-                    file.truncate(sum(map(len, lines[:i])))
-                break
-            events.append(_parse(line))
-        return events
+    def read(path: Path) -> list[Event]:
+        """
+        The events in a log file, without holding it.
+
+        A log may be writing the file meanwhile, so a last line cut short is
+        left out, not dropped from the file.
+        """
+        return [_parse(line) for line in _complete_lines(path.read_bytes())]
+
+    def close(self) -> None:
+        """Let go of the file, if any; the log takes no more events."""
+        if self._file is not None:
+            self._file.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def append(self, event: Event) -> Event:
         """
@@ -139,8 +179,8 @@ class Log:
         """
         line = _event.dump_json(event) + b'\n'
         stored = _parse(line)
-        if self._path is not None:
-            _append_line(self._path, line)
+        if self._file is not None:
+            _append_line(self._file, line)
         self._events.append(stored)
         return stored
 
