@@ -24,7 +24,7 @@ from .log import (
     StageOpened,
     Submitted,
 )
-from .records import Element, Failure, Read, Record, SpecId, Status
+from .records import Element, Failure, Record, Snapshot, SpecId, Status
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class AccumulatorView:
     """
     An accumulator's history: its elements, and how many of them are done.
 
-    ``elements`` only grows, so the record of a read keeps it and uses the
+    ``elements`` only grows, so the record of a snapshot keeps it and uses the
     first ``upto``. ``ready`` counts the leading elements whose records have
     all completed, and ``failed`` is the position of the first element whose
     record did not complete.
@@ -88,7 +88,7 @@ class Views:
                         label=new.label,
                         member=new.member,
                     )
-                    if isinstance(new.submitted, Read):
+                    if isinstance(new.submitted, Snapshot):
                         accumulator = self.accumulators[new.submitted.accumulator]
                         record = record.with_elements(accumulator.elements)
                     self.records[new.id] = record

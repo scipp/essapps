@@ -95,8 +95,8 @@ class Accumulator(_Holder):
     """
     The combination of the elements pushed into it, under an accumulator spec.
 
-    ``id`` names the accumulator in the backend; submitting it reads it over
-    the elements pushed so far.
+    ``id`` names the accumulator in the backend; submitting it makes a
+    snapshot, a record of the accumulator spec over the elements pushed so far.
     """
 
     def __init__(

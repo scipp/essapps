@@ -84,7 +84,7 @@ Property: a cancel stops the started requests within seconds and frees their wor
 
 Actor: spectroscopy user. Goal: each run is reduced on its own node as it arrives, and the volume so far is ready within seconds of each angle.
 Property: each `ANGLE` request starts when its run arrives, on any free node. Pushing a finished angle into the accumulator combines one contribution and reads no earlier one.
-Each read of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of reads.
+Each snapshot of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of snapshots.
 A request of `SUM.of(Counts)` over a thousand elements, made outside a session, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
 
 ## F. Publication and provenance

@@ -656,7 +656,7 @@ assert len(client.provenance(total).datasets()) == 1000
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
-The notebook keeps the cuts it reads; the volume of each read is released once its cut has run.
+The notebook keeps the cuts it reads; the volume of each snapshot is released once its cut has run.
 That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
 
 ## E. Automatic reduction

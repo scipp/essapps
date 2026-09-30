@@ -15,8 +15,8 @@ not history. This backend keeps them in memory, so a backend started from an
 existing log cannot read the outputs of the backend that wrote it.
 
 A request waits until every record it references has completed; this is the
-only scheduling there is. A read of an accumulator waits until the records of
-its elements have completed.
+only scheduling there is. A snapshot of an accumulator waits until the
+records of its elements have completed.
 
 A request runs through its spec's binding. A request through a stage in a
 session runs through the callable the binding returned for the stage's
@@ -25,9 +25,9 @@ the blanks. A stage lives until its session ends and the requests made
 through it have run.
 
 An accumulator whose binding can accumulate keeps the combined value of its
-elements, so a read combines only the elements pushed since the previous
-read. A read's record names the accumulator and how many elements it covers,
-so it costs the same however many elements that is.
+elements, so a snapshot combines only the elements pushed since the previous
+snapshot. A snapshot's record names the accumulator and how many elements it
+covers, so it costs the same however many elements that is.
 """
 
 from __future__ import annotations
@@ -67,9 +67,9 @@ from .log import (
 )
 from .records import (
     Element,
-    Read,
     Record,
     Request,
+    Snapshot,
     SpecId,
     Status,
     SubmitError,
@@ -89,13 +89,13 @@ def _agree(output: DataField, param: DataField) -> bool:
 @dataclass(frozen=True)
 class Entry:
     """
-    A request of a submission, or a read of an accumulator, with its label and member.
+    A request of a submission or a snapshot of an accumulator, and its label and member.
 
     ``name`` says where the request came from in the call, a key or an index,
     and prefixes the reasons it is refused. A reference to the record ``@<i>``
     names the record the i-th entry becomes. ``stage`` names the stage the
     request goes through, if any. An entry with ``accumulator`` and no request
-    reads that accumulator over the elements pushed so far.
+    is a snapshot of that accumulator over the elements pushed so far.
     """
 
     request: Request | None
@@ -131,14 +131,14 @@ class _Stage:
             return self._call
 
 
-class _Reads:
+class _Snapshots:
     """
-    The reads of one accumulator that wait or can run, and the value it holds.
+    The snapshots of one accumulator that wait or can run, and the value it holds.
 
-    Reads wait in the order of ``upto``, which is the order of submission.
+    Snapshots wait in the order of ``upto``, which is the order of submission.
     Those that can run run one at a time and in order, since each moves the
     held value forward from where the previous one left it. Only the one
-    running read touches the held value.
+    running snapshot touches the held value.
     """
 
     def __init__(self) -> None:
@@ -184,7 +184,7 @@ class Backend:
         self._dependents: dict[str, set[str]] = {}
         self._staged: dict[str, _Stage] = {}  # the stages of open sessions
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
-        self._reads: dict[str, _Reads] = {}  # accumulator ID to its reads
+        self._snapshots: dict[str, _Snapshots] = {}  # accumulator ID to its snapshots
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
@@ -229,8 +229,8 @@ class Backend:
             for e in entries
         ]
         with self._changed:
-            submitted: list[Request | Read] = [
-                self._read_of(e, proposal) if request is None else request
+            submitted: list[Request | Snapshot] = [
+                self._snapshot_of(e, proposal) if request is None else request
                 for e, request in zip(entries, prepared, strict=True)
             ]
             specs = {i: r.spec for i, r in zip(ids, submitted, strict=True)}
@@ -270,7 +270,7 @@ class Backend:
     def _prepare(self, entry: Entry, ids: list[str], proposal: str) -> Request:
         """The request with names resolved and defaults filled; needs no lock."""
         request = entry.request
-        assert request is not None  # noqa: S101 - reads are prepared under the lock
+        assert request is not None  # noqa: S101 - snapshots are made under the lock
         try:
             spec = self.spec(request.spec)
             unknown = set(request.params) - set(spec.params.model_fields)
@@ -359,8 +359,8 @@ class Backend:
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
             )
 
-    def _read_of(self, entry: Entry, proposal: str) -> Read:
-        """A read of the entry's accumulator over the elements so far; lock held."""
+    def _snapshot_of(self, entry: Entry, proposal: str) -> Snapshot:
+        """A snapshot of the entry's accumulator over the elements so far; lock held."""
         assert entry.accumulator is not None  # noqa: S101
         accumulator = self._open_accumulator(entry.accumulator, proposal)
         upto = len(accumulator.elements)
@@ -370,7 +370,7 @@ class Backend:
             raise entry.refused(
                 SubmitError(f'element {accumulator.failed} did not complete')
             )
-        return Read(spec=accumulator.spec, accumulator=entry.accumulator, upto=upto)
+        return Snapshot(spec=accumulator.spec, accumulator=entry.accumulator, upto=upto)
 
     def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
         """The spec of a record a request may read; lock held."""
@@ -390,14 +390,14 @@ class Backend:
     def _schedule(self, record_id: str) -> None:
         """Start the record, or let it wait for its unfinished inputs; lock held."""
         record = self._views.records[record_id]
-        if isinstance(record.submitted, Read):
+        if isinstance(record.submitted, Snapshot):
             accumulator_id = record.submitted.accumulator
-            reads = self._reads.setdefault(accumulator_id, _Reads())
-            reads.waiting.append((record.submitted.upto, record_id))
+            snapshots = self._snapshots.setdefault(accumulator_id, _Snapshots())
+            snapshots.waiting.append((record.submitted.upto, record_id))
             failed = self._views.accumulators[accumulator_id].failed
-            for read_id in self._release(accumulator_id):
+            for snapshot_id in self._release(accumulator_id):
                 self._finish(
-                    read_id, Status.FAILED, f'element {failed} did not complete'
+                    snapshot_id, Status.FAILED, f'element {failed} did not complete'
                 )
             return
         inputs = {ref.record for ref in record.request.refs()}
@@ -411,56 +411,56 @@ class Backend:
 
     def _release(self, accumulator_id: str) -> list[str]:
         """
-        Start the reads of an accumulator that can run; lock held.
+        Start the snapshots of an accumulator that can run; lock held.
 
-        Returns the waiting reads that never can, since an element they cover
-        did not complete.
+        Returns the waiting snapshots that never can, since an element they
+        cover did not complete.
         """
-        reads = self._reads.get(accumulator_id)
-        if reads is None:
+        snapshots = self._snapshots.get(accumulator_id)
+        if snapshots is None:
             return []
         accumulator = self._views.accumulators[accumulator_id]
-        while reads.waiting and reads.waiting[0][0] <= accumulator.ready:
-            reads.runnable.append(reads.waiting.popleft()[1])
+        while snapshots.waiting and snapshots.waiting[0][0] <= accumulator.ready:
+            snapshots.runnable.append(snapshots.waiting.popleft()[1])
         failing = []
         if accumulator.failed is not None:
-            while reads.waiting and reads.waiting[-1][0] > accumulator.failed:
-                failing.append(reads.waiting.pop()[1])
-        if reads.runnable and not reads.running:
-            reads.running = True
-            self._executor.submit(self._run_reads, accumulator_id, reads)
+            while snapshots.waiting and snapshots.waiting[-1][0] > accumulator.failed:
+                failing.append(snapshots.waiting.pop()[1])
+        if snapshots.runnable and not snapshots.running:
+            snapshots.running = True
+            self._executor.submit(self._run_snapshots, accumulator_id, snapshots)
         return failing
 
-    def _run_reads(self, accumulator_id: str, reads: _Reads) -> None:
+    def _run_snapshots(self, accumulator_id: str, snapshots: _Snapshots) -> None:
         """
-        Run the runnable reads of an accumulator, one at a time and in order.
+        Run the runnable snapshots of an accumulator, one at a time and in order.
 
-        This also runs the reads of a binding that cannot accumulate one at a
-        time, which gains nothing for them but costs no more than their order.
+        This also runs the snapshots of a binding that cannot accumulate one at
+        a time, which gains nothing for them but costs no more than their order.
         """
         try:
             while True:
                 with self._changed:
-                    if not reads.runnable:
-                        reads.running = False
+                    if not snapshots.runnable:
+                        snapshots.running = False
                         self._settle(accumulator_id)
                         return
-                    read_id = reads.runnable.popleft()
-                self._run(read_id)
+                    snapshot_id = snapshots.runnable.popleft()
+                self._run(snapshot_id)
         except BaseException:  # the log could not be written; a later release restarts
             with self._changed:
-                reads.running = False
+                snapshots.running = False
             raise
 
     def _settle(self, accumulator_id: str) -> None:
-        """Drop what an ended accumulator holds once no read needs it; lock held."""
-        reads = self._reads.get(accumulator_id)
+        """Drop what an ended accumulator holds once no snapshot needs it; lock held."""
+        snapshots = self._snapshots.get(accumulator_id)
         if (
-            reads is not None
-            and reads.idle
+            snapshots is not None
+            and snapshots.idle
             and not self._views.accumulators[accumulator_id].open
         ):
-            del self._reads[accumulator_id]
+            del self._snapshots[accumulator_id]
 
     def _run(self, record_id: str) -> None:
         try:
@@ -469,7 +469,7 @@ class Backend:
                 if record.status.finished:
                     return
                 stage = self._stage_of.get(record_id)
-            if isinstance(record.submitted, Read):
+            if isinstance(record.submitted, Snapshot):
                 outputs = dict(self._combine(record, record.submitted))
             else:
                 outputs = dict(self._compute(record.request, stage))
@@ -507,31 +507,31 @@ class Backend:
         model = self._specs[request.spec].params.model_validate(request.params)
         return {f: getattr(model, f) for f in type(model).model_fields}
 
-    def _combine(self, record: Record, read: Read) -> Mapping[str, Any]:
+    def _combine(self, record: Record, snapshot: Snapshot) -> Mapping[str, Any]:
         """
-        The outputs of a read, from the value the accumulator holds.
+        The outputs of a snapshot, from the value the accumulator holds.
 
         The held value moves forward over the elements pushed since the last
-        read. A binding that cannot accumulate combines all elements. A read
-        whose combining fails drops the held value, which may hold part of
-        its elements.
+        snapshot. A binding that cannot accumulate combines all elements. A
+        snapshot whose combining fails drops the held value, which may hold
+        part of its elements.
         """
         binding = self._bindings[record.spec]
         if not isinstance(binding, AccumulatorBinding):
             return self._compute(record.request, None)
-        reads = self._reads[read.accumulator]
+        snapshots = self._snapshots[snapshot.accumulator]
         # The elements only grow, so reading them without the lock is safe.
-        elements = self._views.accumulators[read.accumulator].elements
-        if reads.held is None or reads.held_upto > read.upto:
-            reads.held, reads.held_upto = binding.accumulator(), 0
+        elements = self._views.accumulators[snapshot.accumulator].elements
+        if snapshots.held is None or snapshots.held_upto > snapshot.upto:
+            snapshots.held, snapshots.held_upto = binding.accumulator(), 0
         try:
-            for element in elements[reads.held_upto : read.upto]:
-                reads.held.push(self._read(dict(element)))
+            for element in elements[snapshots.held_upto : snapshot.upto]:
+                snapshots.held.push(self._read(dict(element)))
         except BaseException:
-            reads.held = None
+            snapshots.held = None
             raise
-        reads.held_upto = read.upto
-        return dict(reads.held.value)
+        snapshots.held_upto = snapshot.upto
+        return dict(snapshots.held.value)
 
     def _read(self, values: dict[str, Any]) -> dict[str, Any]:
         """``values`` with the outputs and datasets they reference read."""
@@ -588,8 +588,8 @@ class Backend:
                     self._executor.submit(self._run, dependent)
             for accumulator_id in accumulators:
                 todo.extend(
-                    (read_id, Status.FAILED, f'element input {finished_id} {finished}')
-                    for read_id in self._release(accumulator_id)
+                    (id_, Status.FAILED, f'element input {finished_id} {finished}')
+                    for id_ in self._release(accumulator_id)
                 )
         self._changed.notify_all()
 

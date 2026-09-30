@@ -70,7 +70,7 @@ Done, with story tests passing:
 - Bindings (`bindings.py`, `pipeline.py`): every binding has `stage(fixed, blanks)`; a plain function computes everything on each call.
 - Sessions with stages and accumulators. Stages live in the backend and keep what their binding computed; a request names its stage, which the backend checks at submission (open, same proposal, same spec) and keeps until the requests through it have run.
 - The event log (`log.py`, `views.py`, `system.md`): every change the backend accepts is checked, appended as one event, and applied to the views (`Views.apply`); what is not history (outputs, staged callables, held values, what waits for what) stays in the backend; a backend given an existing log (a JSON-lines file) replays it, closes sessions left open, and runs what was pending. Output values are not in the log and live in memory.
-- Accumulators live in the backend. A push is checked when made; a read is logged as `Read(spec, accumulator, upto)` and `record.request` builds the flat request when accessed. A binding with `accumulator()` (`combine`) keeps the combined value, and reads of one accumulator run in order, one at a time. D7: 0.86 s for 1000 angles with one worker (5.6 s before), 1000 stored element references (501,500 before).
+- Accumulators live in the backend. A push is checked when made; a snapshot is logged as `Snapshot(spec, accumulator, upto)` and `record.request` builds the flat request when accessed. A binding with `accumulator()` (`combine`) keeps the combined value, and snapshots of one accumulator run in order, one at a time. D7: 0.86 s for 1000 angles with one worker (5.6 s before), 1000 stored element references (501,500 before).
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
 
@@ -112,7 +112,7 @@ Proposal: LoKI first (then Amor), which tests the binding contract and decision 
 > Simon:
 
 **3. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
-Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. With the event log, accumulator reads no longer need grouping independence; a tree of partial sums over a plain request still does.
+Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. With the event log, snapshots of an accumulator no longer need grouping independence; a tree of partial sums over a plain request still does.
 
 > Simon:
 

@@ -25,7 +25,7 @@ element::
     held.value                       # {'numerator': ..., 'denominator': ...}
 
 Its value after the elements are pushed in order is the output of the plain
-request over them. Without one, every read combines all elements.
+request over them. Without one, every snapshot combines all elements.
 """
 
 from __future__ import annotations

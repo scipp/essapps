@@ -38,7 +38,7 @@ from ess.apps.log import (
     StageOpened,
     Submitted,
 )
-from ess.apps.records import Read
+from ess.apps.records import Snapshot
 from ess.apps.testing import FakeDatasets
 
 
@@ -127,7 +127,9 @@ def _write(path: Path, *events: Event) -> None:
         log.append(event)
 
 
-def _submitted(record_id: str, submitted: Request | Read, **fields: Any) -> Submitted:
+def _submitted(
+    record_id: str, submitted: Request | Snapshot, **fields: Any
+) -> Submitted:
     return Submitted(
         time=datetime(2026, 9, 30, tzinfo=UTC),
         proposal='p1',
@@ -159,7 +161,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
         total = session.accumulator(TOTAL)
         for load in loads.values():
             total.push(load)
-        read = first.compute(total, label='total')
+        snapshot = first.compute(total, label='total')
 
     again = restart(tmp_path / 'log')
 
@@ -168,7 +170,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     assert again.latest('total').request.params == {
         'value': [load.ref('value') for load in loads.values()]
     }
-    assert again.latest('total').request == read.request
+    assert again.latest('total').request == snapshot.request
 
 
 def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
@@ -189,7 +191,7 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.output(rerun, 'value') == 3.0
 
 
-def test_a_read_is_logged_as_its_accumulator_and_a_count(
+def test_a_snapshot_is_logged_as_its_accumulator_and_a_count(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -197,17 +199,17 @@ def test_a_read_is_logged_as_its_accumulator_and_a_count(
         total = session.accumulator(TOTAL)
         for n in (1, 2, 3):
             total.push(client.submit(LOAD, {'run': dataset(run=n)}))
-        read = client.compute(total)
+        snapshot = client.compute(total)
 
     (logged,) = [
         r.submitted
         for e in Log(tmp_path / 'log')
         if isinstance(e, Submitted)
         for r in e.records
-        if r.id == read.id
+        if r.id == snapshot.id
     ]
-    assert logged == Read(spec=read.spec, accumulator=total.id, upto=3)
-    assert client.output(read, 'value') == 6.0
+    assert logged == Snapshot(spec=snapshot.spec, accumulator=total.id, upto=3)
+    assert client.output(snapshot, 'value') == 6.0
 
 
 def test_a_record_pending_in_the_log_runs_after_a_restart(
@@ -275,8 +277,8 @@ def test_outputs_are_not_in_the_log(
         again.output(load, 'value')
 
 
-def _read_log(run: Any, element: Status) -> tuple[Event, ...]:
-    """A read of one element, pending, after the element finished."""
+def _snapshot_log(run: Any, element: Status) -> tuple[Event, ...]:
+    """A snapshot of one element, pending, after the element finished."""
     return (
         SessionOpened(session='s', proposal='p1'),
         AccumulatorOpened(accumulator='a', session='s', spec=SpecId.of(TOTAL)),
@@ -284,37 +286,39 @@ def _read_log(run: Any, element: Status) -> tuple[Event, ...]:
         Pushed(
             accumulator='a', element={'value': OutputRef(record='load', output='value')}
         ),
-        _submitted('read', Read(spec=SpecId.of(TOTAL), accumulator='a', upto=1)),
+        _submitted(
+            'snapshot', Snapshot(spec=SpecId.of(TOTAL), accumulator='a', upto=1)
+        ),
         Finished(record='load', status=element),
     )
 
 
-def test_a_read_pending_over_an_element_that_failed_fails_after_a_restart(
+def test_a_snapshot_pending_over_an_element_that_failed_fails_after_a_restart(
     tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
 ) -> None:
     run = datasets.resolve(dataset(run=1))
-    _write(tmp_path / 'log', *_read_log(run, Status.FAILED))
+    _write(tmp_path / 'log', *_snapshot_log(run, Status.FAILED))
 
     client = start(tmp_path / 'log')
-    read = client.wait(_record(client, 'read'))
+    snapshot = client.wait(_record(client, 'snapshot'))
 
-    assert read.status == Status.FAILED
-    assert read.failure is not None
-    assert 'element 0' in read.failure.message
+    assert snapshot.status == Status.FAILED
+    assert snapshot.failure is not None
+    assert 'element 0' in snapshot.failure.message
 
 
-def test_a_read_pending_over_an_element_from_before_a_restart_has_no_input(
+def test_a_snapshot_pending_over_an_element_from_before_a_restart_has_no_input(
     tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
 ) -> None:
     run = datasets.resolve(dataset(run=1))
-    _write(tmp_path / 'log', *_read_log(run, Status.COMPLETED))
+    _write(tmp_path / 'log', *_snapshot_log(run, Status.COMPLETED))
 
     client = start(tmp_path / 'log')
-    read = client.wait(_record(client, 'read'))
+    snapshot = client.wait(_record(client, 'snapshot'))
 
-    assert read.status == Status.FAILED
-    assert read.failure is not None
-    assert 'no output' in read.failure.message
+    assert snapshot.status == Status.FAILED
+    assert snapshot.failure is not None
+    assert 'no output' in snapshot.failure.message
 
 
 def test_a_refused_call_writes_nothing_to_the_log(
