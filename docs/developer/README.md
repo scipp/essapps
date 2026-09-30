@@ -107,6 +107,7 @@ client.output(result, 'iofq')
 `client.wait(records)` returns failed records rather than raising.
 `client.cancel(records)` ends the unfinished ones as `cancelled`.
 Both take a record, a list, or a dict of records, like `client.submit`, and `wait` returns the same shape.
+`client.as_completed(records)` yields records one at a time, in the order they finish; `records` may be a generator that is still submitting (see Drivers).
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, before any record exists: an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
 
 A record is history: what ran, with which inputs, and what came of it.
@@ -263,8 +264,9 @@ with client.session() as session:
 **Accumulator.** An accumulator holds the combined value of the elements pushed into it.
 Pushing a record pushes its outputs named like the element's fields; its other outputs are not pushed.
 A push is checked when it is made, as a request over that element alone would be.
-Computing an accumulator makes a record of its accumulator spec over the elements pushed so far.
-A pushed record may still be pending; `client.submit(total)` returns the record at once, pending until every element is done.
+A pushed record must have completed; pushing a pending record is refused.
+Pushing combines the element into the held value, in the order of the pushes, as the plain request over the same list would.
+Computing an accumulator makes a record of its accumulator spec over the elements pushed so far, completed at once with the held value.
 
 ```python
 with client.session() as session:
@@ -301,16 +303,19 @@ records['250K']
 ```
 
 **A loop over arrivals** waits for new datasets.
-This one reduces each angle of a rotation scan wherever the backend runs it, and keeps a volume of the angles so far:
+This one reduces each angle of a rotation scan wherever the backend runs it, and keeps a volume of the angles finished so far:
 
 ```python
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
-    for run in datasets.watch(Selector(scan='17')):
-        volume.push(client.submit(ANGLE, {'run': run}))          # pending; combined once done
+    angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
+    for angle in client.as_completed(angles):                   # in the order they finish
+        volume.push(angle)
         client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'energy_transfer': 2.0},
                       label='cut', member='17')
 ```
+
+`as_completed` submits an angle in a thread as each run arrives, and yields each angle once it has finished, so the angles are reduced in parallel while the loop pushes one at a time.
 
 ## Batch and automatic reduction
 

@@ -41,7 +41,7 @@ Keep a time machine for history, for a retention period, and none for values.
 
 - D7 is linear: 0.86 s for 1000 angles, 2.2 s for 2000, and one stored reference per element (in-process backend, one worker).
 - A backend can restart from its log: it closes the sessions left open and runs the records left pending, without their stages. This is what system stories B5 and H2 need from history.
-- Accumulators move into the backend. A push is checked when it is made, and the snapshots of one accumulator run in order, each combining only the elements since the previous one.
+- Accumulators move into the backend. A push takes only a finished record and combines it when it is made, so a snapshot completes at submission with the combined value. A driver waits for many records with `client.as_completed`.
 - Event formats must stay readable for as long as the log is kept, and so must the rule that builds a snapshot's request. Views may change freely.
 - A snapshot's record builds its request from its accumulator's elements; a copy made from the record's plain data alone cannot.
 - Keeping values while a client holds a record handle needs leases in a hosted backend, so that a client that disappears releases them.

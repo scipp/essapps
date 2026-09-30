@@ -191,24 +191,22 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.output(rerun, 'value') == 3.0
 
 
-def test_a_snapshot_is_logged_as_its_accumulator_and_a_count(
+def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
     with client.session() as session:
         total = session.accumulator(TOTAL)
         for n in (1, 2, 3):
-            total.push(client.submit(LOAD, {'run': dataset(run=n)}))
-        snapshot = client.compute(total)
+            total.push(client.compute(LOAD, {'run': dataset(run=n)}))
+        snapshot = client.submit(total)
 
-    (logged,) = [
-        r.submitted
-        for e in Log(tmp_path / 'log')
-        if isinstance(e, Submitted)
-        for r in e.records
-        if r.id == snapshot.id
-    ]
-    assert logged == Snapshot(spec=snapshot.spec, accumulator=total.id, upto=3)
+    *_, logged, finished, _ = Log(tmp_path / 'log')  # the last is the session's end
+    assert isinstance(logged, Submitted)
+    assert logged.records[0].submitted == Snapshot(
+        spec=snapshot.spec, accumulator=total.id, upto=3
+    )
+    assert finished == Finished(record=snapshot.id, status=Status.COMPLETED)
     assert client.output(snapshot, 'value') == 6.0
 
 
@@ -277,41 +275,38 @@ def test_outputs_are_not_in_the_log(
         again.output(load, 'value')
 
 
-def _snapshot_log(run: Any, element: Status) -> tuple[Event, ...]:
-    """A snapshot of one element, pending, after the element finished."""
-    return (
+def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+) -> None:
+    load = start(tmp_path / 'log').compute(LOAD, {'run': dataset(run=1)})
+
+    again = restart(tmp_path / 'log')
+
+    with again.session() as session:
+        total = session.accumulator(TOTAL)
+        with pytest.raises(SubmitError, match='no output'):
+            total.push(load)
+
+
+def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
+    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
+) -> None:
+    run = datasets.resolve(dataset(run=1))
+    _write(
+        tmp_path / 'log',
         SessionOpened(session='s', proposal='p1'),
         AccumulatorOpened(accumulator='a', session='s', spec=SpecId.of(TOTAL)),
         _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
+        Finished(record='load', status=Status.COMPLETED),
         Pushed(
             accumulator='a', element={'value': OutputRef(record='load', output='value')}
         ),
         _submitted(
             'snapshot', Snapshot(spec=SpecId.of(TOTAL), accumulator='a', upto=1)
         ),
-        Finished(record='load', status=element),
     )
-
-
-def test_a_snapshot_pending_over_an_element_that_failed_fails_after_a_restart(
-    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
-) -> None:
-    run = datasets.resolve(dataset(run=1))
-    _write(tmp_path / 'log', *_snapshot_log(run, Status.FAILED))
-
-    client = start(tmp_path / 'log')
-    snapshot = client.wait(_record(client, 'snapshot'))
-
-    assert snapshot.status == Status.FAILED
-    assert snapshot.failure is not None
-    assert 'element 0' in snapshot.failure.message
-
-
-def test_a_snapshot_pending_over_an_element_from_before_a_restart_has_no_input(
-    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
-) -> None:
-    run = datasets.resolve(dataset(run=1))
-    _write(tmp_path / 'log', *_snapshot_log(run, Status.COMPLETED))
 
     client = start(tmp_path / 'log')
     snapshot = client.wait(_record(client, 'snapshot'))

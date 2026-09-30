@@ -24,7 +24,7 @@ from .log import (
     StageOpened,
     Submitted,
 )
-from .records import Element, Failure, Record, Snapshot, SpecId, Status
+from .records import Element, Failure, Record, Snapshot, SpecId
 
 
 @dataclass(frozen=True)
@@ -38,12 +38,10 @@ class StageView:
 @dataclass
 class AccumulatorView:
     """
-    An accumulator's history: its elements, and how many of them are done.
+    An accumulator's history: its elements in push order.
 
     ``elements`` only grows, so the record of a snapshot keeps it and uses the
-    first ``upto``. ``ready`` counts the leading elements whose records have
-    all completed, and ``failed`` is the position of the first element whose
-    record did not complete.
+    first ``upto``.
     """
 
     session: str
@@ -51,20 +49,10 @@ class AccumulatorView:
     spec: SpecId
     open: bool = True
     elements: list[Element] = field(default_factory=list)
-    ready: int = 0
-    failed: int | None = None
-
-    def fail(self, position: int) -> None:
-        self.failed = position if self.failed is None else min(self.failed, position)
 
 
 class Views:
-    """
-    The records, labels, sessions, and holders that the events describe.
-
-    ``elements_of`` maps an unfinished record to the accumulators and
-    positions at which it was pushed.
-    """
+    """The records, labels, sessions, and holders that the events describe."""
 
     def __init__(self) -> None:
         self.records: dict[str, Record] = {}
@@ -72,7 +60,6 @@ class Views:
         self.sessions: dict[str, str] = {}  # open session ID to proposal
         self.stages: dict[str, StageView] = {}  # the stages of open sessions
         self.accumulators: dict[str, AccumulatorView] = {}
-        self.elements_of: dict[str, list[tuple[str, int]]] = {}
 
     def apply(self, event: Event) -> None:
         match event:
@@ -102,12 +89,6 @@ class Views:
                 self.records[event.record] = self.records[event.record].model_copy(
                     update={'status': event.status, 'failure': failure}
                 )
-                for accumulator_id, position in self.elements_of.pop(event.record, ()):
-                    accumulator = self.accumulators[accumulator_id]
-                    if event.status is Status.COMPLETED:
-                        self._advance(accumulator)
-                    else:
-                        accumulator.fail(position)
             case SessionOpened():
                 self.sessions[event.session] = event.proposal
             case SessionClosed():
@@ -130,20 +111,4 @@ class Views:
                     event.session, self.sessions[event.session], event.spec
                 )
             case Pushed():
-                accumulator = self.accumulators[event.accumulator]
-                position = len(accumulator.elements)
-                accumulator.elements.append(event.element)
-                for record_id in {ref.record for ref in event.element.values()}:
-                    if not self.records[record_id].status.finished:
-                        self.elements_of.setdefault(record_id, []).append(
-                            (event.accumulator, position)
-                        )
-                self._advance(accumulator)
-
-    def _advance(self, accumulator: AccumulatorView) -> None:
-        elements = accumulator.elements
-        while accumulator.ready < len(elements) and all(
-            self.records[ref.record].status is Status.COMPLETED
-            for ref in elements[accumulator.ready].values()
-        ):
-            accumulator.ready += 1
+                self.accumulators[event.accumulator].elements.append(event.element)

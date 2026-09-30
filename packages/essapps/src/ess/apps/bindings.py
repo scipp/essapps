@@ -70,7 +70,7 @@ class AccumulatorBinding(Binding, Protocol):
         """
         A new element accumulator with nothing pushed.
 
-        Its ``value`` may be read between pushes, and a later push must not
+        Its ``value`` is read after every push, and a later push must not
         modify a value read before it.
         """
         ...

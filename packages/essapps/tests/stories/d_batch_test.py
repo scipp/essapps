@@ -172,11 +172,16 @@ def test_d7_rotation_scan_over_a_thousand_angles(
         if n == 500:
             measure(5, [1.0, 5.0], scan='17')
 
-    cuts = []
+    cuts, pushed = [], []
     with client.session() as session:
         volume = session.accumulator(SUM.of(Counts))
-        for run in islice(datasets.watch(Selector(scan='17')), 1000):
-            volume.push(client.submit(ANGLE, {'run': run}))
+        angles = (
+            client.submit(ANGLE, {'run': run})
+            for run in islice(datasets.watch(Selector(scan='17')), 1000)
+        )
+        for angle in client.as_completed(angles):
+            volume.push(angle)
+            pushed.append(angle)
             cuts.append(
                 client.submit(
                     CUT,
@@ -187,12 +192,11 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             )
         total = client.compute(volume)
 
-    angles = client.records(spec=ANGLE)
-    plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
+    plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in pushed]})
     assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [
         float(k) for k in range(1, 1001)
     ]
     assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-    assert total.request == plain  # the request of the plain sum
-    assert len(angles) == 1000
+    assert total.request == plain  # the request of the plain sum, in push order
+    assert len(client.records(spec=ANGLE)) == 1000
     assert len(client.provenance(total).datasets()) == 1000

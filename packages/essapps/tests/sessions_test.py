@@ -4,6 +4,7 @@
 
 import operator
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
@@ -24,6 +25,7 @@ from ess.apps import (
 )
 from ess.apps.backend import Entry
 from ess.apps.bindings import Function
+from ess.apps.log import Log
 from ess.apps.testing import FakeDatasets
 
 
@@ -66,6 +68,18 @@ SHIFT = _spec('shift', ShiftParams, Parts)
 SCALE = _spec('scale', ScaleParams, Parts)
 TOTAL = AccumulatorSpec(name='total', version=1, element=Parts)
 PAIRS = AccumulatorSpec(name='pairs', version=1, element=LoadOutputs)
+DIGITS = AccumulatorSpec(name='digits', version=1, element=Parts)
+
+
+def pairs(value: list[float], extra: list[float]) -> dict[str, float]:
+    """PAIRS as a plain function over lists."""
+    return {'value': sum(value), 'extra': sum(extra)}
+
+
+def append_digit(number: float, digit: float) -> float:
+    """An order-sensitive combination, slow enough for pushes to overlap."""
+    time.sleep(0.001)
+    return number * 10 + digit
 
 
 class Staging:
@@ -128,7 +142,8 @@ def backend(
             SHIFT: shifting,
             SCALE: scaling,
             TOTAL: combine(operator.add),
-            PAIRS: combine(operator.add),
+            PAIRS: pairs,
+            DIGITS: combine(append_digit),
             FILES_SUM: combine(operator.add),
         },
     )
@@ -276,11 +291,13 @@ def test_a_holder_of_an_ended_session_refuses_calls(client: Client) -> None:
 
 
 def test_an_accumulator_pushes_only_the_element_fields(client: Client) -> None:
-    loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
+    loads = client.wait(
+        [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
+    )
     with client.session() as session:
         total = session.accumulator(TOTAL)
         for load in loads:
-            total.push(load)  # pending; 'extra' is not pushed
+            total.push(load)  # 'extra' is not pushed
         combined = client.compute(total)
 
     assert combined.request.params == {'value': [load.ref('value') for load in loads]}
@@ -332,7 +349,7 @@ def test_a_snapshot_with_nothing_pushed_is_refused(client: Client) -> None:
 
 
 def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) -> None:
-    load = client.submit(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'run': dataset(run=1)})
     with client.session() as session:
         total = session.accumulator(TOTAL)
         total.push(load)
@@ -343,31 +360,12 @@ def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) ->
         client.submit(total)
 
 
-def test_a_snapshot_combines_the_elements_pushed_before_it(
-    client: Client, loading: threading.Event
+def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
+    client: Client,
 ) -> None:
-    loading.clear()
-    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(loads[0])
-        total.push(loads[1])
-        first = client.submit(total)  # pending until both loads have run
-        total.push(loads[2])
-        second = client.submit(total)
-        loading.set()
-        first, second = client.wait([first, second])
-
-    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
-    assert first.request.params == {'value': [x.ref('value') for x in loads[:2]]}
-    assert second.request.params == {'value': [x.ref('value') for x in loads]}
-
-
-def test_snapshots_over_an_element_that_did_not_complete_fail(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
+    loads = client.wait(
+        [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
+    )
     with client.session() as session:
         total = session.accumulator(TOTAL)
         total.push(loads[0])
@@ -375,28 +373,83 @@ def test_snapshots_over_an_element_that_did_not_complete_fail(
         first = client.submit(total)
         total.push(loads[2])
         second = client.submit(total)
-        client.cancel(loads[1])
-        loading.set()
-        snapshots = client.wait([first, second])
 
-        for snapshot in snapshots:
-            assert snapshot.status == Status.FAILED
-            assert snapshot.failure is not None
-            assert f'{loads[1].id} cancelled' in snapshot.failure.message
-        with pytest.raises(SubmitError, match='element 1'):
-            client.submit(total)
+    assert [r.status for r in (first, second)] == [Status.COMPLETED] * 2
+    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
+    assert first.request.params == {'value': [x.ref('value') for x in loads[:2]]}
+    assert second.request.params == {'value': [x.ref('value') for x in loads]}
+
+
+def test_a_record_that_has_not_completed_is_refused_at_the_push(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    pending, cancelled = (client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2))
+    client.cancel(cancelled)
+    with client.session() as session:
+        total = session.accumulator(TOTAL)
+        with pytest.raises(SubmitError, match=f'{pending.id} is still pending'):
+            total.push({'value': pending.ref('value')})
+        with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
+            total.push(client.wait(cancelled))
+        loading.set()
+        client.wait(pending)
+        with pytest.raises(SubmitError, match=f'{pending.id} is still pending'):
+            total.push(pending)  # the handle submit returned, still pending
+        total.push(client.wait(pending))
+        snapshot = client.submit(total)
+
+    assert snapshot.request.params == {'value': [pending.ref('value')]}
+    assert client.output(snapshot, 'value') == 1.0
+
+
+def test_concurrent_pushes_combine_in_the_order_they_are_logged(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    runs = [datasets.measure(n, float(n)) for n in range(3, 10)]
+    loads = client.wait([client.submit(LOAD, {'run': run}) for run in runs])
+    with client.session() as session:
+        digits = session.accumulator(DIGITS)
+        pushes = [threading.Thread(target=digits.push, args=(x,)) for x in loads]
+        for push in pushes:
+            push.start()
+        for push in pushes:
+            push.join()
+        snapshot = client.compute(digits)
+    plain = client.compute(DIGITS, snapshot.request.params)
+
+    assert client.output(snapshot, 'value') == client.output(plain, 'value')
+
+
+def test_a_snapshot_through_a_plain_function_runs_as_the_request(
+    client: Client,
+) -> None:
+    loads = client.wait([client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
+    with client.session() as session:
+        both = session.accumulator(PAIRS)
+        for load in loads:
+            both.push(load)
+        snapshot = client.submit(both)
+    done = client.wait(snapshot)
+
+    assert snapshot.status is Status.PENDING
+    assert done.request.params == {
+        'value': [x.ref('value') for x in loads],
+        'extra': [x.ref('extra') for x in loads],
+    }
+    assert [client.output(done, name) for name in ('value', 'extra')] == [3.0, -3.0]
 
 
 class Sum:
     """
     ``combine(operator.add)`` that counts the elements its accumulators combine.
 
-    With ``failing`` set to n, the next n elements combine and the one after fails.
+    With ``failing`` set, the next element fails to combine.
     """
 
     def __init__(self) -> None:
         self.pushed = 0
-        self.failing: int | None = None
+        self.failing = False
         self._sum = combine(operator.add)
         self.stage = self._sum.stage
 
@@ -410,11 +463,9 @@ class _Summing:
         self._held = held
 
     def push(self, element: Mapping[str, Any]) -> None:
-        if self._owner.failing == 0:
-            self._owner.failing = None
+        if self._owner.failing:
+            self._owner.failing = False
             raise ValueError('cannot combine')
-        if self._owner.failing is not None:
-            self._owner.failing -= 1
         self._owner.pushed += 1
         self._held.push(element)
 
@@ -424,78 +475,59 @@ class _Summing:
 
 
 @pytest.fixture
-def summing(datasets: FakeDatasets) -> Iterator[tuple[Client, Sum]]:
-    """A client whose backend sums TOTAL with a :class:`Sum`."""
-    total = Sum()
+def summing() -> Sum:
+    return Sum()
+
+
+@pytest.fixture
+def log() -> Log:
+    return Log()
+
+
+@pytest.fixture
+def summed(datasets: FakeDatasets, summing: Sum, log: Log) -> Iterator[Client]:
+    """A client of a backend that sums TOTAL with ``summing`` and logs to ``log``."""
     backend = Backend(
-        datasets, {LOAD: lambda run: {'value': run, 'extra': 0.0}, TOTAL: total}
+        datasets,
+        {LOAD: lambda run: {'value': run, 'extra': 0.0}, TOTAL: summing},
+        log=log,
     )
-    yield Client(backend, proposal='p1', submitter='anna'), total
+    yield Client(backend, proposal='p1', submitter='anna')
     backend.close()
 
 
 def test_an_accumulator_combines_each_element_once(
-    summing: tuple[Client, Sum],
+    summed: Client, summing: Sum
 ) -> None:
-    client, total_binding = summing
+    client = summed
     with client.session() as session:
         total = session.accumulator(TOTAL)
         snapshots = []
         for n in (1, 2, 1, 2):
-            total.push(client.submit(LOAD, {'run': dataset(run=n)}))
+            total.push(client.compute(LOAD, {'run': dataset(run=n)}))
             snapshots.append(client.submit(total))
-        snapshots = client.wait(snapshots)
 
     assert [client.output(r, 'value') for r in snapshots] == [1.0, 3.0, 4.0, 6.0]
-    assert total_binding.pushed == 4
+    assert summing.pushed == 4
 
 
-def test_a_snapshot_after_one_that_failed_to_combine_combines_every_element(
-    summing: tuple[Client, Sum],
+def test_a_push_that_fails_to_combine_is_refused_and_stops_the_accumulator(
+    summed: Client, summing: Sum, log: Log
 ) -> None:
-    client, total_binding = summing
+    client = summed
+    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        total.push(client.submit(LOAD, {'run': dataset(run=1)}))
-        client.compute(total)
-        for n in (2, 1):
-            total.push(client.submit(LOAD, {'run': dataset(run=n)}))
-        total_binding.failing = 1  # run 2 combines, the second run 1 fails
-        failed = client.compute(total)
-        total.push(client.submit(LOAD, {'run': dataset(run=2)}))
-        again = client.compute(total)
+        total.push(loads[0])
+        before = client.submit(total)
+        summing.failing = True
+        logged = len(log)
+        with pytest.raises(SubmitError, match=r'^element 1 failed to combine: cannot'):
+            total.push(loads[1])
+        with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
+            total.push(loads[2])
+        with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
+            client.submit(total)
+        assert len(log) == logged
 
-    assert failed.status == Status.FAILED
-    assert client.output(again, 'value') == 6.0  # 1 + 2 + 1 + 2
-
-
-def test_a_cancelled_snapshot_leaves_later_snapshots_correct(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(client.submit(LOAD, {'run': dataset(run=1)}))
-        cancelled = client.submit(total)
-        client.cancel(cancelled)
-        total.push(client.submit(LOAD, {'run': dataset(run=2)}))
-        later = client.submit(total)
-        loading.set()
-        cancelled, later = client.wait([cancelled, later])
-
-    assert cancelled.status == Status.CANCELLED
-    assert client.output(later, 'value') == 3.0
-
-
-def test_a_snapshot_pending_when_its_session_ends_completes(
-    client: Client, loading: threading.Event
-) -> None:
-    loading.clear()
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        for n in (1, 2):
-            total.push(client.submit(LOAD, {'run': dataset(run=n)}))
-        snapshot = client.submit(total)
-    loading.set()
-
-    assert client.output(client.wait(snapshot), 'value') == 3.0
+    assert client.output(before, 'value') == 1.0

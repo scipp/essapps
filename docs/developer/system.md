@@ -33,24 +33,24 @@ Every change the backend accepts is one event:
 | `accumulator-opened` | accumulator ID, session, accumulator spec | an accumulator opens |
 | `pushed` | accumulator ID, the element: a reference per field | an element is pushed |
 
-Story D7 with two angles writes this (IDs shortened, JSON abbreviated):
+Story D7 with two angles writes this (IDs shortened, JSON abbreviated), where the angle of run 2 finishes first and so is pushed first:
 
 ```text
 session-opened      #0  p1
 accumulator-opened  #1  session #0  sum[Counts]/v1
 submitted           #2  angle/v1  {run: uuid:run-1}
+submitted           #3  angle/v1  {run: uuid:run-2}
+finished            #3  completed
+pushed              #1  {counts: #3.counts}
+submitted           #4  sum[Counts]/v1  snapshot of #1, upto=1
+finished            #4  completed
+submitted           #5  cut/v1  {data: #4.counts, index: 0}  label=cut member=17
 finished            #2  completed
 pushed              #1  {counts: #2.counts}
-submitted           #3  sum[Counts]/v1  snapshot of #1, upto=1
-submitted           #4  cut/v1  {data: #3.counts, index: 0}  label=cut member=17
-finished            #3  completed
-finished            #4  completed
-submitted           #5  angle/v1  {run: uuid:run-2}
-finished            #5  completed
-pushed              #1  {counts: #5.counts}
 submitted           #6  sum[Counts]/v1  snapshot of #1, upto=2
-submitted           #7  cut/v1  {data: #6.counts, index: 0}  label=cut member=17
 finished            #6  completed
+submitted           #7  cut/v1  {data: #6.counts, index: 0}  label=cut member=17
+finished            #5  completed
 finished            #7  completed
 session-closed      #0
 ```
@@ -86,8 +86,7 @@ The backend applies each event to its views (`Views.apply` in `views.py`), the s
 | records by ID, with status and failure | `client.wait`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
 | open sessions, their stages and accumulators | calls through holders |
-| each accumulator's elements, how many of them from the first on have completed, and the first that did not complete | snapshots (see Accumulators) |
-| for each unfinished record, the accumulators it was pushed into | starting or failing the snapshots that wait for it |
+| each accumulator's elements | the requests of its snapshots (see Records) |
 
 A view changes only when an event is applied, and how it changes depends on nothing but the events.
 Queries read the views, never the log.
@@ -104,7 +103,7 @@ total = client.submit(volume)        # the log holds: a snapshot of volume, upto
 total.request.params['counts']       # the 1000 references, built now
 ```
 
-Only provenance, a comparison, or code that reads the request builds this list; scheduling and checks work with `upto` alone.
+Only provenance, a comparison, code that reads the request, or a snapshot through a binding that is only a function builds this list.
 To build the list, a snapshot's record keeps a reference to its accumulator's elements in the backend.
 A copy made from the record's plain data alone, such as one sent over a network, cannot build it; a client that receives records over a network would have to fetch the elements itself.
 
@@ -117,58 +116,57 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the ev
 ```
 
 A pending record runs from scratch, without its stage, since sessions do not survive a restart.
-A pending snapshot over an element that did not complete fails.
+A snapshot is pending only through a binding that is only a function, or if the backend stopped between its `submitted` and `finished` events; it runs as the plain request over its elements.
 A pending record whose inputs' values were not kept fails with "no output"; the in-process backend keeps values in memory, so this happens to every pending record whose inputs completed before the restart.
 This is what system stories B5 and H2 need from history; H2 also needs every event format to stay readable across versions.
 
 ## Accumulators
 
 An accumulator lets a driver add elements one at a time and ask for a record of the combined value at any point, without combining the earlier elements again.
-This section follows one accumulator through three pushes and two snapshots:
+Story D7 reduces the angles of a scan in parallel and pushes each into a volume once it has finished:
 
 ```python
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
-    volume.push(a1)                    # a1, a2, a3: records of ANGLE, possibly still pending
-    volume.push(a2)
-    first = client.submit(volume)      # a snapshot over a1 and a2
-    volume.push(a3)
-    second = client.submit(volume)     # a snapshot over a1, a2, and a3
+    angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
+    for angle in client.as_completed(angles):    # each angle once it has finished
+        volume.push(angle)
+        latest = client.submit(volume)           # a snapshot over the angles pushed so far
 ```
 
 `volume` in the notebook is a handle.
 The accumulator itself lives in the backend: its elements, and the combined value it keeps.
 Each push is a call to the backend and a `pushed` event in the log.
 
-**What a snapshot's record says.** `second` is the record of `SUM.of(Counts)` over `counts=[a1, a2, a3]`, the record that the plain request over the same elements makes.
+**A push takes a finished record.** The backend refuses to push a record that has not completed.
+The client also refuses a record handle that is still pending, even if the record has completed since, so that whether a push is refused does not depend on timing.
+A driver waits for records as it does for any output: with `client.wait`, or for many records with `client.as_completed`, which yields them in the order they finish.
+`as_completed` consumes its input in a thread, so the input may be a generator that waits for new datasets.
+The elements are computed in parallel, wherever the backend runs them; only the pushes happen one after another.
+
+If the backend took pending records, each snapshot would have to wait for its elements, fail when one of them fails, and hold back elements that finish early until those pushed before them have finished.
+Waiting in the driver needs none of this.
+
+**A push is checked and combined.** The backend checks a push as it would check a request over that one element: the element has the fields of the accumulator spec's element model, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+It then combines the element into the value it keeps, and appends the `pushed` event.
+A push that does not fit, or whose combining fails, is refused and appends nothing.
+After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
+The accumulator does not keep its elements' values after combining them.
+
+Combining runs outside the backend's lock, under a lock of the accumulator.
+A long combine holds up only the pushes into the same accumulator, and those are logged in the order they were combined.
+
+**A snapshot completes at submission.** The combined value covers exactly the elements pushed so far.
+Submitting the accumulator makes a record of the accumulator spec over those elements and completes it with that value at once: its `finished` event follows its `submitted` event, and nothing waits.
+The snapshot's value is the value of the plain request over the same list, since both combine the elements in list order.
+The list is in the order of the pushes, which in D7 is the order in which the angles finished, so two runs over the same scan may list the angles in different orders.
+
+**What a snapshot's record says.** After three pushes, a snapshot is the record of `SUM.of(Counts)` over `counts=[a1, a2, a3]`, the record that the plain request over the same elements makes.
 Pushes continue after a snapshot is submitted, so its record must say which elements it covers.
-The `submitted` event holds `Snapshot(spec, accumulator, upto)`, where `upto` is the number of elements pushed before the submission: 2 for `first`, 3 for `second`.
+The `submitted` event holds `Snapshot(spec, accumulator, upto)`, where `upto` is the number of elements pushed before the submission.
 The elements themselves are already in the log, as the accumulator's `pushed` events in order.
 Listing them in each snapshot instead would put 1 + 2 + ... + n references into the log for n snapshots, 500,500 for story D7's 1000 angles.
 The section Records above describes how `record.request` builds the list from `upto`.
-
-**Checking a push.** The backend checks a push as it would check a request over that one element: the element has the fields of the accumulator spec's element model, its references name records of the same proposal that have not failed or been cancelled, and their outputs fit the fields.
-A push that does not fit is refused at the push, so a snapshot need not check its elements again.
-
-**When a snapshot runs.** A driver pushes a record without waiting for it, so that the next element is computed while this one still runs.
-Pushed records may be pending in every backend, not only a distributed one: `client.submit` returns at once, and the in-process backend runs records on a pool of threads.
-A snapshot therefore runs once every record it covers has completed: `first` waits for a1 and a2, `second` for a1, a2, and a3.
-
-A snapshot does not wait for its elements the way a request waits for the records it references.
-When the driver pushes faster than the backend computes, as when it catches up on a scan measured earlier, most elements are pending at each snapshot.
-Waiting for each of them would take about n²/2 entries for n snapshots.
-Instead, the backend keeps one number per accumulator, how many elements from the first on have completed, and starts a snapshot when that number reaches its `upto`.
-The bookkeeping for a snapshot does not grow with the number of elements it covers, or with how many of them are pending.
-
-**When an element fails.** If a2 fails or is cancelled, `first` and `second` fail, since both cover it.
-Any later snapshot would cover a2 too, so it is refused at submission, naming the element.
-Next to the number above, the backend keeps the position of the first element that did not complete.
-
-**The combined value.** The backend keeps the combined value of the elements up to the last snapshot.
-`second` adds a3 to the value that `first` computed, instead of combining a1, a2, and a3 again.
-For this, the snapshots of one accumulator run one at a time, in the order they were submitted.
-If combining fails part-way through a snapshot, the backend drops the combined value, and the next snapshot starts again from the first element.
-A snapshot that fails this way or is cancelled does not fail the snapshots after it.
 
 **Where the combining code comes from.** The binding of an accumulator spec may be a plain function over lists, which combines all elements in one call.
 To keep a combined value, the backend needs a binding that can also make element accumulators: objects that take one element at a time and give the combined value so far, as `sciline.Accumulator` does for one key.
@@ -180,9 +178,9 @@ held.push({'counts': counts_2})
 held.value                                # {'counts': counts_1 + counts_2}
 ```
 
+The backend reads `value` after every push, and a later push must not change a value read before it, since a snapshot's output is that value.
 `combine(operator.add)` is such a binding; the stories bind `SUM.of(Counts)` to it.
-It combines the elements in the same order for a plain request, so a snapshot and the plain request over the same elements give the same value.
-With a binding that is only a function, every snapshot calls the function with all the elements pushed so far.
+With a binding that is only a function, a push only checks and appends, and a snapshot runs as the plain request over its elements, calling the function with all of them.
 
 ## Values
 
@@ -226,6 +224,5 @@ Retention is not implemented.
 
 ## Open
 
-- Whether an accumulator keeps the values of its elements after combining them. It needs them to start again after a failed snapshot, and a pending snapshot after its session has ended needs them all.
 - Leases for record handles in a hosted backend.
 - The store of saved values, and where a batch or rule says to save to (with the provenance and publication sub-design).

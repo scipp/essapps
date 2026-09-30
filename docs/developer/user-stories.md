@@ -637,25 +637,28 @@ for n in range(1, 1001):
     if n == 500:
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
-cuts = []
+cuts, pushed = [], []
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
-    for run in islice(datasets.watch(Selector(scan='17')), 1000):
-        volume.push(client.submit(ANGLE, {'run': run}))
+    angles = (client.submit(ANGLE, {'run': run})
+              for run in islice(datasets.watch(Selector(scan='17')), 1000))
+    for angle in client.as_completed(angles):                  # in the order they finish
+        volume.push(angle)
+        pushed.append(angle)
         cuts.append(client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'index': 0},
                                   label='cut', member='17'))
     total = client.compute(volume)
 
-angles = client.records(spec=ANGLE)
-plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
+plain = Request(SUM.of(Counts), {'counts': [a.ref('counts') for a in pushed]})
 assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-assert total.request == plain                                  # the request of the plain sum
-assert len(angles) == 1000                                     # run 5 is reduced once
+assert total.request == plain                                  # the plain sum, in push order
+assert len(client.records(spec=ANGLE)) == 1000                 # run 5 is reduced once
 assert len(client.provenance(total).datasets()) == 1000
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
+The angles are reduced in parallel and pushed in the order they finish, so the volume's request lists them in that order.
 The notebook keeps the cuts it reads; the volume of each snapshot is released once its cut has run.
 That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
 

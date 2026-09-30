@@ -9,8 +9,10 @@ requests accept one, a list, or a dict, and return the same shape.
 
 from __future__ import annotations
 
+import queue
+import threading
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -145,6 +147,49 @@ class Client:
         """The records once finished; a failed record is returned, not raised."""
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.wait(ids, self.proposal))
+
+    def as_completed(self, records: Iterable[Record]) -> Iterator[Record]:
+        """
+        The records as they finish, each once, in the order they finish.
+
+        A thread consumes ``records``, so it may be a generator that blocks,
+        such as one that submits a request per dataset as it arrives: records
+        that finish meanwhile are yielded. An error it raises is raised here.
+        Closing the iterator stops consuming ``records`` after the next one.
+        """
+        finished: queue.SimpleQueue[Record | Exception | int] = queue.SimpleQueue()
+        stop = threading.Event()
+
+        def consume() -> None:
+            seen: set[str] = set()
+            try:
+                for record in records:
+                    if record.id not in seen:
+                        seen.add(record.id)
+                        self._backend.when_finished(
+                            record.id, self.proposal, finished.put
+                        )
+                    if stop.is_set():
+                        return
+            except Exception as error:  # raised in the caller's thread
+                finished.put(error)
+            else:
+                finished.put(len(seen))
+
+        threading.Thread(target=consume, daemon=True).start()
+        yielded, total = 0, None
+        try:
+            while yielded != total:
+                item = finished.get()
+                if isinstance(item, Exception):
+                    raise item
+                if isinstance(item, int):
+                    total = item
+                else:
+                    yielded += 1
+                    yield item
+        finally:
+            stop.set()
 
     def cancel(self, records: Any) -> None:
         """End the unfinished records as cancelled."""

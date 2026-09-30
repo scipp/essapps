@@ -6,7 +6,7 @@
    Done: requests, records, references, labels, templates, `apply`, the dataset source's queries, sessions with stages and accumulators, bindings.
    A binding is staged with the fixed values and returns a callable over the blanks (`bindings.py`); a plain function computes everything on each call, and `PipelineBinding` (`pipeline.py`) cuts a sciline pipeline with `sciline.Stage`.
    Stages live in the backend and keep what their binding computed; a request names its stage, which is checked at submission and kept until the requests through it have run.
-   The backend keeps its history as an event log (`log.py`), and records are views of it (`views.py`). Accumulators live in the backend, keep their combined value, and a snapshot is logged as the accumulator and a count; D7 is linear (0.86 s for 1000 angles with one worker).
+   The backend keeps its history as an event log (`log.py`), and records are views of it (`views.py`). Accumulators live in the backend, take only finished records, keep their combined value, and a snapshot is logged as the accumulator and a count; D7 is linear (0.86 s for 1000 angles with one worker).
 2. Done: history as an event log (ADR 0001, `system.md`), with README.md, the stories, and the system stories changed to match.
 3. The sub-design for provenance and publication, with its own document and stories. It now also covers saving: a value that must outlive its client is saved, and D6 and E1 read outputs that only a save keeps (their Gap lines). Publishing is saving to the catalogue with the provenance flattened from the log.
 4. After Simon's decisions in `handoff.md`: real workflows (LoKI, then Amor) with entry-point registration, or the system tier.
