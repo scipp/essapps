@@ -21,38 +21,34 @@ A record is history. Reading an output that is no longer kept raises an error, a
 
 ## The log
 
-The backend's history is an append-only log.
-Every change the backend accepts is one event:
+The backend's history is an append-only log of what ran, with which inputs, and what came of it, in three events:
 
 | Event | Holds | Appended when |
 |---|---|---|
 | `submitted` | time, proposal, submitter, and for each record: its ID, its request or snapshot, its output names, label, member | a submission is accepted |
 | `finished` | record ID, status, failure message | a record completes, fails, or is cancelled |
-| `session-opened`, `session-closed` | session ID, proposal | a session opens or ends |
-| `stage-opened` | stage ID, session, spec, blanks | a stage opens |
-| `accumulator-opened` | accumulator ID, session, accumulator spec | an accumulator opens |
 | `pushed` | accumulator ID, the element: a reference per field | an element is pushed |
 
-Story D7 with two angles writes this (IDs shortened, JSON abbreviated), where the angle of run 2 finishes first and so is pushed first:
+Sessions and their holders are not history: opening or ending one writes nothing, and none survives a restart.
+A record does not say which stage it went through; a snapshot names its accumulator so that the pushes it covers can be found.
+
+Story D7 with two angles writes this (`#n` a record, `a` the accumulator, JSON abbreviated), where the angle of run 2 finishes first and so is pushed first:
 
 ```text
-session-opened      #0  p1
-accumulator-opened  #1  session #0  sum[Counts]/v1
-submitted           #2  angle/v1  {run: uuid:run-1}
-submitted           #3  angle/v1  {run: uuid:run-2}
-finished            #3  completed
-pushed              #1  {counts: #3.counts}
-submitted           #4  sum[Counts]/v1  snapshot of #1, upto=1
-finished            #4  completed
-submitted           #5  cut/v1  {data: #4.counts, index: 0}  label=cut member=17
-finished            #2  completed
-pushed              #1  {counts: #2.counts}
-submitted           #6  sum[Counts]/v1  snapshot of #1, upto=2
-finished            #6  completed
-submitted           #7  cut/v1  {data: #6.counts, index: 0}  label=cut member=17
-finished            #5  completed
-finished            #7  completed
-session-closed      #0
+submitted  #1  angle/v1  {run: uuid:run-1}
+submitted  #2  angle/v1  {run: uuid:run-2}
+finished   #2  completed
+pushed     a   {counts: #2.counts}
+submitted  #3  sum[Counts]/v1  snapshot of a, upto=1
+finished   #3  completed
+submitted  #4  cut/v1  {data: #3.counts, index: 0}  label=cut member=17
+finished   #1  completed
+pushed     a   {counts: #1.counts}
+submitted  #5  sum[Counts]/v1  snapshot of a, upto=2
+finished   #5  completed
+submitted  #6  cut/v1  {data: #5.counts, index: 0}  label=cut member=17
+finished   #4  completed
+finished   #6  completed
 ```
 
 Each angle adds seven events of constant size, however many angles came before.
@@ -70,12 +66,16 @@ What the log records:
 
 The design depends on the log being append-only and ordered, not on where it is stored.
 
-- In-process backend: in memory, or a file of JSON lines. A last line cut short by a crash while it was written is dropped when the file is read; any other line that is not an event is an error.
+- In-process backend: in memory, or a file of JSON lines. A write that fails, as on a full disk (system story H1), leaves the file as it was. A last line cut short by a crash while it was written is dropped when the file is read; any other line that is not an event is an error.
 - A local backend shared by two notebooks (system story G4): a file appended under a lock (not implemented).
 - A hosted backend: a file, a database table used only by appending, or Kafka.
 
-One log per backend; each event names its proposal.
-If the log is ever split, for example by proposal, only two orders must be kept: the pushes into one accumulator, and the events of one record.
+One log per backend.
+The views depend on three orders, and a log split by proposal keeps all three, since each lies within one proposal:
+
+- a record's `submitted` before its `finished`;
+- the submissions under one label, since the latest is the current one;
+- the pushes into one accumulator, since a snapshot covers the first `upto`.
 
 ## Views
 
@@ -85,12 +85,11 @@ The backend applies each event to its views (`Views.apply` in `views.py`), the s
 |---|---|
 | records by ID, with status and failure | `client.wait`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
-| open sessions, their stages and accumulators | calls through holders |
 | each accumulator's elements | what its snapshots read (see Records) |
 
 A view changes only when an event is applied, and how it changes depends on nothing but the events.
 Queries read the views, never the log.
-What is not history is not a view either: output values, what a stage computed from its fixed values, an accumulator's combined value, which records wait for which, and the queue of work ready to run.
+What is not history is not a view either: sessions and their holders, output values, what a stage computed from its fixed values, an accumulator's combined value, which records wait for which, and the queue of work ready to run.
 The backend keeps it apart from the views, and it is lost when the backend stops.
 
 ### Records
@@ -108,7 +107,7 @@ total.request                          # TypeError: a snapshot is not a request
 
 ### Restart
 
-A backend given a log that already has events applies them, closes the sessions left open, and runs the records left pending:
+A backend given a log that already has events applies them and runs the records left pending:
 
 ```python
 backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the events in the file
@@ -126,7 +125,7 @@ Story D7, the loop over arrivals in README.md, pushes each angle into a volume o
 The backend does this:
 
 ```python
-held = binding.accumulator()             # at accumulator-opened: the combined value, not history
+held = binding.accumulator()             # when the accumulator opens: the combined value, not history
 
 def push(element):                       # a reference per field
     check(element)                       # as a request over [element]; its records have completed
@@ -197,7 +196,7 @@ How the stories fare:
 
 History is kept for a retention period, like a garbage collector whose roots are the events younger than that period.
 An older event is kept while a kept event depends on it, directly or through other kept events; everything else is dropped.
-A record's submission depends on the submissions of the records it references, and a snapshot depends on its accumulator's opening and on the pushes it covers.
+A record's submission depends on the submissions of the records it references, and a snapshot depends on the pushes it covers.
 
 Dependencies point only backwards in time, so there are no cycles: a set of old events that no young event reaches is dropped as a whole.
 A long history stays alive only if something young depends on it, such as an accumulator with a snapshot every day for a whole cycle, which keeps all its pushes; pushes are small.

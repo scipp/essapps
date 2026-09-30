@@ -24,19 +24,11 @@ from ess.apps import (
     SpecId,
     Status,
     SubmitError,
+    Template,
     combine,
     dataset,
 )
-from ess.apps.log import (
-    AccumulatorOpened,
-    Event,
-    Finished,
-    Log,
-    NewRecord,
-    Pushed,
-    SessionOpened,
-    Submitted,
-)
+from ess.apps.log import Event, Finished, Log, NewRecord, Pushed, Submitted
 from ess.apps.records import Snapshot
 from ess.apps.testing import FakeDatasets
 
@@ -199,7 +191,7 @@ def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
             total.push(client.compute(LOAD, {'run': dataset(run=n)}))
         snapshot = client.submit(total)
 
-    *_, logged, finished, _ = Log(tmp_path / 'log')  # the last is the session's end
+    *_, logged, finished = Log(tmp_path / 'log')
     assert isinstance(logged, Submitted)
     assert logged.records[0].submitted == Snapshot(
         spec=snapshot.spec, accumulator=total.id, upto=3
@@ -225,7 +217,7 @@ def test_a_record_pending_in_the_log_runs_after_a_restart(
     assert again.output(done, 'value') == 2.0
 
 
-def test_a_restart_closes_the_sessions_left_open(
+def test_holders_do_not_survive_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
@@ -276,8 +268,6 @@ def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
     run = datasets.resolve(dataset(run=1))
     _write(
         tmp_path / 'log',
-        SessionOpened(session='s', proposal='p1'),
-        AccumulatorOpened(accumulator='a', session='s', spec=SpecId.of(TOTAL)),
         _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
         Finished(record='load', status=Status.COMPLETED),
         Pushed(
@@ -302,8 +292,6 @@ def test_provenance_refuses_a_snapshot_whose_elements_the_log_lacks(
     run = datasets.resolve(dataset(run=1))
     _write(
         tmp_path / 'log',
-        SessionOpened(session='s', proposal='p1'),
-        AccumulatorOpened(accumulator='a', session='s', spec=SpecId.of(TOTAL)),
         _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
         Finished(record='load', status=Status.COMPLETED),
         Pushed(
@@ -321,26 +309,56 @@ def test_provenance_refuses_a_snapshot_whose_elements_the_log_lacks(
         client.provenance(_record(client, 'snapshot'))
 
 
-def test_a_refused_call_writes_nothing_to_the_log(
-    tmp_path: Path, datasets: FakeDatasets, start: Callable[[Path], Client]
+def test_the_log_holds_submissions_finished_records_and_pushes_only(
+    tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
-    log = Log(tmp_path / 'log')
-    bind = {LOAD: lambda run, window: {'value': run}, TOTAL: combine(operator.add)}
-    backend = Backend(datasets, bind, log=log)
-    ended, other = backend.open_session('p1'), backend.open_session('p2')
-    backend.close_session(ended)
-    written = len(log)
+    client = start(tmp_path / 'log')
+    with client.session() as session:
+        session.stage(Template(LOAD, blanks=('window',)))
+        total = session.accumulator(TOTAL)
+        total.push(client.compute(LOAD, {'run': dataset(run=1)}))
 
-    with pytest.raises(SubmitError, match='session'):
-        backend.open_stage(ended, SpecId.of(LOAD), ('window',), 'p1')
-    with pytest.raises(SubmitError, match='session'):
-        backend.open_accumulator(ended, SpecId.of(TOTAL), 'p1')
-    with pytest.raises(SubmitError, match='session'):
-        backend.open_stage(other, SpecId.of(LOAD), ('window',), 'p1')
-    backend.close()
+    assert [type(e) for e in Log(tmp_path / 'log')] == [Submitted, Finished, Pushed]
 
-    assert len(log) == written
-    start(tmp_path / 'log')  # the log can be read again
+
+def test_a_refused_call_writes_nothing_to_the_log(
+    tmp_path: Path, start: Callable[[Path], Client]
+) -> None:
+    client = start(tmp_path / 'log')
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    written = len(Log(tmp_path / 'log'))
+
+    with pytest.raises(SubmitError, match='not parameters'):
+        client.submit(LOAD, {'run': dataset(run=1), 'bins': 2})
+    with client.session() as session:
+        total = session.accumulator(TOTAL)
+        with pytest.raises(SubmitError, match='nothing has been pushed'):
+            client.submit(total)
+        with pytest.raises(SubmitError, match='fields'):
+            total.push({'other': load.ref('value')})
+
+    assert len(Log(tmp_path / 'log')) == written
+
+
+def test_a_write_that_fails_leaves_the_log_as_it_was(
+    tmp_path: Path, datasets: FakeDatasets
+) -> None:
+    resource = pytest.importorskip('resource')
+    path = tmp_path / 'log'
+    run = datasets.resolve(dataset(run=1))
+    log = Log(path)
+    log.append(_submitted('load', Request(LOAD, {'run': run})))
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    # A file limit that a second event exceeds, as a full disk would.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 10, hard))
+    try:
+        with pytest.raises(OSError, match='too large'):
+            log.append(_submitted('again', Request(LOAD, {'run': run})))
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    log.append(Finished(record='load', status=Status.COMPLETED))
+
+    assert [type(e) for e in Log(path)] == [Submitted, Finished]
 
 
 def test_a_last_line_cut_short_is_dropped(

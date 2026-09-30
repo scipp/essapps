@@ -1,22 +1,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend's history: an append-only log of the changes it accepted.
+The backend's history: an append-only log of what ran, with which inputs,
+and what came of it.
 
-Every change to what the backend knows is one event: a submission, a record
-that finished, a session, stage, or accumulator that opened, a push, a
-session that closed. The backend's views, such as the records by ID, are
-built by applying the events in order, when they are appended and again
-when a backend starts from an existing log.
+There are three events: a submission, a record that finished, and a push into
+an accumulator, whose elements a snapshot covers. The backend's views, such as
+the records by ID, are built by applying the events in order, when they are
+appended and again when a backend starts from an existing log.
 
-The log holds what ran, with which inputs, and what came of it. It holds no
-output values and nothing a binding computed; those have their own lifetime.
-A submission is one event, so a backend that stops half-way through one has
-all of it or none of it.
+Sessions and their holders are not history, and neither are output values or
+anything a binding computed; those have their own lifetime. A submission is
+one event, so a backend that stops half-way through one has all of it or none
+of it.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +25,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from .records import Element, Request, SpecId, Status, Submission, map_refs
+from .records import Element, Request, Status, Submission, map_refs
 
 
 class NewRecord(BaseModel, frozen=True):
@@ -52,48 +53,13 @@ class Finished(BaseModel, frozen=True):
     failure: str | None = None
 
 
-class SessionOpened(BaseModel, frozen=True):
-    kind: Literal['session-opened'] = 'session-opened'
-    session: str
-    proposal: str
-
-
-class SessionClosed(BaseModel, frozen=True):
-    kind: Literal['session-closed'] = 'session-closed'
-    session: str
-
-
-class StageOpened(BaseModel, frozen=True):
-    kind: Literal['stage-opened'] = 'stage-opened'
-    stage: str
-    session: str
-    spec: SpecId
-    blanks: tuple[str, ...]
-
-
-class AccumulatorOpened(BaseModel, frozen=True):
-    kind: Literal['accumulator-opened'] = 'accumulator-opened'
-    accumulator: str
-    session: str
-    spec: SpecId
-
-
 class Pushed(BaseModel, frozen=True):
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
     element: Element
 
 
-Event = Annotated[
-    Submitted
-    | Finished
-    | SessionOpened
-    | SessionClosed
-    | StageOpened
-    | AccumulatorOpened
-    | Pushed,
-    Field(discriminator='kind'),
-]
+Event = Annotated[Submitted | Finished | Pushed, Field(discriminator='kind')]
 _event = TypeAdapter(Event)
 
 
@@ -120,13 +86,28 @@ def _parse(line: bytes) -> Event:
     return _with_refs(_event.validate_json(line))
 
 
+def _append_line(path: Path, line: bytes) -> None:
+    """Append ``line`` whole, or leave the file as it was."""
+    with path.open('ab', buffering=0) as file:
+        size = file.seek(0, os.SEEK_END)
+        try:
+            written = 0
+            while written < len(line):
+                written += file.write(line[written:])
+        except BaseException:
+            file.truncate(size)
+            raise
+
+
 class Log:
     """
     Events in the order they were appended.
 
     Without a path the log lives in memory. With a path it is a file of one
     JSON event per line; the events already in the file are read first. A
-    last line cut short, by a crash while it was written, is dropped.
+    last line cut short, by a crash while it was written, is dropped. A write
+    that fails, for example on a full disk, leaves the file as it was, so no
+    later event follows a line cut short.
     """
 
     def __init__(self, path: Path | None = None) -> None:
@@ -159,8 +140,7 @@ class Log:
         line = _event.dump_json(event) + b'\n'
         stored = _parse(line)
         if self._path is not None:
-            with self._path.open('ab') as file:
-                file.write(line)
+            _append_line(self._path, line)
         self._events.append(stored)
         return stored
 

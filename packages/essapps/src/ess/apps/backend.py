@@ -3,16 +3,18 @@
 """
 The backend checks requests, keeps records, and runs requests.
 
-What the backend knows is its log (see ``log.py``): every change it accepts is
-appended as one event and then applied to its views (see ``views.py``). A
-change is checked before its event is appended, so the log holds only events
-that apply. A backend given a log that already has events applies them first,
-closes the sessions left open, and runs the records left pending, without
-their stages; a snapshot left pending fails, since its accumulator is gone.
+What the backend knows of history is its log (see ``log.py``): every
+submission, finished record, and push is appended as one event and then
+applied to its views (see ``views.py``). A change is checked before its event
+is appended, so the log holds only events that apply. A backend given a log
+that already has events applies them first and runs the records left pending,
+without their stages; a snapshot left pending fails, since its accumulator is
+gone.
 
-Output values, what stages and accumulators hold, and what waits for what are
-not history. This backend keeps them in memory, so a backend started from an
-existing log cannot read the outputs of the backend that wrote it.
+Sessions and their holders, output values, and what waits for what are not
+history. This backend keeps them in memory, so a backend started from an
+existing log has no sessions and cannot read the outputs of the backend that
+wrote it.
 
 A request waits until every record it references has completed; this is the
 only scheduling there is.
@@ -52,18 +54,7 @@ from .bindings import (
     as_binding,
 )
 from .datasets import DatasetSource
-from .log import (
-    AccumulatorOpened,
-    Event,
-    Finished,
-    Log,
-    NewRecord,
-    Pushed,
-    SessionClosed,
-    SessionOpened,
-    StageOpened,
-    Submitted,
-)
+from .log import Event, Finished, Log, NewRecord, Pushed, Submitted
 from .records import (
     Element,
     Record,
@@ -75,7 +66,7 @@ from .records import (
     map_refs,
     output_refs,
 )
-from .views import AccumulatorView, Views
+from .views import Views
 
 
 def _agree(output: DataField, param: DataField) -> bool:
@@ -108,13 +99,18 @@ class Entry:
 
 class _Stage:
     """
-    The binding's callable for a stage, and the fixed values it was staged with.
+    A stage: the binding's callable, and the fixed values it was staged with.
 
     The first call stages the binding. A call with other fixed values, such as
     a dataset name that now resolves to another dataset, stages it again.
     """
 
-    def __init__(self, blanks: tuple[str, ...]) -> None:
+    def __init__(
+        self, session: str, proposal: str, spec: SpecId, blanks: tuple[str, ...]
+    ) -> None:
+        self.session = session
+        self.proposal = proposal
+        self.spec = spec
         self.blanks = blanks
         self._lock = threading.Lock()
         self._fixed: dict[str, Any] | None = None
@@ -130,16 +126,25 @@ class _Stage:
 
 class _Held:
     """
-    What an accumulator holds, and the lock that orders its pushes.
+    An accumulator: what it holds, and the lock that orders its pushes.
 
     A push combines its element into ``accumulator``, the binding's, under
     ``lock`` and outside the backend's lock. ``value`` is the combined value of
-    the elements in the accumulator's view; it changes under the backend's lock
-    together with them, so a snapshot reads the two as one. ``stopped`` says
-    why the accumulator takes no more pushes or snapshots.
+    the accumulator's elements in the views; it changes under the backend's
+    lock together with them, so a snapshot reads the two as one. ``stopped``
+    says why the accumulator takes no more pushes or snapshots.
     """
 
-    def __init__(self, accumulator: ElementAccumulator) -> None:
+    def __init__(
+        self,
+        session: str,
+        proposal: str,
+        spec: SpecId,
+        accumulator: ElementAccumulator,
+    ) -> None:
+        self.session = session
+        self.proposal = proposal
+        self.spec = spec
         self.lock = threading.Lock()
         self.accumulator = accumulator
         self.value: Mapping[str, Any] | None = None
@@ -175,6 +180,7 @@ class Backend:
         self._outputs: dict[tuple[str, str], Any] = {}
         self._waiting: dict[str, set[str]] = {}
         self._dependents: dict[str, set[str]] = {}
+        self._sessions: dict[str, str] = {}  # open session ID to proposal
         self._staged: dict[str, _Stage] = {}  # the stages of open sessions
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
         self._held: dict[str, _Held] = {}  # the accumulators of open sessions
@@ -182,8 +188,6 @@ class Backend:
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
-            for session in list(self._views.sessions):
-                self._append(SessionClosed(session=session))
             for record in list(self._views.records.values()):
                 if record.status.finished:
                     continue
@@ -266,16 +270,16 @@ class Backend:
         """
         record_id = uuid.uuid4().hex
         with self._changed:
-            accumulator = self._open_accumulator(accumulator_id, proposal)
-            value = self._held[accumulator_id].value
+            held = self._open_accumulator(accumulator_id, proposal)
+            value = held.value
             if value is None:
                 raise SubmitError('nothing has been pushed')
             snapshot = Snapshot(
-                spec=accumulator.spec,
+                spec=held.spec,
                 accumulator=accumulator_id,
-                upto=len(accumulator.elements),
+                upto=len(self._views.elements[accumulator_id]),
             )
-            outputs = tuple(self._specs[accumulator.spec].outputs.model_fields)
+            outputs = tuple(self._specs[held.spec].outputs.model_fields)
             self._append(
                 Submitted(
                     time=self._clock(),
@@ -372,7 +376,7 @@ class Backend:
         """Check the stage a request goes through; lock held."""
         if entry.stage is None:
             return
-        stage = self._views.stages.get(entry.stage)
+        stage = self._staged.get(entry.stage)
         if stage is None or stage.proposal != proposal:
             raise entry.refused(SubmitError('the stage has ended or is unknown'))
         if stage.spec != request.spec:
@@ -519,7 +523,7 @@ class Backend:
     def open_session(self, proposal: str) -> str:
         session = uuid.uuid4().hex
         with self._changed:
-            self._append(SessionOpened(session=session, proposal=proposal))
+            self._sessions[session] = proposal
         return session
 
     def open_stage(
@@ -532,12 +536,7 @@ class Backend:
         stage_id = uuid.uuid4().hex
         with self._changed:
             self._check_session(session, proposal)
-            self._append(
-                StageOpened(
-                    stage=stage_id, session=session, spec=spec_id, blanks=blanks
-                )
-            )
-            self._staged[stage_id] = _Stage(blanks)
+            self._staged[stage_id] = _Stage(session, proposal, spec_id, blanks)
         return stage_id
 
     def open_accumulator(self, session: str, spec_id: SpecId, proposal: str) -> str:
@@ -555,20 +554,15 @@ class Backend:
                 f'{spec_id} is bound to code that cannot accumulate; '
                 'submit the request over a list instead'
             )
-        held = _Held(binding.accumulator())
+        held = _Held(session, proposal, spec_id, binding.accumulator())
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             self._check_session(session, proposal)
-            self._append(
-                AccumulatorOpened(
-                    accumulator=accumulator_id, session=session, spec=spec_id
-                )
-            )
             self._held[accumulator_id] = held
         return accumulator_id
 
     def _check_session(self, session: str, proposal: str) -> None:
-        if self._views.sessions.get(session) != proposal:
+        if self._sessions.get(session) != proposal:
             raise SubmitError('the session has ended or is unknown')
 
     def push(self, accumulator_id: str, element: Element, proposal: str) -> None:
@@ -582,8 +576,7 @@ class Backend:
         stops, since the binding may hold part of the element.
         """
         with self._changed:
-            self._open_accumulator(accumulator_id, proposal)
-            held = self._held[accumulator_id]
+            held = self._open_accumulator(accumulator_id, proposal)
         with held.lock:
             with self._changed:
                 position, values = self._pushable(accumulator_id, element, proposal)
@@ -605,15 +598,15 @@ class Backend:
         self, accumulator_id: str, element: Element, proposal: str
     ) -> tuple[int, dict[str, Any]]:
         """The position of a push and the element's values, once checked; lock held."""
-        accumulator = self._open_accumulator(accumulator_id, proposal)
-        spec = self._specs[accumulator.spec]
+        held = self._open_accumulator(accumulator_id, proposal)
+        spec = self._specs[held.spec]
         assert isinstance(spec, AccumulatorSpec)  # noqa: S101
         if set(element) != set(spec.element.model_fields):
             raise SubmitError(
                 f'an element has the fields {tuple(spec.element.model_fields)}'
             )
-        position = len(accumulator.elements)
-        request = Request(accumulator.spec, {f: [ref] for f, ref in element.items()})
+        position = len(self._views.elements.get(accumulator_id, ()))
+        request = Request(held.spec, {f: [ref] for f, ref in element.items()})
         entry = Entry(request, name=f'element {position}')
         self._check_reads(entry, request, {}, proposal)
         for ref in element.values():
@@ -629,18 +622,13 @@ class Backend:
         except LookupError as error:  # its value is no longer kept
             raise entry.refused(SubmitError(str(error))) from None
 
-    def _open_accumulator(self, accumulator_id: str, proposal: str) -> AccumulatorView:
-        accumulator = self._views.accumulators.get(accumulator_id)
-        if (
-            accumulator is None
-            or not accumulator.open
-            or accumulator.proposal != proposal
-        ):
+    def _open_accumulator(self, accumulator_id: str, proposal: str) -> _Held:
+        held = self._held.get(accumulator_id)
+        if held is None or held.proposal != proposal:
             raise SubmitError('the accumulator has ended or is unknown')
-        stopped = self._held[accumulator_id].stopped
-        if stopped is not None:
-            raise SubmitError(stopped)
-        return accumulator
+        if held.stopped is not None:
+            raise SubmitError(held.stopped)
+        return held
 
     def close_session(self, session: str) -> None:
         """
@@ -650,17 +638,11 @@ class Backend:
         what an accumulator holds is released now.
         """
         with self._changed:
-            if session not in self._views.sessions:
-                return
-            stages = [i for i, s in self._views.stages.items() if s.session == session]
-            accumulators = [
-                i for i, a in self._views.accumulators.items() if a.session == session
-            ]
-            self._append(SessionClosed(session=session))
-            for stage_id in stages:
-                del self._staged[stage_id]
-            for accumulator_id in accumulators:
-                del self._held[accumulator_id]
+            self._sessions.pop(session, None)
+            self._staged = {
+                i: s for i, s in self._staged.items() if s.session != session
+            }
+            self._held = {i: h for i, h in self._held.items() if h.session != session}
 
     # Queries and control, within one proposal
 
@@ -713,7 +695,7 @@ class Backend:
             if isinstance(record.submitted, Request):
                 return record.submitted.refs()
             snapshot = record.submitted
-            elements = self._views.accumulators[snapshot.accumulator].elements
+            elements = self._views.elements.get(snapshot.accumulator, [])
             if len(elements) < snapshot.upto:
                 raise LookupError(
                     f'the log lacks elements of accumulator {snapshot.accumulator} '

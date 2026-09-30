@@ -24,8 +24,8 @@ Keeping outputs for the medium term also made the record store a catalogue of re
 
 Keep a time machine for history, for a retention period, and none for values.
 
-- **The backend's history is an append-only log of the changes it accepted**: a submission, a record that finished, a session or holder that opened or closed, a push. A change is checked before its event is appended, and a submission is one event.
-- **Records, labels, and the state of holders are views** built by applying the events in order. A backend that reads its log again rebuilds them.
+- **The backend's history is an append-only log of what ran**: a submission, a record that finished, a push into an accumulator. A change is checked before its event is appended, and a submission is one event. Sessions and holders are live state, not history.
+- **Records, labels, and the elements of accumulators are views** built by applying the events in order. A backend that reads its log again rebuilds them.
 - **A snapshot of an accumulator is logged as the accumulator and a count** of the elements it covers. Its record says that, not the list of elements; its value is the value of the accumulator spec over those elements, and provenance reads the elements from the accumulator's pushes.
 - **History is kept for a retention period**, like a garbage collector whose roots are the events younger than that period: an older event is kept while a kept event depends on it.
 - **Values are not history.** An output is kept while a pending request reads it, while a record handle in a client holds it, while a holder in a session holds it, or once it is saved. Labels name records and keep no values.
@@ -40,7 +40,7 @@ Keep a time machine for history, for a retention period, and none for values.
 ## Consequences
 
 - D7 is linear: 0.86 s for 1000 angles, 2.2 s for 2000, and one stored reference per element (in-process backend, one worker).
-- A backend can restart from its log: it closes the sessions left open and runs the records left pending, without their stages. This is what system stories B5 and H2 need from history.
+- A backend can restart from its log: it runs the records left pending, without their stages, since sessions do not survive a restart. This is what system stories B5 and H2 need from history.
 - Accumulators move into the backend. A push takes only a finished record and combines it when it is made, so a snapshot completes at submission with the combined value. A driver waits for many records with `client.as_completed`.
 - Event formats must stay readable for as long as the log is kept. Views may change freely.
 - A snapshot is not a request: `record.request` exists only for requests, and what a snapshot read comes from the backend.
