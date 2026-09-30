@@ -17,6 +17,7 @@ of it.
 
 from __future__ import annotations
 
+import fcntl
 import os
 from collections.abc import Iterator
 from datetime import datetime
@@ -97,10 +98,6 @@ def _complete_lines(data: bytes) -> list[bytes]:
 
 def _hold(path: Path) -> FileIO:
     """``path`` opened to read and append, held against every other open."""
-    try:
-        import fcntl
-    except ImportError:
-        raise NotImplementedError('a log file needs fcntl; Windows lacks it') from None
     file = path.open('a+b', buffering=0)
     try:
         fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

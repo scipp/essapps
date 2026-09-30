@@ -73,7 +73,6 @@ One log per backend, and one backend per log.
 A backend holds its log file from start to close with an exclusive lock (`flock`), and a second backend on the same file, in any process, is refused at start.
 The operating system lets go of the lock when the process ends, so a backend started after a crash or for an upgrade (system story H2) takes the file over.
 Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
-The lock needs `fcntl`, so a log file does not work on Windows; a log in memory does.
 The views depend on three orders, and a log split by proposal keeps all three, since each lies within one proposal:
 
 - a record's `submitted` before its `finished`;
