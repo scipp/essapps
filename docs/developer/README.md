@@ -4,12 +4,12 @@
 
 [scoping.md](scoping.md) states the goals. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
 
-This document describes the API we want: what users and workflow authors write, and what they can rely on.
+This document describes the API we want: what workflow authors, app authors, and notebooks write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
 Those belong in [system.md](system.md), and the system may change them without changing any code shown here.
 [adr/](adr/index.md) records the decisions behind both.
 
-The first sections cover what most users need: submitting requests, reading their results, and chaining them.
+The first sections cover what most notebooks need: submitting requests, reading their results, and chaining them.
 Later sections add what saves computation in interactive work (sessions), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
 
 ## From a for loop
@@ -46,26 +46,34 @@ What the framework adds to the plain loop:
 
 ## Terms
 
+The table names who writes each thing and who makes one at run time, with these roles:
+
+- *framework*: this package, and `ess.reduce.spec`.
+- *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
+- *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
+- *notebook*: a scientist's notebook that uses the client directly.
+- *operator*: deploys a hosted backend and its dataset source.
+
 The terms this document defines, in the order they appear:
 
-| Term | What it is | Written by |
-|---|---|---|
-| backend | the process that runs requests and keeps records | (deployed) |
-| client | the object a notebook uses to talk to one backend | user |
-| spec | the signature of a workflow: name, version, parameters, outputs | workflow author |
-| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author |
-| request | a spec and its parameter values | user |
-| record | a request as the backend accepted it, plus status and outputs | backend |
-| reference | an input that points to an output of a record, or to a dataset | user |
-| label, member | names under which records are found later | user |
-| template | a spec with values for some parameters; the others (*blanks*) are filled later | user |
-| dataset source | answers which datasets exist and what their metadata are | (deployed) |
-| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author |
-| session | a `with` block in which the backend keeps intermediate values in memory | user |
-| stage | a template in a session; what does not depend on the blanks is computed once | user |
-| accumulator | a running combination in a session, such as a sum, to which records are added one at a time | user |
-| snapshot | a record of an accumulator's current value | backend |
-| driver | user code that decides over time what to submit, such as a loop over new datasets | user |
+| Term | What it is | Code from | Made by |
+|---|---|---|---|
+| backend | the process that runs requests and keeps records | framework | operator; or a notebook or app with `local()` |
+| client | the object through which a notebook or app talks to one backend | framework | notebook, app |
+| spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
+| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`PipelineBinding`) | workflow author |
+| request | a spec and its parameter values | framework | notebook, app |
+| record | a request as the backend accepted it, plus status and outputs | framework | backend, at submission |
+| reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
+| label, member | names under which records are found later | | notebook, app |
+| template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
+| dataset source | answers which datasets exist and what their metadata are | framework | operator; a fake one in tests |
+| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author, framework (`SUM`) | workflow author |
+| session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
+| stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
+| accumulator | a running combination in a session, such as a sum, to which records are added one at a time | framework | notebook, app |
+| snapshot | a record of an accumulator's current value | framework | backend, when an accumulator is submitted |
+| driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
 
 The rows down to template are enough for most work.
 Stages and accumulators are both called *holders*, since both hold values in a session.
@@ -91,7 +99,7 @@ A *workflow* is a computation that a package offers, such as the I(Q) reduction 
 **Spec.** A workflow package declares a spec (`ess.reduce.spec.WorkflowSpec`) for each workflow it offers: a name, a version, a params model, and an outputs model.
 Both models are pydantic models; `ess.reduce.spec` provides the field types.
 A field whose value is data, such as an array or a file, is a *data field*; in a request its value is a reference to that data (see References), not the data itself.
-Users run specs; how the package implements a spec is invisible to them.
+Notebooks and apps run specs; how the package implements a spec is invisible to them.
 
 ```python
 class IofQParams(BaseModel):
@@ -108,16 +116,19 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
 
 A request computes every output its spec declares; it cannot ask for other intermediate results.
 To make an intermediate result available, the author declares it as an output.
-To inspect any other intermediate result, a user runs the package's sciline workflow directly in a notebook.
+To inspect any other intermediate result, a scientist runs the package's sciline workflow directly in a notebook.
 
 **Binding.** The package provides the code behind each spec, called its binding.
 The simplest binding is a function that takes the parameters by name and returns the outputs by name:
 
 ```python
-def iofq(run, bins, beam_centre=None) -> dict:
+def iofq(run, bins, beam_centre) -> dict:
     ...
     return {'iofq': result}
 ```
+
+The backend passes every parameter, with the defaults of the params model filled in.
+Defaults belong in the params model only; a default in the binding would never be used, and could disagree with the model.
 
 A sciline pipeline becomes a binding by naming the sciline key that each parameter sets and the key that computes each output:
 
@@ -330,7 +341,7 @@ FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, output
 Position i of each list in a PARTS_SUM request refers to the same run.
 
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
-The package author decides this for the specs the package ships; a user who connects specs from different packages decides it for that chain.
+The workflow author decides this for the specs the package ships; whoever connects specs from different packages, in a notebook or an app, decides it for that chain.
 
 ### One sum, three ways
 
@@ -526,7 +537,7 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 ## Left to the system
 
-Not part of this API, and not visible in user code:
+Not part of this API, and not visible in the code of notebooks, apps, or workflow packages:
 
 - how history is stored and for how long, and how outputs are stored, copied, dropped, and located ([system.md](system.md))
 - how a run number or file becomes a dataset identity, and how local files are identified
@@ -539,7 +550,7 @@ Not part of this API, and not visible in user code:
 ## Open questions
 
 1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result, which a tree of partial sums over a plain request needs. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
-2. **Sessions.** Whether a holder can exist without a session the user opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
+2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing an element.** A request of the accumulator spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
 4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
 5. **Labels and members** on records, `member_field`, and `client.members` are tentative.

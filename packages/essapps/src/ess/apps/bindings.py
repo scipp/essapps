@@ -36,7 +36,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 Function = Callable[..., Mapping[str, Any]]
-"""Takes parameter values by field name, with data read, and returns the outputs."""
+"""
+Takes parameter values by field name, with data read, and returns the outputs.
+
+It gets every field of the params model, defaults filled in, so it declares no
+defaults of its own.
+"""
 
 
 @runtime_checkable

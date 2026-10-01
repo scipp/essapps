@@ -4,7 +4,7 @@
 The in-process backend implements the history and the holders.
 It keeps every value in memory, so dropping values, retention, and saving are not implemented.**
 
-[README.md](README.md) describes the API: what users and workflow authors write, and what they can rely on.
+[README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
 Other parts of the system, such as the store of values, a hosted backend, and where sessions run, get sections here when they are designed.
 [ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart.
