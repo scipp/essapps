@@ -306,6 +306,17 @@ def test_an_accumulator_combines_the_selected_outputs(client: Client) -> None:
     assert client.output(combined, 'value') == 3.0
 
 
+def test_a_push_may_take_an_output_named_unlike_the_field(client: Client) -> None:
+    loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
+    with client.session() as session:
+        total = session.accumulator(TOTAL)
+        for load in loads:
+            total.push({'value': load.ref('extra')})
+        combined = client.compute(total)
+
+    assert client.output(combined, 'value') == -3.0
+
+
 def test_a_push_of_more_fields_than_the_element_is_refused(client: Client) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
     with client.session() as session:

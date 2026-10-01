@@ -418,11 +418,15 @@ The accumulator spec's binding must provide `accumulator()`, as `combine(operato
 
 ```python
 total = session.accumulator(PARTS_SUM)
-total.push(record.refs('numerator', 'denominator'))   # a reference per field of the element
+total.push({'numerator': record.ref('numerator'),    # an element: a reference per field
+            'denominator': record.ref('denominator')})
+total.push(record.refs('numerator', 'denominator'))   # the same, where the names match
+total.push({'numerator': other.ref('counts'), 'denominator': other.ref('monitor')})
 ```
 
 A push takes a reference for each field of the element model, and is refused if a field is missing or extra.
-`record.refs(...)` selects the outputs to push; without names it references every output.
+The referenced outputs may have any name; `record.refs(...)` is short for the case where they are named like the fields.
+Without names, `refs()` references every output.
 The push waits for the records it references to finish and refuses them unless they have completed.
 A push is checked when made, as a request over that one element would be.
 
