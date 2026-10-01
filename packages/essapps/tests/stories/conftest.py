@@ -21,7 +21,7 @@ import scipp as sc
 from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import SUM, AccumulatorSpec, Backend, Client, combine
+from ess.apps import AccumulatorSpec, Backend, Client, combine
 from ess.apps.testing import FakeDatasets
 
 
@@ -216,6 +216,7 @@ class Counts(BaseModel):
 
 
 ANGLE = _spec('angle', RunParams, Counts)
+VOLUME = AccumulatorSpec(name='volume', version=1, element=Counts)
 
 
 def angle(run: Any) -> dict[str, sc.Variable]:
@@ -287,7 +288,7 @@ TOYS = {
     STITCH: stitch,
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
-    SUM.of(Counts): combine(operator.add),
+    VOLUME: combine(operator.add),
 }
 
 

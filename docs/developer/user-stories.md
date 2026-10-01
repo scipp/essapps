@@ -24,7 +24,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FINALIZE` | `numerator`, `denominator`, `scale=1.0` | `normalized` | `numerator / denominator * scale` | the part of `NORMALIZE` after the sum |
 | `ANGLE` | `run` | `counts` | the counts | one angle of a rotation scan |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `SUM.of(Counts)` | generic accumulator spec, element `Counts` (`counts`) | `counts` | the sum | a generic accumulator from ess.reduce |
+| `VOLUME` | accumulator spec, element `Counts` (`counts`) | `counts` | the sum | the accumulation of a rotation scan |
 | `STITCH` | `runs: list`, `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
@@ -639,7 +639,7 @@ for n in range(1, 1001):
 
 cuts, pushed = [], []
 with client.session() as session:
-    volume = session.accumulator(SUM.of(Counts))
+    volume = session.accumulator(VOLUME)
     angles = (client.submit(ANGLE, {'run': run})
               for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
     for angle in client.as_completed(angles):                  # in the order they finish
@@ -908,7 +908,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 3.
 - **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 4.
-- **Generic accumulator specs** (system story D7): how a record names the element model, and how an author declares that grouping does not change the result; README.md open question 1.
+- **Grouping** (system story D7): how an author declares that grouping does not change the result of an accumulator spec; README.md open question 1.
 - **Placing a session** (system story G3): the name and values of the placement argument; README.md open question 2.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing a correction** (F4): deferred.

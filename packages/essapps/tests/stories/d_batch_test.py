@@ -8,9 +8,9 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import SUM, Client, Selector, SubmitError, Template, apply
+from ess.apps import Client, Selector, SubmitError, Template, apply
 
-from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
+from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, VOLUME, Measure
 
 
 def test_d1_temperature_scan(
@@ -166,7 +166,7 @@ def test_d7_rotation_scan_over_a_thousand_angles(
 
     cuts, pushed = [], []
     with client.session() as session:
-        volume = session.accumulator(SUM.of(Counts))
+        volume = session.accumulator(VOLUME)
         angles = (
             client.submit(ANGLE, {'run': run})
             for run in islice(client.datasets.watch(Selector(scan='17')), 1000)

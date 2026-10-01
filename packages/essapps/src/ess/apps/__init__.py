@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Framework for ESS data-reduction applications."""
 
-from .accumulators import SUM, AccumulatorSpec, combine
+from .accumulators import AccumulatorSpec, combine
 from .backend import Backend
 from .batch import LastBefore, Lookup, apply
 from .bindings import Binding
@@ -21,7 +21,6 @@ from .rules import Rule, RuleStatus, TriggerLoop
 from .sessions import Accumulator, Session, Stage
 
 __all__ = [
-    'SUM',
     'Accumulator',
     'AccumulatorSpec',
     'Backend',

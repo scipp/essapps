@@ -53,12 +53,12 @@ submitted  #1  angle/v1  {run: uuid:run-1}
 submitted  #2  angle/v1  {run: uuid:run-2}
 finished   #2  completed
 pushed     a   {counts: #2.counts}
-submitted  #3  sum[Counts]/v1  snapshot of a, upto=1
+submitted  #3  volume/v1  snapshot of a, upto=1
 finished   #3  completed
 submitted  #4  cut/v1  {data: #3.counts, energy_transfer: 2.0}  label=cut member=17
 finished   #1  completed
 pushed     a   {counts: #1.counts}
-submitted  #5  sum[Counts]/v1  snapshot of a, upto=2
+submitted  #5  volume/v1  snapshot of a, upto=2
 finished   #5  completed
 submitted  #6  cut/v1  {data: #5.counts, energy_transfer: 2.0}  label=cut member=17
 finished   #4  completed
@@ -111,7 +111,7 @@ Provenance asks the backend what each record read (`Backend.inputs`), so it work
 
 ```python
 total = client.submit(volume)          # a snapshot of volume, upto=1000
-total.submitted                        # Snapshot(spec=sum[Counts]/v1, accumulator=volume.id, upto=1000)
+total.submitted                        # Snapshot(spec=volume/v1, accumulator=volume.id, upto=1000)
 client.provenance(total).records()     # the 1000 angles, from the accumulator's view
 total.request                          # TypeError: a snapshot is not a request
 ```
@@ -199,7 +199,7 @@ held.value                                # {'counts': counts_1 + counts_2}
 
 The backend reads `value` after every push, and that value becomes a snapshot's output.
 So a later push must not modify a value read before it: each push makes a new value instead of adding in place.
-`combine(operator.add)` is such a binding, since `operator.add` returns a new value; the stories bind `SUM.of(Counts)` to it.
+`combine(operator.add)` is such a binding, since `operator.add` returns a new value; the stories bind `VOLUME` to it.
 
 ## Values
 
