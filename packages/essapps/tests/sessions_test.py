@@ -24,7 +24,6 @@ from ess.apps import (
     Template,
     combine,
     dataset,
-    lists_of,
 )
 from ess.apps.backend import Entry
 from ess.apps.bindings import Function
@@ -69,16 +68,26 @@ def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> Workf
 LOAD = _spec('load', RunParams, LoadOutputs)
 SHIFT = _spec('shift', ShiftParams, Parts)
 SCALE = _spec('scale', ScaleParams, Parts)
-TOTAL = _spec('total', lists_of(Parts), Parts)
-PAIRS = _spec('pairs', lists_of(LoadOutputs), LoadOutputs)
-DIGITS = _spec('digits', lists_of(Parts), Parts)
+
+
+class PartsTable(BaseModel):
+    parts: list[Parts]
+
+
+class PairsTable(BaseModel):
+    pairs: list[LoadOutputs]
+
+
+TOTAL = _spec('total', PartsTable, Parts)
+PAIRS = _spec('pairs', PairsTable, LoadOutputs)
+DIGITS = _spec('digits', PartsTable, Parts)
 
 
 class Mean(BaseModel):
     mean: Array()  # type: ignore[valid-type]
 
 
-MEAN = _spec('mean', lists_of(Parts), Mean)
+MEAN = _spec('mean', PartsTable, Mean)
 
 
 class _Averaging:
@@ -99,15 +108,19 @@ class Averaging:
     """MEAN, whose accumulators hold a sum and a count rather than a mean."""
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        return lambda **values: {'mean': statistics.fmean({**fixed, **values}['value'])}
+        def mean(**values: Any) -> dict[str, float]:
+            rows = {**fixed, **values}['parts']
+            return {'mean': statistics.fmean(row['value'] for row in rows)}
+
+        return mean
 
     def accumulator(self) -> _Averaging:
         return _Averaging()
 
 
-def pairs(value: list[float], extra: list[float]) -> dict[str, float]:
-    """PAIRS as a plain function over lists."""
-    return {'value': sum(value), 'extra': sum(extra)}
+def pairs(pairs: list[dict[str, float]]) -> dict[str, float]:
+    """PAIRS as a plain function over its table."""
+    return {f: sum(row[f] for row in pairs) for f in ('value', 'extra')}
 
 
 def append_digit(number: float, digit: float) -> float:
@@ -357,17 +370,17 @@ def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) ->
         for load in loads:
             mean.push(load.refs('value'))
         snapshot = client.compute(mean)
-    plain = client.compute(MEAN, {'value': [x.ref('value') for x in loads]})
+    plain = client.compute(MEAN, {'parts': [x.refs('value') for x in loads]})
 
     assert client.output(snapshot, 'mean') == client.output(plain, 'mean') == 1.5
 
 
-def test_an_accumulator_needs_a_spec_over_lists(
+def test_an_accumulator_needs_a_spec_over_a_table(
     client: Client, backend: Backend
 ) -> None:
-    with client.session() as session, pytest.raises(TypeError, match='lists'):
+    with client.session() as session, pytest.raises(TypeError, match='table'):
         session.accumulator(SHIFT)
-    with pytest.raises(SubmitError, match='lists'):
+    with pytest.raises(SubmitError, match='table'):
         backend.open_accumulator(backend.open_session('p1'), SpecId.of(SHIFT), 'p1')
 
 
@@ -383,29 +396,25 @@ class Files(BaseModel):
     value: OpaqueFile
 
 
-FILES_SUM = _spec('files-sum', lists_of(Files), Files)
+class FilesTable(BaseModel):
+    files: list[Files]
+
+
+FILES_SUM = _spec('files-sum', FilesTable, Files)
 
 
 def test_an_element_must_fit_the_accumulator(client: Client) -> None:
     load = client.submit(LOAD, {'run': {'dataset': 'run:1'}})
 
     with pytest.raises(SubmitError, match='does not fit'):
-        client.submit(FILES_SUM, {'value': [load.ref('value')]})
+        client.submit(FILES_SUM, {'files': [{'value': load.ref('value')}]})
 
 
-def test_a_spec_over_lists_takes_lists_of_equal_length(client: Client) -> None:
+def test_each_row_of_a_table_needs_every_field(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
 
-    with pytest.raises(SubmitError, match='same number of elements'):
-        client.submit(
-            PAIRS,
-            {
-                'value': [x.ref('value') for x in loads],
-                'extra': [loads[0].ref('extra')],
-            },
-        )
-    with pytest.raises(SubmitError, match='same number of elements'):
-        client.submit(PAIRS, {'value': [], 'extra': []})
+    with pytest.raises(SubmitError, match=r'pairs\.1\.extra: Field required'):
+        client.submit(PAIRS, {'pairs': [loads[0].refs(), loads[1].refs('value')]})
 
 
 def test_an_element_that_does_not_fit_is_refused_at_the_push(client: Client) -> None:
@@ -501,7 +510,7 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
             push.join()
         snapshot = client.compute(digits)
     pushed = client.provenance(snapshot).records()  # in the order they were logged
-    plain = client.compute(DIGITS, {'value': [x.ref('value') for x in pushed]})
+    plain = client.compute(DIGITS, {'parts': [x.refs('value') for x in pushed]})
 
     assert client.output(snapshot, 'value') == client.output(plain, 'value')
 
@@ -511,13 +520,7 @@ def test_an_accumulator_needs_a_binding_that_accumulates(client: Client) -> None
     client.wait(loads)
     with client.session() as session, pytest.raises(SubmitError, match='accumulate'):
         session.accumulator(PAIRS)
-    plain = client.compute(
-        PAIRS,
-        {
-            'value': [x.ref('value') for x in loads],
-            'extra': [x.ref('extra') for x in loads],
-        },
-    )
+    plain = client.compute(PAIRS, {'pairs': [x.refs() for x in loads]})
 
     assert [client.output(plain, name) for name in ('value', 'extra')] == [3.0, -3.0]
 

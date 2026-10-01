@@ -150,7 +150,7 @@ class Snapshot(BaseModel, frozen=True):
 
 
 Element = dict[str, OutputRef]
-"""One element of an accumulator: a reference for each list its spec takes."""
+"""One element of an accumulator: a row of its spec's table, a reference per field."""
 
 Submission = Annotated[Snapshot | Request, Field(union_mode='left_to_right')]
 """

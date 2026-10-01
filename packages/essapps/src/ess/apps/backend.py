@@ -44,10 +44,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ess.reduce.spec import DataField, DatasetRef, OutputRef, WorkflowSpec, data_fields
-from pydantic import ValidationError
+from ess.reduce.spec import (
+    DataField,
+    DatasetRef,
+    OutputRef,
+    WorkflowSpec,
+    data_fields,
+    table_fields,
+)
+from pydantic import BaseModel, ValidationError
 
-from .accumulators import Lists
+from .accumulators import element_table
 from .bindings import (
     AccumulatorBinding,
     Binding,
@@ -76,6 +83,32 @@ def _agree(output: DataField, param: DataField) -> bool:
     if output.format != param.format:
         return False
     return output.array is None or param.array is None or output.array == param.array
+
+
+def _values(model: BaseModel) -> dict[str, Any]:
+    """The values of a params model by field, the rows of a table as dicts."""
+    tables = table_fields(type(model))
+    values = {f: getattr(model, f) for f in type(model).model_fields}
+    return {
+        f: [dict(row) for row in v] if f in tables and v is not None else v
+        for f, v in values.items()
+    }
+
+
+def _reads(
+    params: type[BaseModel], field: str, value: Any
+) -> Iterator[tuple[str, OutputRef, DataField | None]]:
+    """Each output a param's value references, with its place and the field it fills."""
+    row = table_fields(params).get(field)
+    if row is None:
+        target = data_fields(params).get(field)
+        yield from ((field, ref, target) for ref in output_refs(value))
+        return
+    cells = data_fields(row)
+    for i, cell_values in enumerate(value):
+        for cell, cell_value in cell_values.items():
+            for ref in output_refs(cell_value):
+                yield f'{field}[{i}].{cell}', ref, cells.get(cell)
 
 
 @dataclass(frozen=True)
@@ -321,8 +354,7 @@ class Backend:
                 raise SubmitError(f'{request.spec}: {problems}') from None
         except SubmitError as error:
             raise entry.refused(error) from None
-        values = {f: getattr(model, f) for f in type(model).model_fields}
-        return Request(request.spec, values)
+        return Request(request.spec, _values(model))
 
     def _resolver(
         self, field: str, ids: list[str], proposal: str
@@ -359,21 +391,20 @@ class Backend:
         proposal: str,
     ) -> None:
         """Check the outputs a request reads; lock held."""
-        param_fields = data_fields(self._specs[request.spec].params)
+        params = self._specs[request.spec].params
         try:
             for field, value in request.params.items():
-                for ref in output_refs(value):
+                for where, ref, target in _reads(params, field, value):
                     spec_id = submitted.get(ref.record) or self._readable(
-                        ref, field, proposal
+                        ref, where, proposal
                     )
                     outputs = self._output_fields[spec_id]
                     if ref.output not in outputs:
                         raise SubmitError(
-                            f'{field}: {spec_id} has no output {ref.output!r}'
+                            f'{where}: {spec_id} has no output {ref.output!r}'
                         )
-                    target = param_fields.get(field)
                     if target is not None and not _agree(outputs[ref.output], target):
-                        raise SubmitError(f'{field}: {ref} does not fit the field')
+                        raise SubmitError(f'{where}: {ref} does not fit the field')
         except SubmitError as error:
             raise entry.refused(error) from None
 
@@ -451,8 +482,7 @@ class Backend:
         A record holds its values as the log does, in JSON's types; a binding
         gets the types the params model declares, such as a tuple.
         """
-        model = self._specs[request.spec].params.model_validate(request.params)
-        return {f: getattr(model, f) for f in type(model).model_fields}
+        return _values(self._specs[request.spec].params.model_validate(request.params))
 
     def _read(self, values: dict[str, Any]) -> dict[str, Any]:
         """``values`` with the outputs and datasets they reference read."""
@@ -549,15 +579,15 @@ class Backend:
         An accumulator in the session, with nothing pushed.
 
         Its binding must make element accumulators; a plain request over a
-        list works with any binding.
+        table works with any binding.
         """
-        if not issubclass(self.spec(spec_id).params, Lists):
-            raise SubmitError(f'{spec_id} does not take lists')
+        if element_table(self.spec(spec_id)) is None:
+            raise SubmitError(f'{spec_id} does not take one table')
         binding = self._bindings[spec_id]
         if not isinstance(binding, AccumulatorBinding):
             raise SubmitError(
                 f'{spec_id} is bound to code that cannot accumulate; '
-                'submit the request over a list instead'
+                'submit the request over a table instead'
             )
         held = _Held(session, proposal, spec_id, binding.accumulator())
         accumulator_id = uuid.uuid4().hex
@@ -608,13 +638,13 @@ class Backend:
     ) -> tuple[int, dict[str, Any]]:
         """The position of a push and the element's values, once checked; lock held."""
         held = self._open_accumulator(accumulator_id, proposal)
-        spec = self._specs[held.spec]
-        if set(element) != set(spec.params.model_fields):
-            raise SubmitError(
-                f'an element has the fields {tuple(spec.params.model_fields)}'
-            )
+        table = element_table(self._specs[held.spec])
+        assert table is not None  # noqa: S101
+        name, row = table
+        if set(element) != set(row.model_fields):
+            raise SubmitError(f'an element has the fields {tuple(row.model_fields)}')
         position = len(self._views.elements.get(accumulator_id, ()))
-        request = Request(held.spec, {f: [ref] for f, ref in element.items()})
+        request = Request(held.spec, {name: [element]})
         entry = Entry(request, name=f'element {position}')
         self._check_reads(entry, request, {}, proposal)
         try:

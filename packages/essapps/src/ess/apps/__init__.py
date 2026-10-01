@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Framework for ESS data-reduction applications."""
 
-from .accumulators import combine, lists_of
+from .accumulators import combine
 from .backend import Backend
 from .batch import LastBefore, Lookup, apply
 from .bindings import Binding
@@ -46,6 +46,5 @@ __all__ = [
     'apply',
     'combine',
     'dataset',
-    'lists_of',
     'local',
 ]

@@ -26,7 +26,6 @@ from ess.apps import (
     Template,
     combine,
     dataset,
-    lists_of,
 )
 from ess.apps.log import Event, Finished, Log, NewRecord, Pushed, Submitted
 from ess.apps.records import Snapshot
@@ -50,12 +49,18 @@ LOAD = WorkflowSpec(
     params=LoadParams,
     outputs=Value,
 )
+
+
+class Values(BaseModel):
+    values: list[Value]
+
+
 TOTAL = WorkflowSpec(
     name='total',
     version=1,
     title='total',
     description='total',
-    params=lists_of(Value),
+    params=Values,
     outputs=Value,
 )
 

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 from ess.reduce.spec import WorkflowSpec
 
-from .accumulators import Lists
+from .accumulators import element_table
 from .records import Element, Request, SpecId, Template
 
 if TYPE_CHECKING:
@@ -56,9 +56,9 @@ class Session:
         return Stage(self, template, stage_id)
 
     def accumulator(self, spec: WorkflowSpec) -> Accumulator:
-        """An accumulator of ``spec``, whose params must be lists (``lists_of``)."""
-        if not issubclass(spec.params, Lists):
-            raise TypeError(f'{spec.name} does not take lists')
+        """An accumulator of ``spec``, whose only param must be a table."""
+        if element_table(spec) is None:
+            raise TypeError(f'{spec.name} does not take one table')
         if not self.open:
             raise RuntimeError('this session has ended')
         accumulator_id = self._backend.open_accumulator(
@@ -116,7 +116,7 @@ class Accumulator(_Holder):
 
     def push(self, element: Element) -> None:
         """
-        Push an element: a reference for each list the spec takes.
+        Push an element: a row of the spec's table, a reference per field.
 
         Select a record's outputs with ``record.refs('numerator', ...)``.
         The push waits for the records to finish, and refuses them unless they

@@ -167,7 +167,7 @@ def snapshot():
     complete(record, held.value)         # nothing runs
 ```
 
-**Push.** A push gets the check a request over that one element gets: the element has a field for each list the spec takes, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+**Push.** A push gets the check a request over that one element gets: the element has the fields of the table's model, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
 A push that does not fit, or whose combining fails, appends nothing.
 After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
 The accumulator does not keep its elements' values after combining them.
@@ -188,7 +188,7 @@ The `submitted` event names the accumulator and a count instead of the list, sin
 The section Records above describes how provenance reads the elements.
 
 **Binding.** An accumulator needs a binding that makes element accumulators, like `sciline.Accumulator` does for one key; opening one with any other binding is refused.
-A plain request over a list works with any binding.
+A plain request over a table works with any binding.
 
 ```python
 held = binding.accumulator()              # nothing pushed yet
