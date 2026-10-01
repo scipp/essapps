@@ -87,7 +87,7 @@ class Request(BaseModel, frozen=True):
     def ref(self, output: str) -> OutputRef:
         return OutputRef(record=self.placeholder, output=output)
 
-    def refs(self) -> list[OutputRef]:
+    def inputs(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
         return output_refs(self.params)
 
