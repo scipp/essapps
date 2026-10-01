@@ -9,8 +9,10 @@ requests accept one, a list, or a dict, and return the same shape.
 
 from __future__ import annotations
 
+import queue
+import threading
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,7 +22,15 @@ from pydantic import BaseModel
 from .backend import Backend, Entry
 from .bindings import Binding, Function
 from .datasets import DatasetSource
-from .records import Record, Request, SpecId, Status, SubmitError, map_refs
+from .records import (
+    Record,
+    Request,
+    SpecId,
+    Status,
+    Submission,
+    SubmitError,
+    map_refs,
+)
 from .sessions import Accumulator, Session, Stage
 
 
@@ -67,20 +77,21 @@ def _numbered(requests: list[Request]) -> list[Request]:
 
 class Provenance(BaseModel, frozen=True):
     """
-    Where a record came from: its request, the records it read, and their datasets.
+    Where a record came from: what it ran, the records it read, and their datasets.
 
-    ``records`` lists every record read through all inputs, nearest first; it
-    stops at datasets.
+    ``submitted`` is the record's request or snapshot. ``records`` lists every
+    record read through all inputs, nearest first; it stops at datasets.
     """
 
-    request: Request
+    submitted: Submission
     upstream: tuple[Record, ...]
 
     def records(self) -> list[Record]:
         return list(self.upstream)
 
     def datasets(self) -> list[DatasetRef]:
-        requests = (self.request, *(r.request for r in self.upstream))
+        ran = (self.submitted, *(r.submitted for r in self.upstream))
+        requests = [r for r in ran if isinstance(r, Request)]
         return list(dict.fromkeys(d for r in requests for d in r.datasets()))
 
 
@@ -105,7 +116,8 @@ class Client:
 
         Requests may be one, a list, or a dict. The records come back pending,
         in the shape given. Under a label, the keys of a dict become the
-        members of their records.
+        members of their records. An accumulator makes a snapshot, which is
+        completed at once and takes no label or member.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -115,7 +127,11 @@ class Client:
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
-            what = what.request()
+            if label is not None or member is not None:
+                raise TypeError('a snapshot takes no label or member')
+            return self._backend.snapshot(
+                what.id, proposal=self.proposal, submitter=self.submitter
+            )
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -141,6 +157,49 @@ class Client:
         """The records once finished; a failed record is returned, not raised."""
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.wait(ids, self.proposal))
+
+    def as_completed(self, records: Iterable[Record]) -> Iterator[Record]:
+        """
+        The records as they finish, each once, in the order they finish.
+
+        A thread consumes ``records``, so it may be a generator that blocks,
+        such as one that submits a request per dataset as it arrives: records
+        that finish meanwhile are yielded. An error it raises is raised here.
+        Closing the iterator stops consuming ``records`` after the next one.
+        """
+        finished: queue.SimpleQueue[Record | Exception | int] = queue.SimpleQueue()
+        stop = threading.Event()
+
+        def consume() -> None:
+            seen: set[str] = set()
+            try:
+                for record in records:
+                    if record.id not in seen:
+                        seen.add(record.id)
+                        self._backend.when_finished(
+                            record.id, self.proposal, finished.put
+                        )
+                    if stop.is_set():
+                        return
+            except Exception as error:  # raised in the caller's thread
+                finished.put(error)
+            else:
+                finished.put(len(seen))
+
+        threading.Thread(target=consume, daemon=True).start()
+        yielded, total = 0, None
+        try:
+            while yielded != total:
+                item = finished.get()
+                if isinstance(item, Exception):
+                    raise item
+                if isinstance(item, int):
+                    total = item
+                else:
+                    yielded += 1
+                    yield item
+        finally:
+            stop.set()
 
     def cancel(self, records: Any) -> None:
         """End the unfinished records as cancelled."""
@@ -176,9 +235,8 @@ class Client:
         spec_id = None if spec is None else SpecId.of(spec)
         return [
             r
-            for r in self._backend.records(self.proposal)
-            if (label is None or r.label == label)
-            and (spec_id is None or r.request.spec == spec_id)
+            for r in self._backend.records(self.proposal, label=label)
+            if (spec_id is None or r.spec == spec_id)
             and (since is None or r.created >= since)
             and (until is None or r.created < until)
         ]
@@ -199,13 +257,17 @@ class Client:
 
     def provenance(self, record: Record) -> Provenance:
         upstream: dict[str, Record] = {}
-        todo = deque(ref.record for ref in record.request.refs())
+        todo = deque(self._inputs(record.id))
         while todo:
             record_id = todo.popleft()
             if record_id not in upstream:
                 upstream[record_id] = self._backend.record(record_id, self.proposal)
-                todo.extend(ref.record for ref in upstream[record_id].request.refs())
-        return Provenance(request=record.request, upstream=tuple(upstream.values()))
+                todo.extend(self._inputs(record_id))
+        return Provenance(submitted=record.submitted, upstream=tuple(upstream.values()))
+
+    def _inputs(self, record_id: str) -> list[str]:
+        """The IDs of the records a record read."""
+        return [ref.record for ref in self._backend.inputs(record_id, self.proposal)]
 
 
 def local(

@@ -14,11 +14,14 @@ until that is proposed there.
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated, Any, Self
 
 from ess.reduce.spec import WorkflowSpec
 from pydantic import BaseModel, create_model, model_validator
+
+from .bindings import AccumulatorBinding, ElementAccumulator, Function
 
 
 class _Lists(BaseModel):
@@ -60,13 +63,53 @@ class AccumulatorSpec(WorkflowSpec, frozen=True):
         }
 
 
-def combine(operation: Callable[[Any, Any], Any]) -> Callable[..., Mapping[str, Any]]:
-    """The workflow of an accumulator spec: each field combined with ``operation``."""
+class _Fold:
+    """Each field combined with ``operation``, in push order."""
 
-    def workflow(**lists: list[Any]) -> dict[str, Any]:
-        return {f: functools.reduce(operation, values) for f, values in lists.items()}
+    def __init__(self, operation: Callable[[Any, Any], Any]) -> None:
+        self._operation = operation
+        self._value: dict[str, Any] | None = None
 
-    return workflow
+    def push(self, element: Mapping[str, Any]) -> None:
+        if self._value is None:
+            self._value = dict(element)
+        else:
+            value = self._value
+            self._value = {f: self._operation(value[f], v) for f, v in element.items()}
+
+    @property
+    def value(self) -> Mapping[str, Any]:
+        if self._value is None:
+            raise ValueError('nothing has been pushed')
+        return self._value
+
+
+@dataclass(frozen=True)
+class _Combine:
+    operation: Callable[[Any, Any], Any]
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        return functools.partial(self._compute, **fixed)
+
+    def _compute(self, **lists: list[Any]) -> Mapping[str, Any]:
+        fold = self.accumulator()
+        for values in zip(*lists.values(), strict=True):
+            fold.push(dict(zip(lists, values, strict=True)))
+        return fold.value
+
+    def accumulator(self) -> ElementAccumulator:
+        return _Fold(self.operation)
+
+
+def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
+    """
+    The binding of an accumulator spec: each field combined with ``operation``.
+
+    A plain request and an accumulator in a session combine the elements in
+    the same order, so they give the same value. ``operation`` must return a
+    new value and not modify its arguments.
+    """
+    return _Combine(operation)
 
 
 class GenericAccumulator:

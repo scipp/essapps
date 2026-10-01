@@ -79,15 +79,22 @@ def test_c5_vanadium_and_sample_tuned_together(
         reduce = session.stage(
             Template(IOFQ, params={'run': sample}, blanks=('normalization',))
         )
+        reduced = []
         for scale in (1.0, 2.0):
             processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
-            reduced = client.compute(
-                reduce, {'normalization': processed.ref('normalization')}, label='iofq'
+            reduced.append(
+                client.compute(
+                    reduce,
+                    {'normalization': processed.ref('normalization')},
+                    label='iofq',
+                )
             )
 
-    assert [
-        client.output(r, 'iofq').values.tolist() for r in client.records(label='iofq')
-    ] == [[2.0, 4.0], [1.0, 2.0]]
-    assert reduced.request.params['normalization'] == client.latest('vanadium').ref(
+    assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
+        [2.0, 4.0],
+        [1.0, 2.0],
+    ]  # [4, 8] divided by 2, then by 4
+    assert client.records(label='iofq') == reduced
+    assert reduced[-1].request.params['normalization'] == client.latest('vanadium').ref(
         'normalization'
     )

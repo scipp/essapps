@@ -3,7 +3,7 @@
 These stories check what the system must provide beyond the API of [README.md](README.md): cost, placement, persistence, recovery, and operations.
 Each has an actor, a goal, and the property to check.
 Where a story shares a goal with an API story in [user-stories.md](user-stories.md), it has the same identifier.
-The stories get code once a system document says what the system is.
+[system.md](system.md) describes the part of the system that keeps history and values; the stories get code as the system document grows.
 
 ## S. Small stories
 
@@ -53,8 +53,8 @@ Property: records completed before the crash are kept, and requests submitted be
 
 ### B6. Find last week's result
 
-Actor: user after a week. Goal: last week's records and outputs are still there.
-Property: records and their outputs survive restarts of the client and of the backend, until they expire (H3).
+Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
+Property: records survive restarts of the client and of the backend for the retention period (H3). Saved outputs survive as long as their store keeps them.
 
 ## C. Chaining
 
@@ -84,7 +84,7 @@ Property: a cancel stops the started requests within seconds and frees their wor
 
 Actor: spectroscopy user. Goal: each run is reduced on its own node as it arrives, and the volume so far is ready within seconds of each angle.
 Property: each `ANGLE` request starts when its run arrives, on any free node. Pushing a finished angle into the accumulator combines one contribution and reads no earlier one.
-Each read of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of reads.
+Each snapshot of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of snapshots.
 A request of `SUM.of(Counts)` over a thousand elements, made outside a session, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
 
 ## F. Publication and provenance
@@ -111,11 +111,6 @@ Property: a backend in the notebook's process runs a workflow bound there, and u
 Actor: user of a desktop application. Goal: the expensive reduction runs on the cluster; the cheap post-processing is tuned on the laptop with sub-second feedback.
 Property: a session's process runs on the laptop while its stages read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records the session makes go to the cluster's backend.
 
-### G4. Two notebooks on one machine
-
-Actor: user with two notebooks. Goal: both notebooks work at the same time on one machine.
-Property: two clients on one machine share one store, and neither locks the other out.
-
 ### G5. Reference across proposals refused
 
 Actor: operator. Goal: no user reads another proposal's data, whatever client they use.
@@ -126,15 +121,14 @@ Property: the backend checks every reference against the submitter's proposal an
 ### H1. Disk fills up
 
 Actor: operator. Goal: free disk space without losing provenance.
-Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay until the records expire (H3). The operator sees the space used per proposal before the disk is full.
+Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay for the retention period (H3). The operator sees the space used per proposal before the disk is full.
 
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema.
+Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on a log that another backend still holds is refused, so the old and the new version never write the same log.
 
 ### H3. Records expire
 
-Actor: operator. Goal: records and outputs are kept while an experiment needs them and removed afterwards; what was published lasts.
-Property: records and their outputs are kept for a configured period that covers a running experiment, and then expire. A published entry still answers what produced it after the records behind it have expired.
-A record that read an expired record keeps its own request, and its provenance loses that step.
+Actor: operator. Goal: history is kept while an experiment needs it and removed afterwards; what was published lasts.
+Property: history is kept for a configured period that covers a running experiment. An older event is kept while a kept event depends on it, so a kept record's provenance is complete. A published entry still answers what produced it after the history behind it has expired.

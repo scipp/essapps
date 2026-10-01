@@ -4,12 +4,13 @@
 
 [scoping.md](scoping.md) states the goals. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
 
-This document describes the API we want: what users and workflow authors write, and what they can rely on.
+This document describes the API we want: what workflow authors, app authors, and notebooks write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
-Those belong in a separate system document, and the system may change them without changing any code shown here.
+Those belong in [system.md](system.md), and the system may change them without changing any code shown here.
+[adr/](adr/index.md) records the decisions behind both.
 
-The core, described here in full, is specs, requests, records, references, labels, datasets, and the holders in a session.
-Two sub-designs build on it and get one section each here: batch and automatic reduction, and provenance and publication.
+The first sections cover what most notebooks need: submitting requests, reading their results, and chaining them.
+Later sections add what saves computation in interactive work (sessions), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
 
 ## From a for loop
 
@@ -24,11 +25,61 @@ for run in (60339, 60340, 60341):
 The same with the framework:
 
 ```python
+records = {}
 for run in (60339, 60340, 60341):
-    client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100}, label='iofq', member=str(run))
+    records[run] = client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100})
+records = client.wait(records)
+client.output(records[60339], 'iofq')
 ```
 
-What changes: each call is kept and can be found later, calls can run elsewhere and in parallel, and every result can answer where it came from.
+`client` connects to the framework (see Client and backend).
+`IOFQ` is the spec of the I(Q) reduction: it states which parameters the reduction takes and which outputs it returns.
+`dataset(run=run)` names the raw data of a run (see Datasets).
+`client.submit` returns at once with a *record* in the state `pending`; the three reductions run in parallel, possibly on another machine.
+`client.wait` returns the records once they have finished, and `client.output` reads an output by name.
+
+What the framework adds to the plain loop:
+
+- Each call is kept as a record and can be found later, by this notebook or another one.
+- Calls can run elsewhere and in parallel.
+- Every result can answer where it came from: which spec, which parameter values, which datasets, which software versions.
+
+## Terms
+
+The table names who writes each thing and who makes one at run time, with these roles:
+
+- *framework*: this package, and `ess.reduce.spec`.
+- *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
+- *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
+- *notebook*: a scientist's notebook that uses the client directly.
+- *operator*: deploys a hosted backend and its dataset source.
+
+The terms this document defines, in the order they appear:
+
+| Term | What it is | Code from | Made by |
+|---|---|---|---|
+| backend | the process that runs requests and keeps records | framework | operator; or a notebook or app with `local()` |
+| client | the object through which a notebook or app talks to one backend | framework | notebook, app |
+| spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
+| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`PipelineBinding`) | workflow author |
+| request | a spec and its parameter values | framework | notebook, app |
+| record | a request as the backend accepted it, plus status and outputs | framework | backend, at submission |
+| reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
+| label, member | names under which records are found later | | notebook, app |
+| template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
+| dataset source | answers which datasets exist and what their metadata are | framework | operator; a fake one in tests |
+| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author, framework (`SUM`) | workflow author |
+| session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
+| stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
+| accumulator | a running combination in a session, such as a sum, to which records are added one at a time | framework | notebook, app |
+| snapshot | a record of an accumulator's current value | framework | backend, when an accumulator is submitted |
+| driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
+
+The rows down to template are enough for most work.
+Stages and accumulators are both called *holders*, since both hold values in a session.
+The terms stage, accumulator, and driver follow sciline (scipp/sciline ADR 0003).
+
+## Client and backend
 
 A client talks to one backend, for one proposal:
 
@@ -37,96 +88,111 @@ client = connect('https://reduce.example', proposal='p1')   # a hosted backend
 client = local(proposal='p1')                               # a backend in this process
 ```
 
-A hosted backend runs only installed workflows.
-A backend in the notebook's own process may also run a workflow defined in the notebook, `local(proposal='p1', bind={IOFQ: draft})`, and its records say that the implementation was bound there.
+The backend runs requests and keeps records.
+A hosted backend runs only workflows from installed packages.
+A backend in the notebook's process can also run a workflow defined in the notebook (see Binding).
 
-## Overview
+## Specs and bindings
 
-| Kind | Terms |
-|---|---|
-| plain data | spec, request, template, reference, selector |
-| durable | record, label |
-| queries | dataset source |
-| holders, in a session | stage, accumulator |
-| policy | driver |
+A *workflow* is a computation that a package offers, such as the I(Q) reduction of SANS.
 
-The backend executes requests and keeps records.
-A dataset source answers which datasets exist.
-Holders live in a backend process for as long as their session.
-Drivers are loops written against the client and a dataset source; they run in a notebook, an application, or a long-lived driving server, never in the backend.
-The sections below follow sciline's terms (scipp/sciline ADR 0003): stage, accumulator, contribution, driver.
-
-## Specs, requests, records
-
-**Spec.** A workflow package declares a spec (`ess.reduce.spec.WorkflowSpec`): a name, a version, a params model, and an outputs model.
-Both models are pydantic models over one vocabulary, in which a field holding data is a reference.
-Users run specs; how the package implements a spec is invisible to them.
+**Spec.** A workflow package declares a spec (`ess.reduce.spec.WorkflowSpec`) for each workflow it offers: a name, a version, a params model, and an outputs model.
+Both models are pydantic models; `ess.reduce.spec` provides the field types.
+A field whose value is data, such as an array or a file, is a *data field*; in a request its value is a reference to that data (see References), not the data itself.
+Notebooks and apps run specs; how the package implements a spec is invisible to them.
 
 ```python
+class IofQParams(BaseModel):
+    run: NexusFile                          # a data field: a raw NeXus file
+    bins: int = 100                         # a plain value
+    beam_centre: Array() | None = None      # a data field: a scipp array
+
 class IofQOutputs(BaseModel):
-    iofq: Annotated[Ref, DataField(Format.SCIPP, ArraySpec(dims=('Q',), unit='dimensionless'))]
+    iofq: Array(ArraySpec(dims=('Q',), unit='dimensionless'))
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...',
                     params=IofQParams, outputs=IofQOutputs)
 ```
 
-An intermediate value is visible only if the author declares it as an output; a request does not select outputs.
-Other intermediates are inspected by running the package's workflow in a notebook.
+A request computes every output its spec declares; it cannot ask for other intermediate results.
+To make an intermediate result available, the author declares it as an output.
+To inspect any other intermediate result, a scientist runs the package's sciline workflow directly in a notebook.
 
-**Binding.** The package binds each spec to code.
-A binding is staged with the values that stay fixed and returns a callable over the rest; a request outside a stage is staged with no blanks and called once.
-A plain function is a binding that computes everything on each call.
-A sciline pipeline, through `sciline.Stage`, computes what does not depend on the blanks once.
-Records do not depend on which.
+**Binding.** The package provides the code behind each spec, called its binding.
+The simplest binding is a function that takes the parameters by name and returns the outputs by name:
 
 ```python
-def iofq(run, bins, beam_centre=None) -> dict:
+def iofq(run, bins, beam_centre) -> dict:
     ...
     return {'iofq': result}
-
-local(proposal='p1', bind={IOFQ: iofq})
-local(proposal='p1', bind={IOFQ: PipelineBinding(pipeline,
-                                                 params={'run': Filename[SampleRun], 'bins': QBins,
-                                                         'beam_centre': BeamCenter},
-                                                 outputs={'iofq': BackgroundSubtractedIofQ})})
 ```
 
-**Request and record.** A request is a spec and its parameter values.
-Submitting it returns a record: the request with every value filled in, defaults included, plus status and outputs.
-A record's status is `pending`, `completed`, `failed`, or `cancelled`. A finished record never changes; a rerun is a new record.
+The backend passes every parameter, with the defaults of the params model filled in.
+Defaults belong in the params model only; a default in the binding would never be used, and could disagree with the model.
+
+A sciline pipeline becomes a binding by naming the sciline key that each parameter sets and the key that computes each output:
 
 ```python
-result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit and wait
+PipelineBinding(pipeline,
+                params={'run': Filename[SampleRun], 'bins': QBins, 'beam_centre': BeamCenter},
+                outputs={'iofq': BackgroundSubtractedIofQ})
+```
+
+A backend in the notebook's process can bind a spec to code defined in the notebook, for example to try out a change to a workflow:
+
+```python
+local(proposal='p1', bind={IOFQ: draft})
+```
+
+Records made with such a binding say that the code was bound in the notebook.
+
+## Requests and records
+
+A *request* is a spec and its parameter values.
+Submitting a request returns a *record*: the request with every value filled in, defaults included, plus status and outputs.
+The status is `pending`, `completed`, `failed`, or `cancelled`.
+A finished record never changes; running the same request again makes a new record.
+
+```python
+result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit, then wait
 result.request.params                    # every value, defaults included
 result.created, result.status            # a failed record also has result.failure.message
 client.output(result, 'iofq')
 ```
 
-`client.wait(records)` returns failed records rather than raising.
-`client.cancel(records)` ends the unfinished ones as `cancelled`.
-Both take a record, a list, or a dict of records, like `client.submit`, and `wait` returns the same shape.
-A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, before any record exists: an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
+| Call | Does |
+|---|---|
+| `client.submit(...)` | submits, returns pending records |
+| `client.compute(...)` | `submit`, then `wait` |
+| `client.wait(records)` | blocks until finished; returns failed records instead of raising |
+| `client.cancel(records)` | ends unfinished records as `cancelled` |
+| `client.as_completed(records)` | yields records one at a time, in the order they finish (see Drivers) |
 
-Records are working state for running experiments and are kept for the medium term.
-They outlive sessions: most requests run without one, and a batch's failures, a rule's progress, and a beam centre for tomorrow's batch are read later, by other users or programs.
-What lasts is what `publish` puts in the catalogue.
-Reading an output the system has dropped raises an error, and a request that references it is refused at submission.
+Each takes one request or record, a list, or a dict, and returns the same shape.
 
-**Reference.** An input is named by reference: an output of a record, or a dataset.
-An output field fulfils a params field when the two agree.
-A reference to a record that has not finished is a valid input, so a chain is submitted without waiting.
+A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, and no record is made.
+Reasons are an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
+Requests submitted together are checked together: if one is invalid, none is submitted.
+
+## References
+
+An input is given by *reference*: to an output of a record, or to a dataset (see Datasets).
+A reference to a record that has not finished yet is a valid input, so a chain is submitted without waiting:
 
 ```python
 centre = client.submit(BEAM_CENTRE, {'run': dataset(run=60330)})   # pending
 result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.ref('centre')})
 ```
 
-Chain where the intermediate result is worth keeping by itself, such as a beam centre or a vanadium normalization.
-Outside a session, nothing keeps a value in memory from one request to the next: the second request reads the first one's output back.
+`BEAM_CENTRE` is a spec with an output `centre`; `centre.ref('centre')` refers to that output of the pending record.
+The backend runs the second request once the first has completed.
+The first output is kept at least until the second request has read it (see How long records and values are kept).
+An output can be passed to a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the same dims and unit.
+Otherwise the request is refused at submission.
 
-`client.submit` takes a request, a list, or a dict of requests, and returns pending records in the same shape.
-Requests submitted together are checked together: if one is invalid, none is submitted.
-A reference to a request in the same call becomes a reference to its record.
+Several requests that refer to each other can be submitted in one call.
+`Request(spec, params)` makes a request without submitting it.
+A reference to a request in the same call becomes a reference to its record:
 
 ```python
 centre = Request(BEAM_CENTRE, {'run': centre_run})
@@ -135,34 +201,75 @@ samples = {name: Request(IOFQ, {'run': run, 'beam_centre': centre.ref('centre')}
 records = client.submit({'centre': centre, **samples})    # pending records, same keys
 ```
 
-**Label.** A label names a sequence of records; the latest is the current value.
-A member splits a label, one per sample or temperature.
-Label and member are given at submission, not in the request, since they do not change the result; a record shows both.
-Submitting a dict of requests under a label makes each key the member of its record.
+Chain requests where the intermediate result is worth having as a result of its own, such as a beam centre or a vanadium normalization.
+Each step is a separate record.
+To avoid recomputing within a single workflow, use a stage instead (see Sessions).
+
+## Labels and members
+
+A *label* names a sequence of records, such as all I(Q) reductions of an experiment; `client.latest` returns the newest.
+A *member* splits a label further, one per sample or temperature.
+Both are optional and are given at submission, not in the request, since they do not change the result.
+A record shows both.
 
 ```python
 client.compute(IOFQ, {'run': run, 'bins': 50}, label='iofq', member='250K')
-client.submit({'250K': a, '260K': b}, label='iofq')       # members '250K' and '260K'
+client.submit({'250K': a, '260K': b}, label='iofq')       # with a label, dict keys become the members
 client.latest('iofq', member='250K')
 client.members('iofq')                   # {member: latest record}
 client.labels()
 client.records(label='iofq', since=monday, until=friday)
 ```
 
-**Template.** A template is a spec, some values, and blanks. Templates, like rules, are frozen dataclasses; `dataclasses.replace` changes them.
-It can be made from any request's values; naming a field as a blank drops the value given for it.
+The loop from the start, with labels, so that another notebook finds the curves:
+
+```python
+for run in (60339, 60340, 60341):
+    client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100}, label='iofq', member=str(run))
+```
+
+A label holds no values; it only names records.
+
+## Templates
+
+A *template* is a spec, some parameter values, and the names of the parameters left open, its *blanks*.
+Batches, stages, and rules are built from templates.
+A template can be made from any request's values; naming a field as a blank drops the value given for it.
 
 ```python
 template = Template(IOFQ, params={'bins': 100}, blanks=('run',))
-beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
+beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))  # reuse a tuned request
 ```
 
-**View.** A view reads part of an output, such as one cut through a volume, quickly and without making a record.
-Its form waits for the plotting work.
+Templates are frozen dataclasses; `dataclasses.replace` makes a changed copy.
+
+## How long records and values are kept
+
+The backend keeps two kinds of things with different lifetimes:
+
+| | What | Kept |
+|---|---|---|
+| record | what ran, with which inputs, and what came of it | for a retention period |
+| output value | the data an output holds, such as an I(Q) array | only while something holds it, see below |
+
+Records are kept for a retention period, together with the older records they depend on.
+They are kept long because they are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
+Output values are large, so an output value is kept only while
+
+1. a pending request reads it,
+2. a record in a client holds it, like a dask future holds its value,
+3. a stage or accumulator in a session holds it (see Sessions), or
+4. it has been saved.
+
+A value that must outlive its client, such as a beam centre for tomorrow's batch, must be saved.
+How to save is not designed yet.
+Reading an output that is no longer kept raises an error, and a request that references it is refused at submission; the record itself remains.
+What lasts beyond retention is what `publish` puts in a catalogue (see Provenance and publication).
 
 ## Datasets
 
-**Dataset.** A request names a dataset by what a person knows; the record names the dataset's identity, not what was typed.
+**Dataset.** A request names a dataset by what a person knows, such as a run number.
+The backend resolves it, and the record names the dataset's identity, not what was typed.
 
 ```python
 dataset(run=60339)
@@ -170,9 +277,11 @@ dataset(path='/home/user/data/run1.h5')
 dataset(pid='20.500.12269/vanadium')     # for example a result published elsewhere
 ```
 
-**Dataset source.** Listing datasets, waiting for new ones, and reading their metadata are queries of a dataset source, an object separate from the client.
-Forms and drivers take a dataset source next to the client; a test gives them a fake one, and a deployment may serve it as it serves the backend.
-A dataset has a kind, such as raw, derived, mask, or calibration, and a selector matches raw datasets unless it names another kind.
+**Dataset source.** Listing datasets, waiting for new ones, and reading their metadata are queries to a *dataset source*, an object separate from the client.
+Applications and drivers take a dataset source next to the client; a test gives them a fake one.
+`catalogue(...)` below is a dataset source backed by the facility's data catalogue.
+A *selector* picks datasets by metadata.
+A dataset has a kind, such as raw, derived, mask, or calibration; a selector matches raw datasets unless it names another kind.
 
 ```python
 datasets = catalogue(instrument='loki', proposal='p1')
@@ -181,33 +290,18 @@ for run in datasets.watch(Selector(scan='17')): ...   # existing ones first, the
 datasets.metadata(run)['sample']                        # the catalogue's current values
 ```
 
-## Accumulator specs
+## Combining runs: accumulator specs
 
-An accumulator spec combines a list of elements into one value.
-It declares an element model, whose fields are data fields.
-Its params model has one list per element field, and its outputs model is the element model.
-Because the outputs model is the element model, a combined value can be pushed again.
-An author may declare that the result does not depend on how the elements are grouped.
-The backend may then compute a request over many elements in parts, on many processes; the record is the same.
+Many reductions combine several runs into one result.
+The counts of each angle of a rotation scan are summed into one volume.
+A normalization sums numerators and denominators over runs and divides only at the end.
 
-A package derives three specs from its sciline `Aggregation`: one that computes the contribution of one member, one that accumulates contributions, and one that finalizes the combined value.
+An *accumulator spec* is a spec for the combining step.
+It is built around an *element model*: the fields of one value that is combined, such as an array of counts.
+The params of an accumulator spec hold one list per element field; its outputs have the fields of the element model.
+Since output and element have the same fields, a combined value can be combined again.
 
-```python
-class NormalizationParts(BaseModel):           # the element, and PARTS_SUM's outputs model
-    numerator: Array(ArraySpec(dims=('Q',), unit='counts'))
-    denominator: Array(ArraySpec(dims=('Q',), unit='counts'))
-
-CONTRIBUTE = WorkflowSpec(name='sans-contribute', ..., params=ContributeParams, outputs=ContributeOutputs)
-PARTS_SUM = AccumulatorSpec(name='sans-parts-sum', version=1, element=NormalizationParts)
-FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, outputs=IofQOutputs)
-```
-
-`ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, such as a transmission per run, which are not accumulated.
-`FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
-Both fields accumulate from the same members: position i of each list names the same record.
-
-A generic accumulator spec, such as `SUM` from ess.reduce, takes its element model when it is used.
-It connects specs whose authors did not plan for each other, when their fields agree:
+`SUM` from ess.reduce is a generic accumulator spec: `SUM.of(Counts)` is the spec that sums elements with the fields of `Counts`.
 
 ```python
 class Counts(BaseModel):
@@ -218,14 +312,42 @@ volume = client.submit(SUM.of(Counts), {'counts': [a.ref('counts') for a in angl
 client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
 ```
 
-Where values accumulate changes the result.
-It is decided by whoever writes the chain: the package author for the specs it ships, the user for a connection of specs from different packages.
+A generic accumulator spec connects specs whose authors did not plan for each other, as long as their fields match.
+
+An author may declare that the result does not depend on how the elements are grouped, as for a sum (how is open, see Open questions).
+The backend may then compute a request over many elements in parts, on many processes; the record is the same.
+
+A reduction with a sum in the middle splits into three specs.
+A package derives them from its sciline `Aggregation`, sciline's description of such a split:
+
+```text
+run 611 ── CONTRIBUTE ──┐
+run 612 ── CONTRIBUTE ──┼── PARTS_SUM ── FINALIZE ── I(Q)
+run 613 ── CONTRIBUTE ──┘
+```
+
+```python
+class NormalizationParts(BaseModel):           # the element model of PARTS_SUM
+    numerator: Array(ArraySpec(dims=('Q',), unit='counts'))
+    denominator: Array(ArraySpec(dims=('Q',), unit='counts'))
+
+CONTRIBUTE = WorkflowSpec(name='sans-contribute', ..., params=ContributeParams, outputs=ContributeOutputs)
+PARTS_SUM = AccumulatorSpec(name='sans-parts-sum', version=1, element=NormalizationParts)
+FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, outputs=IofQOutputs)
+```
+
+`ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, such as a transmission per run, which are not summed.
+`FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
+Position i of each list in a PARTS_SUM request refers to the same run.
+
+Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
+The workflow author decides this for the specs the package ships; whoever connects specs from different packages, in a notebook or an app, decides it for that chain.
 
 ### One sum, three ways
 
 ```python
 # 1. a spec that sums internally over a list parameter
-client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})
+client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})   # NORMALIZE: such a spec
 
 # 2. a chain of requests
 parts = [client.submit(CONTRIBUTE, {'run': r}) for r in (r611, r612)]
@@ -233,22 +355,28 @@ total = client.submit(PARTS_SUM, {'numerator': [p.ref('numerator') for p in part
                                   'denominator': [p.ref('denominator') for p in parts]})
 client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
 
-# 3. the same chain through holders, see below
+# 3. the same chain through an accumulator, see Sessions
 ```
 
-Ways 2 and 3 make the same records; way 1 makes one record of a different spec.
-The framework does not prevent any of them; a package decides which specs it offers.
+Ways 2 and 3 give the same values. Way 1 makes one record of a different spec.
+The framework allows all three; a package decides which specs it offers.
 
-## Holders
+## Sessions: stages and accumulators
 
-A holder keeps something in memory so that the next call computes less.
-There are two, and both live in a session.
+Without a session, every request computes everything from its inputs.
+In interactive work this repeats work: tuning `bins` reloads the same run for each value, and adding one run to a sum of a hundred sums all hundred again.
+A session lets the backend keep such values in memory between requests.
+
+A *session* is a `with` block.
+In it, a notebook makes stages and accumulators, together called *holders*.
 Holders in one session share a process, so values pass between them in memory.
 Ending the session releases them once the requests made through them have run.
-A session runs in a backend process unless it is placed elsewhere, for example next to a desktop application with `client.session(where='local')`; its records still go to the backend.
+Records made in a session are ordinary records and outlive it.
 
-**Stage.** A stage holds a template with everything that does not depend on its blanks computed.
-A call through a stage computes only the rest.
+A session runs in a backend process unless placed elsewhere, for example next to a desktop application with `client.session(where='local')`; its records still go to the backend.
+
+**Stage.** A *stage* is a template held in a session.
+The backend computes what does not depend on the blanks once, such as loading the run, and each call through the stage computes only the rest:
 
 ```python
 with client.session() as session:
@@ -257,10 +385,38 @@ with client.session() as session:
         client.compute(tune, {'bins': bins}, label='iofq')
 ```
 
-**Accumulator.** An accumulator holds the combined value of the elements pushed into it.
-Pushing a record pushes its outputs named like the element's fields; its other outputs are not pushed.
-Computing an accumulator makes a record of its accumulator spec over the elements pushed so far.
-A pushed record may still be pending; `client.submit(total)` returns the record at once, pending until every element is done.
+A record made through a stage is the record of the plain request with the blanks filled; it does not mention the stage.
+
+For a stage, the backend calls the binding in two steps:
+
+```python
+call = binding.stage(fixed, blanks)   # fixed: {name: value} that stay the same; blanks: names left open
+call(bins=50)                         # values for the blanks; called once per request through the stage
+```
+
+A request outside a stage is the case with no blanks: `binding.stage(values, ())` and then one call without arguments.
+A function binding computes everything in each call.
+A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
+
+**Accumulator.** An *accumulator* holds the combined value of the elements pushed into it so far.
+A request of an accumulator spec needs the whole list at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
+The accumulator spec's binding must provide `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
+
+```python
+total = session.accumulator(PARTS_SUM)
+total.push(record)          # pushes record's outputs named like the element's fields
+```
+
+A push takes the record's outputs named like the element's fields; its other outputs are not pushed.
+The record must have completed; pushing a pending record is refused.
+A push is checked when made, as a request over that one element would be.
+
+**Snapshot.** To use the combined value as the input of another request, submit the accumulator.
+This makes a *snapshot*: a record whose output is the current combined value, completed at once.
+Like any record, its outputs can be referenced.
+A snapshot takes no label or member; the requests that read it do.
+
+Way 3 of the sum above:
 
 ```python
 with client.session() as session:
@@ -277,18 +433,28 @@ with client.session() as session:
     added = client.compute(finalize, client.compute(total).refs(), label='sum')
 ```
 
-The second `client.compute(total)` makes a record of `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`.
-It is the record that way 2 makes; the accumulator only computes it faster.
+A snapshot's value is the output of the plain request over the elements pushed so far, in push order.
+For the second snapshot this is `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`, the request that way 2 makes, where `c611` is the CONTRIBUTE record of run `r611`.
+A snapshot's record names the accumulator and how many elements it covers, not the elements themselves; provenance lists them:
+
+```python
+snapshot = client.compute(total)
+snapshot.submitted                       # what a record ran: a Request, or here a Snapshot
+                                         # Snapshot(spec=sans-parts-sum/v1, accumulator=total.id, upto=3)
+client.provenance(snapshot).records()    # [c611, c612, c613]: the records it read, in push order
+```
 
 ## Drivers
 
-A driver is code that uses the client over time: it decides what to submit, what to push into an accumulator, and what to hold.
-A notebook is a driver, and so is an application.
-Functions such as `apply` only build requests; the driver is the code that calls them.
+The backend runs requests and keeps records; it does not decide what to run.
+Deciding over time what to submit, what to push into an accumulator, and what to keep in a session is the job of a *driver*: ordinary code that uses the client.
+A notebook is a driver, and so is an application or a long-running driving server.
+Drivers never run in the backend.
 
-**A batch** is one submission of many requests.
-`apply` fills a template for each dataset and returns the requests keyed by member, the value of a metadata field that it reads from the dataset source.
-It builds plain data and needs no client; the notebook that submits the requests is the driver.
+**A batch** submits many requests at once.
+`apply` fills a template for each dataset and returns the requests as a dict.
+The keys are the value of a metadata field of each dataset, here the temperature; submitting under a label makes them the members.
+`apply` builds plain data and needs no client; the notebook that submits the requests is the driver.
 
 ```python
 requests = apply(template, samples, datasets, member_field='temperature')
@@ -297,35 +463,48 @@ records['250K']
 ```
 
 **A loop over arrivals** waits for new datasets.
-This one reduces each angle of a rotation scan wherever the backend runs it, and keeps a volume of the angles so far:
+This one reduces each angle of a rotation scan as its run arrives, and keeps a volume of the angles finished so far:
 
 ```python
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
-    for run in datasets.watch(Selector(scan='17')):
-        volume.push(client.submit(ANGLE, {'run': run}))          # pending; combined once done
+    angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
+    for angle in client.as_completed(angles):                   # in the order they finish
+        volume.push(angle)
         client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'energy_transfer': 2.0},
                       label='cut', member='17')
 ```
 
+The generator `angles` submits a request for each run as it arrives.
+`as_completed` consumes it in a thread, so submitting does not wait for the loop body.
+It yields each record once it has finished, so the angles are reduced in parallel while the loop pushes one at a time.
+
 ## Batch and automatic reduction
 
-This sub-design builds on the core and needs from it only that records show their label and member, and a dataset source. It is described in [automatic-reduction.md](automatic-reduction.md).
+This sub-design builds on the core. It needs from it only that records show their label and member, and a dataset source.
+[automatic-reduction.md](automatic-reduction.md) describes it.
 
-A **rule** is plain data: a template, a selector, and a label.
-A lookup fills a blank per dataset, such as the can measured most recently before a sample.
-A series collects every dataset with the same value of a field into the template's list blank, in run order, one member per value; each arrival of an angle then stitches all angles of that sample so far.
+A *lookup* fills further blanks per dataset.
+For example, a sample needs the empty-can run measured most recently before it:
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, datasets, member_field='run', lookup=cans)
+requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, datasets, lookup=cans)
+```
 
+A *rule* is plain data: a name, a template, a selector, and a label, and optionally a lookup or a series.
+It says: for each new dataset the selector matches, fill the template and submit it under the label.
+
+With a *series*, one request takes all matching datasets with the same value of a metadata field so far, in run order.
+In reflectometry, a sample is measured at several angles, one run each; with `series='sample'`, each new angle submits a request that stitches all angles of that sample measured so far, with the sample as the member:
+
+```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 TriggerLoop(client, datasets, rules=[rule]).run()
 ```
 
-The trigger loop is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
+The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 Templates and rules serialize to JSON; the core keeps no store of them, and records do not name them.
 
@@ -333,7 +512,7 @@ Templates and rules serialize to JSON; the core keeps no store of them, and reco
 
 This sub-design builds on the core.
 
-`client.provenance(record)` is plain data: the record's request, the records it read through all its inputs, the datasets they read, and the software versions.
+`client.provenance(record)` is plain data: what the record ran (its request or snapshot), the records it read through all its inputs, the datasets they read, and the software versions.
 It stops at datasets: what lies behind a dataset, raw or published, belongs to the dataset's source.
 
 ```python
@@ -348,20 +527,19 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 ## Guarantees
 
-- A record holds the spec, every parameter value including defaults, and its inputs by reference. A finished record never changes.
-- A holder never changes what a record says. A record made through a stage or an accumulator is the record of the plain request.
+- A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A finished record never changes.
+- A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
 - A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
-- Records are kept for the medium term. A published entry answers what produced it without access to the records.
-- Only holders keep memory on a user's behalf, and ending their session releases them once the requests made through them have run.
+- Records are kept for a retention period, together with the older records they depend on. A published entry answers what produced it without access to the records.
+- An output's value is kept only while a pending request reads it, a record in a client holds it, or a holder in a session holds it, or once it is saved. Ending a session releases its holders once the requests made through them have run.
 
 ## Left to the system
 
-Not part of this API, and not visible in user code:
+Not part of this API, and not visible in the code of notebooks, apps, or workflow packages:
 
-- how records and outputs are stored, copied, dropped, and located, and for how long; the store may be as plain as output files with their requests next to them and an index for labels, pending requests, and failures
-- how records that share most of their references are stored without repeating them
+- how history is stored and for how long, and how outputs are stored, copied, dropped, and located ([system.md](system.md))
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
@@ -371,8 +549,9 @@ Not part of this API, and not visible in user code:
 
 ## Open questions
 
-1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
-2. **Sessions.** Whether a holder can exist without a session the user opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
-3. **Removing a member.** A record of the accumulator spec over fewer parts is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each contribution.
+1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result, which a tree of partial sums over a plain request needs. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
+2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
+3. **Removing an element.** A request of the accumulator spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
 4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
 5. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+6. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

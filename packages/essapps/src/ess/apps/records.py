@@ -4,9 +4,10 @@
 Requests and records: what a user asks for and what the backend made of it.
 
 Both are plain data. A request names a spec and parameter values; a record is
-the request with every value filled in, plus what happened. A record returned
-to a client is a snapshot: a pending record is replaced by a newer snapshot as
-it finishes, and a finished record never changes.
+the request with every value filled in, or a snapshot of an accumulator, plus
+what happened. A record returned to a client is a copy as of the call: a
+pending record is replaced by a newer copy as it finishes, and a finished
+record never changes.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec, as_ref, walk_refs
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,10 +49,12 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec | SpecId) -> SpecId:
+    def of(cls, spec: WorkflowSpec | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
-        return cls(name=spec.name, version=spec.version)
+        if isinstance(spec, WorkflowSpec):
+            return cls(name=spec.name, version=spec.version)
+        return cls.model_validate(spec)
 
     def __str__(self) -> str:
         return f'{self.name}/v{self.version}'
@@ -134,16 +137,44 @@ class Failure(BaseModel, frozen=True):
     message: str
 
 
+class Snapshot(BaseModel, frozen=True):
+    """
+    What submitting an accumulator makes: the combined value of its first elements.
+
+    ``upto`` counts the elements pushed before the submission. The elements
+    are the accumulator's pushes, which the backend's log holds; a snapshot
+    does not list them, so it costs the same however many elements it covers.
+    Its value is the output of the accumulator spec over those elements, in
+    push order.
+    """
+
+    spec: SpecId
+    accumulator: str
+    upto: int = Field(ge=1)
+
+
+Element = dict[str, OutputRef]
+"""One element of an accumulator: a reference for each field of the element model."""
+
+Submission = Annotated[Snapshot | Request, Field(union_mode='left_to_right')]
+"""
+How a record stores its request. Plain data is tried as a snapshot first, since
+a request takes any values.
+"""
+
+
 class Record(BaseModel, frozen=True):
     """
-    A request with every value filled in, and what happened to it.
+    What ran, and what happened to it.
 
-    ``outputs`` lists the output names the spec declares; ``label`` and
-    ``member`` are given at submission and do not change the result.
+    ``submitted`` is what the backend's log holds: a request with every value
+    filled in, or a :class:`Snapshot` of an accumulator. ``outputs`` lists the
+    output names the spec declares; ``label`` and ``member`` are given at
+    submission and do not change the result.
     """
 
     id: str
-    request: Request
+    submitted: Submission
     proposal: str
     submitter: str
     created: datetime
@@ -153,9 +184,23 @@ class Record(BaseModel, frozen=True):
     member: str | None = None
     failure: Failure | None = None
 
+    @property
+    def spec(self) -> SpecId:
+        return self.submitted.spec
+
+    @property
+    def request(self) -> Request:
+        """The request with every value filled in; a snapshot has none."""
+        if isinstance(self.submitted, Snapshot):
+            raise TypeError(
+                f'record {self.id} is a snapshot of accumulator '
+                f'{self.submitted.accumulator}, not a request'
+            )
+        return self.submitted
+
     def ref(self, output: str) -> OutputRef:
         if output not in self.outputs:
-            raise KeyError(f'{self.request.spec} has no output {output!r}')
+            raise KeyError(f'{self.spec} has no output {output!r}')
         return OutputRef(record=self.id, output=output)
 
     def refs(self) -> dict[str, OutputRef]:

@@ -10,7 +10,7 @@ import pytest
 from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, Request, Status, SubmitError, dataset
+from ess.apps import Backend, Client, Record, Request, Status, SubmitError, dataset
 from ess.apps.testing import FakeDatasets
 
 
@@ -249,3 +249,86 @@ def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -
 def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'^second: run: unknown dataset run:9$'):
         client.submit({'first': load(1), 'second': load(9)})
+
+
+def test_as_completed_yields_records_in_the_order_they_finish(
+    client: Client, gate: Gate
+) -> None:
+    first, second = client.submit([load(1), load(2)])
+    finished = client.as_completed([first, second])
+    client.cancel(second)
+    cancelled = next(finished)
+    gate.open.set()
+    completed = next(finished)
+
+    assert (cancelled.id, cancelled.status) == (second.id, Status.CANCELLED)
+    assert (completed.id, completed.status) == (first.id, Status.COMPLETED)
+    assert list(finished) == []
+
+
+def test_as_completed_yields_failed_records_and_each_record_once(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    bad, good = client.submit([load(3), load(1)])
+    finished = list(client.as_completed([bad, good, bad]))
+
+    assert len(finished) == 2
+    assert {r.id: r.status for r in finished} == {
+        bad.id: Status.FAILED,
+        good.id: Status.COMPLETED,
+    }
+
+
+def test_as_completed_yields_while_its_input_blocks(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    received = threading.Event()
+
+    def arriving() -> Iterator[Record]:
+        yield client.submit(load(1))
+        if not received.wait(timeout=5):
+            raise TimeoutError('nothing was yielded while the input blocked')
+        yield client.submit(load(2))
+
+    values = []
+    for record in client.as_completed(arriving()):
+        values.append(client.output(record, 'value'))
+        received.set()
+
+    assert values == [1.0, 2.0]
+
+
+def test_an_error_in_the_input_of_as_completed_reaches_the_caller(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+
+    def arriving() -> Iterator[Record]:
+        yield client.submit(load(1))
+        raise OSError('the catalogue is gone')
+
+    with pytest.raises(OSError, match='the catalogue is gone'):
+        list(client.as_completed(arriving()))
+
+
+def test_closing_as_completed_stops_consuming_its_input(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    closed, released = threading.Event(), threading.Event()
+
+    def arriving() -> Iterator[Record]:  # endless, as datasets.watch
+        try:
+            while True:
+                yield client.submit(load(1))
+                closed.wait(timeout=5)
+        finally:
+            released.set()
+
+    finished = client.as_completed(arriving())
+    next(finished)
+    finished.close()
+    closed.set()
+
+    assert released.wait(timeout=5)  # the input was dropped, not exhausted
+    assert len(client.records()) <= 2
