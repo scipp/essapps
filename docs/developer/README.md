@@ -331,7 +331,7 @@ An author may declare that the result does not depend on how the elements are gr
 The backend may then compute a request over many elements in parts, on many processes; the record is the same.
 
 A reduction with a sum in the middle splits into three specs.
-A package derives them from its sciline `Aggregation`, sciline's description of such a split:
+A package builds CONTRIBUTE and FINALIZE from the stages of one sciline `split`, cut at the keys that PARTS_SUM sums:
 
 ```text
 run 611 ── CONTRIBUTE ──┐
@@ -351,6 +351,7 @@ FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, output
 
 `ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, such as a transmission per run, which are not summed.
 `FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
+A FINALIZE may read several sums, for example one over sample runs and one over background runs.
 Position i of each list in a PARTS_SUM request refers to the same run.
 
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
