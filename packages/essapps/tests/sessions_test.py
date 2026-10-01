@@ -185,9 +185,9 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
         )
         pending = [client.submit(shift, {'offset': x}) for x in (1.0, 2.0, 3.0, 4.0)]
         loading.set()
-        shifted = client.wait(pending)
+        client.wait(pending)
 
-    assert [client.output(r, 'value') for r in shifted] == [2.0, 3.0, 4.0, 5.0]
+    assert [client.output(r, 'value') for r in pending] == [2.0, 3.0, 4.0, 5.0]
     assert shifting.staged == [('offset',)]
 
 
@@ -202,10 +202,9 @@ def test_a_request_through_a_stage_uses_it_after_its_session_ended(
         )
         pending = client.submit(shift, {'offset': 1.0})
     loading.set()
-    shifted = client.wait(pending)
 
-    assert shifted.status is Status.COMPLETED
-    assert client.output(shifted, 'value') == 3.0
+    assert client.wait(pending) is Status.COMPLETED
+    assert client.output(pending, 'value') == 3.0
     assert shifting.staged == [('offset',)]
 
 
@@ -236,8 +235,8 @@ def test_a_stage_that_failed_to_stage_is_staged_on_the_next_call(
         failed = client.compute(scale, {'factor': 2.0})
         scaled = client.compute(scale, {'factor': 2.0})
 
-    assert failed.status is Status.FAILED
-    assert 'staging failed' in failed.failure.message
+    assert client.status(failed) is Status.FAILED
+    assert 'staging failed' in client.failure(failed)
     assert client.output(scaled, 'value') == 4.0
 
 
@@ -293,9 +292,8 @@ def test_a_holder_of_an_ended_session_refuses_calls(client: Client) -> None:
 
 
 def test_an_accumulator_pushes_only_the_element_fields(client: Client) -> None:
-    loads = client.wait(
-        [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
-    )
+    loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
+    client.wait(loads)
     with client.session() as session:
         total = session.accumulator(TOTAL)
         for load in loads:
@@ -376,9 +374,8 @@ def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) ->
 def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     client: Client,
 ) -> None:
-    loads = client.wait(
-        [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
-    )
+    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
+    client.wait(loads)
     with client.session() as session:
         total = session.accumulator(TOTAL)
         total.push(loads[0])
@@ -387,7 +384,7 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
         total.push(loads[2])
         second = client.submit(total)
 
-    assert [r.status for r in (first, second)] == [Status.COMPLETED] * 2
+    assert client.status([first, second]) == [Status.COMPLETED] * 2
     assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
     assert [r.submitted.upto for r in (first, second)] == [2, 3]
     with pytest.raises(TypeError, match='snapshot'):
@@ -396,7 +393,7 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     assert client.provenance(second).records() == loads
 
 
-def test_a_record_that_has_not_completed_is_refused_at_the_push(
+def test_a_push_waits_for_its_records_and_takes_only_completed_ones(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -404,15 +401,10 @@ def test_a_record_that_has_not_completed_is_refused_at_the_push(
     client.cancel(cancelled)
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match=f'{pending.id} is still pending'):
-            total.push({'value': pending.ref('value')})
         with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
-            total.push(client.wait(cancelled))
-        loading.set()
-        client.wait(pending)
-        with pytest.raises(SubmitError, match=f'{pending.id} is still pending'):
-            total.push(pending)  # the handle submit returned, still pending
-        total.push(client.wait(pending))
+            total.push(cancelled)
+        threading.Timer(0.05, loading.set).start()
+        total.push(pending)  # pending when pushed: the push waits for it
         snapshot = client.submit(total)
 
     assert [r.id for r in client.provenance(snapshot).records()] == [pending.id]
@@ -423,7 +415,8 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
     client: Client, datasets: FakeDatasets
 ) -> None:
     runs = [datasets.measure(n, float(n)) for n in range(3, 10)]
-    loads = client.wait([client.submit(LOAD, {'run': run}) for run in runs])
+    loads = [client.submit(LOAD, {'run': run}) for run in runs]
+    client.wait(loads)
     with client.session() as session:
         digits = session.accumulator(DIGITS)
         pushes = [threading.Thread(target=digits.push, args=(x,)) for x in loads]
@@ -439,7 +432,8 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
 
 
 def test_an_accumulator_needs_a_binding_that_accumulates(client: Client) -> None:
-    loads = client.wait([client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
+    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    client.wait(loads)
     with client.session() as session, pytest.raises(SubmitError, match='accumulate'):
         session.accumulator(PAIRS)
     plain = client.compute(

@@ -26,7 +26,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     )
 
     requests = apply(template, samples, datasets, member_field='run')
-    reduced = list(client.wait(client.submit(requests, label='iofq')).values())
+    reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
         [3.0, 7.0],
