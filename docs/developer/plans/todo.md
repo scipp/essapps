@@ -46,4 +46,4 @@ The old `adapter.py` also let a binding ask for a dataset as a local path or as 
 
 - `AccumulatorSpec` and `combine` belong in `ess.reduce.spec`, next to `WorkflowSpec`. That needs a proposal in essreduce.
 - `PipelineBinding` belongs in ess.reduce, where specs meet sciline workflows; it is the only module here that imports sciline.
-- Stages and accumulators build on sciline ADR 0003 (`Stage`, `Aggregation`, `Accumulator`), which is still proposed. The venv needs sciline from `/workspace/sciline`, branch `map-reduce-outside-the-graph`.
+- Stages and accumulators build on sciline ADR 0003 (`Stage`, `split`, `Accumulator`), which is still proposed. The venv needs sciline from `/workspace/sciline`, branch `map-reduce-outside-the-graph`.
