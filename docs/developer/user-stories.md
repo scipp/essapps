@@ -40,7 +40,7 @@ In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the 
 Every backend in the stories, including one that `local(...)` makes, reads the same datasets and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw dataset with the given counts and metadata, and returns its reference.
 The metadata of such a dataset also holds its run number, as `run`; `measure(..., proposal=...)` makes the dataset belong to another proposal.
-`datasets` is a fake dataset source for `client`'s proposal, with `list`, `watch`, and `metadata` as in README.md; the backends resolve `dataset(...)` against the same datasets.
+`datasets` is the fake dataset source of every backend; stories query it through `client.datasets` as in README.md.
 It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a dataset's metadata, and `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance` and `.supersedes`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
@@ -168,7 +168,7 @@ second = measure(4, [6.0, 9.0], role='sample')
 template = Template(IOFQ, blanks=('run', 'can'))
 cans = Lookup(can=LastBefore(Selector(role='can')))    # the latest can measured before the run
 
-requests = apply(template, [first, second], datasets, member_field='run', lookup=cans)
+requests = apply(template, [first, second], client.datasets, member_field='run', lookup=cans)
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[4.0, 5.0], [4.0, 7.0]]
@@ -259,7 +259,7 @@ datasets.correct(runs[1], sample='heavy water')
 
 (named,) = reduced[1].request.datasets()
 assert named == runs[1]                                  # the correction keeps the dataset
-assert datasets.metadata(named)['sample'] == 'heavy water'
+assert client.datasets.metadata(named)['sample'] == 'heavy water'
 ```
 
 ## B. Manual and interactive reduction
@@ -278,7 +278,7 @@ with client.session() as session:
 final = client.latest('iofq')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
-requests = apply(beamtime, [new], datasets, member_field='run')
+requests = apply(beamtime, [new], client.datasets, member_field='run')
 (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
 assert len(client.records(label='iofq')) == 4
@@ -419,7 +419,7 @@ samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
            measure(3, [5.0, 4.0, 3.0, 2.0], role='sample')]
 template = Template(IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('run',))
 
-requests = apply(template, samples, datasets, member_field='run')
+requests = apply(template, samples, client.datasets, member_field='run')
 reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[3.0, 7.0], [7.0, 3.0]]
@@ -498,7 +498,7 @@ temperatures = ['250K', '260K', '270K', '280K', '290K']
 runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperatures, start=1)]
 corrupt(runs[1])                                                     # 260K
 template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
-requests = apply(template, runs, datasets, member_field='temperature')
+requests = apply(template, runs, client.datasets, member_field='temperature')
 scan = client.compute(requests, label='scan')                        # keyed by temperature
 
 assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')] == [
@@ -509,7 +509,7 @@ assert client.wait(scan) == {
 assert client.members('scan') == scan
 ```
 
-Gap: `member_field` and `client.members` are tentative (README.md open question 5).
+Gap: `member_field` and `client.members` are tentative (README.md open question 4).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -547,10 +547,10 @@ Actor: user of the shared service. Goal: cancel a running batch of 500 with a wr
 ```python
 runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
 wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
-first = client.submit(apply(wrong, runs, datasets, member_field='run'), label='scan')
+first = client.submit(apply(wrong, runs, client.datasets, member_field='run'), label='scan')
 client.cancel(first)
 fixed = replace(wrong, params={'threshold': 0.5})
-second = client.compute(apply(fixed, runs, datasets, member_field='run'), label='scan')
+second = client.compute(apply(fixed, runs, client.datasets, member_field='run'), label='scan')
 
 assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
 assert [client.output(r, 'iofq').values.tolist() for r in second.values()] == 500 * [[2.0, 2.0]]
@@ -566,7 +566,7 @@ Actor: user filling in a batch form. Goal: a parameter the params model rejects 
 ```python
 runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
 typo = Template(IOFQ, params={'threshold': '2,5'}, blanks=('run',))
-requests = apply(typo, runs, datasets, member_field='run')
+requests = apply(typo, runs, client.datasets, member_field='run')
 
 with pytest.raises(SubmitError, match='threshold'):
     client.submit(requests, label='scan')
@@ -582,7 +582,7 @@ good = measure(1, [1.0, 1.0, 1.0, 1.0], temperature='250K')
 bad = measure(2, [2.0, 2.0, 2.0, 2.0], temperature='260K')
 corrupt(bad)
 template = Template(IOFQ, blanks=('run',))
-requests = apply(template, [good, bad], datasets, member_field='temperature')
+requests = apply(template, [good, bad], client.datasets, member_field='temperature')
 failed = client.compute(requests, label='scan')['260K']
 
 repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')     # the measurement is repeated
@@ -605,16 +605,16 @@ Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again
 ```python
 template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-client.compute(apply(template, runs, datasets, member_field='run'), label='scan')
+client.compute(apply(template, runs, client.datasets, member_field='run'), label='scan')
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
 runs = [r.request.params['run'] for r in before]
-renamed = apply(replace(template, spec=IOFQ_V2), runs, datasets, member_field='run')
+renamed = apply(replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run')
 with pytest.raises(SubmitError, match='threshold'):
     client.submit(renamed, label='scan')
 moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
-requests = apply(moved, runs, datasets, member_field='run')
+requests = apply(moved, runs, client.datasets, member_field='run')
 after = list(client.compute(requests, label='scan').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
@@ -641,7 +641,7 @@ cuts, pushed = [], []
 with client.session() as session:
     volume = session.accumulator(SUM.of(Counts))
     angles = (client.submit(ANGLE, {'run': run})
-              for run in islice(datasets.watch(Selector(scan='17')), 1000))
+              for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
     for angle in client.as_completed(angles):                  # in the order they finish
         volume.push(angle)
         pushed.append(angle)
@@ -672,7 +672,7 @@ reference = measure(1, [1.0, 1.0], role='reference')
 template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
 rule = Rule('reflectivity', template, selector=Selector(role='sample'), series='sample',
             label='reflectivity')
-loop = TriggerLoop(client, datasets, rules=[rule])
+loop = TriggerLoop(client, rules=[rule])
 
 r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
 loop.step()
@@ -699,7 +699,7 @@ Actor: instrument operator. Goal: after an upgrade removed the template's spec v
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
             label='iofq')
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
-loop = TriggerLoop(upgraded, datasets, rules=[rule])
+loop = TriggerLoop(upgraded, rules=[rule])
 measure(1, [1.0, 1.0], role='sample')
 
 assert loop.step() == []
@@ -713,7 +713,7 @@ Actor: none; a failure mode. Goal: a published result that SciCat lists as a dat
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(),   # every raw dataset
             label='iofq')
-loop = TriggerLoop(client, datasets, rules=[rule])
+loop = TriggerLoop(client, rules=[rule])
 measure(1, [1.0, 2.0, 3.0, 4.0])
 (reduced,) = loop.step()
 pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -732,11 +732,11 @@ Actor: instrument scientist. Goal: new runs use the improved template; earlier r
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
             label='iofq')
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-(before,) = TriggerLoop(client, datasets, rules=[rule]).step()
+(before,) = TriggerLoop(client, rules=[rule]).step()
 
 improved = replace(rule, template=replace(rule.template, params={'threshold': 1.5}))
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = TriggerLoop(client, datasets, rules=[improved]).step()
+(after,) = TriggerLoop(client, rules=[improved]).step()
 
 assert after.request.datasets() == [second]                     # run 1 is not reduced again
 assert [client.output(r, 'iofq').values.tolist() for r in (before, after)] == [
@@ -907,8 +907,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 3.
-- **Dataset sources** (Conventions): the stories' fake `datasets` also serves the backends; whether a notebook's dataset source must agree with the backend's is README.md open question 4.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 5.
+- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 4.
 - **Generic accumulator specs** (system story D7): how a record names the element model, and how an author declares that grouping does not change the result; README.md open question 1.
 - **Placing a session** (system story G3): the name and values of the placement argument; README.md open question 2.
 - **Recomputing in a record's environment** (F2): deferred.

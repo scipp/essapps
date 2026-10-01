@@ -4,13 +4,23 @@
 
 import threading
 from collections.abc import Iterator
+from itertools import islice
 from typing import Any
 
 import pytest
 from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, Record, Request, Status, SubmitError, dataset
+from ess.apps import (
+    Backend,
+    Client,
+    Record,
+    Request,
+    Selector,
+    Status,
+    SubmitError,
+    dataset,
+)
 from ess.apps.testing import FakeDatasets
 
 
@@ -165,6 +175,24 @@ def test_a_reference_to_another_proposal_is_refused(
 def test_an_unknown_dataset_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='unknown dataset run:9'):
         client.submit(load(9))
+
+
+def test_a_client_sees_only_the_datasets_of_its_proposal(
+    backend: Backend, datasets: FakeDatasets
+) -> None:
+    mine = Client(backend, proposal='p1', submitter='anna')
+    theirs = Client(backend, proposal='p2', submitter='eve')
+    other = datasets.measure(4, 4.0, proposal='p2')
+    later = datasets.measure(5, 5.0)
+
+    assert mine.datasets.list(Selector()) == [
+        datasets.resolve(dataset(run=n)) for n in (1, 2, 3, 5)
+    ]
+    assert theirs.datasets.list(Selector()) == [other]
+    assert list(islice(mine.datasets.watch(Selector()), 4))[-1] == later
+    assert theirs.datasets.metadata(other)['run'] == 4
+    with pytest.raises(KeyError, match='in proposal p1'):
+        mine.datasets.metadata(other)
 
 
 def test_the_keys_of_a_dict_become_members(client: Client, gate: Gate) -> None:

@@ -1,16 +1,16 @@
 # Batch and automatic reduction
 
 This sub-design builds on the core of [README.md](README.md).
-From the core it needs only that records show their label and member, and a dataset source.
+From the core it needs only that records show their label and member, and `client.datasets`.
 Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories.md).
 
 ## Batches
 
 `apply` fills a template for each dataset and returns the requests keyed by member, the value of a metadata field (by default the run number).
-It builds plain data and needs no client.
+It reads metadata through `client.datasets` and builds plain data; it submits nothing.
 
 ```python
-requests = apply(Template(IOFQ, blanks=('run',)), samples, datasets, member_field='temperature')
+requests = apply(Template(IOFQ, blanks=('run',)), samples, client.datasets, member_field='temperature')
 records = client.submit(requests, label='scan')
 ```
 
@@ -19,7 +19,7 @@ Each dataset fills the one blank the lookup leaves.
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, datasets, lookup=cans)
+requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, client.datasets, lookup=cans)
 ```
 
 ## Rules
@@ -45,9 +45,10 @@ The core keeps no store of them, and records do not name them: a record's reques
 ## The trigger loop
 
 The trigger loop is the driver for rules. It runs in a driving server or a notebook, never in the backend.
+It finds new datasets through `client.datasets`.
 
 ```python
-loop = TriggerLoop(client, datasets, rules=[rule])
+loop = TriggerLoop(client, rules=[rule])
 loop.step()                  # submits what arrived since the last step, returns the records
 loop.status(rule).reason     # why the rule submitted nothing, such as an unknown spec version
 loop.run()                   # steps forever

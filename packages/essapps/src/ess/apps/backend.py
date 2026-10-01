@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend checks requests, keeps records, and runs requests.
+The backend checks requests, keeps records, and runs requests. It also
+answers its clients' queries about the datasets of its dataset source.
 
 What the backend knows of history is its log (see ``log.py``): every
 submission, finished record, and push is appended as one event and then
@@ -37,7 +38,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -54,7 +55,7 @@ from .bindings import (
     Function,
     as_binding,
 )
-from .datasets import DatasetSource
+from .datasets import DatasetSource, Selector, readable
 from .log import Event, Finished, Log, NewRecord, Pushed, Submitted
 from .records import (
     Element,
@@ -332,10 +333,11 @@ class Backend:
                     identity = self._datasets.resolve(ref)
                 except KeyError:
                     raise SubmitError(f'{field}: unknown dataset {ref}') from None
-                owner = self._datasets.metadata(identity).get('proposal', proposal)
-                if owner != proposal:
+                metadata = self._datasets.metadata(identity)
+                if not readable(metadata, proposal):
                     raise SubmitError(
-                        f'{field}: dataset {ref} belongs to proposal {owner}'
+                        f'{field}: dataset {ref} belongs to proposal '
+                        f'{metadata["proposal"]}'
                     )
                 return identity
             if ref.key is not None:
@@ -741,3 +743,27 @@ class Backend:
         with self._changed:
             self._mine(record_id, proposal)
             return self._read_output(OutputRef(record=record_id, output=name))
+
+    # Datasets, within one proposal
+
+    def datasets(self, selector: Selector, proposal: str) -> list[DatasetRef]:
+        """The matching datasets the proposal may read, in the order measured."""
+        return [
+            ref
+            for ref in self._datasets.list(selector)
+            if readable(self._datasets.metadata(ref), proposal)
+        ]
+
+    def watch_datasets(self, selector: Selector, proposal: str) -> Iterator[DatasetRef]:
+        """Matching datasets the proposal may read: existing ones, then new ones."""
+        return (
+            ref
+            for ref in self._datasets.watch(selector)
+            if readable(self._datasets.metadata(ref), proposal)
+        )
+
+    def dataset_metadata(self, ref: DatasetRef, proposal: str) -> dict[str, Any]:
+        metadata = self._datasets.metadata(ref)
+        if not readable(metadata, proposal):
+            raise KeyError(f'no dataset {ref} in proposal {proposal}')
+        return metadata

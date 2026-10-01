@@ -3,8 +3,9 @@
 """
 Rules and the trigger loop: automatic reduction of new datasets.
 
-A rule is plain data. The trigger loop is a driver: it runs next to the client,
-never in the backend, and keeps no memory of its own. Which datasets a rule
+A rule is plain data. The trigger loop is a driver: it uses a client, never
+runs in the backend, and keeps no memory of its own. It finds new datasets
+through the client. Which datasets a rule
 has handled is read from the records under the rule's label, so a restarted
 or replaced loop picks up where the last one stopped. A dataset whose record
 failed counts as handled; running it again is the user's decision.
@@ -20,7 +21,7 @@ from ess.reduce.spec import DatasetRef
 
 from .batch import Lookup, apply, dataset_blank, run_number
 from .client import Client
-from .datasets import DatasetSource, Selector
+from .datasets import Selector
 from .records import Record, Request, SubmitError, Template
 
 
@@ -51,11 +52,9 @@ class RuleStatus:
 
 
 class TriggerLoop:
-    def __init__(
-        self, client: Client, source: DatasetSource, rules: list[Rule]
-    ) -> None:
+    def __init__(self, client: Client, rules: list[Rule]) -> None:
         self._client = client
-        self._source = source
+        self._source = client.datasets
         self._rules = rules
         self._status = {rule.name: RuleStatus() for rule in rules}
 

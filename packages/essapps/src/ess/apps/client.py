@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from .backend import Backend, Entry
 from .bindings import Binding, Function
-from .datasets import DatasetSource
+from .datasets import DatasetSource, Selector
 from .records import (
     Record,
     Request,
@@ -98,11 +98,37 @@ class Provenance(BaseModel, frozen=True):
         return list(dict.fromkeys(d for r in requests for d in r.datasets()))
 
 
+class Datasets:
+    """
+    The datasets of the backend's dataset source that the proposal may read.
+
+    Forms and drivers find datasets here: they list them, wait for new ones,
+    and read their metadata. A request names a dataset with ``dataset(...)``.
+    """
+
+    def __init__(self, backend: Backend, proposal: str) -> None:
+        self._backend = backend
+        self._proposal = proposal
+
+    def list(self, selector: Selector) -> list[DatasetRef]:
+        """The datasets the selector matches, in the order they were measured."""
+        return self._backend.datasets(selector, self._proposal)
+
+    def watch(self, selector: Selector) -> Iterator[DatasetRef]:
+        """Matching datasets: the existing ones first, then new ones, each once."""
+        return self._backend.watch_datasets(selector, self._proposal)
+
+    def metadata(self, ref: DatasetRef) -> dict[str, Any]:
+        """The dataset's current metadata; raises ``KeyError`` if not readable."""
+        return self._backend.dataset_metadata(ref, self._proposal)
+
+
 class Client:
     def __init__(self, backend: Backend, *, proposal: str, submitter: str) -> None:
         self._backend = backend
         self.proposal = proposal
         self.submitter = submitter
+        self.datasets = Datasets(backend, proposal)
 
     # Submitting
 

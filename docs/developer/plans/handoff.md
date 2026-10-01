@@ -42,7 +42,7 @@ Lint: `ruff check . && ruff format .` (ruff from conda base; no pre-commit hooks
 |---|---|
 | plain data | spec, request, template, reference, selector (and rule, in the sub-design) |
 | durable | record, label |
-| queries | dataset source |
+| queries | dataset source, through `client.datasets` |
 | holders, in a session | stage, accumulator |
 | policy | driver |
 
@@ -52,7 +52,7 @@ The essentials, all in the README with code:
 - `client.submit` (pending) and `client.compute` (submit and wait) take a spec with values, a stage with values, an accumulator, a request, a list, or a dict, and return the same shape. Under a label, a dict's keys become members. Label and member are given at submission; they are not part of the request.
 - A record holds the request with every value filled in; statuses `pending`, `completed`, `failed`, `cancelled`; a finished record never changes. Records are history, kept for a retention period, and outlive sessions; an output's value is kept only while a pending request, a client's record handle, or a holder holds it, or once saved (system.md); long-term provenance is what `publish` puts in the catalogue. Provenance stops at datasets (what lies behind a dataset belongs to its source).
 - Every connection between requests is a reference; a reference to a pending record is a valid input, which is the only scheduling mechanism.
-- Datasets are named by `dataset(run=/path=/pid=)`; the record names the identity. A dataset source (separate from the client, injected into drivers and forms) lists, watches, and reads metadata. Selectors match raw datasets unless they name another kind.
+- Datasets are named by `dataset(run=/path=/pid=)`; the record names the identity. The backend resolves names and reads data through its dataset source; drivers and forms list, watch, and read metadata through `client.datasets`, which shows only the datasets the client's proposal may read. Selectors match raw datasets unless they name another kind.
 - An accumulator spec (`AccumulatorSpec(name=, version=, element=)`) takes one list per element field and outputs the element model, so a combined value can be pushed again. A package derives CONTRIBUTE, the accumulator spec, and FINALIZE from its sciline `Aggregation`. `SUM.of(element)` is a generic one.
 - Holders live in a session (`client.session(where=...)`): a stage holds a template; an accumulator holds pushed elements. A stage never changes what a record says; a snapshot's record names its accumulator and how many elements it covers.
 - A driver is code that uses the client over time (notebook, application, trigger loop in a driving server); drivers never run in the backend. A tree of partial sums over a known list is how the backend may execute one accumulator request, not a driver.
@@ -105,7 +105,7 @@ Also `None`: the backend fills every default at submission, so a binding cannot 
 > Simon:
 
 **2. What comes after the accumulators: real workflows, the system tier, or provenance and publication.**
-The system tier is the store, a hosted backend with `connect(url)`, sessions placed in a backend process, and a served dataset source; README open questions 2 (session placement, the trigger loop owning a session) and 4 (where a notebook's dataset source comes from) belong to it.
+The system tier is the store, a hosted backend with `connect(url)`, sessions placed in a backend process, and `client.datasets` served over the connection (`watch` needs a streaming or long-poll endpoint); README open question 2 (session placement, the trigger loop owning a session) belongs to it.
 The in-process backend hides all of it.
 Proposal: LoKI first (then Amor), which tests the binding contract and decision 2 on real data before infrastructure is built around them; entry-point registration comes with it.
 
@@ -120,7 +120,7 @@ Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[
 
 In `todo.md`.
 
-Open questions in the README: generic accumulator spec identity and the declaration that grouping does not change a result; sessions (a holder without a user-opened session, the trigger loop owning one, the placement argument); removing a member from an accumulator; where a notebook's dataset source comes from; labels and members are tentative.
+Open questions in the README: generic accumulator spec identity and the declaration that grouping does not change a result; sessions (a holder without a user-opened session, the trigger loop owning one, the placement argument); removing a member from an accumulator; labels and members are tentative.
 
 ## Gotchas
 

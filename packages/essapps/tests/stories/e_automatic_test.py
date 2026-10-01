@@ -17,9 +17,7 @@ from .conftest import IOFQ, IOFQ_V2, STITCH, Measure
 NO_PUBLISH = 'publication is not implemented'
 
 
-def test_e1_series_grows_reduction_follows(
-    client: Client, measure: Measure, datasets: FakeDatasets
-) -> None:
+def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
     template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
     rule = Rule(
@@ -29,7 +27,7 @@ def test_e1_series_grows_reduction_follows(
         series='sample',
         label='reflectivity',
     )
-    loop = TriggerLoop(client, datasets, rules=[rule])
+    loop = TriggerLoop(client, rules=[rule])
 
     r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
     loop.step()
@@ -52,7 +50,7 @@ def test_e1_series_grows_reduction_follows(
 
 
 def test_e2_automatic_reduction_goes_quiet(
-    upgrade: Callable[..., Client], measure: Measure, datasets: FakeDatasets
+    upgrade: Callable[..., Client], measure: Measure
 ) -> None:
     rule = Rule(
         'auto-iofq',
@@ -61,7 +59,7 @@ def test_e2_automatic_reduction_goes_quiet(
         label='iofq',
     )
     upgraded = upgrade(specs=[IOFQ_V2])  # a backend without version 1
-    loop = TriggerLoop(upgraded, datasets, rules=[rule])
+    loop = TriggerLoop(upgraded, rules=[rule])
     measure(1, [1.0, 1.0], role='sample')
 
     assert loop.step() == []
@@ -78,7 +76,7 @@ def test_e3_reduction_of_our_own_output(
         selector=Selector(),
         label='iofq',
     )
-    loop = TriggerLoop(client, datasets, rules=[rule])
+    loop = TriggerLoop(client, rules=[rule])
     measure(1, [1.0, 2.0, 3.0, 4.0])
     (reduced,) = loop.step()
     pid = client.publish(reduced.ref('iofq'), 'scicat')
@@ -88,7 +86,7 @@ def test_e3_reduction_of_our_own_output(
 
 
 def test_e4_template_improved_during_a_beamtime(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     rule = Rule(
         'auto-iofq',
@@ -97,11 +95,11 @@ def test_e4_template_improved_during_a_beamtime(
         label='iofq',
     )
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (before,) = TriggerLoop(client, datasets, rules=[rule]).step()
+    (before,) = TriggerLoop(client, rules=[rule]).step()
 
     improved = replace(rule, template=replace(rule.template, params={'threshold': 1.5}))
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (after,) = TriggerLoop(client, datasets, rules=[improved]).step()
+    (after,) = TriggerLoop(client, rules=[improved]).step()
 
     assert after.request.datasets() == [second]
     assert [client.output(r, 'iofq').values.tolist() for r in (before, after)] == [
