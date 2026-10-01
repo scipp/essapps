@@ -110,23 +110,3 @@ def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     new value and not modify its arguments.
     """
     return _Combine(operation)
-
-
-class GenericAccumulator:
-    """An operation, such as a sum, that makes an accumulator spec for any element."""
-
-    def __init__(self, name: str, version: int = 1) -> None:
-        self.name = name
-        self.version = version
-
-    @functools.cache  # noqa: B019 - one spec per element; generic accumulators live forever
-    def of(self, element: type[BaseModel]) -> AccumulatorSpec:
-        """The accumulator spec for ``element``; its name names the element model."""
-        return AccumulatorSpec(
-            name=f'{self.name}[{element.__name__}]',
-            version=self.version,
-            element=element,
-        )
-
-
-SUM = GenericAccumulator('sum')

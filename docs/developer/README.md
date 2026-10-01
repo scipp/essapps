@@ -68,7 +68,7 @@ The terms this document defines, in the order they appear:
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | operator; a fake one in tests |
-| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author, framework (`SUM`) | workflow author |
+| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author | workflow author |
 | session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
 | stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
 | accumulator | a running combination in a session, such as a sum, to which records are added one at a time | framework | notebook, app |
@@ -314,18 +314,18 @@ It is built around an *element model*: the fields of one value that is combined,
 The params of an accumulator spec hold one list per element field; its outputs have the fields of the element model.
 Since output and element have the same fields, a combined value can be combined again.
 
-`SUM` from ess.reduce is a generic accumulator spec: `SUM.of(Counts)` is the spec that sums elements with the fields of `Counts`.
-
 ```python
 class Counts(BaseModel):
     counts: Array(ArraySpec(dims=('Q', 'energy_transfer'), unit='counts'))
 
+VOLUME = AccumulatorSpec(name='volume', version=1, element=Counts)          # bound to a sum
+
 angles = [client.submit(ANGLE, {'run': r}) for r in scan]                    # one run per angle
-volume = client.submit(SUM.of(Counts), {'counts': [a.ref('counts') for a in angles]})
+volume = client.submit(VOLUME, {'counts': [a.ref('counts') for a in angles]})
 client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
 ```
 
-A generic accumulator spec connects specs whose authors did not plan for each other, as long as their fields match.
+An accumulator spec connects specs whose authors did not plan for each other, as long as their fields match.
 
 An author may declare that the result does not depend on how the elements are grouped, as for a sum (how is open, see Open questions).
 The backend may then compute a request over many elements in parts, on many processes; the record is the same.
@@ -481,7 +481,7 @@ This one reduces each angle of a rotation scan as its run arrives, and keeps a v
 
 ```python
 with client.session() as session:
-    volume = session.accumulator(SUM.of(Counts))
+    volume = session.accumulator(VOLUME)
     angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
     for angle in client.as_completed(angles):                   # in the order they finish
         volume.push(angle)
@@ -563,7 +563,7 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 
 ## Open questions
 
-1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result, which a tree of partial sums over a plain request needs. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
+1. **Grouping.** How an author declares that grouping does not change the result of an accumulator spec, which a tree of partial sums over a plain request needs.
 2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing an element.** A request of the accumulator spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
 4. **Labels and members** on records, `member_field`, and `client.members` are tentative.

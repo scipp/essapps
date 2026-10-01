@@ -53,7 +53,7 @@ The essentials, all in the README with code:
 - A record holds the request with every value filled in; statuses `pending`, `completed`, `failed`, `cancelled`; a finished record never changes. Records are history, kept for a retention period, and outlive sessions; an output's value is kept only while a pending request, a client's record handle, or a holder holds it, or once saved (system.md); long-term provenance is what `publish` puts in the catalogue. Provenance stops at datasets (what lies behind a dataset belongs to its source).
 - Every connection between requests is a reference; a reference to a pending record is a valid input, which is the only scheduling mechanism.
 - Datasets are named by `dataset(run=/path=/pid=)`; the record names the identity. The backend resolves names and reads data through its dataset source; drivers and forms list, watch, and read metadata through `client.datasets`, which shows only the datasets the client's proposal may read. Selectors match raw datasets unless they name another kind.
-- An accumulator spec (`AccumulatorSpec(name=, version=, element=)`) takes one list per element field and outputs the element model, so a combined value can be pushed again. A package derives CONTRIBUTE, the accumulator spec, and FINALIZE from its sciline `Aggregation`. `SUM.of(element)` is a generic one.
+- An accumulator spec (`AccumulatorSpec(name=, version=, element=)`) takes one list per element field and outputs the element model, so a combined value can be pushed again. A package derives CONTRIBUTE, the accumulator spec, and FINALIZE from its sciline `Aggregation`.
 - Holders live in a session (`client.session(where=...)`): a stage holds a template; an accumulator holds pushed elements. A stage never changes what a record says; a snapshot's record names its accumulator and how many elements it covers.
 - A driver is code that uses the client over time (notebook, application, trigger loop in a driving server); drivers never run in the backend. A tree of partial sums over a known list is how the backend may execute one accumulator request, not a driver.
 - Several ways to write a sum are accepted: a spec with a list parameter, a chain of requests, the same chain through holders.
@@ -74,7 +74,7 @@ Done, with story tests passing:
 
 Strict xfails and what they need: C2, E3, F1, F2, F4 (publication, provenance `.software`, recompute, supersedes); G1 (grants across proposals); G2 (`local(bind=...)`, publish, software mark); B4 (views; form open); B5 (a notebook crash is not simulated); A1 (local folders by path); A4 (removing a dataset, deferred).
 
-Provisional choices in the code, easy to change: generic accumulator specs are named `sum[Counts]` (README open question 1); `apply` and rules key members by `run` unless told otherwise; order means run order.
+Provisional choices in the code, easy to change: `apply` and rules key members by `run` unless told otherwise; order means run order.
 
 ## Decisions to ask Simon
 
@@ -111,8 +111,8 @@ Proposal: LoKI first (then Amor), which tests the binding contract and decision 
 
 > Simon:
 
-**3. How a generic accumulator spec is named in a record** (README open question 1), and how an author declares that grouping does not change the result.
-Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[Counts]` works until then. With the event log, snapshots of an accumulator no longer need grouping independence; a tree of partial sums over a plain request still does.
+**3. How an author declares that grouping does not change the result** of an accumulator spec (README open question 1).
+With the event log, snapshots of an accumulator no longer need grouping independence; a tree of partial sums over a plain request still does.
 
 > Simon:
 
@@ -120,7 +120,7 @@ Needed before `AccumulatorSpec` is proposed to ess.reduce; the provisional `sum[
 
 In `todo.md`.
 
-Open questions in the README: generic accumulator spec identity and the declaration that grouping does not change a result; sessions (a holder without a user-opened session, the trigger loop owning one, the placement argument); removing a member from an accumulator; labels and members are tentative.
+Open questions in the README: the declaration that grouping does not change a result; sessions (a holder without a user-opened session, the trigger loop owning one, the placement argument); removing a member from an accumulator; labels and members are tentative.
 
 ## Gotchas
 
