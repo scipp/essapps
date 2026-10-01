@@ -123,9 +123,8 @@ r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
 parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]
 total = Request(PARTS_SUM, {'numerator': [p.ref('numerator') for p in parts],
                             'denominator': [p.ref('denominator') for p in parts]})
-c611, c612, pending = client.submit([*parts, total])          # returns at once
+c611, c612, summed = client.submit([*parts, total])          # returns at once
 
-(summed,) = client.wait([pending])
 assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
 assert summed.request.params['numerator'] == [c611.ref('numerator'), c612.ref('numerator')]
 ```
@@ -170,7 +169,7 @@ template = Template(IOFQ, blanks=('run', 'can'))
 cans = Lookup(can=LastBefore(Selector(role='can')))    # the latest can measured before the run
 
 requests = apply(template, [first, second], datasets, member_field='run', lookup=cans)
-reduced = list(client.wait(client.submit(requests, label='iofq')).values())
+reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[4.0, 5.0], [4.0, 7.0]]
 assert [r.request.datasets() for r in reduced] == [[first, can_1], [second, can_3]]
@@ -280,7 +279,7 @@ final = client.latest('iofq')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
 requests = apply(beamtime, [new], datasets, member_field='run')
-(reduced,) = client.wait(client.submit(requests, label='iofq-beamtime')).values()
+(reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
 assert len(client.records(label='iofq')) == 4
 assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
@@ -421,7 +420,7 @@ samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
 template = Template(IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('run',))
 
 requests = apply(template, samples, datasets, member_field='run')
-reduced = list(client.wait(client.submit(requests, label='iofq')).values())
+reduced = list(client.compute(requests, label='iofq').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [[3.0, 7.0], [7.0, 3.0]]
 assert set(client.provenance(reduced[0]).datasets()) == {samples[0], centre_run}
@@ -500,11 +499,11 @@ runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperat
 corrupt(runs[1])                                                     # 260K
 template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
 requests = apply(template, runs, datasets, member_field='temperature')
-scan = client.wait(client.submit(requests, label='scan'))            # keyed by temperature
+scan = client.compute(requests, label='scan')                        # keyed by temperature
 
 assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')] == [
     [4.0], [12.0], [20.0]]
-assert {t: r.status for t, r in scan.items()} == {
+assert client.wait(scan) == {
     '250K': 'completed', '260K': 'failed', '270K': 'completed', '280K': 'completed',
     '290K': 'completed'}
 assert client.members('scan') == scan
@@ -524,11 +523,12 @@ for member, run in runs.items():
     client.submit(IOFQ, {'run': run}, label='night', member=member)
 
 morning = connect()                                                  # the next day, a new client
-night = morning.wait(morning.members('night'))
-failed = [r for r in night.values() if r.status == 'failed']
+night = morning.members('night')
+failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
 repair(runs['7'])                                                    # the transfer is repeated
-reruns = morning.wait([morning.submit(r.request.spec, r.request.params, label=r.label,
-                                      member=r.member) for r in failed])
+reruns = [morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
+          for r in failed]
+morning.wait(reruns)
 
 assert [r.member for r in failed] == ['7']
 assert reruns[0].request == failed[0].request
@@ -550,9 +550,9 @@ wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
 first = client.submit(apply(wrong, runs, datasets, member_field='run'), label='scan')
 client.cancel(first)
 fixed = replace(wrong, params={'threshold': 0.5})
-second = client.wait(client.submit(apply(fixed, runs, datasets, member_field='run'), label='scan'))
+second = client.compute(apply(fixed, runs, datasets, member_field='run'), label='scan')
 
-assert {r.status for r in client.wait(first).values()} <= {'completed', 'cancelled'}
+assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
 assert [client.output(r, 'iofq').values.tolist() for r in second.values()] == 500 * [[2.0, 2.0]]
 assert len(client.records(label='scan')) == 1000
 ```
@@ -583,17 +583,17 @@ bad = measure(2, [2.0, 2.0, 2.0, 2.0], temperature='260K')
 corrupt(bad)
 template = Template(IOFQ, blanks=('run',))
 requests = apply(template, [good, bad], datasets, member_field='temperature')
-failed = client.wait(client.submit(requests, label='scan'))['260K']
+failed = client.compute(requests, label='scan')['260K']
 
 repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')     # the measurement is repeated
 rerun = client.compute(IOFQ, {**failed.request.params, 'run': repeat}, label=failed.label,
                        member=failed.member)
 
-assert failed.failure.message == 'file signature not found'
+assert client.failure(failed) == 'file signature not found'
 assert client.latest('scan', member='260K') == rerun
 assert client.output(rerun, 'iofq').values.tolist() == [4.0, 4.0]
 assert client.records(label='scan')[-1] == rerun
-assert failed.status == 'failed'                                     # the failure stays
+assert client.status(failed) == 'failed'                                   # the failure stays
 ```
 
 Gap: `member_field`, and labels and members on records, are tentative, as in D1.
@@ -605,7 +605,7 @@ Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again
 ```python
 template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-client.wait(client.submit(apply(template, runs, datasets, member_field='run'), label='scan'))
+client.compute(apply(template, runs, datasets, member_field='run'), label='scan')
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
@@ -615,7 +615,7 @@ with pytest.raises(SubmitError, match='threshold'):
     client.submit(renamed, label='scan')
 moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
 requests = apply(moved, runs, datasets, member_field='run')
-after = list(client.wait(client.submit(requests, label='scan')).values())
+after = list(client.compute(requests, label='scan').values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
     [2.0, 7.0], [0.0, 2.0, 3.0, 4.0]]
@@ -649,7 +649,7 @@ with client.session() as session:
                                   label='cut', member='17'))
     total = client.compute(volume)
 
-assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [float(k) for k in range(1, 1001)]
+assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
 assert client.provenance(total).records() == pushed            # the angles, in push order
 assert len(client.records(spec=ANGLE)) == 1000                 # run 5 is reduced once

@@ -9,7 +9,6 @@ from .bindings import Binding
 from .client import Client, Provenance, local
 from .datasets import DatasetSource, Selector, dataset
 from .records import (
-    Failure,
     Record,
     Request,
     Snapshot,
@@ -29,7 +28,6 @@ __all__ = [
     'Binding',
     'Client',
     'DatasetSource',
-    'Failure',
     'LastBefore',
     'Lookup',
     'Provenance',

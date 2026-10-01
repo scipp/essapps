@@ -112,6 +112,6 @@ def test_a_parameter_without_a_sciline_key_fails_the_record(
     record = client.compute(SHIFT, {'run': dataset(run=1)})
     backend.close()
 
-    assert record.status is Status.FAILED
-    assert 'no sciline key' in record.failure.message
-    assert 'note' in record.failure.message
+    assert client.status(record) is Status.FAILED
+    assert 'no sciline key' in client.failure(record)
+    assert 'note' in client.failure(record)

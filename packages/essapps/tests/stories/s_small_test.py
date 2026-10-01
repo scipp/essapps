@@ -68,9 +68,8 @@ def test_s4_submit_a_chain_in_one_go(client: Client, measure: Measure) -> None:
             'denominator': [p.ref('denominator') for p in parts],
         },
     )
-    c611, c612, pending = client.submit([*parts, total])
+    c611, c612, summed = client.submit([*parts, total])
 
-    (summed,) = client.wait([pending])
     assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
     assert summed.request.params['numerator'] == [
         c611.ref('numerator'),
@@ -112,7 +111,7 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     requests = apply(
         template, [first, second], datasets, member_field='run', lookup=cans
     )
-    reduced = list(client.wait(client.submit(requests, label='iofq')).values())
+    reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
         [4.0, 5.0],

@@ -25,9 +25,10 @@ first call, so a binding that holds values computes only what depends on
 the blanks. A stage lives until its session ends and the requests made
 through it have run.
 
-An accumulator takes only elements whose records have completed. A push
-combines the element into the value the accumulator holds, and a snapshot's
-record completes at submission with that value. A snapshot's record names the
+An accumulator takes only elements whose records have completed; a push
+waits for the records it references to finish. A push then combines the
+element into the value the accumulator holds, and a snapshot's record
+completes at submission with that value. A snapshot's record names the
 accumulator and how many elements it covers, so it costs the same however
 many elements that is.
 """
@@ -189,7 +190,7 @@ class Backend:
             for event in self._log:
                 self._views.apply(event)
             for record in list(self._views.records.values()):
-                if record.status.finished:
+                if record.id in self._views.finished:
                     continue
                 if isinstance(record.submitted, Snapshot):
                     self._finish(
@@ -395,8 +396,9 @@ class Backend:
             raise SubmitError(
                 f'{field}: record {ref.record} belongs to proposal {record.proposal}'
             )
-        if record.status in (Status.FAILED, Status.CANCELLED):
-            raise SubmitError(f'{field}: record {ref.record} {record.status}')
+        status = self._views.status(ref.record)
+        if status in (Status.FAILED, Status.CANCELLED):
+            raise SubmitError(f'{field}: record {ref.record} {status}')
         return record.spec
 
     # Execution
@@ -405,7 +407,7 @@ class Backend:
         """Start the record, or let it wait for its unfinished inputs; lock held."""
         record = self._views.records[record_id]
         inputs = {ref.record for ref in record.request.refs()}
-        waiting = {i for i in inputs if not self._views.records[i].status.finished}
+        waiting = inputs - self._views.finished.keys()
         if not waiting:
             self._executor.submit(self._run, record_id)
             return
@@ -415,9 +417,9 @@ class Backend:
 
     def _run(self, record_id: str) -> None:
         with self._changed:
-            record = self._views.records[record_id]
-            if record.status.finished:
+            if record_id in self._views.finished:
                 return
+            record = self._views.records[record_id]
             stage = self._stage_of.get(record_id)
         try:
             outputs = dict(self._compute(record.request, stage))
@@ -469,11 +471,10 @@ class Backend:
 
     def _complete(self, record_id: str, outputs: dict[str, Any]) -> None:
         """Complete a record with outputs, or fail it if they do not fit; lock held."""
-        record = self._views.records[record_id]
-        if record.status.finished:  # cancelled meanwhile
+        if record_id in self._views.finished:  # cancelled meanwhile
             return
         try:
-            self._check_returned(record.spec, outputs)
+            self._check_returned(self._views.records[record_id].spec, outputs)
         except ValueError as error:
             self._finish(record_id, Status.FAILED, str(error))
             return
@@ -498,7 +499,7 @@ class Backend:
         todo = [(record_id, status, failure)]
         while todo:
             finished_id, finished, message = todo.pop()
-            if self._views.records[finished_id].status.finished:
+            if finished_id in self._views.finished:
                 continue
             self._append(Finished(record=finished_id, status=finished, failure=message))
             for call in self._on_finished.pop(finished_id, ()):
@@ -571,14 +572,18 @@ class Backend:
         """
         Push an element, checked as a request over it alone would be.
 
-        The records it references must have completed. The element is
+        The push waits for the records the element references to finish, so
+        whether it is refused does not depend on timing; they must have
+        completed. The element is
         combined before its event is appended, under the accumulator's lock,
         so the pushes into one accumulator are logged in the order they were
         combined. If combining fails, the push is refused and the accumulator
         stops, since the binding may hold part of the element.
         """
+        ids = [ref.record for ref in element.values()]
         with self._changed:
             held = self._open_accumulator(accumulator_id, proposal)
+            self._changed.wait_for(lambda: not self._pending(ids, proposal))
         with held.lock:
             with self._changed:
                 position, values = self._pushable(accumulator_id, element, proposal)
@@ -611,14 +616,6 @@ class Backend:
         request = Request(held.spec, {f: [ref] for f, ref in element.items()})
         entry = Entry(request, name=f'element {position}')
         self._check_reads(entry, request, {}, proposal)
-        for ref in element.values():
-            if self._views.records[ref.record].status is Status.PENDING:
-                raise entry.refused(
-                    SubmitError(
-                        f'record {ref.record} is still pending; '
-                        'push it once it has completed'
-                    )
-                )
         try:
             return position, {f: self._read_output(ref) for f, ref in element.items()}
         except LookupError as error:  # its value is no longer kept
@@ -648,20 +645,45 @@ class Backend:
 
     # Queries and control, within one proposal
 
+    def _pending(self, ids: Iterable[str], proposal: str) -> bool:
+        """Whether a record of the proposal among ``ids`` is pending; lock held."""
+        records = self._views.records
+        return any(
+            i in records
+            and records[i].proposal == proposal
+            and i not in self._views.finished
+            for i in ids
+        )
+
     def _mine(self, record_id: str, proposal: str) -> Record:
         record = self._views.records.get(record_id)
         if record is None or record.proposal != proposal:
             raise KeyError(f'no record {record_id} in proposal {proposal}')
         return record
 
-    def wait(self, ids: Iterable[str], proposal: str) -> list[Record]:
+    def status(self, ids: Iterable[str], proposal: str) -> list[Status]:
+        with self._changed:
+            return [self._status(i, proposal) for i in ids]
+
+    def wait(self, ids: Iterable[str], proposal: str) -> list[Status]:
+        """The status of each record once all have finished."""
         ids = list(ids)
         with self._changed:
             for record_id in ids:
                 self._mine(record_id, proposal)
-            records = self._views.records
-            self._changed.wait_for(lambda: all(records[i].status.finished for i in ids))
-            return [records[i] for i in ids]
+            self._changed.wait_for(lambda: not self._pending(ids, proposal))
+            return [self._status(i, proposal) for i in ids]
+
+    def failure(self, record_id: str, proposal: str) -> str | None:
+        """Why a record failed; ``None`` unless it has failed."""
+        with self._changed:
+            self._mine(record_id, proposal)
+            finished = self._views.finished.get(record_id)
+            return None if finished is None else finished.failure
+
+    def _status(self, record_id: str, proposal: str) -> Status:
+        self._mine(record_id, proposal)
+        return self._views.status(record_id)
 
     def when_finished(
         self, record_id: str, proposal: str, call: Callable[[Record], None]
@@ -674,7 +696,7 @@ class Backend:
         """
         with self._changed:
             record = self._mine(record_id, proposal)
-            if record.status.finished:
+            if record_id in self._views.finished:
                 call(record)
             else:
                 self._on_finished.setdefault(record_id, []).append(call)

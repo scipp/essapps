@@ -5,6 +5,9 @@ The client: what a notebook, an application, or a driver calls.
 
 A client talks to one backend for one proposal. Calls that take records or
 requests accept one, a list, or a dict, and return the same shape.
+
+A record never changes; its status changes once, from pending to finished,
+and is asked with :meth:`Client.status` or :meth:`Client.wait`.
 """
 
 from __future__ import annotations
@@ -150,13 +153,25 @@ class Client:
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
-        """Submit and wait."""
-        return self.wait(self.submit(*args, **kwargs))
+        """Submit, wait, and return the records."""
+        records = self.submit(*args, **kwargs)
+        self.wait(records)
+        return records
+
+    def status(self, records: Any) -> Any:
+        """The status of each record now."""
+        ids = [r.id for r in _items(records)]
+        return _reshape(records, self._backend.status(ids, self.proposal))
 
     def wait(self, records: Any) -> Any:
-        """The records once finished; a failed record is returned, not raised."""
+        """The status of each record once all have finished; a failure is not raised."""
         ids = [r.id for r in _items(records)]
         return _reshape(records, self._backend.wait(ids, self.proposal))
+
+    def failure(self, records: Any) -> Any:
+        """Why each record failed; ``None`` for a record that has not failed."""
+        failures = [self._backend.failure(r.id, self.proposal) for r in _items(records)]
+        return _reshape(records, failures)
 
     def as_completed(self, records: Iterable[Record]) -> Iterator[Record]:
         """
@@ -218,9 +233,11 @@ class Client:
     # Reading
 
     def output(self, record: Record, name: str) -> Any:
-        (record,) = self._backend.wait([record.id], self.proposal)
-        if record.status is not Status.COMPLETED:
-            raise RuntimeError(f'record {record.id} {record.status}: {record.failure}')
+        """The value of an output, once the record has completed."""
+        (status,) = self._backend.wait([record.id], self.proposal)
+        if status is not Status.COMPLETED:
+            failure = self._backend.failure(record.id, self.proposal)
+            raise RuntimeError(f'record {record.id} {status}: {failure}')
         return self._backend.output(record.id, name, self.proposal)
 
     def records(

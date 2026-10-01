@@ -13,19 +13,21 @@ the backend keeps elsewhere.
 from __future__ import annotations
 
 from .log import Event, Finished, Pushed, Submitted
-from .records import Element, Failure, Record
+from .records import Element, Record, Status
 
 
 class Views:
     """
     The records, labels, and accumulator elements that the events describe.
 
-    ``elements`` holds each accumulator's elements in push order; a snapshot
-    of it covers the first ``upto``.
+    ``finished`` holds the event that finished a record; a record without one
+    is pending. ``elements`` holds each accumulator's elements in push order;
+    a snapshot of it covers the first ``upto``.
     """
 
     def __init__(self) -> None:
         self.records: dict[str, Record] = {}
+        self.finished: dict[str, Finished] = {}
         self.labels: dict[tuple[str, str], list[str]] = {}  # (proposal, label)
         self.elements: dict[str, list[Element]] = {}  # accumulator ID to elements
 
@@ -47,11 +49,10 @@ class Views:
                         key = (event.proposal, new.label)
                         self.labels.setdefault(key, []).append(new.id)
             case Finished():
-                failure = (
-                    None if event.failure is None else Failure(message=event.failure)
-                )
-                self.records[event.record] = self.records[event.record].model_copy(
-                    update={'status': event.status, 'failure': failure}
-                )
+                self.finished[event.record] = event
             case Pushed():
                 self.elements.setdefault(event.accumulator, []).append(event.element)
+
+    def status(self, record_id: str) -> Status:
+        finished = self.finished.get(record_id)
+        return Status.PENDING if finished is None else finished.status

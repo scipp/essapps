@@ -28,15 +28,15 @@ The same with the framework:
 records = {}
 for run in (60339, 60340, 60341):
     records[run] = client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100})
-records = client.wait(records)
+client.wait(records)
 client.output(records[60339], 'iofq')
 ```
 
 `client` connects to the framework (see Client and backend).
 `IOFQ` is the spec of the I(Q) reduction: it states which parameters the reduction takes and which outputs it returns.
 `dataset(run=run)` names the raw data of a run (see Datasets).
-`client.submit` returns at once with a *record* in the state `pending`; the three reductions run in parallel, possibly on another machine.
-`client.wait` returns the records once they have finished, and `client.output` reads an output by name.
+`client.submit` returns at once with a *record*; the three reductions run in parallel, possibly on another machine.
+`client.wait` blocks until they have finished, and `client.output` reads an output by name.
 
 What the framework adds to the plain loop:
 
@@ -63,7 +63,7 @@ The terms this document defines, in the order they appear:
 | spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
 | binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
-| record | a request as the backend accepted it, plus status and outputs | framework | backend, at submission |
+| record | a request as the backend accepted it, with the names of its outputs; it never changes | framework | backend, at submission |
 | reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
@@ -149,22 +149,25 @@ Records made with such a binding say that the code was bound in the notebook.
 ## Requests and records
 
 A *request* is a spec and its parameter values.
-Submitting a request returns a *record*: the request with every value filled in, defaults included, plus status and outputs.
-The status is `pending`, `completed`, `failed`, or `cancelled`.
-A finished record never changes; running the same request again makes a new record.
+Submitting a request returns a *record*: the request with every value filled in, defaults included, and the names of its outputs.
+A record never changes, and running the same request again makes a new record.
+What happens to it is its *status*: `pending`, then once `completed`, `failed`, or `cancelled`.
+The client asks the backend for it, so it is always current.
 
 ```python
 result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit, then wait
 result.request.params                    # every value, defaults included
-result.created, result.status            # a failed record also has result.failure.message
-client.output(result, 'iofq')
+client.status(result)                    # 'completed'
+client.output(result, 'iofq')            # raises if the record failed
 ```
 
 | Call | Does |
 |---|---|
-| `client.submit(...)` | submits, returns pending records |
-| `client.compute(...)` | `submit`, then `wait` |
-| `client.wait(records)` | blocks until finished; returns failed records instead of raising |
+| `client.submit(...)` | submits, returns the records |
+| `client.compute(...)` | `submit`, then `wait`; returns the records |
+| `client.status(records)` | the status of each record now |
+| `client.wait(records)` | blocks until finished; returns the status of each, does not raise for failures |
+| `client.failure(records)` | why each record failed, or `None` |
 | `client.cancel(records)` | ends unfinished records as `cancelled` |
 | `client.as_completed(records)` | yields records one at a time, in the order they finish (see Drivers) |
 
@@ -415,7 +418,7 @@ total.push(record)          # pushes record's outputs named like the element's f
 ```
 
 A push takes the record's outputs named like the element's fields; its other outputs are not pushed.
-The record must have completed; pushing a pending record is refused.
+The push waits for the record to finish and refuses it unless it has completed.
 A push is checked when made, as a request over that one element would be.
 
 **Snapshot.** To use the combined value as the input of another request, submit the accumulator.
@@ -534,7 +537,7 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 ## Guarantees
 
-- A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A finished record never changes.
+- A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
 - A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.

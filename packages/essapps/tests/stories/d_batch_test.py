@@ -28,12 +28,12 @@ def test_d1_temperature_scan(
     corrupt(runs[1])
     template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
     requests = apply(template, runs, datasets, member_field='temperature')
-    scan = client.wait(client.submit(requests, label='scan'))
+    scan = client.compute(requests, label='scan')
 
     assert [
         client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')
     ] == [[4.0], [12.0], [20.0]]
-    assert {t: r.status for t, r in scan.items()} == {
+    assert client.wait(scan) == {
         '250K': 'completed',
         '260K': 'failed',
         '270K': 'completed',
@@ -56,17 +56,14 @@ def test_d2_overnight_cluster_batch(
         client.submit(IOFQ, {'run': run}, label='night', member=member)
 
     morning = connect()
-    night = morning.wait(morning.members('night'))
-    failed = [r for r in night.values() if r.status == 'failed']
+    night = morning.members('night')
+    failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
     repair(runs['7'])
-    reruns = morning.wait(
-        [
-            morning.submit(
-                r.request.spec, r.request.params, label=r.label, member=r.member
-            )
-            for r in failed
-        ]
-    )
+    reruns = [
+        morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
+        for r in failed
+    ]
+    morning.wait(reruns)
 
     assert [r.member for r in failed] == ['7']
     assert reruns[0].request == failed[0].request
@@ -85,11 +82,11 @@ def test_d3_cancel_and_resubmit(
     )
     client.cancel(first)
     fixed = replace(wrong, params={'threshold': 0.5})
-    second = client.wait(
-        client.submit(apply(fixed, runs, datasets, member_field='run'), label='scan')
+    second = client.compute(
+        apply(fixed, runs, datasets, member_field='run'), label='scan'
     )
 
-    assert {r.status for r in client.wait(first).values()} <= {'completed', 'cancelled'}
+    assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
     assert [
         client.output(r, 'iofq').values.tolist() for r in second.values()
     ] == 500 * [[2.0, 2.0]]
@@ -119,7 +116,7 @@ def test_d5_understand_why_a_run_failed(
     corrupt(bad)
     template = Template(IOFQ, blanks=('run',))
     requests = apply(template, [good, bad], datasets, member_field='temperature')
-    failed = client.wait(client.submit(requests, label='scan'))['260K']
+    failed = client.compute(requests, label='scan')['260K']
 
     repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')
     rerun = client.compute(
@@ -129,11 +126,11 @@ def test_d5_understand_why_a_run_failed(
         member=failed.member,
     )
 
-    assert failed.failure.message == 'file signature not found'
+    assert client.failure(failed) == 'file signature not found'
     assert client.latest('scan', member='260K') == rerun
     assert client.output(rerun, 'iofq').values.tolist() == [4.0, 4.0]
     assert client.records(label='scan')[-1] == rerun
-    assert failed.status == 'failed'
+    assert client.status(failed) == 'failed'
 
 
 def test_d6_rerun_a_batch_with_a_new_workflow_version(
@@ -141,9 +138,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
 ) -> None:
     template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-    client.wait(
-        client.submit(apply(template, runs, datasets, member_field='run'), label='scan')
-    )
+    client.compute(apply(template, runs, datasets, member_field='run'), label='scan')
 
     before = client.records(label='scan')
     runs = [r.request.params['run'] for r in before]
@@ -152,7 +147,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
         client.submit(renamed, label='scan')
     moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
     requests = apply(moved, runs, datasets, member_field='run')
-    after = list(client.wait(client.submit(requests, label='scan')).values())
+    after = list(client.compute(requests, label='scan').values())
 
     assert [
         client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])
@@ -192,7 +187,7 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             )
         total = client.compute(volume)
 
-    assert [client.output(c, 'cut').value for c in client.wait(cuts)] == [
+    assert [client.output(c, 'cut').value for c in cuts] == [
         float(k) for k in range(1, 1001)
     ]
     assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]

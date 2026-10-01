@@ -96,7 +96,7 @@ def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> N
     total = Request(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
     records = client.submit({'a': a, 'b': b, 'total': total})
 
-    assert records['total'].status is Status.PENDING
+    assert client.status(records['total']) is Status.PENDING
     gate.open.set()
     assert client.output(records['total'], 'value') == 3.0
 
@@ -108,14 +108,16 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
     records = client.submit([bad, good, first, second])
     gate.open.set()
 
-    bad, good, first, second = client.wait(records)
-    assert bad.failure.message == 'negative run'
-    assert good.status is Status.COMPLETED
-    assert (first.status, first.failure.message) == (
+    bad, good, first, second = records
+    assert client.wait(records) == [
         Status.FAILED,
-        f'input {bad.id} failed',
-    )
-    assert second.failure.message == f'input {first.id} failed'
+        Status.COMPLETED,
+        Status.FAILED,
+        Status.FAILED,
+    ]
+    assert client.failure(bad) == 'negative run'
+    assert client.failure(first) == f'input {bad.id} failed'
+    assert client.failure(second) == f'input {first.id} failed'
 
 
 def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
@@ -125,8 +127,7 @@ def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
     client.cancel(records[2])
     gate.open.set()
 
-    statuses = [r.status for r in client.wait(records)]
-    assert statuses == [Status.COMPLETED, Status.COMPLETED, Status.CANCELLED]
+    assert client.wait(records) == ['completed', 'completed', 'cancelled']
 
 
 def test_one_refused_request_refuses_the_submission(client: Client) -> None:
@@ -196,8 +197,8 @@ def test_a_workflow_that_leaves_out_an_output_fails(client: Client, gate: Gate) 
     reader = Request(ADD, {'a': nothing.ref('value'), 'b': nothing.ref('value')})
 
     nothing, reader = client.compute([nothing, reader])
-    assert "missing ['value']" in nothing.failure.message
-    assert reader.failure.message == f'input {nothing.id} failed'
+    assert "missing ['value']" in client.failure(nothing)
+    assert client.failure(reader) == f'input {nothing.id} failed'
 
 
 def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
@@ -209,7 +210,7 @@ def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
     records = client.submit(chain)
     gate.open.set()
 
-    assert {r.status for r in client.wait(records)} == {Status.FAILED}
+    assert set(client.wait(records)) == {Status.FAILED}
 
 
 def test_the_same_request_twice_is_refused(client: Client) -> None:
@@ -232,10 +233,9 @@ def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
     client.cancel(running)
     gate.open.set()
 
-    (cancelled,) = client.wait([running])
-    assert cancelled.status is Status.CANCELLED
+    assert client.wait(running) is Status.CANCELLED
     with pytest.raises(RuntimeError, match='cancelled'):
-        client.output(cancelled, 'value')
+        client.output(running, 'value')
 
 
 def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -> None:
@@ -261,8 +261,8 @@ def test_as_completed_yields_records_in_the_order_they_finish(
     gate.open.set()
     completed = next(finished)
 
-    assert (cancelled.id, cancelled.status) == (second.id, Status.CANCELLED)
-    assert (completed.id, completed.status) == (first.id, Status.COMPLETED)
+    assert (cancelled.id, client.status(cancelled)) == (second.id, Status.CANCELLED)
+    assert (completed.id, client.status(completed)) == (first.id, Status.COMPLETED)
     assert list(finished) == []
 
 
@@ -274,7 +274,7 @@ def test_as_completed_yields_failed_records_and_each_record_once(
     finished = list(client.as_completed([bad, good, bad]))
 
     assert len(finished) == 2
-    assert {r.id: r.status for r in finished} == {
+    assert {r.id: client.status(r) for r in finished} == {
         bad.id: Status.FAILED,
         good.id: Status.COMPLETED,
     }

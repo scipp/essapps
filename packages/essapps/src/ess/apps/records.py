@@ -133,10 +133,6 @@ class Status(StrEnum):
         return self is not Status.PENDING
 
 
-class Failure(BaseModel, frozen=True):
-    message: str
-
-
 class Snapshot(BaseModel, frozen=True):
     """
     What submitting an accumulator makes: the combined value of its first elements.
@@ -165,12 +161,15 @@ a request takes any values.
 
 class Record(BaseModel, frozen=True):
     """
-    What ran, and what happened to it.
+    What was submitted, as the backend accepted it.
 
     ``submitted`` is what the backend's log holds: a request with every value
     filled in, or a :class:`Snapshot` of an accumulator. ``outputs`` lists the
     output names the spec declares; ``label`` and ``member`` are given at
     submission and do not change the result.
+
+    A record never changes, so every copy of it is equal. Its status, which
+    changes once from pending to finished, is asked of the client.
     """
 
     id: str
@@ -179,10 +178,8 @@ class Record(BaseModel, frozen=True):
     submitter: str
     created: datetime
     outputs: tuple[str, ...]
-    status: Status = Status.PENDING
     label: str | None = None
     member: str | None = None
-    failure: Failure | None = None
 
     @property
     def spec(self) -> SpecId:

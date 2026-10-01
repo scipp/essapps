@@ -85,7 +85,8 @@ It does this the same way when it appends a new event and when it reads an exist
 
 | View | Used by |
 |---|---|
-| records by ID, with status and failure | `client.wait`, `client.output`, checks of references |
+| records by ID | `client.records`, `client.provenance`, checks of references |
+| the `finished` event by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
 | each accumulator's elements | what its snapshots read (see Records) |
 
@@ -103,7 +104,8 @@ The views depend on three orders in the log:
 
 ### Records
 
-A record stores what the log holds: a request, or for a snapshot `Snapshot(spec, accumulator, upto)`.
+A record stores what its `submitted` event holds: a request, or for a snapshot `Snapshot(spec, accumulator, upto)`.
+Its status is in its `finished` event, so a record never changes and a client's copy of it is never out of date.
 A snapshot does not list what it read; that is the first `upto` elements in its accumulator's view.
 Provenance asks the backend what each record read (`Backend.inputs`), so it works for a snapshot as for a request:
 
@@ -154,6 +156,7 @@ The backend does this:
 held = binding.accumulator()             # when the accumulator opens: the combined value, not history
 
 def push(element):                       # element: a reference per field
+    wait(element)                        # until its records have finished
     check(element)                       # as for a request over [element]; its records have completed
     held.push(read(element))             # combine the values (see Push for which lock)
     append(Pushed(accumulator, element))
@@ -169,8 +172,9 @@ A push that does not fit, or whose combining fails, appends nothing.
 After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
 The accumulator does not keep its elements' values after combining them.
 
-The push refuses pending records so that all waiting happens in the driver, for example in `client.as_completed`.
-If the backend accepted pending records, it would have to make a snapshot wait for an unfinished element, or hold back an element that finished before one pushed earlier.
+A push waits for the records it references to finish before it is checked, so whether it is refused does not depend on timing.
+The element gets its position only once it is combined, so a snapshot never waits for an unfinished element, and an element that finished first is never held back behind one pushed earlier.
+A driver that pushes records as they finish, as `client.as_completed` yields them, never waits in the push.
 
 Combining can take long.
 It runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long combine holds up only the pushes into the same accumulator.

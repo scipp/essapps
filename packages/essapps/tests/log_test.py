@@ -211,10 +211,9 @@ def test_a_record_pending_in_the_log_runs_after_a_restart(
 
     again = restart(tmp_path / 'log')
     loading.set()
-    done = again.wait(pending)
 
-    assert done.status == Status.COMPLETED
-    assert again.output(done, 'value') == 2.0
+    assert again.wait(pending) == Status.COMPLETED
+    assert again.output(pending, 'value') == 2.0
 
 
 def test_holders_do_not_survive_a_restart(
@@ -242,7 +241,7 @@ def test_outputs_are_not_in_the_log(
 
     again = restart(tmp_path / 'log')
 
-    assert again.wait(load).status == Status.COMPLETED
+    assert again.wait(load) == Status.COMPLETED
     with pytest.raises(LookupError, match='no output'):
         again.output(load, 'value')
 
@@ -279,11 +278,10 @@ def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
     )
 
     client = start(tmp_path / 'log')
-    snapshot = client.wait(_record(client, 'snapshot'))
+    snapshot = _record(client, 'snapshot')
 
-    assert snapshot.status == Status.FAILED
-    assert snapshot.failure is not None
-    assert 'accumulator ended' in snapshot.failure.message
+    assert client.wait(snapshot) == Status.FAILED
+    assert 'accumulator ended' in client.failure(snapshot)
 
 
 def test_provenance_refuses_a_snapshot_whose_elements_the_log_lacks(

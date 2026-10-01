@@ -44,7 +44,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
     requests = apply(beamtime, [new], datasets, member_field='run')
-    (reduced,) = client.wait(client.submit(requests, label='iofq-beamtime')).values()
+    (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
     assert len(client.records(label='iofq')) == 4
     assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)

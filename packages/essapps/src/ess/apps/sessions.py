@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Self
 
 from .accumulators import AccumulatorSpec
-from .records import Element, Record, Request, SpecId, SubmitError, Template
+from .records import Element, Record, Request, SpecId, Template
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -116,18 +116,12 @@ class Accumulator(_Holder):
         """
         Push a record's outputs named like the element's fields, or references.
 
-        The record must have completed, so a driver pushes records as they
-        finish, as ``client.as_completed`` yields them. A pending record is
-        refused even if it has completed since, so that whether a push is
-        refused does not depend on timing. The record's other outputs are not
-        pushed.
+        The push waits for the records to finish, and refuses them unless they
+        have completed. A driver that pushes records as they finish, as
+        ``client.as_completed`` yields them, never waits here. The record's
+        other outputs are not pushed.
         """
         self._check_open()
         if isinstance(element, Record):
-            if not element.status.finished:
-                raise SubmitError(
-                    f'record {element.id} is still pending; '
-                    'push it once it has completed'
-                )
             element = {f: element.ref(f) for f in self._fields}
         self._push(self.id, element)
