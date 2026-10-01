@@ -300,11 +300,11 @@ with client.session() as session:
     parts = {}
     for run in (r611, r612):
         parts[run] = client.compute(contribute, {'run': run})
-        total.push(parts[run])
+        total.push(parts[run].refs('numerator', 'denominator'))
     first = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
     parts[r613] = client.compute(contribute, {'run': r613})
-    total.push(parts[r613])
+    total.push(parts[r613].refs('numerator', 'denominator'))
     added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
 kept = [parts[r611], parts[r613]]
@@ -643,7 +643,7 @@ with client.session() as session:
     angles = (client.submit(ANGLE, {'run': run})
               for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
     for angle in client.as_completed(angles):                  # in the order they finish
-        volume.push(angle)
+        volume.push(angle.refs())
         pushed.append(angle)
         cuts.append(client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'index': 0},
                                   label='cut', member='17'))

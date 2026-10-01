@@ -200,6 +200,6 @@ class Record(BaseModel, frozen=True):
             raise KeyError(f'{self.spec} has no output {output!r}')
         return OutputRef(record=self.id, output=output)
 
-    def refs(self) -> dict[str, OutputRef]:
-        """A reference to every output, by name."""
-        return {name: self.ref(name) for name in self.outputs}
+    def refs(self, *outputs: str) -> dict[str, OutputRef]:
+        """A reference to each of ``outputs`` by name; to every output if none."""
+        return {name: self.ref(name) for name in outputs or self.outputs}

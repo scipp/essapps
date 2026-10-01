@@ -151,7 +151,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     with first.session() as session:
         total = session.accumulator(TOTAL)
         for load in loads.values():
-            total.push(load)
+            total.push(load.refs('value'))
         snapshot = first.compute(total)
 
     again = restart(tmp_path / 'log')
@@ -188,7 +188,7 @@ def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
     with client.session() as session:
         total = session.accumulator(TOTAL)
         for n in (1, 2, 3):
-            total.push(client.compute(LOAD, {'run': dataset(run=n)}))
+            total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
         snapshot = client.submit(total)
 
     *_, logged, finished = Log.read(tmp_path / 'log')
@@ -224,7 +224,7 @@ def test_holders_do_not_survive_a_restart(
     first = start(tmp_path / 'log')
     load = first.compute(LOAD, {'run': dataset(run=1)})
     total = first.session().accumulator(TOTAL)
-    total.push(load)
+    total.push(load.refs('value'))
 
     again = restart(tmp_path / 'log')
 
@@ -258,7 +258,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     with again.session() as session:
         total = session.accumulator(TOTAL)
         with pytest.raises(SubmitError, match='no output'):
-            total.push(load)
+            total.push(load.refs('value'))
 
 
 def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
@@ -314,7 +314,7 @@ def test_the_log_holds_submissions_finished_records_and_pushes_only(
     with client.session() as session:
         session.stage(Template(LOAD, blanks=('window',)))
         total = session.accumulator(TOTAL)
-        total.push(client.compute(LOAD, {'run': dataset(run=1)}))
+        total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Submitted,

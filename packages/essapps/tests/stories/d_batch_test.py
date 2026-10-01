@@ -172,7 +172,7 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
         )
         for angle in client.as_completed(angles):
-            volume.push(angle)
+            volume.push(angle.refs())
             pushed.append(angle)
             cuts.append(
                 client.submit(
