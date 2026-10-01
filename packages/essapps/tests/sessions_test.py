@@ -291,19 +291,27 @@ def test_a_holder_of_an_ended_session_refuses_calls(client: Client) -> None:
         session.stage(Template(LOAD, blanks=('run',)))
 
 
-def test_an_accumulator_pushes_only_the_element_fields(client: Client) -> None:
+def test_an_accumulator_combines_the_selected_outputs(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
     client.wait(loads)
     with client.session() as session:
         total = session.accumulator(TOTAL)
         for load in loads:
-            total.push(load)  # 'extra' is not pushed
+            total.push(load.refs('value'))
         combined = client.compute(total)
 
     assert combined.submitted == Snapshot(
         spec=SpecId.of(TOTAL), accumulator=total.id, upto=2
     )
     assert client.output(combined, 'value') == 3.0
+
+
+def test_a_push_of_more_fields_than_the_element_is_refused(client: Client) -> None:
+    load = client.submit(LOAD, {'run': dataset(run=1)})
+    with client.session() as session:
+        total = session.accumulator(TOTAL)
+        with pytest.raises(SubmitError, match='fields'):
+            total.push(load.refs())  # 'value' and 'extra'
 
 
 class Files(BaseModel):
@@ -354,7 +362,7 @@ def test_a_snapshot_takes_no_label(client: Client) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        total.push(load)
+        total.push(load.refs('value'))
         with pytest.raises(TypeError, match='no label'):
             client.submit(total, label='total')
 
@@ -363,10 +371,10 @@ def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) ->
     load = client.compute(LOAD, {'run': dataset(run=1)})
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        total.push(load)
+        total.push(load.refs('value'))
 
     with pytest.raises(RuntimeError, match='session'):
-        total.push(load)
+        total.push(load.refs('value'))
     with pytest.raises(SubmitError, match='ended'):
         client.submit(total)
 
@@ -378,10 +386,10 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     client.wait(loads)
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        total.push(loads[0])
-        total.push(loads[1])
+        total.push(loads[0].refs('value'))
+        total.push(loads[1].refs('value'))
         first = client.submit(total)
-        total.push(loads[2])
+        total.push(loads[2].refs('value'))
         second = client.submit(total)
 
     assert client.status([first, second]) == [Status.COMPLETED] * 2
@@ -402,9 +410,9 @@ def test_a_push_waits_for_its_records_and_takes_only_completed_ones(
     with client.session() as session:
         total = session.accumulator(TOTAL)
         with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
-            total.push(cancelled)
+            total.push(cancelled.refs('value'))
         threading.Timer(0.05, loading.set).start()
-        total.push(pending)  # pending when pushed: the push waits for it
+        total.push(pending.refs('value'))  # pending when pushed: the push waits for it
         snapshot = client.submit(total)
 
     assert [r.id for r in client.provenance(snapshot).records()] == [pending.id]
@@ -419,7 +427,9 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
     client.wait(loads)
     with client.session() as session:
         digits = session.accumulator(DIGITS)
-        pushes = [threading.Thread(target=digits.push, args=(x,)) for x in loads]
+        pushes = [
+            threading.Thread(target=digits.push, args=(x.refs('value'),)) for x in loads
+        ]
         for push in pushes:
             push.start()
         for push in pushes:
@@ -511,7 +521,7 @@ def test_an_accumulator_combines_each_element_once(
         total = session.accumulator(TOTAL)
         snapshots = []
         for n in (1, 2, 1, 2):
-            total.push(client.compute(LOAD, {'run': dataset(run=n)}))
+            total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
             snapshots.append(client.submit(total))
 
     assert [client.output(r, 'value') for r in snapshots] == [1.0, 3.0, 4.0, 6.0]
@@ -525,14 +535,14 @@ def test_a_push_that_fails_to_combine_is_refused_and_stops_the_accumulator(
     loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
     with client.session() as session:
         total = session.accumulator(TOTAL)
-        total.push(loads[0])
+        total.push(loads[0].refs('value'))
         before = client.submit(total)
         summing.failing = True
         logged = len(log)
         with pytest.raises(SubmitError, match=r'^element 1 failed to combine: cannot'):
-            total.push(loads[1])
+            total.push(loads[1].refs('value'))
         with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
-            total.push(loads[2])
+            total.push(loads[2].refs('value'))
         with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
             client.submit(total)
         assert len(log) == logged

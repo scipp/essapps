@@ -64,11 +64,11 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
         parts = {}
         for run in (r611, r612):
             parts[run] = client.compute(contribute, {'run': run})
-            total.push(parts[run])
+            total.push(parts[run].refs('numerator', 'denominator'))
         first = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
         parts[r613] = client.compute(contribute, {'run': r613})
-        total.push(parts[r613])
+        total.push(parts[r613].refs('numerator', 'denominator'))
         added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
     kept = [parts[r611], parts[r613]]

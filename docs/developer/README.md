@@ -418,11 +418,12 @@ The accumulator spec's binding must provide `accumulator()`, as `combine(operato
 
 ```python
 total = session.accumulator(PARTS_SUM)
-total.push(record)          # pushes record's outputs named like the element's fields
+total.push(record.refs('numerator', 'denominator'))   # a reference per field of the element
 ```
 
-A push takes the record's outputs named like the element's fields; its other outputs are not pushed.
-The push waits for the record to finish and refuses it unless it has completed.
+A push takes a reference for each field of the element model, and is refused if a field is missing or extra.
+`record.refs(...)` selects the outputs to push; without names it references every output.
+The push waits for the records it references to finish and refuses them unless they have completed.
 A push is checked when made, as a request over that one element would be.
 
 **Snapshot.** To use the combined value as the input of another request, submit the accumulator.
@@ -440,10 +441,11 @@ with client.session() as session:
     total = session.accumulator(PARTS_SUM)
 
     for run in (r611, r612):
-        total.push(client.compute(contribute, {'run': run}))
+        total.push(client.compute(contribute, {'run': run}).refs('numerator', 'denominator'))
     first = client.compute(finalize, client.compute(total).refs(), label='sum')
 
-    total.push(client.compute(contribute, {'run': r613}))      # r611 and r612 are not reduced again
+    c613 = client.compute(contribute, {'run': r613})           # r611 and r612 are not reduced again
+    total.push(c613.refs('numerator', 'denominator'))
     added = client.compute(finalize, client.compute(total).refs(), label='sum')
 ```
 
@@ -485,7 +487,7 @@ with client.session() as session:
     volume = session.accumulator(VOLUME)
     angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
     for angle in client.as_completed(angles):                   # in the order they finish
-        volume.push(angle)
+        volume.push(angle.refs())                               # ANGLE outputs only counts
         client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'energy_transfer': 2.0},
                       label='cut', member='17')
 ```

@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Self
 
 from .accumulators import AccumulatorSpec
-from .records import Element, Record, Request, SpecId, Template
+from .records import Element, Request, SpecId, Template
 
 if TYPE_CHECKING:
     from .backend import Backend
@@ -109,19 +109,16 @@ class Accumulator(_Holder):
         super().__init__(session)
         self.spec = spec
         self.id = accumulator_id
-        self._fields = tuple(spec.element.model_fields)
         self._push = push
 
-    def push(self, element: Record | Element) -> None:
+    def push(self, element: Element) -> None:
         """
-        Push a record's outputs named like the element's fields, or references.
+        Push an element: a reference for each field of the element model.
 
+        Select a record's outputs with ``record.refs('numerator', ...)``.
         The push waits for the records to finish, and refuses them unless they
         have completed. A driver that pushes records as they finish, as
-        ``client.as_completed`` yields them, never waits here. The record's
-        other outputs are not pushed.
+        ``client.as_completed`` yields them, never waits here.
         """
         self._check_open()
-        if isinstance(element, Record):
-            element = {f: element.ref(f) for f in self._fields}
         self._push(self.id, element)
