@@ -47,7 +47,7 @@ from typing import Any
 from ess.reduce.spec import DataField, DatasetRef, OutputRef, WorkflowSpec, data_fields
 from pydantic import ValidationError
 
-from .accumulators import AccumulatorSpec
+from .accumulators import Lists
 from .bindings import (
     AccumulatorBinding,
     Binding,
@@ -551,8 +551,8 @@ class Backend:
         Its binding must make element accumulators; a plain request over a
         list works with any binding.
         """
-        if not isinstance(self.spec(spec_id), AccumulatorSpec):
-            raise SubmitError(f'{spec_id} is not an accumulator spec')
+        if not issubclass(self.spec(spec_id).params, Lists):
+            raise SubmitError(f'{spec_id} does not take lists')
         binding = self._bindings[spec_id]
         if not isinstance(binding, AccumulatorBinding):
             raise SubmitError(
@@ -609,10 +609,9 @@ class Backend:
         """The position of a push and the element's values, once checked; lock held."""
         held = self._open_accumulator(accumulator_id, proposal)
         spec = self._specs[held.spec]
-        assert isinstance(spec, AccumulatorSpec)  # noqa: S101
-        if set(element) != set(spec.element.model_fields):
+        if set(element) != set(spec.params.model_fields):
             raise SubmitError(
-                f'an element has the fields {tuple(spec.element.model_fields)}'
+                f'an element has the fields {tuple(spec.params.model_fields)}'
             )
         position = len(self._views.elements.get(accumulator_id, ()))
         request = Request(held.spec, {f: [ref] for f, ref in element.items()})

@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Accumulator specs: specs that combine a list of elements into one value.
+Specs over lists: specs that combine a list of elements into one value.
 
-An accumulator spec declares an element model whose fields are data fields.
-Its params model has one list per element field, and its outputs model is the
-element model, so a combined value can be pushed again.
+The params of such a spec are a :class:`Lists` model: one list per field of an
+element, position i of every list being element i. ``lists_of(Counts)`` makes
+one from the model of an element. The outputs are any model; a sum outputs the
+element's fields, a mean or a sum into a wider type does not.
+
+An accumulator in a session can be opened on any spec over lists whose binding
+makes element accumulators, as ``combine`` does.
 
 These belong in ``ess.reduce.spec`` next to ``WorkflowSpec``; they live here
 until that is proposed there.
@@ -18,14 +22,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Self
 
-from ess.reduce.spec import WorkflowSpec
 from pydantic import BaseModel, create_model, model_validator
 
 from .bindings import AccumulatorBinding, ElementAccumulator, Function
 
 
-class _Lists(BaseModel):
-    """Params of an accumulator spec: position i of each list is one element."""
+class Lists(BaseModel):
+    """Params of a spec over lists: position i of each list is element i."""
 
     @model_validator(mode='after')
     def _same_length(self) -> Self:
@@ -37,30 +40,13 @@ class _Lists(BaseModel):
         return self
 
 
-def _lists(element: type[BaseModel]) -> type[BaseModel]:
+def lists_of(element: type[BaseModel]) -> type[Lists]:
+    """Params with one list per field of ``element``."""
     fields: dict[str, Any] = {
         name: (list[Annotated[info.annotation, *info.metadata]], ...)
         for name, info in element.model_fields.items()
     }
-    return create_model(f'{element.__name__}Lists', __base__=_Lists, **fields)
-
-
-class AccumulatorSpec(WorkflowSpec, frozen=True):
-    """A spec whose params are one list per field of ``element``, combined into one."""
-
-    element: type[BaseModel]
-
-    @model_validator(mode='before')
-    @classmethod
-    def _derive(cls, data: dict[str, Any]) -> dict[str, Any]:
-        element = data['element']
-        return {
-            'title': data['name'],
-            'description': f'combines lists of {element.__name__}',
-            'params': _lists(element),
-            'outputs': element,
-            **data,
-        }
+    return create_model(f'{element.__name__}Lists', __base__=Lists, **fields)
 
 
 class _Fold:
@@ -103,7 +89,8 @@ class _Combine:
 
 def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     """
-    The binding of an accumulator spec: each field combined with ``operation``.
+    The binding of a spec over lists that outputs the element's fields: each
+    field combined with ``operation``, as in ``operation(operation(a, b), c)``.
 
     A plain request and an accumulator in a session combine the elements in
     the same order, so they give the same value. ``operation`` must return a

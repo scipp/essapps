@@ -26,14 +26,14 @@ Keep a time machine for history, for a retention period, and none for values.
 
 - **The backend's history is an append-only log of what ran**: a submission, a record that finished, a push into an accumulator. A change is checked before its event is appended, and a submission is one event. Sessions and holders are live state, not history.
 - **Records, labels, and the elements of accumulators are views** built by applying the events in order. A backend that reads its log again rebuilds them.
-- **A snapshot of an accumulator is logged as the accumulator and a count** of the elements it covers. Its record says that, not the list of elements; its value is the value of the accumulator spec over those elements, and provenance reads the elements from the accumulator's pushes.
+- **A snapshot of an accumulator is logged as the accumulator and a count** of the elements it covers. Its record says that, not the list of elements; its value is the value of the accumulator's spec over those elements, and provenance reads the elements from the accumulator's pushes.
 - **History is kept for a retention period**, like a garbage collector whose roots are the events younger than that period: an older event is kept while a kept event depends on it.
 - **Values are not history.** An output is kept while a pending request reads it, while a record handle in a client holds it, while a holder in a session holds it, or once it is saved. Labels name records and keep no values.
 
 ## Alternatives considered
 
 - **A flat list per snapshot, with storage that shares repeated references.** Keeps the meaning of a snapshot, but every layer above the store still handles the full list: quadratic in the number of snapshots.
-- **A chain of totals**: each snapshot is the accumulator spec over the previous snapshot and the new elements. Linear, but the record no longer means the sum of its elements, and every accumulator spec must then give the same result however the elements are grouped.
+- **A chain of totals**: each snapshot is the accumulator's spec over the previous snapshot and the new elements. Linear, but the record no longer means the sum of its elements, and every spec an accumulator holds must then output its element's fields and give the same result however the elements are grouped.
 - **Array records**: a holder's records share one stored template, and a snapshot names a range of them with a new reference form in `ess.reduce.spec`. Linear and keeps the meaning, but adds a second level of identity to every layer, and works only for elements from one stage.
 - **A record store that keeps outputs for the medium term.** The time machine for values, and a second catalogue.
 

@@ -53,7 +53,7 @@ The essentials, all in the README with code:
 - A record holds the request with every value filled in; statuses `pending`, `completed`, `failed`, `cancelled`; a finished record never changes. Records are history, kept for a retention period, and outlive sessions; an output's value is kept only while a pending request, a client's record handle, or a holder holds it, or once saved (system.md); long-term provenance is what `publish` puts in the catalogue. Provenance stops at datasets (what lies behind a dataset belongs to its source).
 - Every connection between requests is a reference; a reference to a pending record is a valid input, which is the only scheduling mechanism.
 - Datasets are named by `dataset(run=/path=/pid=)`; the record names the identity. The backend resolves names and reads data through its dataset source; drivers and forms list, watch, and read metadata through `client.datasets`, which shows only the datasets the client's proposal may read. Selectors match raw datasets unless they name another kind.
-- An accumulator spec (`AccumulatorSpec(name=, version=, element=)`) takes one list per element field and outputs the element model, so a combined value can be pushed again. A package builds CONTRIBUTE and FINALIZE from the stages of one sciline `split`, with the accumulator spec between them.
+- A spec over lists (`params=lists_of(Element)`) takes one list per element field; its outputs are free, so a sum may output the element and a mean may not. An accumulator can be opened on any spec over lists whose binding makes element accumulators. A package builds CONTRIBUTE and FINALIZE from the stages of one sciline `split`, with a spec over lists between them.
 - Holders live in a session (`client.session(where=...)`): a stage holds a template; an accumulator holds pushed elements. A stage never changes what a record says; a snapshot's record names its accumulator and how many elements it covers.
 - A driver is code that uses the client over time (notebook, application, trigger loop in a driving server); drivers never run in the backend. A tree of partial sums over a known list is how the backend may execute one accumulator request, not a driver.
 - Several ways to write a sum are accepted: a spec with a list parameter, a chain of requests, the same chain through holders.
@@ -111,7 +111,7 @@ Proposal: LoKI first (then Amor), which tests the binding contract and decision 
 
 > Simon:
 
-**3. How an author declares that grouping does not change the result** of an accumulator spec (README open question 1).
+**3. How an author declares that grouping does not change the result** of a spec over lists (README open question 1).
 With the event log, snapshots of an accumulator no longer need grouping independence; a tree of partial sums over a plain request still does.
 
 > Simon:

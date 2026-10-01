@@ -140,7 +140,7 @@ class Snapshot(BaseModel, frozen=True):
     ``upto`` counts the elements pushed before the submission. The elements
     are the accumulator's pushes, which the backend's log holds; a snapshot
     does not list them, so it costs the same however many elements it covers.
-    Its value is the output of the accumulator spec over those elements, in
+    Its value is the output of the accumulator's spec over those elements, in
     push order.
     """
 
@@ -150,7 +150,7 @@ class Snapshot(BaseModel, frozen=True):
 
 
 Element = dict[str, OutputRef]
-"""One element of an accumulator: a reference for each field of the element model."""
+"""One element of an accumulator: a reference for each list its spec takes."""
 
 Submission = Annotated[Snapshot | Request, Field(union_mode='left_to_right')]
 """

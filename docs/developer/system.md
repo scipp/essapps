@@ -167,7 +167,7 @@ def snapshot():
     complete(record, held.value)         # nothing runs
 ```
 
-**Push.** A push gets the check a request over that one element gets: the element has the fields of the element model, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+**Push.** A push gets the check a request over that one element gets: the element has a field for each list the spec takes, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
 A push that does not fit, or whose combining fails, appends nothing.
 After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
 The accumulator does not keep its elements' values after combining them.
@@ -197,7 +197,8 @@ held.push({'counts': counts_2})
 held.value                                # {'counts': counts_1 + counts_2}
 ```
 
-The backend reads `value` after every push, and that value becomes a snapshot's output.
+The backend reads `value` after every push, and that value becomes a snapshot's outputs.
+What the element accumulator holds need not be the outputs: one for a mean holds a sum and a count, and `value` divides them.
 So a later push must not modify a value read before it: each push makes a new value instead of adding in place.
 `combine(operator.add)` is such a binding, since `operator.add` returns a new value; the stories bind `VOLUME` to it.
 

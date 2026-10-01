@@ -16,7 +16,7 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of an accumulator spec may also make element accumulators, like
+A binding of a spec over lists may also make element accumulators, like
 ``sciline.Accumulator`` for a whole element. An accumulator in a session holds
 one, so it needs such a binding::
 
@@ -60,12 +60,12 @@ class Binding(Protocol):
 
 class ElementAccumulator(Protocol):
     def push(self, element: Mapping[str, Any]) -> None:
-        """Add an element: a value for each field of the element model."""
+        """Add an element: a value for each list the spec takes."""
         ...
 
     @property
     def value(self) -> Mapping[str, Any]:
-        """The combination of the elements pushed so far."""
+        """The outputs of the spec over the elements pushed so far."""
         ...
 
 

@@ -3,6 +3,7 @@
 """Holders in a session: what they refuse, and the records they make."""
 
 import operator
+import statistics
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -13,7 +14,6 @@ from ess.reduce.spec import Array, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.apps import (
-    AccumulatorSpec,
     Backend,
     Client,
     Request,
@@ -24,6 +24,7 @@ from ess.apps import (
     Template,
     combine,
     dataset,
+    lists_of,
 )
 from ess.apps.backend import Entry
 from ess.apps.bindings import Function
@@ -68,9 +69,40 @@ def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> Workf
 LOAD = _spec('load', RunParams, LoadOutputs)
 SHIFT = _spec('shift', ShiftParams, Parts)
 SCALE = _spec('scale', ScaleParams, Parts)
-TOTAL = AccumulatorSpec(name='total', version=1, element=Parts)
-PAIRS = AccumulatorSpec(name='pairs', version=1, element=LoadOutputs)
-DIGITS = AccumulatorSpec(name='digits', version=1, element=Parts)
+TOTAL = _spec('total', lists_of(Parts), Parts)
+PAIRS = _spec('pairs', lists_of(LoadOutputs), LoadOutputs)
+DIGITS = _spec('digits', lists_of(Parts), Parts)
+
+
+class Mean(BaseModel):
+    mean: Array()  # type: ignore[valid-type]
+
+
+MEAN = _spec('mean', lists_of(Parts), Mean)
+
+
+class _Averaging:
+    def __init__(self) -> None:
+        self._total = 0.0
+        self._count = 0
+
+    def push(self, element: Mapping[str, Any]) -> None:
+        self._total += element['value']
+        self._count += 1
+
+    @property
+    def value(self) -> Mapping[str, Any]:
+        return {'mean': self._total / self._count}
+
+
+class Averaging:
+    """MEAN, whose accumulators hold a sum and a count rather than a mean."""
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        return lambda **values: {'mean': statistics.fmean({**fixed, **values}['value'])}
+
+    def accumulator(self) -> _Averaging:
+        return _Averaging()
 
 
 def pairs(value: list[float], extra: list[float]) -> dict[str, float]:
@@ -146,6 +178,7 @@ def backend(
             TOTAL: combine(operator.add),
             PAIRS: pairs,
             DIGITS: combine(append_digit),
+            MEAN: Averaging(),
             FILES_SUM: combine(operator.add),
         },
     )
@@ -317,6 +350,27 @@ def test_a_push_may_take_an_output_named_unlike_the_field(client: Client) -> Non
     assert client.output(combined, 'value') == -3.0
 
 
+def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) -> None:
+    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    with client.session() as session:
+        mean = session.accumulator(MEAN)
+        for load in loads:
+            mean.push(load.refs('value'))
+        snapshot = client.compute(mean)
+    plain = client.compute(MEAN, {'value': [x.ref('value') for x in loads]})
+
+    assert client.output(snapshot, 'mean') == client.output(plain, 'mean') == 1.5
+
+
+def test_an_accumulator_needs_a_spec_over_lists(
+    client: Client, backend: Backend
+) -> None:
+    with client.session() as session, pytest.raises(TypeError, match='lists'):
+        session.accumulator(SHIFT)
+    with pytest.raises(SubmitError, match='lists'):
+        backend.open_accumulator(backend.open_session('p1'), SpecId.of(SHIFT), 'p1')
+
+
 def test_a_push_of_more_fields_than_the_element_is_refused(client: Client) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
     with client.session() as session:
@@ -329,7 +383,7 @@ class Files(BaseModel):
     value: OpaqueFile
 
 
-FILES_SUM = AccumulatorSpec(name='files-sum', version=1, element=Files)
+FILES_SUM = _spec('files-sum', lists_of(Files), Files)
 
 
 def test_an_element_must_fit_the_accumulator(client: Client) -> None:
@@ -339,7 +393,7 @@ def test_an_element_must_fit_the_accumulator(client: Client) -> None:
         client.submit(FILES_SUM, {'value': [load.ref('value')]})
 
 
-def test_an_accumulator_spec_takes_lists_of_equal_length(client: Client) -> None:
+def test_a_spec_over_lists_takes_lists_of_equal_length(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
 
     with pytest.raises(SubmitError, match='same number of elements'):
