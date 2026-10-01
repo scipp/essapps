@@ -408,7 +408,7 @@ class Backend:
     def _schedule(self, record_id: str) -> None:
         """Start the record, or let it wait for its unfinished inputs; lock held."""
         record = self._views.records[record_id]
-        inputs = {ref.record for ref in record.request.refs()}
+        inputs = {ref.record for ref in record.request.inputs()}
         waiting = inputs - self._views.finished.keys()
         if not waiting:
             self._executor.submit(self._run, record_id)
@@ -719,7 +719,7 @@ class Backend:
         with self._changed:
             record = self._mine(record_id, proposal)
             if isinstance(record.submitted, Request):
-                return record.submitted.refs()
+                return record.submitted.inputs()
             snapshot = record.submitted
             elements = self._views.elements.get(snapshot.accumulator, [])
             if len(elements) < snapshot.upto:
