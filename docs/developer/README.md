@@ -67,7 +67,7 @@ The terms this document defines, in the order they appear:
 | reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
-| dataset source | answers which datasets exist and what their metadata are | framework | operator; a fake one in tests |
+| dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | operator; a fake one in tests |
 | accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author, framework (`SUM`) | workflow author |
 | session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
 | stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
@@ -287,17 +287,20 @@ dataset(path='/home/user/data/run1.h5')
 dataset(pid='20.500.12269/vanadium')     # for example a result published elsewhere
 ```
 
-**Dataset source.** Listing datasets, waiting for new ones, and reading their metadata are queries to a *dataset source*, an object separate from the client.
-Applications and drivers take a dataset source next to the client; a test gives them a fake one.
-`catalogue(...)` below is a dataset source backed by the facility's data catalogue.
+**Dataset source.** A backend finds datasets through its *dataset source*, which the operator deploys with it, for example one backed by the facility's data catalogue.
+The backend resolves names and reads data through it.
+Listing datasets, waiting for new ones, and reading their metadata are queries to the same source, made through the client as `client.datasets`.
+A client sees only the datasets its proposal may read.
+So an application or a driver finds the same datasets that the backend resolves names against, and needs no source of its own.
+A test gives the backend a fake dataset source.
 A *selector* picks datasets by metadata.
 A dataset has a kind, such as raw, derived, mask, or calibration; a selector matches raw datasets unless it names another kind.
 
 ```python
-datasets = catalogue(instrument='loki', proposal='p1')
+datasets = client.datasets
 samples = datasets.list(Selector(role='sample'))
 for run in datasets.watch(Selector(scan='17')): ...   # existing ones first, then new ones, each once
-datasets.metadata(run)['sample']                        # the catalogue's current values
+datasets.metadata(run)['sample']                        # the source's current values
 ```
 
 ## Combining runs: accumulator specs
@@ -464,7 +467,8 @@ Drivers never run in the backend.
 **A batch** submits many requests at once.
 `apply` fills a template for each dataset and returns the requests as a dict.
 The keys are the value of a metadata field of each dataset, here the temperature; submitting under a label makes them the members.
-`apply` builds plain data and needs no client; the notebook that submits the requests is the driver.
+`apply` reads metadata through `client.datasets` and builds plain data; it submits nothing.
+The notebook that submits the requests is the driver.
 
 ```python
 requests = apply(template, samples, datasets, member_field='temperature')
@@ -491,7 +495,7 @@ It yields each record once it has finished, so the angles are reduced in paralle
 
 ## Batch and automatic reduction
 
-This sub-design builds on the core. It needs from it only that records show their label and member, and a dataset source.
+This sub-design builds on the core. It needs from it only that records show their label and member, and `client.datasets`.
 [automatic-reduction.md](automatic-reduction.md) describes it.
 
 A *lookup* fills further blanks per dataset.
@@ -511,7 +515,7 @@ In reflectometry, a sample is measured at several angles, one run each; with `se
 ```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
-TriggerLoop(client, datasets, rules=[rule]).run()
+TriggerLoop(client, rules=[rule]).run()
 ```
 
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
@@ -562,6 +566,5 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 1. **Generic accumulator specs.** How the element model appears in a record, so that `SUM.of(Counts)` and `SUM.of(NormalizationParts)` are told apart; and how an author declares that grouping does not change the result, which a tree of partial sums over a plain request needs. Until decided, the implementation puts the element model's name in the spec's name, `sum[Counts]`.
 2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
 3. **Removing an element.** A request of the accumulator spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
-4. **Dataset sources.** Where a notebook gets its dataset source, and whether it must agree with the one the backend uses to resolve names.
-5. **Labels and members** on records, `member_field`, and `client.members` are tentative.
-6. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
+4. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+5. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

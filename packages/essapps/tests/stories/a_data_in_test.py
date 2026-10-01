@@ -60,4 +60,4 @@ def test_a5_metadata_corrected_after_the_fact(
 
     (named,) = reduced[1].request.datasets()
     assert named == runs[1]
-    assert datasets.metadata(named)['sample'] == 'heavy water'
+    assert client.datasets.metadata(named)['sample'] == 'heavy water'

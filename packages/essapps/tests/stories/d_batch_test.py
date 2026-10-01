@@ -9,7 +9,6 @@ from itertools import islice
 import pytest
 
 from ess.apps import SUM, Client, Selector, SubmitError, Template, apply
-from ess.apps.testing import FakeDatasets
 
 from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
 
@@ -17,7 +16,6 @@ from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, Counts, Measure
 def test_d1_temperature_scan(
     client: Client,
     measure: Measure,
-    datasets: FakeDatasets,
     corrupt: Callable[..., None],
 ) -> None:
     temperatures = ['250K', '260K', '270K', '280K', '290K']
@@ -27,7 +25,7 @@ def test_d1_temperature_scan(
     ]
     corrupt(runs[1])
     template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
-    requests = apply(template, runs, datasets, member_field='temperature')
+    requests = apply(template, runs, client.datasets, member_field='temperature')
     scan = client.compute(requests, label='scan')
 
     assert [
@@ -72,18 +70,16 @@ def test_d2_overnight_cluster_batch(
     assert len(morning.records(label='night')) == 31
 
 
-def test_d3_cancel_and_resubmit(
-    client: Client, measure: Measure, datasets: FakeDatasets
-) -> None:
+def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
     runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
     wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
     first = client.submit(
-        apply(wrong, runs, datasets, member_field='run'), label='scan'
+        apply(wrong, runs, client.datasets, member_field='run'), label='scan'
     )
     client.cancel(first)
     fixed = replace(wrong, params={'threshold': 0.5})
     second = client.compute(
-        apply(fixed, runs, datasets, member_field='run'), label='scan'
+        apply(fixed, runs, client.datasets, member_field='run'), label='scan'
     )
 
     assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
@@ -93,12 +89,10 @@ def test_d3_cancel_and_resubmit(
     assert len(client.records(label='scan')) == 1000
 
 
-def test_d4_typo_caught_before_500_failures(
-    client: Client, measure: Measure, datasets: FakeDatasets
-) -> None:
+def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) -> None:
     runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
     typo = Template(IOFQ, params={'threshold': '2,5'}, blanks=('run',))
-    requests = apply(typo, runs, datasets, member_field='run')
+    requests = apply(typo, runs, client.datasets, member_field='run')
 
     with pytest.raises(SubmitError, match='threshold'):
         client.submit(requests, label='scan')
@@ -108,14 +102,13 @@ def test_d4_typo_caught_before_500_failures(
 def test_d5_understand_why_a_run_failed(
     client: Client,
     measure: Measure,
-    datasets: FakeDatasets,
     corrupt: Callable[..., None],
 ) -> None:
     good = measure(1, [1.0, 1.0, 1.0, 1.0], temperature='250K')
     bad = measure(2, [2.0, 2.0, 2.0, 2.0], temperature='260K')
     corrupt(bad)
     template = Template(IOFQ, blanks=('run',))
-    requests = apply(template, [good, bad], datasets, member_field='temperature')
+    requests = apply(template, [good, bad], client.datasets, member_field='temperature')
     failed = client.compute(requests, label='scan')['260K']
 
     repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')
@@ -134,19 +127,23 @@ def test_d5_understand_why_a_run_failed(
 
 
 def test_d6_rerun_a_batch_with_a_new_workflow_version(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-    client.compute(apply(template, runs, datasets, member_field='run'), label='scan')
+    client.compute(
+        apply(template, runs, client.datasets, member_field='run'), label='scan'
+    )
 
     before = client.records(label='scan')
     runs = [r.request.params['run'] for r in before]
-    renamed = apply(replace(template, spec=IOFQ_V2), runs, datasets, member_field='run')
+    renamed = apply(
+        replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
+    )
     with pytest.raises(SubmitError, match='threshold'):
         client.submit(renamed, label='scan')
     moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
-    requests = apply(moved, runs, datasets, member_field='run')
+    requests = apply(moved, runs, client.datasets, member_field='run')
     after = list(client.compute(requests, label='scan').values())
 
     assert [
@@ -160,7 +157,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
 
 
 def test_d7_rotation_scan_over_a_thousand_angles(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     for n in range(1, 1001):
         measure(n, [1.0, float(n)], scan='17')
@@ -172,7 +169,7 @@ def test_d7_rotation_scan_over_a_thousand_angles(
         volume = session.accumulator(SUM.of(Counts))
         angles = (
             client.submit(ANGLE, {'run': run})
-            for run in islice(datasets.watch(Selector(scan='17')), 1000)
+            for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
         )
         for angle in client.as_completed(angles):
             volume.push(angle)

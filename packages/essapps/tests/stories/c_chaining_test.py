@@ -13,7 +13,7 @@ from .conftest import BEAM_CENTRE, EXPORT, IOFQ, STITCH, VANADIUM, Measure
 
 
 def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(BEAM_CENTRE, {'run': centre_run}, label='beam-centre')
@@ -25,7 +25,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
         IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('run',)
     )
 
-    requests = apply(template, samples, datasets, member_field='run')
+    requests = apply(template, samples, client.datasets, member_field='run')
     reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [

@@ -15,11 +15,12 @@ from typing import Any
 
 from ess.reduce.spec import DatasetRef
 
-from .datasets import DatasetSource, Selector
+from .client import Datasets
+from .datasets import Selector
 from .records import Request, Template
 
 
-def run_number(ref: DatasetRef, source: DatasetSource) -> int:
+def run_number(ref: DatasetRef, source: Datasets) -> int:
     return int(source.metadata(ref)['run'])
 
 
@@ -29,7 +30,7 @@ class LastBefore:
 
     selector: Selector
 
-    def find(self, ref: DatasetRef, source: DatasetSource) -> DatasetRef:
+    def find(self, ref: DatasetRef, source: Datasets) -> DatasetRef:
         run = run_number(ref, source)
         earlier = [d for d in source.list(self.selector) if run_number(d, source) < run]
         if not earlier:
@@ -43,7 +44,7 @@ class Lookup:
     def __init__(self, **rules: LastBefore) -> None:
         self.rules = rules
 
-    def fill(self, ref: DatasetRef, source: DatasetSource) -> dict[str, Any]:
+    def fill(self, ref: DatasetRef, source: Datasets) -> dict[str, Any]:
         return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
@@ -58,7 +59,7 @@ def dataset_blank(template: Template, lookup: Lookup | None) -> str:
 def apply(
     template: Template,
     datasets: Iterable[DatasetRef],
-    source: DatasetSource,
+    source: Datasets,
     *,
     member_field: str = 'run',
     lookup: Lookup | None = None,
@@ -66,7 +67,8 @@ def apply(
     """
     Fill the template for each dataset.
 
-    Each dataset fills the one blank the lookup leaves. The requests are keyed
+    ``source`` answers metadata queries, such as ``client.datasets``. Each
+    dataset fills the one blank the lookup leaves. The requests are keyed
     by member: the value of the metadata field ``member_field`` of each
     dataset. Submitting them under a label makes the keys the members of their
     records.

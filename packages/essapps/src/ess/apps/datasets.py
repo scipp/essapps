@@ -58,12 +58,19 @@ class Selector:
         return f'Selector({self.fields})'
 
 
+def readable(metadata: dict[str, Any], proposal: str) -> bool:
+    """Whether requests of ``proposal`` may read a dataset with this metadata."""
+    return metadata.get('proposal', proposal) == proposal
+
+
 class DatasetSource(Protocol):
     """
     Which datasets exist, and what they hold.
 
-    The backend resolves names and reads datasets; forms and drivers list
-    datasets, wait for new ones, and read their metadata.
+    A backend has one. It resolves names and reads datasets through it, and
+    answers through it the queries of its clients: listing datasets, waiting
+    for new ones, and reading their metadata. A client sees only the datasets
+    its proposal may read.
     """
 
     def resolve(self, name: DatasetRef) -> DatasetRef:

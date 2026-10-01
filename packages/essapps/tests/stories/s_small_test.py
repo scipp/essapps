@@ -13,7 +13,6 @@ from ess.apps import (
     Template,
     apply,
 )
-from ess.apps.testing import FakeDatasets
 
 from .conftest import (
     BACKGROUND,
@@ -99,7 +98,7 @@ def test_s6_sum_sample_runs_and_background_runs(
 
 
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     can_1 = measure(1, [1.0, 1.0], role='can')
     first = measure(2, [5.0, 6.0], role='sample')
@@ -109,7 +108,7 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     cans = Lookup(can=LastBefore(Selector(role='can')))
 
     requests = apply(
-        template, [first, second], datasets, member_field='run', lookup=cans
+        template, [first, second], client.datasets, member_field='run', lookup=cans
     )
     reduced = list(client.compute(requests, label='iofq').values())
 

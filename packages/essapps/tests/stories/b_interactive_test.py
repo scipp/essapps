@@ -10,7 +10,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from ess.apps import Client, Template, apply
-from ess.apps.testing import FakeDatasets
 
 from .conftest import (
     ANGLE,
@@ -28,7 +27,7 @@ tuesday = datetime(2026, 9, 8, tzinfo=UTC)
 
 
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
-    client: Client, measure: Measure, datasets: FakeDatasets
+    client: Client, measure: Measure
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     with client.session() as session:
@@ -43,7 +42,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         final.request.spec, params=final.request.params, blanks=('run',)
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
-    requests = apply(beamtime, [new], datasets, member_field='run')
+    requests = apply(beamtime, [new], client.datasets, member_field='run')
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
     assert len(client.records(label='iofq')) == 4
