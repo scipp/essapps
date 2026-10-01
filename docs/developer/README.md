@@ -170,6 +170,13 @@ client.output(result, 'iofq')
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
 
+A request uses only the spec's name and version, so a caller that does not have the workflow package installed gives them directly:
+
+```python
+client.compute(SpecId(name='sans-iofq', version=1), {'run': dataset(run=60339), 'bins': 100})
+```
+
+The backend validates the values against its own copy of the spec.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault, and no record is made.
 Reasons are an invalid value, an unknown spec version, an unknown run number, or a reference the submitter may not read.
 Requests submitted together are checked together: if one is invalid, none is submitted.
