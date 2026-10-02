@@ -204,6 +204,19 @@ def test_the_keys_of_a_dict_become_members(client: Client, gate: Gate) -> None:
     assert client.labels() == ['scan']
 
 
+def test_latest_without_a_member_is_the_newest_record_of_any_member(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    cold = client.submit(load(1), label='scan', member='250K')
+    warm = client.submit(load(2), label='scan', member='260K')
+
+    assert client.latest('scan') == warm
+    assert client.latest('scan', member='250K') == cold
+    with pytest.raises(KeyError, match="'270K'"):
+        client.latest('scan', member='270K')
+
+
 def test_reading_an_output_of_a_failed_record_raises(
     client: Client, gate: Gate
 ) -> None:
