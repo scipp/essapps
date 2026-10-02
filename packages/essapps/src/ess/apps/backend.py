@@ -256,7 +256,6 @@ class Backend:
         bind: Mapping[WorkflowSpec, Binding | Function],
         *,
         workers: int = 4,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         log: Log | None = None,
     ) -> None:
         self._datasets = datasets
@@ -269,7 +268,6 @@ class Backend:
         self._output_fields = {
             spec_id: data_fields(spec.outputs) for spec_id, spec in self._specs.items()
         }
-        self._clock = clock
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
         self._log = Log() if log is None else log
@@ -349,7 +347,7 @@ class Backend:
                 self._check_stage(entry, request, caller)
             self._append(
                 Submitted(
-                    time=self._clock(),
+                    time=datetime.now(UTC),
                     proposal=proposal,
                     submitter=caller.submitter,
                     records=tuple(
@@ -397,7 +395,7 @@ class Backend:
             outputs = tuple(self._specs[held.spec].outputs.model_fields)
             self._append(
                 Submitted(
-                    time=self._clock(),
+                    time=datetime.now(UTC),
                     proposal=caller.proposal,
                     submitter=caller.submitter,
                     records=(

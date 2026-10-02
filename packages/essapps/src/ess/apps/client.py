@@ -24,7 +24,6 @@ import threading
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Self
 
 from ess.reduce.spec import DatasetRef, WorkflowSpec
@@ -401,7 +400,6 @@ def local(
     datasets: DatasetSource,
     bind: Mapping[WorkflowSpec, Binding | Function],
     submitter: str = 'user',
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Client:
     """
     A client of its own backend in this process, running the workflows bound here.
@@ -409,7 +407,7 @@ def local(
     Closing the client closes the backend.
     """
     return Client(
-        Backend(datasets, bind, clock=clock),
+        Backend(datasets, bind),
         proposal=proposal,
         submitter=submitter,
         owns_backend=True,
