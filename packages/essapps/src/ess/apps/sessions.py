@@ -116,7 +116,7 @@ class Accumulator(_Holder):
 
     def push(self, element: Element) -> None:
         """
-        Push an element: a row of the spec's table, a reference per field.
+        Push a row of the spec's table, as a request over the table takes it.
 
         Select a record's outputs with ``record.refs('numerator', ...)``.
         The push waits for the records to finish, and refuses them unless they

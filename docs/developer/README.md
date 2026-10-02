@@ -443,7 +443,7 @@ total.push(record.refs('numerator', 'denominator'))   # the same, where the name
 total.push({'numerator': other.ref('counts'), 'denominator': other.ref('monitor')})
 ```
 
-A push takes a reference for each field of the element, and is refused if a field is missing or extra.
+A push is refused if a required field of the element is missing or a field is extra.
 A push combines every field or none, so the outputs of a snapshot cover the same runs; one accumulator per field would not guarantee that.
 The referenced outputs may have any name; `record.refs(...)` is short for the case where they are named like the fields.
 Without names, `refs()` references every output.
