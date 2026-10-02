@@ -252,7 +252,16 @@ class Backend:
                     self._schedule(record.id)
 
     def close(self) -> None:
-        """Wait for the running requests, then let go of the log."""
+        """
+        Wait until no record is pending, then let go of the workers and the log.
+
+        Closing stops no work: a request that waits for an input runs once the
+        input has finished, and its dependents after it.
+        """
+        with self._changed:
+            self._changed.wait_for(
+                lambda: self._views.records.keys() <= self._views.finished.keys()
+            )
         self._executor.shutdown(wait=True)
         self._log.close()
 
