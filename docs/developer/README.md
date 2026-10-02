@@ -469,6 +469,8 @@ The referenced outputs may have any name; `record.refs(...)` is short for the ca
 Without names, `refs()` references every output.
 The push waits for the records it references to finish and refuses them unless they have completed.
 A push is checked when made, as a request over that one element would be.
+A push that references a snapshot is refused: pushing a snapshot into an accumulator is not supported.
+Accumulators meet in a request instead, such as a FINALIZE that reads two sums.
 
 **Snapshot.** To use the combined value as the input of another request, submit the accumulator.
 This makes a *snapshot*: a record whose output is the current combined value, completed at once.

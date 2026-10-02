@@ -665,6 +665,21 @@ def test_a_snapshot_takes_no_label(client: Client) -> None:
         client.submit(total, label='total')
 
 
+def test_a_snapshot_cannot_be_pushed_into_an_accumulator(client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    total = client.accumulator(TOTAL)
+    total.push(load.refs('value'))
+    snapshot = client.submit(total)
+    other = client.accumulator(TOTAL)
+
+    refused = 'pushing a snapshot into an accumulator is not supported'
+    for element in (snapshot.refs('value'), {'value': snapshot.ref('value')}):
+        for accumulator in (total, other):
+            with pytest.raises(SubmitError, match=refused):
+                accumulator.push(element)
+    assert client.output(snapshot, 'value') == 1.0  # the refusals ended nothing
+
+
 def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     client: Client,
 ) -> None:

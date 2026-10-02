@@ -861,7 +861,9 @@ class Backend:
 
         The element is checked and read as the request over it alone is, once
         the records it references have finished, and comes back as that
-        request holds it: names resolved and defaults filled in.
+        request holds it: names resolved and defaults filled in. An element
+        that references a snapshot is refused, since no accumulator combines
+        another's value; accumulators meet in a request.
         """
         ids = [ref.record for ref in output_refs(element)]
         with self._changed:
@@ -874,6 +876,13 @@ class Backend:
         entry = Entry(Request(held.spec, {name: [element]}))
         request = self._prepare(entry, caller.proposal)
         with self._changed:
+            for ref in request.inputs():
+                record = self._views.records.get(ref.record)
+                if record is not None and isinstance(record.submitted, Snapshot):
+                    raise SubmitError(
+                        f'record {ref.record} is a snapshot: pushing a snapshot '
+                        'into an accumulator is not supported'
+                    )
             self._check_reads(entry, request, caller.proposal)
         try:
             values = self._read(request.params)

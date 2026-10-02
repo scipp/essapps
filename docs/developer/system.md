@@ -178,6 +178,8 @@ def snapshot():
 
 **Push.** A push gets the check a request over that one element gets: the element is a valid row of the table's model, with no field the model lacks, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
 The log holds the element as that request would hold it, with names resolved and defaults filled in.
+An element that references a snapshot, of any accumulator, is refused, whichever outputs it names: pushing a snapshot into an accumulator is not supported, and accumulators meet in a request instead.
+Such a push would read the other accumulator's value while combining, without holding back that accumulator's next push.
 A push that does not fit, or whose combining fails, appends nothing.
 After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
 The accumulator does not keep its elements' values after combining them.
