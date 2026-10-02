@@ -6,8 +6,8 @@ What the backend knows, built from its log.
 :meth:`Views.apply` is the only way the views change, and what it does
 depends on nothing but the events. A backend that applies its log again
 therefore has the views of the backend that wrote it. What is not history,
-such as sessions and their holders, output values, and an accumulator's held value,
-the backend keeps elsewhere.
+such as clients and their stages and accumulators, and output values, the
+backend keeps elsewhere.
 """
 
 from __future__ import annotations

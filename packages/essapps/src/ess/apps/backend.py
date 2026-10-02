@@ -12,19 +12,27 @@ that already has events applies them first and runs the records left pending,
 without their stages; a snapshot left pending fails, since its accumulator is
 gone.
 
-Sessions and their holders, output values, and what waits for what are not
-history. This backend keeps them in memory, so a backend started from an
-existing log has no sessions and cannot read the outputs of the backend that
-wrote it.
+A client is one entry in the backend, from :meth:`Backend.open_client` to
+:meth:`Backend.close_client`: its proposal, the records whose outputs it keeps,
+and its stages and accumulators. Every call names its client, and a call of a
+client that has ended raises :class:`ClientEnded`. Clients, output values, and
+what waits for what are not history. This backend keeps them in memory, so a
+backend started from an existing log has no clients and cannot read the
+outputs of the backend that wrote it.
+
+An output value is kept while the client that made its record keeps it, or
+while a pending request has yet to read it. Releasing and ending stop no work.
 
 A request waits until every record it references has completed; this is the
 only scheduling there is.
 
-A request runs through its spec's binding. A request through a stage in a
-session runs through the callable the binding returned for the stage's
-first call, so a binding that holds values computes only what depends on
-the blanks. A stage lives until its session ends and the requests made
-through it have run.
+A request runs through its spec's binding. A stage checks its template's
+values as a request's and resolves dataset names when it is made, and a
+request through it must have its values outside the blanks. Such a request
+runs through the callable the binding returned for the stage's first call, so
+a binding that holds values computes only what depends on the blanks. A stage
+lives until its client releases it or ends, and the requests made through it
+have run.
 
 An accumulator takes only elements whose records have completed; a push
 waits for the records it references to finish. A push then combines the
@@ -38,7 +46,8 @@ from __future__ import annotations
 
 import threading
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -72,10 +81,15 @@ from .records import (
     SpecId,
     Status,
     SubmitError,
+    Template,
     map_refs,
     output_refs,
 )
 from .views import Views
+
+
+class ClientEnded(RuntimeError):
+    """A call of a client that has ended."""
 
 
 def _agree(output: DataField, param: DataField) -> bool:
@@ -93,6 +107,15 @@ def _values(model: BaseModel) -> dict[str, Any]:
         f: [dict(row) for row in v] if f in tables and v is not None else v
         for f, v in values.items()
     }
+
+
+def _problems(error: ValidationError, blanks: Sequence[str] = ()) -> list[str]:
+    """What a validation error finds wrong, but for blanks that are missing."""
+    return [
+        f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
+        for e in error.errors()
+        if not (e['type'] == 'missing' and len(e['loc']) == 1 and e['loc'][0] in blanks)
+    ]
 
 
 def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
@@ -151,28 +174,29 @@ class Entry:
 
 class _Stage:
     """
-    A stage: the binding's callable, and the fixed values it was staged with.
+    A stage: its spec, its blanks, its fixed values, and the binding's callable.
 
-    The first call stages the binding. A call with other fixed values, such as
-    a dataset name that now resolves to another dataset, stages it again.
+    The fixed values are the template's, with dataset names resolved when the
+    stage was made. The first call stages the binding, and so does the call
+    after one that failed to stage. What the callable holds is a cache: the
+    backend may drop it at any time, and the next call stages the binding
+    again and makes the same record.
     """
 
     def __init__(
-        self, session: str, proposal: str, spec: SpecId, blanks: tuple[str, ...]
+        self, spec: SpecId, blanks: tuple[str, ...], fixed: dict[str, Any]
     ) -> None:
-        self.session = session
-        self.proposal = proposal
         self.spec = spec
         self.blanks = blanks
+        self.fixed = fixed
         self._lock = threading.Lock()
-        self._fixed: dict[str, Any] | None = None
         self._call: Function | None = None
 
-    def staged(self, fixed: dict[str, Any], stage: Callable[[], Function]) -> Function:
-        """The binding's callable for ``fixed``; ``stage`` makes it if needed."""
+    def staged(self, stage: Callable[[], Function]) -> Function:
+        """The binding's callable; ``stage`` makes it if there is none."""
         with self._lock:
-            if self._call is None or fixed != self._fixed:
-                self._call, self._fixed = stage(), fixed
+            if self._call is None:
+                self._call = stage()
             return self._call
 
 
@@ -187,20 +211,28 @@ class _Held:
     says why the accumulator takes no more pushes or snapshots.
     """
 
-    def __init__(
-        self,
-        session: str,
-        proposal: str,
-        spec: SpecId,
-        accumulator: ElementAccumulator,
-    ) -> None:
-        self.session = session
-        self.proposal = proposal
+    def __init__(self, spec: SpecId, accumulator: ElementAccumulator) -> None:
         self.spec = spec
         self.lock = threading.Lock()
         self.accumulator = accumulator
         self.value: Mapping[str, Any] | None = None
         self.stopped: str | None = None
+
+
+class _Client:
+    """
+    A client of the backend, until it ends.
+
+    ``kept`` holds the IDs of the records whose outputs the client keeps: the
+    records it made and has not released.
+    """
+
+    def __init__(self, proposal: str, submitter: str) -> None:
+        self.proposal = proposal
+        self.submitter = submitter
+        self.kept: set[str] = set()
+        self.stages: dict[str, _Stage] = {}
+        self.accumulators: dict[str, _Held] = {}
 
 
 class Backend:
@@ -229,13 +261,14 @@ class Backend:
         self._log = Log() if log is None else log
         self._views = Views()
         # Not history
-        self._outputs: dict[tuple[str, str], Any] = {}
+        self._clients: dict[str, _Client] = {}  # by client ID, until it ends
+        self._outputs: dict[tuple[str, str], Any] = {}  # by record ID and name
+        # (record ID, name) to the number of pending records yet to read it
+        self._readers: Counter[tuple[str, str]] = Counter()
+        self._unread: dict[str, list[tuple[str, str]]] = {}  # the reverse
         self._waiting: dict[str, set[str]] = {}
         self._dependents: dict[str, set[str]] = {}
-        self._sessions: dict[str, str] = {}  # open session ID to proposal
-        self._staged: dict[str, _Stage] = {}  # the stages of open sessions
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
-        self._held: dict[str, _Held] = {}  # the accumulators of open sessions
         self._on_finished: dict[str, list[Callable[[Record], None]]] = {}
         with self._changed:
             for event in self._log:
@@ -281,26 +314,27 @@ class Backend:
 
     # Submission
 
-    def submit(
-        self, entries: list[Entry], *, proposal: str, submitter: str
-    ) -> list[Record]:
+    def submit(self, entries: list[Entry], *, client: str) -> list[Record]:
         """
         Check every request, then create a record for each.
 
         If one request is refused, none is submitted. Dataset names are
-        resolved before the backend's lock is taken. The records are pending.
+        resolved before the backend's lock is taken. The records are pending,
+        and the client keeps their outputs.
         """
         ids = [uuid.uuid4().hex for _ in entries]
+        proposal = self._client(client).proposal
         requests = [self._prepare(e, proposal) for e in entries]
         with self._changed:
+            caller = self._client(client)
             for entry, request in zip(entries, requests, strict=True):
                 self._check_reads(entry, request, proposal)
-                self._check_stage(entry, request, proposal)
+                self._check_stage(entry, request, caller)
             self._append(
                 Submitted(
                     time=self._clock(),
                     proposal=proposal,
-                    submitter=submitter,
+                    submitter=caller.submitter,
                     records=tuple(
                         NewRecord(
                             id=record_id,
@@ -317,22 +351,24 @@ class Backend:
                     ),
                 )
             )
+            caller.kept.update(ids)
             for record_id, entry in zip(ids, entries, strict=True):
                 if entry.stage is not None:
-                    self._stage_of[record_id] = self._staged[entry.stage]
+                    self._stage_of[record_id] = caller.stages[entry.stage]
                 self._schedule(record_id)
             return [self._views.records[i] for i in ids]
 
-    def snapshot(self, accumulator_id: str, *, proposal: str, submitter: str) -> Record:
+    def snapshot(self, accumulator_id: str, *, client: str) -> Record:
         """
         A record of the accumulator's combined value, completed at once.
 
         It covers the elements pushed so far, and names the accumulator and how
-        many elements that is.
+        many elements that is. The client keeps its outputs.
         """
         record_id = uuid.uuid4().hex
         with self._changed:
-            held = self._open_accumulator(accumulator_id, proposal)
+            caller = self._client(client)
+            held = self._accumulator(caller, accumulator_id)
             value = held.value
             if value is None:
                 raise SubmitError('nothing has been pushed')
@@ -345,13 +381,14 @@ class Backend:
             self._append(
                 Submitted(
                     time=self._clock(),
-                    proposal=proposal,
-                    submitter=submitter,
+                    proposal=caller.proposal,
+                    submitter=caller.submitter,
                     records=(
                         NewRecord(id=record_id, submitted=snapshot, outputs=outputs),
                     ),
                 )
             )
+            caller.kept.add(record_id)
             self._complete(record_id, dict(value))
             return self._views.records[record_id]
 
@@ -359,28 +396,38 @@ class Backend:
         """The request with names resolved and defaults filled; needs no lock."""
         request = entry.request
         try:
-            spec = self.spec(request.spec)
-            unknown = set(request.params) - set(spec.params.model_fields)
-            if unknown:
-                raise SubmitError(
-                    f'{sorted(unknown)}: not parameters of {request.spec}'
-                )
-            _check_cells(spec.params, request.params)
-            params = {
-                field: map_refs(value, self._resolver(field, proposal))
-                for field, value in request.params.items()
-            }
+            params = self._resolve(request.spec, request.params, (), proposal)
             try:
-                model = spec.params.model_validate(params)
+                model = self.spec(request.spec).params.model_validate(params)
             except ValidationError as error:
-                problems = '; '.join(
-                    f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
-                    for e in error.errors()
-                )
+                problems = '; '.join(_problems(error))
                 raise SubmitError(f'{request.spec}: {problems}') from None
         except SubmitError as error:
             raise entry.refused(error) from None
         return Request(request.spec, _values(model))
+
+    def _resolve(
+        self,
+        spec_id: SpecId,
+        params: Mapping[str, Any],
+        blanks: tuple[str, ...],
+        proposal: str,
+    ) -> dict[str, Any]:
+        """
+        ``params`` with dataset names resolved; needs no lock.
+
+        Refuses a param or blank the spec lacks, and a row of a table with a
+        field its row model lacks.
+        """
+        spec = self.spec(spec_id)
+        unknown = (set(params) | set(blanks)) - set(spec.params.model_fields)
+        if unknown:
+            raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
+        _check_cells(spec.params, params)
+        return {
+            field: map_refs(value, self._resolver(field, proposal))
+            for field, value in params.items()
+        }
 
     def _resolver(
         self, field: str, proposal: str
@@ -418,19 +465,41 @@ class Backend:
                         )
                     if target is not None and not _agree(outputs[ref.output], target):
                         raise SubmitError(f'{where}: {ref} does not fit the field')
+                    if self._views.status(ref.record) is Status.COMPLETED:
+                        try:
+                            self._value(ref)
+                        except LookupError as error:
+                            raise SubmitError(f'{where}: {error}') from None
         except SubmitError as error:
             raise entry.refused(error) from None
 
-    def _check_stage(self, entry: Entry, request: Request, proposal: str) -> None:
-        """Check the stage a request goes through; lock held."""
+    def _check_stage(self, entry: Entry, request: Request, caller: _Client) -> None:
+        """
+        Check the stage a request goes through; lock held.
+
+        The request must have the stage's values outside the blanks, as given
+        or resolved when the stage was made.
+        """
         if entry.stage is None:
             return
-        stage = self._staged.get(entry.stage)
-        if stage is None or stage.proposal != proposal:
-            raise entry.refused(SubmitError('the stage has ended or is unknown'))
+        stage = caller.stages.get(entry.stage)
+        if stage is None:
+            raise entry.refused(SubmitError('the stage was released or is unknown'))
         if stage.spec != request.spec:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
+            )
+        given = {
+            k: map_refs(v, lambda ref: ref)
+            for k, v in entry.request.params.items()
+            if k not in stage.blanks
+        }
+        differ = (given.keys() ^ stage.fixed.keys()) | {
+            k for k in given.keys() & stage.fixed.keys() if given[k] != stage.fixed[k]
+        }
+        if differ:
+            raise entry.refused(
+                SubmitError(f"{sorted(differ)}: differ from the stage's values")
             )
 
     def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
@@ -451,9 +520,10 @@ class Backend:
 
     def _schedule(self, record_id: str) -> None:
         """Start the record, or let it wait for its unfinished inputs; lock held."""
-        record = self._views.records[record_id]
-        inputs = {ref.record for ref in record.request.inputs()}
-        waiting = inputs - self._views.finished.keys()
+        refs = self._views.records[record_id].request.inputs()
+        self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
+        self._readers.update(self._unread[record_id])
+        waiting = {ref.record for ref in refs} - self._views.finished.keys()
         if not waiting:
             self._executor.submit(self._run, record_id)
             return
@@ -468,7 +538,10 @@ class Backend:
             record = self._views.records[record_id]
             stage = self._stage_of.get(record_id)
         try:
-            outputs = dict(self._compute(record.request, stage))
+            call, blanks = self._call(record.request, stage)
+            with self._changed:
+                self._has_read(record_id)
+            outputs = dict(call(**blanks))
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
                 self._finish(record_id, Status.FAILED, str(error) or repr(error))
@@ -476,17 +549,20 @@ class Backend:
         with self._changed:
             self._complete(record_id, outputs)
 
-    def _compute(self, request: Request, stage: _Stage | None) -> Mapping[str, Any]:
-        """The outputs of a request, through its stage if it has one."""
+    def _call(
+        self, request: Request, stage: _Stage | None
+    ) -> tuple[Function, dict[str, Any]]:
+        """
+        The callable that computes a request, through its stage if it has one,
+        and the values of the blanks to call it with; the inputs are read.
+        """
         binding = self._bindings[request.spec]
         values = self._typed(request)
         if stage is None:
-            return binding.stage(self._read(values), ())()
+            return binding.stage(self._read(values), ()), {}
         fixed = {k: v for k, v in values.items() if k not in stage.blanks}
-        call = stage.staged(
-            fixed, lambda: binding.stage(self._read(fixed), stage.blanks)
-        )
-        return call(**self._read({k: values[k] for k in stage.blanks}))
+        call = stage.staged(lambda: binding.stage(self._read(fixed), stage.blanks))
+        return call, self._read({k: values[k] for k in stage.blanks})
 
     def _typed(self, request: Request) -> dict[str, Any]:
         """
@@ -505,14 +581,35 @@ class Backend:
 
     def _read_output(self, ref: OutputRef | DatasetRef) -> Any:
         """The value of an output; a dataset is read later, outside the lock."""
-        if isinstance(ref, DatasetRef):
-            return ref
+        return ref if isinstance(ref, DatasetRef) else self._value(ref)
+
+    def _value(self, ref: OutputRef) -> Any:
+        """The value of an output of a completed record, if kept; lock held."""
         try:
             return self._outputs[(ref.record, ref.output)]
         except KeyError:
             raise LookupError(
-                f'record {ref.record} has no output {ref.output}'
+                f'record {ref.record} output {ref.output}: the value is not kept'
             ) from None
+
+    def _has_read(self, record_id: str) -> None:
+        """Let go of the values a record was yet to read; lock held."""
+        for key in self._unread.pop(record_id, ()):
+            self._readers[key] -= 1
+            if not self._readers[key]:
+                del self._readers[key]
+                self._drop(*key)
+
+    def _drop(self, record_id: str, *names: str) -> None:
+        """
+        Drop the record's outputs that no client keeps and no pending record
+        is yet to read; lock held.
+        """
+        if any(record_id in c.kept for c in self._clients.values()):
+            return
+        for name in names:
+            if not self._readers[(record_id, name)]:
+                self._outputs.pop((record_id, name), None)
 
     def _complete(self, record_id: str, outputs: dict[str, Any]) -> None:
         """Complete a record with outputs, or fail it if they do not fit; lock held."""
@@ -525,6 +622,7 @@ class Backend:
             return
         for name, value in outputs.items():
             self._outputs[(record_id, name)] = value
+        self._drop(record_id, *outputs)
         self._finish(record_id, Status.COMPLETED)
 
     def _check_returned(self, spec_id: SpecId, outputs: dict[str, Any]) -> None:
@@ -549,6 +647,7 @@ class Backend:
             self._append(Finished(record=finished_id, status=finished, failure=message))
             for call in self._on_finished.pop(finished_id, ()):
                 call(self._views.records[finished_id])
+            self._has_read(finished_id)
             self._waiting.pop(finished_id, None)
             self._stage_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
@@ -566,54 +665,100 @@ class Backend:
                     self._executor.submit(self._run, dependent)
         self._changed.notify_all()
 
-    # Sessions
+    # Clients and what they keep
 
-    def open_session(self, proposal: str) -> str:
-        session = uuid.uuid4().hex
+    def open_client(self, proposal: str, submitter: str) -> str:
+        """A new client of the proposal; it keeps nothing yet."""
+        client = uuid.uuid4().hex
         with self._changed:
-            self._sessions[session] = proposal
-        return session
+            self._clients[client] = _Client(proposal, submitter)
+        return client
 
-    def open_stage(
-        self, session: str, spec_id: SpecId, blanks: tuple[str, ...], proposal: str
-    ) -> str:
-        """A stage in the session; its first call stages the binding."""
-        unknown = set(blanks) - set(self.spec(spec_id).params.model_fields)
-        if unknown:
-            raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
+    def close_client(self, client: str) -> None:
+        """
+        End the client and release everything it keeps; stops no work.
+
+        A client that has ended is ended again without effect.
+        """
+        with self._changed:
+            caller = self._clients.pop(client, None)
+            for record_id in () if caller is None else caller.kept:
+                self._drop(record_id, *self._views.records[record_id].outputs)
+
+    def _client(self, client: str) -> _Client:
+        """The client, unless it has ended."""
+        with self._changed:
+            caller = self._clients.get(client)
+        if caller is None:
+            raise ClientEnded(f'client {client} has ended')
+        return caller
+
+    def release(self, ids: Iterable[str], client: str) -> None:
+        """
+        Release records, stages, and accumulators the client keeps; stops no work.
+
+        A released record's outputs are dropped once no pending record is yet
+        to read them. A released stage takes no more requests, and those made
+        through it still run through it. A released accumulator takes no more
+        pushes or snapshots, and its combined value is dropped. Releasing what
+        the client does not keep does nothing.
+        """
+        with self._changed:
+            caller = self._client(client)
+            for i in ids:
+                caller.stages.pop(i, None)
+                caller.accumulators.pop(i, None)
+                if i in caller.kept:
+                    caller.kept.remove(i)
+                    self._drop(i, *self._views.records[i].outputs)
+
+    def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
+        """
+        A stage of the client, and its template as the stage holds it.
+
+        The template's values are checked as a request's are, but for the
+        blanks, and dataset names are resolved now. The stage keeps the
+        values; a request through it must have them. Its first call stages
+        the binding.
+        """
+        spec_id, blanks = template.spec, template.blanks
+        proposal = self._client(client).proposal
+        fixed = self._resolve(spec_id, template.params, blanks, proposal)
+        try:
+            self.spec(spec_id).params.model_validate(fixed)
+        except ValidationError as error:
+            if problems := _problems(error, blanks):
+                raise SubmitError(f'{spec_id}: {"; ".join(problems)}') from None
         stage_id = uuid.uuid4().hex
         with self._changed:
-            self._check_session(session, proposal)
-            self._staged[stage_id] = _Stage(session, proposal, spec_id, blanks)
-        return stage_id
+            caller = self._client(client)
+            request = Request(spec_id, fixed)
+            self._check_reads(Entry(request), request, proposal)
+            caller.stages[stage_id] = _Stage(spec_id, blanks, fixed)
+        return stage_id, Template(spec_id, fixed, blanks)
 
-    def open_accumulator(self, session: str, spec_id: SpecId, proposal: str) -> str:
+    def open_accumulator(self, spec_id: SpecId, client: str) -> str:
         """
-        An accumulator in the session, with nothing pushed.
+        An accumulator of the client, with nothing pushed.
 
         Its binding must make element accumulators; a plain request over a
         table works with any binding.
         """
-        if element_table(self.spec(spec_id)) is None:
-            raise SubmitError(f'{spec_id} does not take one table')
-        binding = self._bindings[spec_id]
-        if not isinstance(binding, AccumulatorBinding):
-            raise SubmitError(
-                f'{spec_id} is bound to code that cannot accumulate; '
-                'submit the request over a table instead'
-            )
-        held = _Held(session, proposal, spec_id, binding.accumulator())
         accumulator_id = uuid.uuid4().hex
         with self._changed:
-            self._check_session(session, proposal)
-            self._held[accumulator_id] = held
+            caller = self._client(client)
+            if element_table(self.spec(spec_id)) is None:
+                raise SubmitError(f'{spec_id} does not take one table')
+            binding = self._bindings[spec_id]
+            if not isinstance(binding, AccumulatorBinding):
+                raise SubmitError(
+                    f'{spec_id} is bound to code that cannot accumulate; '
+                    'submit the request over a table instead'
+                )
+            caller.accumulators[accumulator_id] = _Held(spec_id, binding.accumulator())
         return accumulator_id
 
-    def _check_session(self, session: str, proposal: str) -> None:
-        if self._sessions.get(session) != proposal:
-            raise SubmitError('the session has ended or is unknown')
-
-    def push(self, accumulator_id: str, element: Element, proposal: str) -> None:
+    def push(self, accumulator_id: str, element: Element, client: str) -> None:
         """
         Push an element, checked as a request over it alone would be.
 
@@ -625,10 +770,10 @@ class Backend:
         combined. If combining fails, the push is refused and the accumulator
         stops, since the binding may hold part of the element.
         """
-        held, filled, values = self._pushable(accumulator_id, element, proposal)
+        held, filled, values = self._pushable(accumulator_id, element, client)
         with held.lock:
             with self._changed:
-                self._open_accumulator(accumulator_id, proposal)
+                self._accumulator(self._client(client), accumulator_id)
                 position = len(self._views.elements.get(accumulator_id, ()))
             try:
                 held.accumulator.push(values)
@@ -640,12 +785,12 @@ class Backend:
                     held.stopped = f'the accumulator stopped: {failure}'
                 raise SubmitError(failure) from error
             with self._changed:
-                self._open_accumulator(accumulator_id, proposal)
+                self._accumulator(self._client(client), accumulator_id)
                 self._append(Pushed(accumulator=accumulator_id, element=filled))
                 held.value = value
 
     def _pushable(
-        self, accumulator_id: str, element: Element, proposal: str
+        self, accumulator_id: str, element: Element, client: str
     ) -> tuple[_Held, Element, dict[str, Any]]:
         """
         The accumulator, the element, and its values read, once checked.
@@ -656,45 +801,32 @@ class Backend:
         """
         ids = [ref.record for ref in output_refs(element)]
         with self._changed:
-            held = self._open_accumulator(accumulator_id, proposal)
-            self._changed.wait_for(lambda: not self._pending(ids, proposal))
+            caller = self._client(client)
+            held = self._accumulator(caller, accumulator_id)
+            self._changed.wait_for(lambda: not self._pending(ids, caller.proposal))
         table = element_table(self._specs[held.spec])
         assert table is not None  # noqa: S101
         name, _ = table
         entry = Entry(Request(held.spec, {name: [element]}))
-        request = self._prepare(entry, proposal)
+        request = self._prepare(entry, caller.proposal)
         with self._changed:
-            self._check_reads(entry, request, proposal)
+            self._check_reads(entry, request, caller.proposal)
         try:
             values = self._read(request.params)
-        except LookupError as error:  # such as an output no longer kept
+        except LookupError as error:  # an output released since the check
             raise SubmitError(str(error)) from None
         ((filled,), (read,)) = request.params[name], values[name]
         return held, filled, read
 
-    def _open_accumulator(self, accumulator_id: str, proposal: str) -> _Held:
-        held = self._held.get(accumulator_id)
-        if held is None or held.proposal != proposal:
-            raise SubmitError('the accumulator has ended or is unknown')
+    def _accumulator(self, caller: _Client, accumulator_id: str) -> _Held:
+        held = caller.accumulators.get(accumulator_id)
+        if held is None:
+            raise SubmitError('the accumulator was released or is unknown')
         if held.stopped is not None:
             raise SubmitError(held.stopped)
         return held
 
-    def close_session(self, session: str) -> None:
-        """
-        End the session: its holders take no more requests.
-
-        A stage is released once the requests made through it have run, and
-        what an accumulator holds is released now.
-        """
-        with self._changed:
-            self._sessions.pop(session, None)
-            self._staged = {
-                i: s for i, s in self._staged.items() if s.session != session
-            }
-            self._held = {i: h for i, h in self._held.items() if h.session != session}
-
-    # Queries and control, within one proposal
+    # Queries and control, within the client's proposal
 
     def _pending(self, ids: Iterable[str], proposal: str) -> bool:
         """Whether a record of the proposal among ``ids`` is pending; lock held."""
@@ -712,23 +844,25 @@ class Backend:
             raise KeyError(f'no record {record_id} in proposal {proposal}')
         return record
 
-    def status(self, ids: Iterable[str], proposal: str) -> list[Status]:
+    def status(self, ids: Iterable[str], client: str) -> list[Status]:
         with self._changed:
+            proposal = self._client(client).proposal
             return [self._status(i, proposal) for i in ids]
 
-    def wait(self, ids: Iterable[str], proposal: str) -> list[Status]:
+    def wait(self, ids: Iterable[str], client: str) -> list[Status]:
         """The status of each record once all have finished."""
         ids = list(ids)
         with self._changed:
+            proposal = self._client(client).proposal
             for record_id in ids:
                 self._mine(record_id, proposal)
             self._changed.wait_for(lambda: not self._pending(ids, proposal))
             return [self._status(i, proposal) for i in ids]
 
-    def failure(self, record_id: str, proposal: str) -> str | None:
+    def failure(self, record_id: str, client: str) -> str | None:
         """Why a record failed; ``None`` unless it has failed."""
         with self._changed:
-            self._mine(record_id, proposal)
+            self._mine(record_id, self._client(client).proposal)
             finished = self._views.finished.get(record_id)
             return None if finished is None else finished.failure
 
@@ -737,7 +871,7 @@ class Backend:
         return self._views.status(record_id)
 
     def when_finished(
-        self, record_id: str, proposal: str, call: Callable[[Record], None]
+        self, record_id: str, client: str, call: Callable[[Record], None]
     ) -> None:
         """
         Call ``call`` with the record once it has finished, or now if it has.
@@ -746,27 +880,28 @@ class Backend:
         raise nothing, and not call the backend, as ``queue.SimpleQueue.put``.
         """
         with self._changed:
-            record = self._mine(record_id, proposal)
+            record = self._mine(record_id, self._client(client).proposal)
             if record_id in self._views.finished:
                 call(record)
             else:
                 self._on_finished.setdefault(record_id, []).append(call)
 
-    def cancel(self, ids: Iterable[str], proposal: str) -> None:
+    def cancel(self, ids: Iterable[str], client: str) -> None:
         """Cancel the unfinished records; a running workflow's outputs are dropped."""
         with self._changed:
+            proposal = self._client(client).proposal
             for record_id in ids:
                 self._mine(record_id, proposal)
                 self._finish(record_id, Status.CANCELLED)
 
-    def record(self, record_id: str, proposal: str) -> Record:
+    def record(self, record_id: str, client: str) -> Record:
         with self._changed:
-            return self._mine(record_id, proposal)
+            return self._mine(record_id, self._client(client).proposal)
 
-    def inputs(self, record_id: str, proposal: str) -> list[OutputRef]:
+    def inputs(self, record_id: str, client: str) -> list[OutputRef]:
         """What a record read: a request's references, or a snapshot's elements."""
         with self._changed:
-            record = self._mine(record_id, proposal)
+            record = self._mine(record_id, self._client(client).proposal)
             if isinstance(record.submitted, Request):
                 return record.submitted.inputs()
             snapshot = record.submitted
@@ -778,9 +913,10 @@ class Backend:
                 )
             return [ref for e in elements[: snapshot.upto] for ref in output_refs(e)]
 
-    def records(self, proposal: str, label: str | None = None) -> list[Record]:
-        """The records of a proposal, oldest first, under ``label`` if given."""
+    def records(self, client: str, label: str | None = None) -> list[Record]:
+        """The records of the proposal, oldest first, under ``label`` if given."""
         with self._changed:
+            proposal = self._client(client).proposal
             records = self._views.records
             if label is not None:
                 return [
@@ -788,30 +924,34 @@ class Backend:
                 ]
             return [r for r in records.values() if r.proposal == proposal]
 
-    def output(self, record_id: str, name: str, proposal: str) -> Any:
+    def output(self, record_id: str, name: str, client: str) -> Any:
+        """The value of an output of a completed record, if it is still kept."""
         with self._changed:
-            self._mine(record_id, proposal)
-            return self._read_output(OutputRef(record=record_id, output=name))
+            record = self._mine(record_id, self._client(client).proposal)
+            return self._value(record.ref(name))
 
-    # Datasets, within one proposal
+    # Datasets, within the client's proposal
 
-    def datasets(self, selector: Selector, proposal: str) -> list[DatasetRef]:
+    def datasets(self, selector: Selector, client: str) -> list[DatasetRef]:
         """The matching datasets the proposal may read, in the order measured."""
+        proposal = self._client(client).proposal
         return [
             ref
             for ref in self._datasets.list(selector)
             if readable(self._datasets.metadata(ref), proposal)
         ]
 
-    def watch_datasets(self, selector: Selector, proposal: str) -> Iterator[DatasetRef]:
+    def watch_datasets(self, selector: Selector, client: str) -> Iterator[DatasetRef]:
         """Matching datasets the proposal may read: existing ones, then new ones."""
+        proposal = self._client(client).proposal
         return (
             ref
             for ref in self._datasets.watch(selector)
             if readable(self._datasets.metadata(ref), proposal)
         )
 
-    def dataset_metadata(self, ref: DatasetRef, proposal: str) -> dict[str, Any]:
+    def dataset_metadata(self, ref: DatasetRef, client: str) -> dict[str, Any]:
+        proposal = self._client(client).proposal
         metadata = self._datasets.metadata(ref)
         if not readable(metadata, proposal):
             raise KeyError(f'no dataset {ref} in proposal {proposal}')

@@ -165,24 +165,25 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             measure(5, [1.0, 5.0], scan='17')
 
     cuts, pushed = [], []
-    with client.session() as session:
-        volume = session.accumulator(VOLUME)
-        angles = (
-            client.submit(ANGLE, {'run': run})
-            for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
-        )
-        for angle in client.as_completed(angles):
-            volume.push(angle.refs())
-            pushed.append(angle)
-            cuts.append(
-                client.submit(
-                    CUT,
-                    {'data': client.submit(volume).ref('counts'), 'index': 0},
-                    label='cut',
-                    member='17',
-                )
+    volume = client.accumulator(VOLUME)
+    angles = (
+        client.submit(ANGLE, {'run': run})
+        for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
+    )
+    for angle in client.as_completed(angles):
+        volume.push(angle.refs())
+        pushed.append(angle)
+        snapshot = client.submit(volume)
+        cuts.append(
+            client.submit(
+                CUT,
+                {'data': snapshot.ref('counts'), 'index': 0},
+                label='cut',
+                member='17',
             )
-        total = client.compute(volume)
+        )
+        client.release(snapshot)  # its value stays until the cut has read it
+    total = client.compute(volume)
 
     assert [client.output(c, 'cut').value for c in cuts] == [
         float(k) for k in range(1, 1001)

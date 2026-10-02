@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Holders in a session: what they refuse, and the records they make."""
+"""What a client keeps: its stages, its accumulators, and the values of its records."""
 
 import operator
 import statistics
@@ -16,7 +16,9 @@ from pydantic import BaseModel
 from ess.apps import (
     Backend,
     Client,
+    ClientEnded,
     Request,
+    Selector,
     Snapshot,
     SpecId,
     Status,
@@ -24,6 +26,7 @@ from ess.apps import (
     Template,
     combine,
     dataset,
+    local,
 )
 from ess.apps.backend import Entry
 from ess.apps.bindings import Function
@@ -249,11 +252,10 @@ def test_calls_through_a_stage_are_staged_once(
     client: Client, shifting: Staging
 ) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        shift = session.stage(
-            Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
-        )
-        shifted = [client.compute(shift, {'offset': x}) for x in (0.5, 1.5)]
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    shifted = [client.compute(shift, {'offset': x}) for x in (0.5, 1.5)]
     plain = client.compute(SHIFT, {'value': load.ref('value'), 'offset': 1.5})
 
     assert [client.output(r, 'value') for r in shifted] == [1.5, 2.5]
@@ -266,126 +268,277 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
 ) -> None:
     loading.clear()
     load = client.submit(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        shift = session.stage(
-            Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
-        )
-        pending = [client.submit(shift, {'offset': x}) for x in (1.0, 2.0, 3.0, 4.0)]
-        loading.set()
-        client.wait(pending)
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    pending = [client.submit(shift, {'offset': x}) for x in (1.0, 2.0, 3.0, 4.0)]
+    loading.set()
+    client.wait(pending)
 
     assert [client.output(r, 'value') for r in pending] == [2.0, 3.0, 4.0, 5.0]
     assert shifting.staged == [('offset',)]
 
 
-def test_a_request_through_a_stage_uses_it_after_its_session_ended(
+def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     client: Client, shifting: Staging, loading: threading.Event
 ) -> None:
     loading.clear()
     load = client.submit(LOAD, {'run': dataset(run=2)})
-    with client.session() as session:
-        shift = session.stage(
-            Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
-        )
-        pending = client.submit(shift, {'offset': 1.0})
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    pending = client.submit(shift, {'offset': 1.0})
+    client.release(shift)
     loading.set()
 
+    with pytest.raises(SubmitError, match='the stage was released'):
+        client.submit(shift, {'offset': 2.0})
     assert client.wait(pending) is Status.COMPLETED
     assert client.output(pending, 'value') == 3.0
     assert shifting.staged == [('offset',)]
 
 
-def test_a_stage_is_staged_again_when_its_dataset_name_resolves_elsewhere(
+def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     client: Client, scaling: Staging, datasets: FakeDatasets
 ) -> None:
-    with client.session() as session:
-        scale = session.stage(
-            Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',))
-        )
-        before = client.compute(scale, {'factor': 2.0})
-        datasets.correct(datasets.resolve(dataset(run=1)), run=99)
-        datasets.measure(1, 5.0, pid='again')
-        after = client.compute(scale, {'factor': 2.0})
+    run = datasets.resolve(dataset(run=1))
+    scale = client.stage(
+        Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',))
+    )
+    before = client.compute(scale, {'factor': 2.0})
+    datasets.correct(run, run=99)
+    datasets.measure(1, 5.0, pid='again')
+    after = client.compute(scale, {'factor': 2.0})
 
-    assert [client.output(r, 'value') for r in (before, after)] == [2.0, 10.0]
-    assert scaling.staged == [('factor',), ('factor',)]
+    assert scale.template.params == {'run': run}
+    assert after.request == before.request
+    assert [client.output(r, 'value') for r in (before, after)] == [2.0, 2.0]
+    assert scaling.staged == [('factor',)]
 
 
 def test_a_stage_that_failed_to_stage_is_staged_on_the_next_call(
     client: Client, scaling: Staging
 ) -> None:
     scaling.fail_next = True
-    with client.session() as session:
-        scale = session.stage(
-            Template(SCALE, params={'run': dataset(run=2)}, blanks=('factor',))
-        )
-        failed = client.compute(scale, {'factor': 2.0})
-        scaled = client.compute(scale, {'factor': 2.0})
+    scale = client.stage(
+        Template(SCALE, params={'run': dataset(run=2)}, blanks=('factor',))
+    )
+    failed = client.compute(scale, {'factor': 2.0})
+    scaled = client.compute(scale, {'factor': 2.0})
 
     assert client.status(failed) is Status.FAILED
     assert 'staging failed' in client.failure(failed)
     assert client.output(scaled, 'value') == 4.0
 
 
-def test_a_request_through_a_stage_of_another_spec_is_refused(
-    client: Client, backend: Backend
+def test_a_request_through_a_stage_must_have_the_stage_s_values(
+    backend: Backend,
 ) -> None:
+    client = backend.open_client('p1', 'anna')
+    (load,) = backend.submit(
+        [Entry(Request(LOAD, {'run': dataset(run=1)}))], client=client
+    )
+    scale, template = backend.open_stage(
+        Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',)),
+        client=client,
+    )
+    refused = {
+        'the stage holds scale': Request(SHIFT, {'value': load.ref('value')}),
+        r"\['run'\]: differ from the stage's values": Request(
+            SCALE, {'run': dataset(run=2), 'factor': 2.0}
+        ),
+    }
+    for reason, request in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            backend.submit([Entry(request, stage=scale)], client=client)
+
+    (record,) = backend.submit(
+        [Entry(template.fill({'factor': 2.0}), stage=scale)], client=client
+    )
+    assert record.request.params['run'] == template.params['run']
+
+
+def test_the_stages_and_accumulators_of_another_client_are_refused(
+    backend: Backend, client: Client
+) -> None:
+    theirs = Client(backend, proposal='p1', submitter='bob')
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    scale = client.stage(
+        Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',))
+    )
+    total = client.accumulator(TOTAL)
+    total.push(load.refs('value'))
+
+    with pytest.raises(SubmitError, match='the stage was released or is unknown'):
+        theirs.submit(scale, {'factor': 2.0})
+    with pytest.raises(SubmitError, match='the accumulator was released or is'):
+        theirs.submit(total)
+
+
+def test_a_stage_refuses_a_template_that_a_request_would_refuse(
+    client: Client,
+) -> None:
+    cancelled = client.submit(LOAD, {'run': dataset(run=1)})
+    client.cancel(cancelled)
+    released = client.compute(LOAD, {'run': dataset(run=1)})
+    client.release(released)
+    refused = {
+        r"\['speed'\]: not parameters": Template(SCALE, blanks=('speed',)),
+        r"\['scale'\]: not parameters": Template(
+            SCALE, params={'scale': 2.0}, blanks=('factor',)
+        ),
+        'run: Field required': Template(SCALE, blanks=('factor',)),
+        'factor: Input should be a valid number': Template(
+            SCALE, params={'factor': 'x'}, blanks=('run',)
+        ),
+        'run: unknown dataset run:9': Template(
+            SCALE, params={'run': dataset(run=9)}, blanks=('factor',)
+        ),
+        f'record {cancelled.id} cancelled': Template(
+            SHIFT, params={'value': cancelled.ref('value')}, blanks=('offset',)
+        ),
+        'the value is not kept': Template(
+            SHIFT, params={'value': released.ref('value')}, blanks=('offset',)
+        ),
+    }
+    for reason, template in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            client.stage(template)
+
+
+# What a client keeps
+
+
+def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    client.release(load)
+
+    not_kept = f'record {load.id} output value: the value is not kept'
+    with pytest.raises(LookupError, match=not_kept):
+        client.output(load, 'value')
+    with pytest.raises(SubmitError, match=f'^value: {not_kept}$'):
+        client.submit(SHIFT, {'value': load.ref('value')})
+    assert client.records() == [load]
+    assert client.status(load) is Status.COMPLETED
+
+
+def test_a_pending_request_reads_a_value_released_after_its_submission(
+    client: Client, loading: threading.Event
+) -> None:
+    first = client.compute(LOAD, {'run': dataset(run=1)})
+    loading.clear()
+    second = client.submit(LOAD, {'run': dataset(run=2)})
+    total = client.submit(TOTAL, {'parts': [first.refs('value'), second.refs('value')]})
+    client.release(first)
+    loading.set()
+
+    assert client.output(total, 'value') == 3.0
+    with pytest.raises(LookupError, match='not kept'):  # read, then dropped
+        client.output(first, 'value')
+
+
+def test_a_released_pending_record_drops_its_outputs_when_it_completes(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
     load = client.submit(LOAD, {'run': dataset(run=1)})
-    request = Request(SHIFT, {'value': load.ref('value')})
-    with client.session() as session:
-        scale = session.stage(Template(SCALE, blanks=('factor',)))
-        with pytest.raises(SubmitError, match='the stage holds scale'):
-            backend.submit(
-                [Entry(request, stage=scale.id)], proposal='p1', submitter='x'
-            )
+    client.release(load)
+    loading.set()
+
+    assert client.wait(load) is Status.COMPLETED
+    with pytest.raises(LookupError, match='not kept'):
+        client.output(load, 'value')
 
 
-def test_a_stage_of_another_proposal_is_refused(
-    client: Client, backend: Backend, datasets: FakeDatasets
+def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    Client(backend, proposal='p1', submitter='bob').release(load)
+
+    assert client.output(load, 'value') == 1.0
+
+
+def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    total = client.accumulator(TOTAL)
+    total.push(load.refs('value'))
+    client.close()
+
+    calls = [
+        lambda: client.submit(LOAD, {'run': dataset(run=1)}),
+        lambda: client.submit(shift, {'offset': 1.0}),
+        lambda: client.submit(total),
+        lambda: total.push(load.refs('value')),
+        lambda: client.status(load),
+        lambda: client.output(load, 'value'),
+        lambda: client.records(),
+        lambda: client.stage(Template(SCALE, blanks=('speed',))),
+        lambda: client.accumulator(TOTAL),
+        lambda: client.release(load),
+        lambda: client.datasets.list(Selector()),
+    ]
+    for call in calls:
+        with pytest.raises(ClientEnded):
+            call()
+
+
+def test_closing_a_client_stops_no_work_and_drops_what_it_keeps(
+    backend: Backend, client: Client, loading: threading.Event
 ) -> None:
-    datasets.measure(3, 3.0)
-    datasets.correct(datasets.resolve(dataset(run=3)), proposal='p2')
-    request = Request(SCALE, {'run': dataset(run=3), 'factor': 2.0})
-    with client.session() as session:
-        scale = session.stage(Template(SCALE, blanks=('factor',)))
-        with pytest.raises(SubmitError, match='ended or is unknown'):
-            backend.submit(
-                [Entry(request, stage=scale.id)], proposal='p2', submitter='x'
-            )
+    other = Client(backend, proposal='p1', submitter='bob')
+    done = client.compute(LOAD, {'run': dataset(run=1)})
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=2)})
+    shifted = other.submit(SHIFT, {'value': pending.ref('value')})
+    client.close()
+    loading.set()
+
+    assert other.wait([pending, shifted]) == [Status.COMPLETED] * 2
+    assert other.output(shifted, 'value') == 2.0  # read before it was dropped
+    for record in (done, pending):
+        with pytest.raises(SubmitError, match='not kept'):
+            other.submit(SHIFT, {'value': record.ref('value')})
 
 
-def test_a_stage_refuses_blanks_that_are_not_parameters(client: Client) -> None:
-    with client.session() as session, pytest.raises(SubmitError, match='speed'):
-        session.stage(Template(SCALE, blanks=('speed',)))
+def test_a_with_block_closes_the_client(backend: Backend) -> None:
+    with Client(backend, proposal='p1', submitter='anna') as client:
+        load = client.compute(LOAD, {'run': dataset(run=1)})
+    client.close()  # closing again does nothing
+
+    with pytest.raises(ClientEnded):
+        client.output(load, 'value')
 
 
-def test_ending_a_session_twice_is_harmless(client: Client) -> None:
-    with client.session() as session:
-        pass
-    with session:
-        pass
+def test_closing_a_local_client_closes_its_backend_once_nothing_is_pending(
+    datasets: FakeDatasets, loading: threading.Event
+) -> None:
+    loaded = []
 
-    assert not session.open
+    def load(run: float) -> dict[str, Any]:
+        loading.wait(timeout=5)
+        loaded.append(run)
+        return {'value': run, 'extra': -run}
+
+    loading.clear()
+    with local(proposal='p1', datasets=datasets, bind={LOAD: load}) as client:
+        client.submit(LOAD, {'run': dataset(run=1)})
+        threading.Timer(0.05, loading.set).start()
+
+    assert loaded == [1.0]
 
 
-def test_a_holder_of_an_ended_session_refuses_calls(client: Client) -> None:
-    with client.session() as session:
-        stage = session.stage(Template(LOAD, blanks=('run',)))
-
-    with pytest.raises(RuntimeError, match='session'):
-        client.submit(stage, {'run': {'dataset': 'run:1'}})
-    with pytest.raises(RuntimeError, match='session'):
-        session.stage(Template(LOAD, blanks=('run',)))
+# Accumulators
 
 
 def test_an_accumulator_combines_the_selected_outputs(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
     client.wait(loads)
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        for load in loads:
-            total.push(load.refs('value'))
-        combined = client.compute(total)
+    total = client.accumulator(TOTAL)
+    for load in loads:
+        total.push(load.refs('value'))
+    combined = client.compute(total)
 
     assert combined.submitted == Snapshot(
         spec=SpecId.of(TOTAL), accumulator=total.id, upto=2
@@ -395,22 +548,20 @@ def test_an_accumulator_combines_the_selected_outputs(client: Client) -> None:
 
 def test_a_push_may_take_an_output_named_unlike_the_field(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': {'dataset': f'run:{n}'}}) for n in (1, 2)]
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        for load in loads:
-            total.push({'value': load.ref('extra')})
-        combined = client.compute(total)
+    total = client.accumulator(TOTAL)
+    for load in loads:
+        total.push({'value': load.ref('extra')})
+    combined = client.compute(total)
 
     assert client.output(combined, 'value') == -3.0
 
 
 def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
-    with client.session() as session:
-        mean = session.accumulator(MEAN)
-        for load in loads:
-            mean.push(load.refs('value'))
-        snapshot = client.compute(mean)
+    mean = client.accumulator(MEAN)
+    for load in loads:
+        mean.push(load.refs('value'))
+    snapshot = client.compute(mean)
     plain = client.compute(MEAN, {'parts': [x.refs('value') for x in loads]})
 
     assert client.output(snapshot, 'mean') == client.output(plain, 'mean') == 1.5
@@ -419,18 +570,19 @@ def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) ->
 def test_an_accumulator_needs_a_spec_over_a_table(
     client: Client, backend: Backend
 ) -> None:
-    with client.session() as session, pytest.raises(TypeError, match='table'):
-        session.accumulator(SHIFT)
+    with pytest.raises(TypeError, match='table'):
+        client.accumulator(SHIFT)
     with pytest.raises(SubmitError, match='table'):
-        backend.open_accumulator(backend.open_session('p1'), SpecId.of(SHIFT), 'p1')
+        backend.open_accumulator(
+            SpecId.of(SHIFT), client=backend.open_client('p1', 'anna')
+        )
 
 
 def test_a_push_of_more_fields_than_the_element_is_refused(client: Client) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match='fields'):
-            total.push(load.refs())  # 'value' and 'extra'
+    total = client.accumulator(TOTAL)
+    with pytest.raises(SubmitError, match='fields'):
+        total.push(load.refs())  # 'value' and 'extra'
 
 
 def test_a_push_takes_values_and_defaults_as_the_request_does(client: Client) -> None:
@@ -439,11 +591,10 @@ def test_a_push_takes_values_and_defaults_as_the_request_does(client: Client) ->
         {'value': loads[0].ref('value'), 'weight': 3.0},
         {'value': loads[1].ref('value')},  # the default weight
     ]
-    with client.session() as session:
-        weighted = session.accumulator(WEIGHTED)
-        for row in rows:
-            weighted.push(row)
-        snapshot = client.compute(weighted)
+    weighted = client.accumulator(WEIGHTED)
+    for row in rows:
+        weighted.push(row)
+    snapshot = client.compute(weighted)
     plain = client.compute(WEIGHTED, {'rows': rows})
 
     assert client.output(snapshot, 'value') == client.output(plain, 'value') == 5.0
@@ -457,14 +608,13 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
         {'value': load.ref('value'), 'scale': 2.0},  # a field the row lacks
         {'value': 1.0},  # a value where a reference goes
     ]
-    with client.session() as session:
-        weighted = session.accumulator(WEIGHTED)
-        for element in elements:
-            with pytest.raises(SubmitError) as refused:
-                client.submit(WEIGHTED, {'rows': [element]})
-            with pytest.raises(SubmitError) as pushed:
-                weighted.push(element)
-            assert str(pushed.value) == str(refused.value)
+    weighted = client.accumulator(WEIGHTED)
+    for element in elements:
+        with pytest.raises(SubmitError) as refused:
+            client.submit(WEIGHTED, {'rows': [element]})
+        with pytest.raises(SubmitError) as pushed:
+            weighted.push(element)
+        assert str(pushed.value) == str(refused.value)
 
 
 class Files(BaseModel):
@@ -494,38 +644,39 @@ def test_each_row_of_a_table_needs_every_field(client: Client) -> None:
 
 def test_an_element_that_does_not_fit_is_refused_at_the_push(client: Client) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        files = session.accumulator(FILES_SUM)
-        with pytest.raises(SubmitError, match='does not fit'):
-            files.push({'value': load.ref('value')})
+    files = client.accumulator(FILES_SUM)
+    with pytest.raises(SubmitError, match='does not fit'):
+        files.push({'value': load.ref('value')})
 
 
 def test_a_snapshot_with_nothing_pushed_is_refused(client: Client) -> None:
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match='nothing has been pushed'):
-            client.submit(total)
+    total = client.accumulator(TOTAL)
+    with pytest.raises(SubmitError, match='nothing has been pushed'):
+        client.submit(total)
 
 
 def test_a_snapshot_takes_no_label(client: Client) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(load.refs('value'))
-        with pytest.raises(TypeError, match='no label'):
-            client.submit(total, label='total')
+    total = client.accumulator(TOTAL)
+    total.push(load.refs('value'))
+    with pytest.raises(TypeError, match='no label'):
+        client.submit(total, label='total')
 
 
-def test_an_accumulator_of_an_ended_session_refuses_snapshots(client: Client) -> None:
+def test_a_released_accumulator_takes_no_pushes_and_its_snapshots_stay(
+    client: Client,
+) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(load.refs('value'))
+    total = client.accumulator(TOTAL)
+    total.push(load.refs('value'))
+    snapshot = client.submit(total)
+    client.release(total)
 
-    with pytest.raises(RuntimeError, match='session'):
+    with pytest.raises(SubmitError, match='the accumulator was released'):
         total.push(load.refs('value'))
-    with pytest.raises(SubmitError, match='ended'):
+    with pytest.raises(SubmitError, match='the accumulator was released'):
         client.submit(total)
+    assert client.output(snapshot, 'value') == 1.0
 
 
 def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
@@ -533,13 +684,12 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
 ) -> None:
     loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
     client.wait(loads)
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(loads[0].refs('value'))
-        total.push(loads[1].refs('value'))
-        first = client.submit(total)
-        total.push(loads[2].refs('value'))
-        second = client.submit(total)
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    total.push(loads[1].refs('value'))
+    first = client.submit(total)
+    total.push(loads[2].refs('value'))
+    second = client.submit(total)
 
     assert client.status([first, second]) == [Status.COMPLETED] * 2
     assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
@@ -556,13 +706,12 @@ def test_a_push_waits_for_its_records_and_takes_only_completed_ones(
     loading.clear()
     pending, cancelled = (client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2))
     client.cancel(cancelled)
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
-            total.push(cancelled.refs('value'))
-        threading.Timer(0.05, loading.set).start()
-        total.push(pending.refs('value'))  # pending when pushed: the push waits for it
-        snapshot = client.submit(total)
+    total = client.accumulator(TOTAL)
+    with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
+        total.push(cancelled.refs('value'))
+    threading.Timer(0.05, loading.set).start()
+    total.push(pending.refs('value'))  # pending when pushed: the push waits for it
+    snapshot = client.submit(total)
 
     assert [r.id for r in client.provenance(snapshot).records()] == [pending.id]
     assert client.output(snapshot, 'value') == 1.0
@@ -574,16 +723,15 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
     runs = [datasets.measure(n, float(n)) for n in range(3, 10)]
     loads = [client.submit(LOAD, {'run': run}) for run in runs]
     client.wait(loads)
-    with client.session() as session:
-        digits = session.accumulator(DIGITS)
-        pushes = [
-            threading.Thread(target=digits.push, args=(x.refs('value'),)) for x in loads
-        ]
-        for push in pushes:
-            push.start()
-        for push in pushes:
-            push.join()
-        snapshot = client.compute(digits)
+    digits = client.accumulator(DIGITS)
+    pushes = [
+        threading.Thread(target=digits.push, args=(x.refs('value'),)) for x in loads
+    ]
+    for push in pushes:
+        push.start()
+    for push in pushes:
+        push.join()
+    snapshot = client.compute(digits)
     pushed = client.provenance(snapshot).records()  # in the order they were logged
     plain = client.compute(DIGITS, {'parts': [x.refs('value') for x in pushed]})
 
@@ -593,8 +741,8 @@ def test_concurrent_pushes_combine_in_the_order_they_are_logged(
 def test_an_accumulator_needs_a_binding_that_accumulates(client: Client) -> None:
     loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
     client.wait(loads)
-    with client.session() as session, pytest.raises(SubmitError, match='accumulate'):
-        session.accumulator(PAIRS)
+    with pytest.raises(SubmitError, match='accumulate'):
+        client.accumulator(PAIRS)
     plain = client.compute(PAIRS, {'pairs': [x.refs() for x in loads]})
 
     assert [client.output(plain, name) for name in ('value', 'extra')] == [3.0, -3.0]
@@ -660,12 +808,11 @@ def test_an_accumulator_combines_each_element_once(
     summed: Client, summing: Sum
 ) -> None:
     client = summed
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        snapshots = []
-        for n in (1, 2, 1, 2):
-            total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
-            snapshots.append(client.submit(total))
+    total = client.accumulator(TOTAL)
+    snapshots = []
+    for n in (1, 2, 1, 2):
+        total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
+        snapshots.append(client.submit(total))
 
     assert [client.output(r, 'value') for r in snapshots] == [1.0, 3.0, 4.0, 6.0]
     assert summing.pushed == 4
@@ -676,18 +823,17 @@ def test_a_push_that_fails_to_combine_is_refused_and_stops_the_accumulator(
 ) -> None:
     client = summed
     loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        total.push(loads[0].refs('value'))
-        before = client.submit(total)
-        summing.failing = True
-        logged = len(log)
-        with pytest.raises(SubmitError, match=r'^element 1 failed to combine: cannot'):
-            total.push(loads[1].refs('value'))
-        with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
-            total.push(loads[2].refs('value'))
-        with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
-            client.submit(total)
-        assert len(log) == logged
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    before = client.submit(total)
+    summing.failing = True
+    logged = len(log)
+    with pytest.raises(SubmitError, match=r'^element 1 failed to combine: cannot'):
+        total.push(loads[1].refs('value'))
+    with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
+        total.push(loads[2].refs('value'))
+    with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
+        client.submit(total)
+    assert len(log) == logged
 
     assert client.output(before, 'value') == 1.0

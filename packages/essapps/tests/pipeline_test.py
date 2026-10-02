@@ -75,11 +75,10 @@ def client(pipeline: sciline.Pipeline) -> Iterator[Client]:
 
 
 def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None:
-    with client.session() as session:
-        tune = session.stage(
-            Template(SHIFT, params={'run': dataset(run=1)}, blanks=('offset',))
-        )
-        tuned = [client.compute(tune, {'offset': x}) for x in (0.5, 1.5, 2.5)]
+    tune = client.stage(
+        Template(SHIFT, params={'run': dataset(run=1)}, blanks=('offset',))
+    )
+    tuned = [client.compute(tune, {'offset': x}) for x in (0.5, 1.5, 2.5)]
     plain = client.compute(SHIFT, {'run': dataset(run=1), 'offset': 1.5})
 
     assert [client.output(r, 'value') for r in tuned] == [10.5, 11.5, 12.5]
@@ -89,11 +88,10 @@ def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None
 
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
-    with client.session() as session:
-        annotate = session.stage(
-            Template(SHIFT, params={'run': dataset(run=1)}, blanks=('note',))
-        )
-        noted = client.compute(annotate, {'note': 'first try'})
+    annotate = client.stage(
+        Template(SHIFT, params={'run': dataset(run=1)}, blanks=('note',))
+    )
+    noted = client.compute(annotate, {'note': 'first try'})
 
     assert client.output(noted, 'value') == 10.0
 

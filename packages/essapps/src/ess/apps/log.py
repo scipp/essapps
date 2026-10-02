@@ -9,10 +9,10 @@ an accumulator, whose elements a snapshot covers. The backend's views, such as
 the records by ID, are built by applying the events in order, when they are
 appended and again when a backend starts from an existing log.
 
-Sessions and their holders are not history, and neither are output values or
-anything a binding computed; those have their own lifetime. A submission is
-one event, so a backend that stops half-way through one has all of it or none
-of it.
+Clients and their stages and accumulators are not history, and neither are
+output values or anything a binding computed; those have their own lifetime.
+A submission is one event, so a backend that stops half-way through one has
+all of it or none of it.
 """
 
 from __future__ import annotations

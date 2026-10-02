@@ -72,23 +72,22 @@ def test_c5_vanadium_and_sample_tuned_together(
     client: Client, measure: Measure
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
-    with client.session() as session:
-        vanadium = session.stage(
-            Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',))
-        )
-        reduce = session.stage(
-            Template(IOFQ, params={'run': sample}, blanks=('normalization',))
-        )
-        reduced = []
-        for scale in (1.0, 2.0):
-            processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
-            reduced.append(
-                client.compute(
-                    reduce,
-                    {'normalization': processed.ref('normalization')},
-                    label='iofq',
-                )
+    vanadium = client.stage(
+        Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',))
+    )
+    reduce = client.stage(
+        Template(IOFQ, params={'run': sample}, blanks=('normalization',))
+    )
+    reduced = []
+    for scale in (1.0, 2.0):
+        processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
+        reduced.append(
+            client.compute(
+                reduce,
+                {'normalization': processed.ref('normalization')},
+                label='iofq',
             )
+        )
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
         [2.0, 4.0],

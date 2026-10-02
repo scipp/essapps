@@ -36,10 +36,9 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
 
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-    with client.session() as session:
-        tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
-        for bins in (1, 2, 4):
-            result = client.compute(tune, {'bins': bins}, label='iofq')
+    tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
+    for bins in (1, 2, 4):
+        result = client.compute(tune, {'bins': bins}, label='iofq')
 
     assert client.latest('iofq') == result
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]

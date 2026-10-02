@@ -27,7 +27,7 @@ Property: the backend fetches the dataset from the catalogue once, and the secon
 ### A4. Mistaken copy into the shared service
 
 Actor: user of the shared service. Goal: remove a file that should not have left their machine.
-Property: a local file reaches the service only when a request that names it is submitted. After its removal, no copy of its bytes remains in the service: not in storage, caches, or session processes.
+Property: a local file reaches the service only when a request that names it is submitted. After its removal, no copy of its bytes remains in the service: not in storage, caches, or the processes that run stages.
 
 ## B. Manual and interactive reduction
 
@@ -46,10 +46,10 @@ Property: pushing a contribution into an accumulator and computing it reduces on
 Actor: spectroscopy user in the web UI. Goal: cuts follow a slider as it is dragged.
 Property: a view of an output returns in a fraction of a second, and only the slice leaves the backend; the volume is not copied to the UI.
 
-### B5. Notebook kernel dies mid-session
+### B5. Notebook kernel dies
 
 Actor: user in a notebook. Goal: after a restart, nothing made before the crash is lost, and nothing stays held.
-Property: records completed before the crash are kept, and requests submitted before it still complete. The backend ends the dead kernel's session and releases its memory, although the client never ended it.
+Property: records completed before the crash are kept, and requests submitted before it still complete. The backend ends the dead kernel's client and drops what the client kept, although the client was never closed.
 
 ### B6. Find last week's result
 
@@ -66,7 +66,7 @@ Property: the backend reads the published output through the catalogue. It needs
 ### C5. Vanadium and sample tuned together
 
 Actor: instrument scientist in a notebook. Goal: the sample reduction follows each vanadium change within a second or two.
-Property: the vanadium output passes to the sample's stage in memory, within the session's process. Neither run is loaded again.
+Property: the vanadium output passes to the sample's stage in memory, within one process. Neither run is loaded again.
 
 ## D. Batch
 
@@ -87,7 +87,7 @@ Gap: a cancel ends the records, but a workflow that has started runs on and keep
 Actor: spectroscopy user. Goal: each run is reduced on its own node as it arrives, and the volume so far is ready within seconds of each angle.
 Property: each `ANGLE` request starts when its run arrives, on any free node. Pushing a finished angle into the accumulator combines one contribution and reads no earlier one.
 Each snapshot of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of snapshots.
-A request of `VOLUME` over a thousand elements, made outside a session, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
+A plain request of `VOLUME` over a thousand elements, not through an accumulator, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
 
 ## F. Publication and provenance
 
@@ -111,7 +111,7 @@ Property: a backend in the notebook's process runs a workflow bound there, and u
 ### G3. Local application, remote compute
 
 Actor: user of a desktop application. Goal: the expensive reduction runs on the cluster; the cheap post-processing is tuned on the laptop with sub-second feedback.
-Property: a session's process runs on the laptop while its stages read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records the session makes go to the cluster's backend.
+Property: the application's stages run on the laptop while they read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records made through the stages go to the cluster's backend. Where a stage runs is the system's decision, not an argument of the API.
 
 ### G5. Reference across proposals refused
 

@@ -11,23 +11,20 @@ from ess.apps import Client, SubmitError
 from .conftest import BEAM_CENTRE, IOFQ, Measure
 
 
-@pytest.mark.xfail(
-    reason='sessions, stages, publish, and provenance.software are not implemented'
-)
+@pytest.mark.xfail(reason='publish and provenance.software are not implemented')
 def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
     centre = client.compute(BEAM_CENTRE, {'run': centre_run})
-    with client.session() as session:
-        tune = session.stage(
-            Template(
-                IOFQ,
-                params={'run': run, 'beam_centre': centre.ref('centre')},
-                blanks=('threshold',),
-            )
+    tune = client.stage(
+        Template(
+            IOFQ,
+            params={'run': run, 'beam_centre': centre.ref('centre')},
+            blanks=('threshold',),
         )
-        result = client.compute(tune, {'threshold': 1.5})
+    )
+    result = client.compute(tune, {'threshold': 1.5})
     pid = client.publish(result.ref('iofq'), 'scicat')
     plain = client.compute(IOFQ, result.request.params)
 

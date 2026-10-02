@@ -10,7 +10,7 @@ Those belong in [system.md](system.md), and the system may change them without c
 [adr/](adr/index.md) records the decisions behind both.
 
 The first sections cover what most notebooks need: submitting requests, reading their results, and chaining them.
-Later sections add what saves computation in interactive work (sessions), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
+Later sections add what saves computation in interactive work (stages and accumulators), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
 
 ## From a for loop
 
@@ -59,7 +59,7 @@ The terms this document defines, in the order they appear:
 | Term | What it is | Code from | Made by |
 |---|---|---|---|
 | backend | the process that runs requests and keeps records | framework | operator; or a notebook or app with `local()` |
-| client | the object through which a notebook or app talks to one backend | framework | notebook, app |
+| client | the object through which a notebook or app talks to one backend; it keeps what it makes until it releases it or ends | framework | notebook, app |
 | spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
 | binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
@@ -69,14 +69,12 @@ The terms this document defines, in the order they appear:
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | operator; a fake one in tests |
 | spec over a table | a spec whose only parameter is a list of elements of one model, such as a sum over runs | workflow author | workflow author |
-| session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
-| stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
-| accumulator | a spec over a table in a session, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
+| stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
+| accumulator | a spec over a table the backend keeps for a client, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
 | snapshot | a record of an accumulator's current value | framework | backend, when an accumulator is submitted |
 | driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
 
 The rows down to template are enough for most work.
-Stages and accumulators are both called *holders*, since both hold values in a session.
 The terms stage, accumulator, and driver follow sciline (scipp/sciline ADR 0003).
 
 ## Client and backend
@@ -214,7 +212,7 @@ Each call is checked on its own: if the samples are refused, the beam-centre rec
 
 Chain requests where the intermediate result is worth having as a result of its own, such as a beam centre or a vanadium normalization.
 Each step is a separate record.
-To avoid recomputing within a single workflow, use a stage instead (see Sessions).
+To avoid recomputing within a single workflow, use a stage instead (see Stages and accumulators).
 
 ## Labels and members
 
@@ -261,20 +259,43 @@ The backend keeps two kinds of things with different lifetimes:
 | | What | Kept |
 |---|---|---|
 | record | what ran, with which inputs, and what came of it | for a retention period |
-| output value | the data an output holds, such as an I(Q) array | only while something holds it, see below |
+| output value | the data an output holds, such as an I(Q) array | while a client keeps it, see below |
 
 Records are kept for a retention period, together with the older records they depend on.
 They are kept long because they are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
-Output values are large, so an output value is kept only while
 
-1. a pending request reads it,
-2. a record in a client holds it, like a dask future holds its value,
-3. a stage or accumulator in a session holds it (see Sessions), or
-4. it has been saved.
+Output values are large, so the backend keeps a value only while something keeps it.
+Two things do:
+
+- **the client that made its record, until the client releases it or ends;**
+- **a pending request that reads it, until the request has read it.**
+
+Nothing else keeps a value: not a record object, not a reference, not a label.
+A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
+
+| Call | Does |
+|---|---|
+| `client.release(what)` | releases records (one, a list, or a dict), a stage, or an accumulator |
+| `client.close()` | ends the client, which releases everything it keeps |
+| `with client:` | closes the client at the end of the block |
+
+```python
+centre = client.compute(BEAM_CENTRE, {'run': dataset(run=60330)})
+result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.ref('centre')})
+client.release(centre)              # the pending request still reads the centre
+client.output(result, 'iofq')       # kept: this client made the record
+client.output(centre, 'centre')     # raises: the value is not kept
+```
+
+Releasing and ending stop no work: pending requests still run.
+A released record that is still pending drops its values once it completes and no pending request reads them.
+Any later call of a client that has ended raises `ClientEnded`.
+A client made with `local()` owns its backend: closing the client also closes the backend, which waits until no record is pending.
+A client that is never closed ends with its process.
 
 A value that must outlive its client, such as a beam centre for tomorrow's batch, must be saved.
 How to save is not designed yet.
-Reading an output that is no longer kept raises an error, and a request that references it is refused at submission; the record itself remains.
+Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
 What lasts beyond retention is what `publish` puts in a catalogue (see Provenance and publication).
 
 ## Datasets
@@ -386,38 +407,35 @@ parts = [client.submit(CONTRIBUTE, {'run': r}) for r in (r611, r612)]
 total = client.submit(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]})
 client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
 
-# 3. the same chain through an accumulator, see Sessions
+# 3. the same chain through an accumulator, see Stages and accumulators
 ```
 
 Ways 2 and 3 give the same values. Way 1 makes one record of a different spec.
-NORMALIZE takes a scalar next to its list of runs, so it is not a spec over a table, and no accumulator can hold it.
+NORMALIZE takes a scalar next to its list of runs, so it is not a spec over a table, and it cannot be an accumulator.
 The framework allows all three; a package decides which specs it offers.
 
-## Sessions: stages and accumulators
+## Stages and accumulators
 
-Without a session, every request computes everything from its inputs.
+A plain request computes everything from its inputs.
 In interactive work this repeats work: tuning `bins` reloads the same run for each value, and adding one run to a sum of a hundred sums all hundred again.
-A session lets the backend keep such values in memory between requests.
+Stages and accumulators let the backend keep such values in memory between requests.
+A client makes them and keeps them until it releases them or ends (see How long records and values are kept).
+Records made through them are ordinary records.
 
-A *session* is a `with` block.
-In it, a notebook makes stages and accumulators, together called *holders*.
-Holders in one session share a process, so values pass between them in memory.
-Ending the session releases them once the requests made through them have run.
-Records made in a session are ordinary records and outlive it.
-
-A session runs in a backend process unless placed elsewhere, for example next to a desktop application with `client.session(where='local')`; its records still go to the backend.
-
-**Stage.** A *stage* is a template held in a session.
+**Stage.** A *stage* is a template that the backend keeps for a client.
 The backend computes what does not depend on the blanks once, such as loading the run, and each call through the stage computes only the rest:
 
 ```python
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))   # loads the run once
-    for bins in (50, 100, 200):
-        client.compute(tune, {'bins': bins}, label='iofq')
+tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))   # loads the run once
+for bins in (50, 100, 200):
+    client.compute(tune, {'bins': bins}, label='iofq')
 ```
 
+`client.stage` checks the template's values as it would check a request's, with the blanks left out, so a template that a request would refuse is refused here.
+It resolves dataset names when the stage is made, and `tune.template` holds the values as resolved; a later correction in the catalogue does not change what the stage computes with.
+A call through the stage fills only the blanks.
 A record made through a stage is the record of the plain request with the blanks filled; it does not mention the stage.
+What the stage computed is a cache: the backend may drop it at any time, and the next call computes it again and makes the same record.
 
 For a stage, the backend calls the binding in two steps:
 
@@ -430,14 +448,14 @@ A request outside a stage is the case with no blanks: `binding.stage(values, ())
 A function binding computes everything in each call.
 A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
 
-**Accumulator.** An *accumulator* is a spec over a table held in a session.
+**Accumulator.** An *accumulator* is a spec over a table that the backend keeps for a client.
 A request of a spec over a table needs the whole table at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
 A push takes the same dict that one element of the request takes.
 As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: the combination of the elements so far, such as their sum.
-Any spec over a table can be held if its binding provides `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
+Any spec over a table can be an accumulator if its binding provides `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
 
 ```python
-total = session.accumulator(PARTS_SUM)
+total = client.accumulator(PARTS_SUM)
 total.push({'numerator': record.ref('numerator'),    # an element: a reference per field
             'denominator': record.ref('denominator')})
 total.push(record.refs('numerator', 'denominator'))   # the same, where the names match
@@ -459,19 +477,14 @@ A snapshot takes no label or member; the requests that read it do.
 Way 3 of the sum above:
 
 ```python
-with client.session() as session:
-    contribute = session.stage(Template(CONTRIBUTE, blanks=('run',)))
-    finalize = session.stage(Template(FINALIZE, params={'scale': 2.0},
-                                      blanks=('numerator', 'denominator')))
-    total = session.accumulator(PARTS_SUM)
+total = client.accumulator(PARTS_SUM)
+for run in (r611, r612):
+    total.push(client.compute(CONTRIBUTE, {'run': run}).refs('numerator', 'denominator'))
+first = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
 
-    for run in (r611, r612):
-        total.push(client.compute(contribute, {'run': run}).refs('numerator', 'denominator'))
-    first = client.compute(finalize, client.compute(total).refs(), label='sum')
-
-    c613 = client.compute(contribute, {'run': r613})           # r611 and r612 are not reduced again
-    total.push(c613.refs('numerator', 'denominator'))
-    added = client.compute(finalize, client.compute(total).refs(), label='sum')
+c613 = client.compute(CONTRIBUTE, {'run': r613})               # r611 and r612 are not reduced again
+total.push(c613.refs('numerator', 'denominator'))
+added = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
 ```
 
 A snapshot's value is the output of the plain request over the elements pushed so far, in push order.
@@ -488,7 +501,7 @@ client.provenance(snapshot).records()    # [c611, c612, c613]: the records it re
 ## Drivers
 
 The backend runs requests and keeps records; it does not decide what to run.
-Deciding over time what to submit, what to push into an accumulator, and what to keep in a session is the job of a *driver*: ordinary code that uses the client.
+Deciding over time what to submit, what to push into an accumulator, and what to release is the job of a *driver*: ordinary code that uses the client.
 A notebook is a driver, and so is an application or a long-running driving server.
 Drivers never run in the backend.
 
@@ -508,18 +521,20 @@ records['250K']
 This one reduces each angle of a rotation scan as its run arrives, and keeps a volume of the angles finished so far:
 
 ```python
-with client.session() as session:
-    volume = session.accumulator(VOLUME)
-    angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
-    for angle in client.as_completed(angles):                   # in the order they finish
-        volume.push(angle.refs())                               # ANGLE outputs only counts
-        client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'energy_transfer': 2.0},
-                      label='cut', member='17')
+volume = client.accumulator(VOLUME)
+angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
+for angle in client.as_completed(angles):                       # in the order they finish
+    volume.push(angle.refs())                                   # ANGLE outputs only counts
+    snapshot = client.submit(volume)
+    client.submit(CUT, {'data': snapshot.ref('counts'), 'energy_transfer': 2.0},
+                  label='cut', member='17')
+    client.release(snapshot)                                    # the cut still reads it
 ```
 
 The generator `angles` submits a request for each run as it arrives.
 `as_completed` consumes it in a thread, so submitting does not wait for the loop body.
 It yields each record once it has finished, so the angles are reduced in parallel while the loop pushes one at a time.
+Releasing each snapshot once its cut is submitted keeps one volume per pending cut, not one per angle.
 
 ## Batch and automatic reduction
 
@@ -547,6 +562,7 @@ TriggerLoop(client, rules=[rule]).run()
 ```
 
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
+Like any driver, it keeps what it makes through its client, such as an accumulator for a sum that grows with each new dataset under a rule.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 Templates and rules serialize to JSON; the core keeps no store of them, and records do not name them.
 
@@ -572,10 +588,10 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 - A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
-- A record's outputs do not depend on how they were computed: through holders, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
+- A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - Records are kept for a retention period, together with the older records they depend on. A published entry answers what produced it without access to the records.
-- An output's value is kept only while a pending request reads it, a record in a client holds it, or a holder in a session holds it, or once it is saved. Ending a session releases its holders once the requests made through them have run.
+- Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
 
 ## Left to the system
 
@@ -586,13 +602,12 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
 - how a request of a spec over a table with many elements is split into parts, such as a tree of partial sums, and how that is configured
-- where a session's process runs by default, whether a value passed in memory is also written, and how a session whose client is gone is ended
+- where a stage or an accumulator is kept and computes, for example next to a desktop application; whether a value passed in memory is also written; and how a client whose process is gone is ended
 - how access across proposals is enforced
 
 ## Open questions
 
 1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it.
-2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
-3. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
-4. **Labels and members** on records, `member_field`, and `client.members` are tentative.
-5. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
+2. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
+3. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

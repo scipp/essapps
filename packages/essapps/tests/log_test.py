@@ -160,11 +160,10 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
         )
         for n in (1, 2, 3)
     }
-    with first.session() as session:
-        total = session.accumulator(TOTAL)
-        for load in loads.values():
-            total.push(load.refs('value'))
-        snapshot = first.compute(total)
+    total = first.accumulator(TOTAL)
+    for load in loads.values():
+        total.push(load.refs('value'))
+    snapshot = first.compute(total)
 
     again = restart(tmp_path / 'log')
 
@@ -197,11 +196,10 @@ def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        for n in (1, 2, 3):
-            total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
-        snapshot = client.submit(total)
+    total = client.accumulator(TOTAL)
+    for n in (1, 2, 3):
+        total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
+    snapshot = client.submit(total)
 
     *_, logged, finished = Log.read(tmp_path / 'log')
     assert isinstance(logged, Submitted)
@@ -222,25 +220,28 @@ def test_a_record_pending_in_the_log_runs_after_a_restart(
     pending = start(tmp_path / 'log').submit(LOAD, {'run': dataset(run=2)})
 
     again = restart(tmp_path / 'log')
+    total = again.submit(TOTAL, {'values': [pending.refs('value')]})
     loading.set()
 
     assert again.wait(pending) == Status.COMPLETED
-    assert again.output(pending, 'value') == 2.0
+    assert again.output(total, 'value') == 2.0
+    with pytest.raises(LookupError, match='not kept'):  # its client is gone
+        again.output(pending, 'value')
 
 
-def test_holders_do_not_survive_a_restart(
+def test_accumulators_do_not_survive_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
     first = start(tmp_path / 'log')
     load = first.compute(LOAD, {'run': dataset(run=1)})
-    total = first.session().accumulator(TOTAL)
+    total = first.accumulator(TOTAL)
     total.push(load.refs('value'))
 
     again = restart(tmp_path / 'log')
 
-    with pytest.raises(SubmitError, match='ended'):
+    with pytest.raises(SubmitError, match='released or is unknown'):
         again.submit(total)
 
 
@@ -254,7 +255,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(LookupError, match='no output'):
+    with pytest.raises(LookupError, match='the value is not kept'):
         again.output(load, 'value')
 
 
@@ -267,10 +268,9 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
 
     again = restart(tmp_path / 'log')
 
-    with again.session() as session:
-        total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match='no output'):
-            total.push(load.refs('value'))
+    total = again.accumulator(TOTAL)
+    with pytest.raises(SubmitError, match='the value is not kept'):
+        total.push(load.refs('value'))
 
 
 def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
@@ -323,10 +323,9 @@ def test_the_log_holds_submissions_finished_records_and_pushes_only(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    with client.session() as session:
-        session.stage(Template(LOAD, blanks=('window',)))
-        total = session.accumulator(TOTAL)
-        total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
+    client.stage(Template(LOAD, params={'run': dataset(run=1)}, blanks=('window',)))
+    total = client.accumulator(TOTAL)
+    total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Submitted,
@@ -344,12 +343,11 @@ def test_a_refused_call_writes_nothing_to_the_log(
 
     with pytest.raises(SubmitError, match='not parameters'):
         client.submit(LOAD, {'run': dataset(run=1), 'bins': 2})
-    with client.session() as session:
-        total = session.accumulator(TOTAL)
-        with pytest.raises(SubmitError, match='nothing has been pushed'):
-            client.submit(total)
-        with pytest.raises(SubmitError, match='fields'):
-            total.push({'other': load.ref('value')})
+    total = client.accumulator(TOTAL)
+    with pytest.raises(SubmitError, match='nothing has been pushed'):
+        client.submit(total)
+    with pytest.raises(SubmitError, match='fields'):
+        total.push({'other': load.ref('value')})
 
     assert len(Log.read(tmp_path / 'log')) == written
 
