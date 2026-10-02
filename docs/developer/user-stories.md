@@ -114,20 +114,19 @@ assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
 
 The author must have declared `masked` as an output. Every record of `IOFQ` then has it.
 
-### S4. Submit a chain in one go
+### S4. Submit a chain without waiting
 
 Actor: user in a notebook. Goal: submit two reductions and a third request that combines them, without waiting in between.
 
 ```python
 r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
-parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]
-total = Request(PARTS_SUM, {'numerator': [p.ref('numerator') for p in parts],
-                            'denominator': [p.ref('denominator') for p in parts]})
-c611, c612, summed = client.submit([*parts, total])          # returns at once
+parts = client.submit([Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)])  # pending
+summed = client.submit(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]})
 
 assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
-assert summed.request.params['numerator'] == [c611.ref('numerator'), c612.ref('numerator')]
 ```
+
+Both calls return at once. The sum runs once both parts have completed.
 
 ### S5. Sum runs
 

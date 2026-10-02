@@ -57,17 +57,14 @@ def test_s3_look_at_a_value_inside_a_reduction(
     assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
 
 
-def test_s4_submit_a_chain_in_one_go(client: Client, measure: Measure) -> None:
+def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
-    parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]
-    rows = [{f: p.ref(f) for f in ('numerator', 'denominator')} for p in parts]
-    total = Request(PARTS_SUM, {'parts': rows})
-    c611, c612, summed = client.submit([*parts, total])
+    parts = client.submit([Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)])
+    summed = client.submit(
+        PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]}
+    )
 
     assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
-    assert summed.request.params['parts'] == [
-        c.refs('numerator', 'denominator') for c in (c611, c612)
-    ]
 
 
 def test_s5_sum_runs(client: Client, measure: Measure) -> None:
