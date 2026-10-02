@@ -20,11 +20,11 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `NORMALIZE` | `runs: list`, `scale=1.0` | `normalized` | the counts summed over runs, divided by their total, times `scale` | a reduction that sums runs internally |
 | `BACKGROUND` | `sample_runs: list`, `background_runs: list` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
 | `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | the counts; their total; the first count divided by the total | the per-run part of `NORMALIZE` |
-| `PARTS_SUM` | accumulator spec, element `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed | the accumulation of `NORMALIZE` |
+| `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed | the accumulation of `NORMALIZE` |
 | `FINALIZE` | `numerator`, `denominator`, `scale=1.0` | `normalized` | `numerator / denominator * scale` | the part of `NORMALIZE` after the sum |
 | `ANGLE` | `run` | `counts` | the counts | one angle of a rotation scan |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `VOLUME` | accumulator spec, element `Counts` (`counts`) | `counts` | the sum | the accumulation of a rotation scan |
+| `VOLUME` | `angles`: a table of `Counts` (`counts`) | `counts` | the sum | the accumulation of a rotation scan |
 | `STITCH` | `runs: list`, `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
@@ -908,7 +908,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 3.
 - **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 4.
-- **Grouping** (system story D7): how an author declares that grouping does not change the result of an accumulator spec; README.md open question 1.
+- **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
 - **Placing a session** (system story G3): the name and values of the placement argument; README.md open question 2.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing a correction** (F4): deferred.

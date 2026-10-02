@@ -16,7 +16,6 @@ from ess.reduce.spec import Array, NexusFile, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.apps import (
-    AccumulatorSpec,
     Backend,
     Client,
     Record,
@@ -50,7 +49,20 @@ LOAD = WorkflowSpec(
     params=LoadParams,
     outputs=Value,
 )
-TOTAL = AccumulatorSpec(name='total', version=1, element=Value)
+
+
+class Values(BaseModel):
+    values: list[Value]
+
+
+TOTAL = WorkflowSpec(
+    name='total',
+    version=1,
+    title='total',
+    description='total',
+    params=Values,
+    outputs=Value,
+)
 
 
 @pytest.fixture

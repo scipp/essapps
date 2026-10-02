@@ -74,10 +74,7 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
     kept = [parts[r611], parts[r613]]
     summed = client.compute(
         PARTS_SUM,
-        {
-            'numerator': [p.ref('numerator') for p in kept],
-            'denominator': [p.ref('denominator') for p in kept],
-        },
+        {'parts': [p.refs('numerator', 'denominator') for p in kept]},
     )
     removed = client.compute(FINALIZE, summed.refs(), label='sum')
 

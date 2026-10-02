@@ -21,7 +21,7 @@ import scipp as sc
 from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import AccumulatorSpec, Backend, Client, combine
+from ess.apps import Backend, Client, combine
 from ess.apps.testing import FakeDatasets
 
 
@@ -206,9 +206,11 @@ class NormalizationParts(BaseModel):
     denominator: Array()  # type: ignore[valid-type]
 
 
-PARTS_SUM = AccumulatorSpec(
-    name='sans-parts-sum', version=1, element=NormalizationParts
-)
+class PartsSumParams(BaseModel):
+    parts: list[NormalizationParts]
+
+
+PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
 
 
 class Counts(BaseModel):
@@ -216,7 +218,13 @@ class Counts(BaseModel):
 
 
 ANGLE = _spec('angle', RunParams, Counts)
-VOLUME = AccumulatorSpec(name='volume', version=1, element=Counts)
+
+
+class VolumeParams(BaseModel):
+    angles: list[Counts]
+
+
+VOLUME = _spec('volume', VolumeParams, Counts)
 
 
 def angle(run: Any) -> dict[str, sc.Variable]:

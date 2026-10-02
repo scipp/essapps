@@ -68,10 +68,10 @@ The terms this document defines, in the order they appear:
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | operator; a fake one in tests |
-| accumulator spec | a spec that combines a list of values into one, such as a sum | workflow author | workflow author |
+| spec over a table | a spec whose only parameter is a list of elements of one model, such as a sum over runs | workflow author | workflow author |
 | session | a `with` block in which the backend keeps intermediate values in memory | framework | notebook, app |
 | stage | a template in a session; what does not depend on the blanks is computed once | framework | notebook, app |
-| accumulator | a running combination in a session, such as a sum, to which records are added one at a time | framework | notebook, app |
+| accumulator | a spec over a table in a session, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
 | snapshot | a record of an accumulator's current value | framework | backend, when an accumulator is submitted |
 | driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
 
@@ -303,32 +303,46 @@ for run in datasets.watch(Selector(scan='17')): ...   # existing ones first, the
 datasets.metadata(run)['sample']                        # the source's current values
 ```
 
-## Combining runs: accumulator specs
+## Combining runs: specs over a table
 
 Many reductions combine several runs into one result.
 The counts of each angle of a rotation scan are summed into one volume.
 A normalization sums numerators and denominators over runs and divides only at the end.
 
-An *accumulator spec* is a spec for the combining step.
-It is built around an *element model*: the fields of one value that is combined, such as an array of counts.
-The params of an accumulator spec hold one list per element field; its outputs have the fields of the element model.
-Since output and element have the same fields, a combined value can be combined again.
+What one run contributes is an *element*, such as an array of counts; a model declares its fields.
+The combining step is a spec whose only parameter is a list of elements, a *table* in `ess.reduce.spec`: a form shows it with one row per element and one column per field.
+Such a spec is a *spec over a table*.
 
 ```python
 class Counts(BaseModel):
     counts: Array(ArraySpec(dims=('Q', 'energy_transfer'), unit='counts'))
 
-VOLUME = AccumulatorSpec(name='volume', version=1, element=Counts)          # bound to a sum
+class VolumeParams(BaseModel):
+    angles: list[Counts]                                                      # a table
+
+VOLUME = WorkflowSpec(name='volume', ..., params=VolumeParams, outputs=Counts)   # bound to a sum
 
 angles = [client.submit(ANGLE, {'run': r}) for r in scan]                    # one run per angle
-volume = client.submit(VOLUME, {'counts': [a.ref('counts') for a in angles]})
+volume = client.submit(VOLUME, {'angles': [a.refs('counts') for a in angles]})
 client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
 ```
 
-An accumulator spec connects specs whose authors did not plan for each other, as long as their fields match.
+Each element of a request is a dict with a reference per field, which `record.refs(...)` gives.
+An element's fields are values or data fields, never another model or table; `ess.reduce.spec` refuses a spec that nests deeper.
+
+The outputs are whatever the combination gives.
+A sum gives the fields of the element, as VOLUME does, so a sum can be summed again.
+A mean gives other fields, and a sum of 32-bit integer counts may give 64-bit integers so that it does not overflow:
+
+```python
+MEAN = WorkflowSpec(name='mean', ..., params=VolumeParams, outputs=MeanCounts)
+```
+
+A spec over a table connects specs whose authors did not plan for each other, as long as their fields match.
 
 An author may declare that the result does not depend on how the elements are grouped, as for a sum (how is open, see Open questions).
 The backend may then compute a request over many elements in parts, on many processes; the record is the same.
+This needs outputs with the fields of the element, since the result of each part is combined again; a mean does not qualify.
 
 A reduction with a sum in the middle splits into three specs.
 A package builds CONTRIBUTE and FINALIZE from the stages of one sciline `split`, cut at the keys that PARTS_SUM sums:
@@ -340,19 +354,22 @@ run 613 ── CONTRIBUTE ──┘
 ```
 
 ```python
-class NormalizationParts(BaseModel):           # the element model of PARTS_SUM
+class NormalizationParts(BaseModel):           # one element of PARTS_SUM
     numerator: Array(ArraySpec(dims=('Q',), unit='counts'))
     denominator: Array(ArraySpec(dims=('Q',), unit='counts'))
 
+class PartsSumParams(BaseModel):
+    parts: list[NormalizationParts]
+
 CONTRIBUTE = WorkflowSpec(name='sans-contribute', ..., params=ContributeParams, outputs=ContributeOutputs)
-PARTS_SUM = AccumulatorSpec(name='sans-parts-sum', version=1, element=NormalizationParts)
+PARTS_SUM = WorkflowSpec(name='sans-parts-sum', ..., params=PartsSumParams, outputs=NormalizationParts)
 FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, outputs=IofQOutputs)
 ```
 
 `ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, such as a transmission per run, which are not summed.
 `FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
 A FINALIZE may read several sums, for example one over sample runs and one over background runs.
-Position i of each list in a PARTS_SUM request refers to the same run.
+Each element of a PARTS_SUM request holds the numerator and denominator of one run, so the two cannot be paired with different runs.
 
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
 The workflow author decides this for the specs the package ships; whoever connects specs from different packages, in a notebook or an app, decides it for that chain.
@@ -365,14 +382,14 @@ client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})   # NORMALIZE: s
 
 # 2. a chain of requests
 parts = [client.submit(CONTRIBUTE, {'run': r}) for r in (r611, r612)]
-total = client.submit(PARTS_SUM, {'numerator': [p.ref('numerator') for p in parts],
-                                  'denominator': [p.ref('denominator') for p in parts]})
+total = client.submit(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]})
 client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
 
 # 3. the same chain through an accumulator, see Sessions
 ```
 
 Ways 2 and 3 give the same values. Way 1 makes one record of a different spec.
+NORMALIZE takes a scalar next to its list of runs, so it is not a spec over a table, and no accumulator can hold it.
 The framework allows all three; a package decides which specs it offers.
 
 ## Sessions: stages and accumulators
@@ -412,9 +429,11 @@ A request outside a stage is the case with no blanks: `binding.stage(values, ())
 A function binding computes everything in each call.
 A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
 
-**Accumulator.** An *accumulator* holds the combined value of the elements pushed into it so far.
-A request of an accumulator spec needs the whole list at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
-The accumulator spec's binding must provide `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
+**Accumulator.** An *accumulator* is a spec over a table held in a session.
+A request of a spec over a table needs the whole table at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
+A push takes the same dict that one element of the request takes.
+As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: the combination of the elements so far, such as their sum.
+Any spec over a table can be held if its binding provides `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
 
 ```python
 total = session.accumulator(PARTS_SUM)
@@ -424,7 +443,8 @@ total.push(record.refs('numerator', 'denominator'))   # the same, where the name
 total.push({'numerator': other.ref('counts'), 'denominator': other.ref('monitor')})
 ```
 
-A push takes a reference for each field of the element model, and is refused if a field is missing or extra.
+A push takes a reference for each field of the element, and is refused if a field is missing or extra.
+A push combines every field or none, so the outputs of a snapshot cover the same runs; one accumulator per field would not guarantee that.
 The referenced outputs may have any name; `record.refs(...)` is short for the case where they are named like the fields.
 Without names, `refs()` references every output.
 The push waits for the records it references to finish and refuses them unless they have completed.
@@ -564,14 +584,14 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
-- how a request of an accumulator spec over many elements is split into parts, such as a tree of partial sums, and how that is configured
+- how a request of a spec over a table with many elements is split into parts, such as a tree of partial sums, and how that is configured
 - where a session's process runs by default, whether a value passed in memory is also written, and how a session whose client is gone is ended
 - how access across proposals is enforced
 
 ## Open questions
 
-1. **Grouping.** How an author declares that grouping does not change the result of an accumulator spec, which a tree of partial sums over a plain request needs.
+1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it.
 2. **Sessions.** Whether a holder can exist without a session that a notebook or app opened; how the trigger loop owns one, for a sum that grows with each new dataset under a rule; the name and values of the placement argument.
-3. **Removing an element.** A request of the accumulator spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
+3. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
 4. **Labels and members** on records, `member_field`, and `client.members` are tentative.
 5. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

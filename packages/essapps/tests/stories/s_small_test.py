@@ -60,19 +60,13 @@ def test_s3_look_at_a_value_inside_a_reduction(
 def test_s4_submit_a_chain_in_one_go(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = [Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)]
-    total = Request(
-        PARTS_SUM,
-        {
-            'numerator': [p.ref('numerator') for p in parts],
-            'denominator': [p.ref('denominator') for p in parts],
-        },
-    )
+    rows = [{f: p.ref(f) for f in ('numerator', 'denominator')} for p in parts]
+    total = Request(PARTS_SUM, {'parts': rows})
     c611, c612, summed = client.submit([*parts, total])
 
     assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
-    assert summed.request.params['numerator'] == [
-        c611.ref('numerator'),
-        c612.ref('numerator'),
+    assert summed.request.params['parts'] == [
+        c.refs('numerator', 'denominator') for c in (c611, c612)
     ]
 
 
