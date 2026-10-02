@@ -2,7 +2,7 @@
 
 **Status: the design of the API. Implementation starts with the core.**
 
-[scoping.md](scoping.md) states the goals. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
+[scoping.md](scoping.md) states the goals, and [../requirements/](../requirements/README.md) what we know, assume, and do not know about the problem. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
 
 This document describes the API we want: what workflow authors, app authors, and notebooks write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
