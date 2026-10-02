@@ -32,7 +32,7 @@ rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each arrival of an angle then stitches all angles of that sample so far; a stitch is a spec over a list, not an accumulation.
+Each arrival of an angle then stitches all angles of that sample so far; a stitch is one request over all angles so far, not an accumulation.
 
 ```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),

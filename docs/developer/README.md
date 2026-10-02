@@ -72,10 +72,9 @@ The terms this document defines, in the order they appear:
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
 | accumulator | a spec over a table the backend keeps for a client, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
 | snapshot | a record of an accumulator's current value, kept until the next push | framework | backend, when an accumulator is submitted |
-| driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
 
 The rows down to template are enough for most work.
-The terms stage, accumulator, and driver follow sciline (scipp/sciline ADR 0003).
+The terms stage and accumulator follow sciline (scipp/sciline ADR 0003).
 
 ## Client and backend
 
@@ -142,6 +141,19 @@ PipelineBinding(pipeline,
                         'can': Filename[BackgroundRun], 'beam_centre': BeamCenter},
                 outputs={'iofq': BackgroundSubtractedIofQ})
 ```
+
+The backend calls a binding in two steps, so that a stage (see Stages and accumulators) computes what stays the same once:
+
+```python
+call = binding.stage(fixed, blanks)   # fixed: {name: value} that stay the same; blanks: names left open
+call(bins=50)                         # values for the blanks; called once per request through the stage
+```
+
+A request outside a stage is the case with no blanks: `binding.stage(values, ())` and then one call without arguments.
+A function binding computes everything in each call.
+A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
+A binding of a spec over a table, such as `combine(operator.iadd)`, may also provide `accumulator()`.
+An accumulator needs it (see Stages and accumulators); [system.md](system.md) describes that protocol.
 
 A backend in the notebook's process can bind a spec to code defined in the notebook, for example to try out a change to a workflow:
 
@@ -375,12 +387,8 @@ MEAN = WorkflowSpec(name='mean', ..., params=VolumeParams, outputs=MeanCounts)
 
 A spec over a table connects specs whose authors did not plan for each other, as long as their fields match.
 
-An author may declare that the result does not depend on how the elements are grouped, as for a sum (how is open, see Open questions).
-The backend may then compute a request over many elements in parts, on many processes; the record is the same.
-This needs outputs with the fields of the element, since the result of each part is combined again; a mean does not qualify.
-
 A reduction with a sum in the middle splits into three specs.
-A package builds CONTRIBUTE and FINALIZE from the stages of one sciline `split`, cut at the keys that PARTS_SUM sums:
+A package builds CONTRIBUTE and FINALIZE from the parts of one sciline `split`, cut at the keys that PARTS_SUM sums:
 
 ```text
 run 611 ── CONTRIBUTE ──┐
@@ -412,7 +420,7 @@ The workflow author decides this for the specs the package ships; whoever connec
 ### One sum, three ways
 
 ```python
-# 1. a spec that sums internally over a list parameter
+# 1. one request of a spec that sums its runs internally
 client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})   # NORMALIZE: such a spec
 
 # 2. a chain of requests
@@ -449,23 +457,13 @@ It resolves dataset names when the stage is made, and `tune.template` holds the 
 A call through the stage fills only the blanks.
 A record made through a stage is the record of the plain request with the blanks filled; it does not mention the stage.
 What the stage computed is a cache: the backend may drop it at any time, and the next call computes it again and makes the same record.
-
-For a stage, the backend calls the binding in two steps:
-
-```python
-call = binding.stage(fixed, blanks)   # fixed: {name: value} that stay the same; blanks: names left open
-call(bins=50)                         # values for the blanks; called once per request through the stage
-```
-
-A request outside a stage is the case with no blanks: `binding.stage(values, ())` and then one call without arguments.
-A function binding computes everything in each call.
-A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
+How the backend calls the binding for a stage is in Specs and bindings.
 
 **Accumulator.** An *accumulator* is a spec over a table that the backend keeps for a client.
 A request of a spec over a table needs the whole table at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
 A push takes the same dict that one element of the request takes.
 As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: the combination of the elements so far, such as their sum.
-Any spec over a table can be an accumulator if its binding provides `accumulator()`, as `combine(operator.iadd)` does; [system.md](system.md) describes the protocol.
+Any spec over a table can be an accumulator if its binding provides `accumulator()` (see Specs and bindings).
 
 ```python
 total = client.accumulator(PARTS_SUM)
@@ -542,7 +540,7 @@ To keep an earlier state, submit a request that reduces or copies the snapshot, 
 ## Drivers
 
 The backend runs requests and keeps records; it does not decide what to run.
-Deciding over time what to submit, what to push into an accumulator, and what to release is the job of a *driver*: ordinary code that uses the client.
+Deciding over time what to submit, what to push into an accumulator, and what to release is the job of a driver: ordinary code that uses the client.
 A notebook is a driver, and so is an application or a long-running driving server.
 Drivers never run in the backend.
 
@@ -633,7 +631,7 @@ Recomputing in a record's environment comes later.
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
-- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice that is a view of it, since the snapshot's value changes at the next push.
+- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice of it, since the snapshot's value changes at the next push.
 - A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - Records are kept as long as the proposal, and dropped with it as a whole. A published entry answers what produced it without access to the records.
@@ -647,13 +645,13 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
-- how a request of a spec over a table with many elements is split into parts, such as a tree of partial sums, and how that is configured
+- whether a request of a spec over a table with many elements is computed in parts on many processes, such as a tree of partial sums, and how that is configured. The record is the same. Computing in parts needs the author to declare that grouping does not change the result, as for a sum (open question 1).
 - where a stage or an accumulator is kept and computes, for example next to a desktop application; whether a value passed in memory is also written; and how a client whose process is gone is ended
 - how access across proposals is enforced
 
 ## Open questions
 
-1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it.
+1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it, since the result of each part is combined again; a mean cannot.
 2. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

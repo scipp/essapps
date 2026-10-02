@@ -366,7 +366,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it is one spec over a list of runs, not an accumulation.
+The stitch fits scale factors over all angles at once, so it is one request over all runs, not an accumulation.
 
 ### C5. Vanadium and sample tuned together
 
