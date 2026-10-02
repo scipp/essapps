@@ -106,7 +106,7 @@ Property: the application's stages run on the laptop while they read outputs of 
 ### G5. Reference across proposals refused
 
 Actor: operator. Goal: no user reads another proposal's data, whatever client they use.
-Property: the backend checks every reference against the submitter's proposal and its grants. A modified client cannot get around the check.
+Property: the backend checks every reference against the submitter's proposal. A modified client cannot get around the check.
 
 ## H. Operations
 

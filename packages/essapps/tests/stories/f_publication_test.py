@@ -4,6 +4,8 @@
 
 # ruff: noqa: F821
 
+from collections.abc import Callable
+
 import pytest
 
 from ess.apps import Client, SubmitError, Template
@@ -38,9 +40,12 @@ def test_f1_publish_then_trace_six_months_later(
 
 
 @pytest.mark.xfail(
-    reason='upgrade, client.recompute, and provenance.software are not implemented'
+    reason='records name no software versions, so upgrade takes no versions=; '
+    'client.recompute and Provenance.software are not implemented'
 )
-def test_f2_reproduce_after_two_upgrades(client: Client, measure: Measure) -> None:
+def test_f2_reproduce_after_two_upgrades(
+    client: Client, measure: Measure, upgrade: Callable[..., Client]
+) -> None:
     result = client.compute(
         IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0]), 'threshold': 1.5}
     )
