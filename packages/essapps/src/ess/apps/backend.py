@@ -135,8 +135,7 @@ class Entry:
     A request of a submission, and its label and member.
 
     ``name`` says where the request came from in the call, a key or an index,
-    and prefixes the reasons it is refused. A reference to the record ``@<i>``
-    names the record the i-th entry becomes. ``stage`` names the stage the
+    and prefixes the reasons it is refused. ``stage`` names the stage the
     request goes through, if any.
     """
 
@@ -292,11 +291,10 @@ class Backend:
         resolved before the backend's lock is taken. The records are pending.
         """
         ids = [uuid.uuid4().hex for _ in entries]
-        requests = [self._prepare(e, ids, proposal) for e in entries]
+        requests = [self._prepare(e, proposal) for e in entries]
         with self._changed:
-            specs = {i: r.spec for i, r in zip(ids, requests, strict=True)}
             for entry, request in zip(entries, requests, strict=True):
-                self._check_reads(entry, request, specs, proposal)
+                self._check_reads(entry, request, proposal)
                 self._check_stage(entry, request, proposal)
             self._append(
                 Submitted(
@@ -357,7 +355,7 @@ class Backend:
             self._complete(record_id, dict(value))
             return self._views.records[record_id]
 
-    def _prepare(self, entry: Entry, ids: list[str], proposal: str) -> Request:
+    def _prepare(self, entry: Entry, proposal: str) -> Request:
         """The request with names resolved and defaults filled; needs no lock."""
         request = entry.request
         try:
@@ -369,7 +367,7 @@ class Backend:
                 )
             _check_cells(spec.params, request.params)
             params = {
-                field: map_refs(value, self._resolver(field, ids, proposal))
+                field: map_refs(value, self._resolver(field, proposal))
                 for field, value in request.params.items()
             }
             try:
@@ -385,7 +383,7 @@ class Backend:
         return Request(request.spec, _values(model))
 
     def _resolver(
-        self, field: str, ids: list[str], proposal: str
+        self, field: str, proposal: str
     ) -> Callable[[OutputRef | DatasetRef], OutputRef | DatasetRef]:
         def resolve(ref: OutputRef | DatasetRef) -> OutputRef | DatasetRef:
             if isinstance(ref, DatasetRef):
@@ -402,30 +400,17 @@ class Backend:
                 return identity
             if ref.key is not None:
                 raise SubmitError(f'{field}: {ref} names an element of an output')
-            if not ref.record.startswith('@'):
-                return ref
-            index = ref.record[1:]
-            if not index.isdigit() or int(index) >= len(ids):
-                raise SubmitError(f'{field}: {ref} names a request not in this call')
-            return OutputRef(record=ids[int(index)], output=ref.output)
+            return ref
 
         return resolve
 
-    def _check_reads(
-        self,
-        entry: Entry,
-        request: Request,
-        submitted: Mapping[str, SpecId],
-        proposal: str,
-    ) -> None:
+    def _check_reads(self, entry: Entry, request: Request, proposal: str) -> None:
         """Check the outputs a request reads; lock held."""
         params = self._specs[request.spec].params
         try:
             for field, value in request.params.items():
                 for where, ref, target in _reads(params, field, value):
-                    spec_id = submitted.get(ref.record) or self._readable(
-                        ref, where, proposal
-                    )
+                    spec_id = self._readable(ref, where, proposal)
                     outputs = self._output_fields[spec_id]
                     if ref.output not in outputs:
                         raise SubmitError(
@@ -677,9 +662,9 @@ class Backend:
         assert table is not None  # noqa: S101
         name, _ = table
         entry = Entry(Request(held.spec, {name: [element]}))
-        request = self._prepare(entry, [], proposal)
+        request = self._prepare(entry, proposal)
         with self._changed:
-            self._check_reads(entry, request, {}, proposal)
+            self._check_reads(entry, request, proposal)
         try:
             values = self._read(request.params)
         except LookupError as error:  # such as an output no longer kept

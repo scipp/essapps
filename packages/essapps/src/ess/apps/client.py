@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from ess.reduce.spec import DatasetRef, OutputRef, WorkflowSpec
+from ess.reduce.spec import DatasetRef, WorkflowSpec
 from pydantic import BaseModel
 
 from .backend import Backend, Entry
@@ -31,8 +31,6 @@ from .records import (
     SpecId,
     Status,
     Submission,
-    SubmitError,
-    map_refs,
 )
 from .sessions import Accumulator, Session, Stage
 
@@ -62,20 +60,6 @@ def _names(what: Any) -> list[str | None]:
     if isinstance(what, list | tuple):
         return [f'[{i}]' for i in range(len(what))]
     return [None]
-
-
-def _numbered(requests: list[Request]) -> list[Request]:
-    """The requests with references to each other rewritten as ``@<index>``."""
-    index = {r.placeholder: f'@{i}' for i, r in enumerate(requests)}
-    if len(index) != len(requests):
-        raise SubmitError('a request appears twice in one submission')
-
-    def renumber(ref: Any) -> Any:
-        if isinstance(ref, OutputRef) and ref.record in index:
-            return OutputRef(record=index[ref.record], output=ref.output, key=ref.key)
-        return ref
-
-    return [Request(r.spec, map_refs(r.params, renumber)) for r in requests]
 
 
 class Provenance(BaseModel, frozen=True):
@@ -170,7 +154,7 @@ class Client:
         entries = [
             Entry(request, label=label, member=m, name=name, stage=stage)
             for request, m, name in zip(
-                _numbered(_items(what)), members, _names(what), strict=True
+                _items(what), members, _names(what), strict=True
             )
         ]
         records = self._backend.submit(

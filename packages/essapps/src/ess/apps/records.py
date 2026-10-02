@@ -61,13 +61,7 @@ class SpecId(BaseModel, frozen=True):
 
 
 class Request(BaseModel, frozen=True):
-    """
-    A spec and its parameter values.
-
-    A request that is not yet submitted can be referenced by other requests in
-    the same submission; :meth:`ref` gives a placeholder that the backend
-    replaces by a reference to the record the request becomes.
-    """
+    """A spec and its parameter values."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -78,14 +72,6 @@ class Request(BaseModel, frozen=True):
         self, spec: WorkflowSpec | SpecId, params: dict[str, Any] | None = None
     ) -> None:
         super().__init__(spec=SpecId.of(spec), params=params or {})
-
-    @property
-    def placeholder(self) -> str:
-        """The record name that :meth:`ref` uses before submission."""
-        return f'@{id(self)}'
-
-    def ref(self, output: str) -> OutputRef:
-        return OutputRef(record=self.placeholder, output=output)
 
     def inputs(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""

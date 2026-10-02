@@ -102,36 +102,32 @@ def load(n: int) -> Request:
 
 
 def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> None:
-    a, b = load(1), load(2)
-    total = Request(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
-    records = client.submit({'a': a, 'b': b, 'total': total})
+    a, b = client.submit([load(1), load(2)])
+    total = client.submit(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
 
-    assert client.status(records['total']) is Status.PENDING
+    assert client.status(total) is Status.PENDING
     gate.open.set()
-    assert client.output(records['total'], 'value') == 3.0
+    assert client.output(total, 'value') == 3.0
 
 
 def test_closing_waits_until_no_record_is_pending(
     backend: Backend, client: Client, gate: Gate
 ) -> None:
-    a = load(1)
-    total = Request(ADD, {'a': a.ref('value'), 'b': a.ref('value')})
-    records = client.submit([a, total])  # total waits for a
+    a = client.submit(load(1))
+    total = client.submit(ADD, {'a': a.ref('value'), 'b': a.ref('value')})  # waits
     threading.Timer(0.05, gate.open.set).start()
     backend.close()
 
-    assert client.status(records) == [Status.COMPLETED, Status.COMPLETED]
+    assert client.status([a, total]) == [Status.COMPLETED, Status.COMPLETED]
 
 
 def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) -> None:
-    bad, good = load(3), load(1)
-    first = Request(ADD, {'a': bad.ref('value'), 'b': good.ref('value')})
-    second = Request(ADD, {'a': first.ref('value'), 'b': good.ref('value')})
-    records = client.submit([bad, good, first, second])
+    bad, good = client.submit([load(3), load(1)])
+    first = client.submit(ADD, {'a': bad.ref('value'), 'b': good.ref('value')})
+    second = client.submit(ADD, {'a': first.ref('value'), 'b': good.ref('value')})
     gate.open.set()
 
-    bad, good, first, second = records
-    assert client.wait(records) == [
+    assert client.wait([bad, good, first, second]) == [
         Status.FAILED,
         Status.COMPLETED,
         Status.FAILED,
@@ -143,22 +139,28 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
 
 
 def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
-    a, b = load(1), load(2)
-    total = Request(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
-    records = client.submit([a, b, total])
-    client.cancel(records[2])
+    a, b = client.submit([load(1), load(2)])
+    total = client.submit(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
+    client.cancel(total)
     gate.open.set()
 
-    assert client.wait(records) == ['completed', 'completed', 'cancelled']
+    assert client.wait([a, b, total]) == ['completed', 'completed', 'cancelled']
 
 
 def test_one_refused_request_refuses_the_submission(client: Client) -> None:
-    a = load(1)
+    a = client.submit(load(1))
     typo = Request(ADD, {'a': a.ref('value'), 'b': a.ref('value'), 'offset': 'x'})
 
     with pytest.raises(SubmitError, match='offset'):
-        client.submit([a, typo])
-    assert client.records() == []
+        client.submit([load(2), typo])
+    assert client.records() == [a]
+
+
+def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
+    missing = {'record': 'missing', 'output': 'value'}
+
+    with pytest.raises(SubmitError, match='unknown record missing'):
+        client.submit(ADD, {'a': missing, 'b': missing})
 
 
 def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
@@ -244,41 +246,38 @@ def test_an_unknown_parameter_is_refused(client: Client) -> None:
         client.submit(LOAD, {'run': dataset(run=1), 'scale': 2.0})
 
 
-def test_a_workflow_that_leaves_out_an_output_fails(client: Client, gate: Gate) -> None:
-    gate.open.set()
-    nothing = Request(NOTHING, {'run': dataset(run=1)})
-    reader = Request(ADD, {'a': nothing.ref('value'), 'b': nothing.ref('value')})
+def test_a_workflow_that_leaves_out_an_output_fails(client: Client) -> None:
+    nothing = client.compute(NOTHING, {'run': dataset(run=1)})
 
-    nothing, reader = client.compute([nothing, reader])
     assert "missing ['value']" in client.failure(nothing)
-    assert client.failure(reader) == f'input {nothing.id} failed'
 
 
 def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
-    chain = [load(3)]
+    chain = [client.submit(load(3))]
     for _ in range(1500):
-        chain.append(
-            Request(ADD, {'a': chain[-1].ref('value'), 'b': chain[0].ref('value')})
-        )
-    records = client.submit(chain)
+        a, b = chain[-1].ref('value'), chain[0].ref('value')
+        chain.append(client.submit(ADD, {'a': a, 'b': b}))
     gate.open.set()
 
-    assert set(client.wait(records)) == {Status.FAILED}
+    assert set(client.wait(chain)) == {Status.FAILED}
 
 
-def test_the_same_request_twice_is_refused(client: Client) -> None:
-    a = load(1)
+def test_the_same_request_twice_makes_two_records(client: Client, gate: Gate) -> None:
+    gate.open.set()
+    request = load(1)
+    first, second = client.compute([request, request])
 
-    with pytest.raises(SubmitError, match='twice'):
-        client.submit([a, a])
+    assert first.id != second.id
+    assert first.request == second.request
+    assert client.records() == [first, second]
 
 
 def test_a_reference_to_an_element_of_an_output_is_refused(client: Client) -> None:
-    a = load(1)
-    element = {'record': a.placeholder, 'output': 'value', 'key': '0'}
+    a = client.submit(load(1))
+    element = {'record': a.id, 'output': 'value', 'key': '0'}
 
     with pytest.raises(SubmitError, match='element'):
-        client.submit([a, Request(ADD, {'a': element, 'b': a.ref('value')})])
+        client.submit(ADD, {'a': element, 'b': a.ref('value')})
 
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
