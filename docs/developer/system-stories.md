@@ -9,8 +9,8 @@ Where a story shares a goal with an API story in [user-stories.md](user-stories.
 
 ### S2. Tune one parameter
 
-Actor: user in a notebook. Goal: a new binning comes back in a second or two.
-Property: a call through a stage does not load the run again.
+Actor: user in a notebook. Goal: a new binning comes back in a second or two, and so does each change of binning and mask in user story B1.
+Property: a call through a stage does not load the run again, with one blank such as `bins` or with several such as `bins` and `threshold`.
 
 ## A. Getting data in
 
@@ -30,11 +30,6 @@ Actor: user of the shared service. Goal: remove a file that should not have left
 Property: a local file reaches the service only when a request that names it is submitted. After its removal, no copy of its bytes remains in the service: not in storage, caches, or the processes that run stages.
 
 ## B. Manual and interactive reduction
-
-### B1. Tune a SANS reduction
-
-Actor: user in a notebook. Goal: each change of binning or mask comes back in a second or two.
-Property: a call through a stage whose blanks are `bins` and `threshold` does not load the run again.
 
 ### B2. Add a run to a sum
 
@@ -60,8 +55,8 @@ Property: records survive restarts of the client and of the backend, as long as 
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend published.
-Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage.
+Actor: user. Goal: use a vanadium result that another backend, or another proposal, published.
+Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage. A result of another proposal on the same backend is read the same way, or from a saved output: no proposal reads another's records.
 
 ### C5. Vanadium and sample tuned together
 
@@ -97,11 +92,6 @@ Actor: user. Goal: reproduce a result exactly after the backend has been upgrade
 Property: the software environment recorded with a record is enough to install it again, so that a request can run in its record's environment.
 
 ## G. Roles and deployment
-
-### G1. Instrument scientist prepares a beamtime
-
-Actor: operator, for an instrument scientist. Goal: records of the commissioning proposal are readable by the users of the coming proposal.
-Property: an operator lets one proposal read another's records and datasets by configuration. The backend enforces the grant.
 
 ### G2. Developer iterates on a workflow
 

@@ -313,6 +313,8 @@ What lasts beyond the proposal is what `publish` puts in a catalogue (see Proven
 
 **Dataset.** A request names a dataset by what a person knows, such as a run number.
 The backend resolves it, and the record names the dataset's identity, not what was typed.
+The record holds none of the dataset's metadata, such as the sample name; metadata is read from the dataset source when asked (see below).
+So a correction made in the source shows at the next read, and the record still names the same dataset.
 
 ```python
 dataset(run=60339)
@@ -624,7 +626,8 @@ pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its prov
 
 Publishing puts an output in the catalogue with its provenance; that entry, not the record, is what lasts.
 Records say what ran, including a workflow bound in a notebook's own backend; publishing is not refused on that account.
-Corrections that supersede a published entry, and recomputing in a record's environment, come later.
+Superseding a published entry with a correction is the catalogue's job.
+Recomputing in a record's environment comes later.
 
 ## Guarantees
 

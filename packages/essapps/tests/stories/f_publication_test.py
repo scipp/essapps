@@ -53,17 +53,3 @@ def test_f2_reproduce_after_two_upgrades(client: Client, measure: Measure) -> No
     assert again.request == result.request
     assert client.provenance(again).software['scipp'] == '99.0'
     assert client.provenance(result).software['scipp'] != '99.0'
-
-
-@pytest.mark.xfail(
-    reason='publish and scicat are not implemented; supersedes is deferred'
-)
-def test_f4_publish_a_corrected_version(client: Client, measure: Measure) -> None:
-    run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    bad = client.compute(IOFQ, {'run': run, 'threshold': 5.0})
-    old = client.publish(bad.ref('iofq'), 'scicat')
-    fixed = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
-    new = client.publish(fixed.ref('iofq'), 'scicat', supersedes=old)
-
-    assert scicat.entries[new].supersedes == old
-    assert scicat.entries[old].provenance == client.provenance(bad)

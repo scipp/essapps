@@ -11,27 +11,7 @@ import pytest
 from ess.apps import Client, SubmitError, local
 from ess.apps.testing import FakeDatasets
 
-from .conftest import BEAM_CENTRE, IOFQ, VANADIUM, Measure, iofq
-
-
-@pytest.mark.xfail(reason='grants across proposals are not implemented')
-def test_g1_instrument_scientist_prepares_a_beamtime(
-    connect: Callable[..., Client], measure: Measure
-) -> None:
-    scientist = connect(proposal='commissioning', user='anna')
-    user = connect(proposal='p2', user='eve')
-    vanadium = scientist.compute(
-        VANADIUM, {'run': measure(1, [1.0, 1.0], proposal='commissioning')}
-    )
-    sample = measure(2, [2.0, 2.0, 2.0, 2.0], proposal='p2')
-    result = user.compute(
-        IOFQ, {'run': sample, 'normalization': vanadium.ref('normalization')}
-    )
-
-    assert user.output(result, 'iofq').values.tolist() == [2.0, 2.0]
-    with pytest.raises(SubmitError, match='p2'):
-        scientist.compute(IOFQ, {'run': sample})
-    assert scientist.records() == [vanadium]
+from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
 
 
 @pytest.mark.xfail(
