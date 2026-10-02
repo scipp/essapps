@@ -23,6 +23,7 @@ until that is proposed there.
 
 from __future__ import annotations
 
+import copy
 import functools
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -43,7 +44,12 @@ def element_table(spec: WorkflowSpec) -> tuple[str, type[BaseModel]] | None:
 
 
 class _Fold:
-    """Each field combined with ``operation``, in push order."""
+    """
+    Each field combined with ``operation``, in push order.
+
+    The first element is copied, so that combining in place never changes the
+    output it came from.
+    """
 
     def __init__(self, operation: Callable[[Any, Any], Any]) -> None:
         self._operation = operation
@@ -51,10 +57,10 @@ class _Fold:
 
     def push(self, element: Mapping[str, Any]) -> None:
         if self._value is None:
-            self._value = dict(element)
+            self._value = copy.deepcopy(dict(element))
         else:
-            value = self._value
-            self._value = {f: self._operation(value[f], v) for f, v in element.items()}
+            for field, value in element.items():
+                self._value[field] = self._operation(self._value[field], value)
 
     @property
     def value(self) -> Mapping[str, Any]:
@@ -87,7 +93,11 @@ def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     field combined with ``operation``, as in ``operation(operation(a, b), c)``.
 
     A plain request and an accumulator combine the elements in the same
-    order, so they give the same value. ``operation`` must return a
-    new value and not modify its arguments.
+    order, so they give the same value. ``operation(total, element)`` may
+    modify ``total`` in place, and returns the combined value: with
+    ``operator.iadd`` an accumulator adds in place, and with ``operator.add``
+    each push makes a new value. It must not modify ``element``. ``total``
+    starts as a copy of the first element, so neither way changes the output
+    an element came from.
     """
     return _Combine(operation)

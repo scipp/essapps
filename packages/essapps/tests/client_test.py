@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
+import numpy as np
 import pytest
 from ess.reduce.spec import Array, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from ess.apps import (
     Backend,
     Client,
     ClientEnded,
+    Record,
     Request,
     Selector,
     Snapshot,
@@ -663,22 +665,6 @@ def test_a_snapshot_takes_no_label(client: Client) -> None:
         client.submit(total, label='total')
 
 
-def test_a_released_accumulator_takes_no_pushes_and_its_snapshots_stay(
-    client: Client,
-) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
-    total = client.accumulator(TOTAL)
-    total.push(load.refs('value'))
-    snapshot = client.submit(total)
-    client.release(total)
-
-    with pytest.raises(SubmitError, match='the accumulator was released'):
-        total.push(load.refs('value'))
-    with pytest.raises(SubmitError, match='the accumulator was released'):
-        client.submit(total)
-    assert client.output(snapshot, 'value') == 1.0
-
-
 def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     client: Client,
 ) -> None:
@@ -688,11 +674,13 @@ def test_a_snapshot_completes_at_submission_over_the_elements_pushed_before_it(
     total.push(loads[0].refs('value'))
     total.push(loads[1].refs('value'))
     first = client.submit(total)
+    values = [client.output(first, 'value')]  # before the next push ends it
     total.push(loads[2].refs('value'))
     second = client.submit(total)
+    values.append(client.output(second, 'value'))
 
     assert client.status([first, second]) == [Status.COMPLETED] * 2
-    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
+    assert values == [3.0, 4.0]
     assert [r.submitted.upto for r in (first, second)] == [2, 3]
     with pytest.raises(TypeError, match='snapshot'):
         first.request
@@ -809,12 +797,12 @@ def test_an_accumulator_combines_each_element_once(
 ) -> None:
     client = summed
     total = client.accumulator(TOTAL)
-    snapshots = []
+    values = []
     for n in (1, 2, 1, 2):
         total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
-        snapshots.append(client.submit(total))
+        values.append(client.output(client.submit(total), 'value'))
 
-    assert [client.output(r, 'value') for r in snapshots] == [1.0, 3.0, 4.0, 6.0]
+    assert values == [1.0, 3.0, 4.0, 6.0]
     assert summing.pushed == 4
 
 
@@ -835,5 +823,163 @@ def test_a_push_that_fails_to_combine_is_refused_and_stops_the_accumulator(
     with pytest.raises(SubmitError, match='stopped: element 1 failed to combine'):
         client.submit(total)
     assert len(log) == logged
+    with pytest.raises(LookupError, match='ended at a push'):  # it may be half added
+        client.output(before, 'value')
 
-    assert client.output(before, 'value') == 1.0
+
+# Snapshots of an accumulator that adds in place
+
+
+class ValueParams(BaseModel):
+    value: Array()  # type: ignore[valid-type]
+
+
+COPY = _spec('copy', ValueParams, Parts)
+
+
+class Copying:
+    """COPY, which copies its value once ``go`` is set; ``started`` says it runs."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.go = threading.Event()
+
+    def __call__(self, value: np.ndarray) -> dict[str, np.ndarray]:
+        self.started.set()
+        self.go.wait(timeout=5)
+        return {'value': value.copy()}
+
+
+@pytest.fixture
+def copying() -> Copying:
+    return Copying()
+
+
+@pytest.fixture
+def in_place(datasets: FakeDatasets, copying: Copying) -> Iterator[Client]:
+    """A client of a backend whose TOTAL adds arrays in place."""
+
+    def load(run: float) -> dict[str, np.ndarray]:
+        return {'value': np.array([run]), 'extra': np.array([-run])}
+
+    backend = Backend(
+        datasets, {LOAD: load, TOTAL: combine(operator.iadd), COPY: copying}
+    )
+    yield Client(backend, proposal='p1', submitter='anna')
+    copying.go.set()
+    backend.close()
+
+
+@pytest.fixture
+def loads(in_place: Client) -> list[Record]:
+    return [in_place.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+
+
+def test_adding_in_place_gives_the_values_of_adding() -> None:
+    rows = [{'value': np.array([n, 10.0 * n])} for n in (1.0, 2.0, 3.0)]
+    values = []
+    for operation in (operator.add, operator.iadd):
+        binding = combine(operation)
+        held = binding.accumulator()
+        for row in rows:
+            held.push(row)
+        plain = binding.stage({'parts': rows}, ())()
+        values.append([held.value['value'].tolist(), plain['value'].tolist()])
+
+    assert values == [[[6.0, 60.0]] * 2] * 2
+    assert rows[0]['value'].tolist() == [1.0, 10.0]  # the first row is copied
+
+
+def test_adding_in_place_leaves_the_outputs_pushed_unchanged(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    total = client.accumulator(TOTAL)
+    for load in loads:
+        total.push(load.refs('value'))
+    plain = client.compute(TOTAL, {'parts': [x.refs('value') for x in loads]})
+
+    assert client.output(client.submit(total), 'value').tolist() == [3.0]
+    assert client.output(plain, 'value').tolist() == [3.0]
+    assert [client.output(x, 'value').tolist() for x in loads] == [[1.0], [2.0]]
+
+
+def test_a_push_ends_the_snapshots_taken_before_it(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    first = client.submit(total)
+    read = client.output(first, 'value')
+    total.push(loads[1].refs('value'))
+
+    ended = "the snapshot's value ended at a push into its accumulator"
+    with pytest.raises(LookupError, match=ended):
+        client.output(first, 'value')
+    with pytest.raises(SubmitError, match=f'^value: record {first.id} .*{ended}$'):
+        client.submit(COPY, {'value': first.ref('value')})
+    assert read.tolist() == [1.0]  # a copy, which the push left as it was
+    assert client.status(first) is Status.COMPLETED
+    assert client.output(client.submit(total), 'value').tolist() == [3.0]
+
+
+def test_a_push_waits_until_the_requests_that_read_a_snapshot_have_run(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    copied = client.submit(COPY, {'value': client.submit(total).ref('value')})
+    copying.started.wait(timeout=5)  # the copy runs, and holds the value
+    push = threading.Thread(target=total.push, args=(loads[1].refs('value'),))
+    push.start()
+    push.join(timeout=0.05)
+
+    assert push.is_alive()
+    copying.go.set()
+    push.join()
+    assert client.output(copied, 'value').tolist() == [1.0]
+    assert client.output(client.submit(total), 'value').tolist() == [3.0]
+
+
+def test_a_push_waits_for_a_cancelled_request_that_still_runs(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    copied = client.submit(COPY, {'value': client.submit(total).ref('value')})
+    copying.started.wait(timeout=5)
+    client.cancel(copied)
+    push = threading.Thread(target=total.push, args=(loads[1].refs('value'),))
+    push.start()
+    push.join(timeout=0.05)
+
+    assert push.is_alive()
+    copying.go.set()
+    push.join()
+    assert client.status(copied) is Status.CANCELLED
+
+
+def test_a_released_accumulator_takes_no_pushes_and_ends_its_snapshots(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    total = client.accumulator(TOTAL)
+    total.push(loads[0].refs('value'))
+    snapshot = client.submit(total)
+    copied = client.submit(COPY, {'value': snapshot.ref('value')})
+    client.release(total)  # stops no work
+
+    with pytest.raises(SubmitError, match='the accumulator was released'):
+        total.push(loads[1].refs('value'))
+    with pytest.raises(SubmitError, match='the accumulator was released'):
+        client.submit(total)
+    ended = "the snapshot's value ended at the release of its accumulator"
+    with pytest.raises(SubmitError, match=ended):
+        client.submit(COPY, {'value': snapshot.ref('value')})
+    copying.go.set()
+    assert client.output(copied, 'value').tolist() == [1.0]  # read after the release
+    with pytest.raises(LookupError, match=ended):
+        client.output(snapshot, 'value')

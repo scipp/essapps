@@ -25,7 +25,9 @@ needs such a binding::
     held.value                       # {'numerator': ..., 'denominator': ...}
 
 Its value after the elements are pushed in order is the output of the plain
-request over them.
+request over them. It may add each element in place, and its value may be
+what it holds, not a copy: the backend reads the value only between pushes,
+and lets go of it before the next push.
 """
 
 from __future__ import annotations
@@ -60,12 +62,23 @@ class Binding(Protocol):
 
 class ElementAccumulator(Protocol):
     def push(self, element: Mapping[str, Any]) -> None:
-        """Add an element: a row of the spec's table, with data read."""
+        """
+        Add an element: a row of the spec's table, with data read.
+
+        It may modify what the accumulator holds in place, and so change a
+        value read before it, but not the element. An accumulator that starts
+        from the first element copies it, so that adding in place never
+        changes the output the element came from.
+        """
         ...
 
     @property
     def value(self) -> Mapping[str, Any]:
-        """The outputs of the spec over the elements pushed so far."""
+        """
+        The outputs of the spec over the elements pushed so far.
+
+        They may be what the accumulator holds, not a copy.
+        """
         ...
 
 
@@ -75,8 +88,7 @@ class AccumulatorBinding(Binding, Protocol):
         """
         A new element accumulator with nothing pushed.
 
-        Its ``value`` is read after every push, and a later push must not
-        modify a value read before it.
+        Its ``push`` and ``value`` are called from one thread at a time.
         """
         ...
 
