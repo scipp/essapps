@@ -268,11 +268,11 @@ The backend keeps two kinds of things with different lifetimes:
 
 | | What | Kept |
 |---|---|---|
-| record | what ran, with which inputs, and what came of it | for a retention period |
+| record | what ran, with which inputs, and what came of it | as long as the proposal |
 | output value | the data an output holds, such as an I(Q) array | while a client keeps it, see below |
 
-Records are kept for a retention period, together with the older records they depend on.
-They are kept long because they are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
+Records are the proposal's history: they are kept as long as the proposal, and dropped with it as a whole.
+They are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
 
 Output values are large, so the backend keeps a value only while something keeps it.
 Two things do:
@@ -307,7 +307,7 @@ A client that is never closed ends with its process.
 A value that must outlive its client, such as a beam centre for tomorrow's batch, must be saved.
 How to save is not designed yet.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
-What lasts beyond retention is what `publish` puts in a catalogue (see Provenance and publication).
+What lasts beyond the proposal is what `publish` puts in a catalogue (see Provenance and publication).
 
 ## Datasets
 
@@ -633,14 +633,14 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice that is a view of it, since the snapshot's value changes at the next push.
 - A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
-- Records are kept for a retention period, together with the older records they depend on. A published entry answers what produced it without access to the records.
+- Records are kept as long as the proposal, and dropped with it as a whole. A published entry answers what produced it without access to the records.
 - Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
 
 ## Left to the system
 
 Not part of this API, and not visible in the code of notebooks, apps, or workflow packages:
 
-- how history is stored and for how long, and how outputs are stored, copied, dropped, and located ([system.md](system.md))
+- how history is stored, and how outputs are stored, copied, dropped, and located ([system.md](system.md))
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for

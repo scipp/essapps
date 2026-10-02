@@ -747,7 +747,7 @@ assert [r.request.params for r in provenance.records()] == [centre.request.param
 assert {'essapps', 'scipp'} <= provenance.software.keys()
 ```
 
-The entry carries what lasts. The history behind it expires after the retention period (system story H3).
+The entry carries what lasts. The history behind it is dropped with the proposal (system story H3).
 
 ### F2. Reproduce after two upgrades
 
@@ -872,7 +872,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 System story only; see [system-stories.md](system-stories.md).
 
-### H3. Records expire
+### H3. Records end with the proposal
 
 System story only; see [system-stories.md](system-stories.md).
 

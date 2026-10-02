@@ -2,7 +2,8 @@
 
 **Status: the design of how the system keeps history and values.
 The in-process backend implements the history, the clients, and dropping values.
-It keeps values in memory only, so retention and saving are not implemented.**
+It keeps values in memory only, so saving is not implemented.
+It never drops history.**
 
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
@@ -24,7 +25,7 @@ It adds four terms of its own:
 
 The backend keeps two things with different lifetimes:
 
-- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept for a retention period.
+- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept as long as the proposal (see How long history is kept).
 - **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request that reads it has yet to run (see Values), or once it is saved.
 
 A record is history; its output values are not.
@@ -276,19 +277,16 @@ How the stories fare:
 | E1: the curve a rule made, read later | the rule saves what it makes; not designed yet |
 | B5: kernel dies | what was saved; all history |
 
-## Retention
+## How long history is kept
 
-History is kept for a retention period.
-This works like a garbage collector whose roots are the events younger than that period: an older event is kept while a kept event depends on it, directly or through other kept events; everything else is dropped.
-A record's submission depends on the submissions of the records it references, and a snapshot depends on the pushes it covers.
+Records are the proposal's history.
+The events of a proposal are kept as long as the proposal, and dropped with it as a whole; no event is dropped earlier.
+The trigger loop knows that it has handled a dataset only from the records under its rule's label ([automatic-reduction.md](automatic-reduction.md)).
+A backend that dropped old records would make a restarted loop reduce those datasets again.
+History is small enough to keep: in story D7, each angle adds seven events of constant size (see An example).
+A hosted backend that splits its log by proposal (see Where the log lives) drops a proposal's history by dropping its part of the log.
 
-Dependencies point only backwards in time, so there are no cycles: a set of old events that no young event reaches is dropped as a whole.
-A long history stays alive only if something young depends on it.
-For example, an accumulator with a snapshot every day for a whole cycle keeps all its pushes; pushes are small.
-Without this rule, a snapshot whose pushes had expired could not state what it covers.
-Publishing writes the provenance, flattened from the log, into the catalogue entry, so what is published does not depend on retention.
-
-Retention is not implemented.
+Publishing writes the provenance, flattened from the log, into the catalogue entry, so what is published outlives the proposal's history.
 
 ## Open
 

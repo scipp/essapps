@@ -50,3 +50,4 @@ Keep a time machine for history, for a retention period, and none for values.
 ## Amendment 2026-10-02
 
 - The consequence on restarting from the log cites system stories B5 and H2. Only H2, a backend upgrade with runs in flight, restarts the backend. B5 is a notebook kernel that dies; its client ends, and the backend keeps running.
+- History is not kept for a retention period. Records are the proposal's history: they are kept as long as the proposal, and dropped with it as a whole. The trigger loop knows which datasets a rule has handled only from the records under the rule's label, so a retention that dropped old records would make it reduce those datasets again.

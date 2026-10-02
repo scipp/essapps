@@ -54,7 +54,7 @@ Property: records completed before the crash are kept, and requests submitted be
 ### B6. Find last week's result
 
 Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
-Property: records survive restarts of the client and of the backend for the retention period (H3). Saved outputs survive as long as their store keeps them.
+Property: records survive restarts of the client and of the backend, as long as the proposal (H3). Saved outputs survive as long as their store keeps them.
 
 ## C. Chaining
 
@@ -123,14 +123,14 @@ Property: the backend checks every reference against the submitter's proposal an
 ### H1. Disk fills up
 
 Actor: operator. Goal: free disk space without losing provenance.
-Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay for the retention period (H3). The operator sees the space used per proposal before the disk is full.
+Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay as long as the proposal (H3). The operator sees the space used per proposal before the disk is full.
 
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
 Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on a log that another backend still holds is refused, so the old and the new version never write the same log.
 
-### H3. Records expire
+### H3. Records end with the proposal
 
-Actor: operator. Goal: history is kept while an experiment needs it and removed afterwards; what was published lasts.
-Property: history is kept for a configured period that covers a running experiment. An older event is kept while a kept event depends on it, so a kept record's provenance is complete. A published entry still answers what produced it after the history behind it has expired.
+Actor: operator. Goal: history is kept while the proposal needs it and removed afterwards; what was published lasts.
+Property: a proposal's history is kept as long as the proposal and dropped with it as a whole, never in part. So a kept record's provenance is complete, and a trigger loop never reduces a dataset again. A published entry still answers what produced it after the history behind it is dropped.
