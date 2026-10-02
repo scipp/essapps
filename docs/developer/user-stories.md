@@ -87,10 +87,9 @@ Actor: user in a notebook. Goal: change the binning several times, looking at th
 
 ```python
 run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
-    for bins in (1, 2, 4):
-        result = client.compute(tune, {'bins': bins}, label='iofq')
+tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
+for bins in (1, 2, 4):
+    result = client.compute(tune, {'bins': bins}, label='iofq')
 
 assert client.latest('iofq') == result
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
@@ -269,10 +268,9 @@ Actor: user in a notebook. Goal: change binning and mask several times, looking 
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
-    for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-        client.compute(tune, {'bins': bins, 'threshold': threshold}, label='iofq')
+tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
+for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
+    client.compute(tune, {'bins': bins, 'threshold': threshold}, label='iofq')
 
 final = client.latest('iofq')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
@@ -293,18 +291,17 @@ Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and i
 
 ```python
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
-with client.session() as session:
-    contribute = session.stage(Template(CONTRIBUTE, blanks=('run',)))
-    total = session.accumulator(PARTS_SUM)
-    parts = {}
-    for run in (r611, r612):
-        parts[run] = client.compute(contribute, {'run': run})
-        total.push(parts[run].refs('numerator', 'denominator'))
-    first = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
+contribute = client.stage(Template(CONTRIBUTE, blanks=('run',)))
+total = client.accumulator(PARTS_SUM)
+parts = {}
+for run in (r611, r612):
+    parts[run] = client.compute(contribute, {'run': run})
+    total.push(parts[run].refs('numerator', 'denominator'))
+first = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
-    parts[r613] = client.compute(contribute, {'run': r613})
-    total.push(parts[r613].refs('numerator', 'denominator'))
-    added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
+parts[r613] = client.compute(contribute, {'run': r613})
+total.push(parts[r613].refs('numerator', 'denominator'))
+added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
 kept = [parts[r611], parts[r613]]
 summed = client.compute(PARTS_SUM, {'numerator': [p.ref('numerator') for p in kept],
@@ -320,7 +317,7 @@ assert client.records(label='sum') == [first, added, removed]
 assert len(client.records(spec=CONTRIBUTE)) == 3                     # each run reduced once
 ```
 
-Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (README.md open question 3).
+Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (README.md open question 2).
 That adding 613 costs about one run is system story B2.
 
 ### B3. Compare two parameter sets side by side
@@ -329,11 +326,10 @@ Actor: user in a notebook. Goal: look at the result with and without a mask, kee
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
-    plain = client.compute(tune, {'bins': 2, 'threshold': 0.0}, label='iofq')
-    masked = client.compute(tune, {'bins': 2, 'threshold': 2.5}, label='iofq-masked')
-    finer = client.compute(tune, {'bins': 4, 'threshold': 2.5}, label='iofq-masked')
+tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
+plain = client.compute(tune, {'bins': 2, 'threshold': 0.0}, label='iofq')
+masked = client.compute(tune, {'bins': 2, 'threshold': 2.5}, label='iofq-masked')
+finer = client.compute(tune, {'bins': 4, 'threshold': 2.5}, label='iofq-masked')
 
 assert [client.output(r, 'iofq').values.tolist() for r in (plain, masked, finer)] == [
     [3.0, 7.0], [0.0, 7.0], [0.0, 0.0, 3.0, 4.0]]
@@ -361,29 +357,27 @@ assert client.records() == [volume, fit]                     # the views made no
 Gap: the form of a view waits for the plotting work; `client.output(..., index=)` stands in for it.
 The chosen cut is a parameter of the next request. How fast a view comes back is system story B4.
 
-### B5. Notebook kernel dies mid-session
+### B5. Notebook kernel dies
 
 Actor: user in a notebook. Goal: after a restart, continue where they were.
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
-    tuned = client.compute(tune, {'bins': 1}, label='iofq')
-    crash()                                        # the kernel dies inside the session
+tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
+tuned = client.compute(tune, {'bins': 1}, label='iofq')
+crash()                                            # the kernel dies
 
 client = connect()
 last = client.latest('iofq')
-with client.session() as session:
-    tune = session.stage(Template(IOFQ, params={'run': last.request.params['run']}, blanks=('bins',)))
-    again = client.compute(tune, {'bins': 4}, label='iofq')
+tune = client.stage(Template(IOFQ, params={'run': last.request.params['run']}, blanks=('bins',)))
+again = client.compute(tune, {'bins': 4}, label='iofq')
 
 assert last == tuned
 assert client.records(label='iofq') == [tuned, again]
 assert client.output(again, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
 ```
 
-The stage dies with the kernel, so the new session loads the run again. What the backend does with the dead session is system story B5.
+The stage ends with the kernel's client, so the new client's stage loads the run again. What the backend does with the dead client is system story B5.
 
 ### B6. Find last week's result
 
@@ -469,14 +463,13 @@ Actor: instrument scientist in a notebook. Goal: adjust the vanadium processing 
 
 ```python
 vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
-with client.session() as session:
-    vanadium = session.stage(Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',)))
-    reduce = session.stage(Template(IOFQ, params={'run': sample}, blanks=('normalization',)))
-    reduced = []
-    for scale in (1.0, 2.0):
-        processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
-        reduced.append(client.compute(reduce, {'normalization': processed.ref('normalization')},
-                                      label='iofq'))
+vanadium = client.stage(Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',)))
+reduce = client.stage(Template(IOFQ, params={'run': sample}, blanks=('normalization',)))
+reduced = []
+for scale in (1.0, 2.0):
+    processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
+    reduced.append(client.compute(reduce, {'normalization': processed.ref('normalization')},
+                                  label='iofq'))
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
     [2.0, 4.0], [1.0, 2.0]]                      # [4, 8] divided by 2, then by 4
@@ -484,7 +477,7 @@ assert client.records(label='iofq') == reduced
 assert reduced[-1].request.params['normalization'] == client.latest('vanadium').ref('normalization')
 ```
 
-The notebook is the driver: it reruns the sample after each vanadium change. It keeps the records whose outputs it reads later, since a label keeps no values. That the change comes back quickly is system story C5.
+The notebook is the driver: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
 
 ## D. Batch
 
@@ -508,7 +501,7 @@ assert client.wait(scan) == {
 assert client.members('scan') == scan
 ```
 
-Gap: `member_field` and `client.members` are tentative (README.md open question 4).
+Gap: `member_field` and `client.members` are tentative (README.md open question 3).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -637,16 +630,17 @@ for n in range(1, 1001):
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
 cuts, pushed = [], []
-with client.session() as session:
-    volume = session.accumulator(VOLUME)
-    angles = (client.submit(ANGLE, {'run': run})
-              for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
-    for angle in client.as_completed(angles):                  # in the order they finish
-        volume.push(angle.refs())
-        pushed.append(angle)
-        cuts.append(client.submit(CUT, {'data': client.submit(volume).ref('counts'), 'index': 0},
-                                  label='cut', member='17'))
-    total = client.compute(volume)
+volume = client.accumulator(VOLUME)
+angles = (client.submit(ANGLE, {'run': run})
+          for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
+for angle in client.as_completed(angles):                      # in the order they finish
+    volume.push(angle.refs())
+    pushed.append(angle)
+    snapshot = client.submit(volume)
+    cuts.append(client.submit(CUT, {'data': snapshot.ref('counts'), 'index': 0},
+                              label='cut', member='17'))
+    client.release(snapshot)                                   # the cut still reads it
+total = client.compute(volume)
 
 assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
@@ -657,7 +651,8 @@ assert len(client.provenance(total).datasets()) == 1000
 
 `watch` yields run 5 once, although its file arrives twice.
 The angles are reduced in parallel and pushed in the order they finish, so the volume's request lists them in that order.
-The notebook keeps the cuts it reads; the volume of each snapshot is released once its cut has run.
+The notebook releases each snapshot once its cut is submitted, so the volume of a snapshot is dropped once its cut has read it.
+The client keeps the cuts.
 That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
 
 ## E. Automatic reduction
@@ -755,10 +750,9 @@ Actor: user, then a colleague. Goal: the SciCat entry alone answers what raw fil
 ```python
 centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
 centre = client.compute(BEAM_CENTRE, {'run': centre_run})
-with client.session() as session:                               # tuned before publishing
-    tune = session.stage(Template(IOFQ, params={'run': run, 'beam_centre': centre.ref('centre')},
-                                  blanks=('threshold',)))
-    result = client.compute(tune, {'threshold': 1.5})
+tune = client.stage(Template(IOFQ, params={'run': run, 'beam_centre': centre.ref('centre')},
+                             blanks=('threshold',)))
+result = client.compute(tune, {'threshold': 1.5})               # tuned before publishing
 pid = client.publish(result.ref('iofq'), 'scicat')
 plain = client.compute(IOFQ, result.request.params)             # the same request, without a stage
 
@@ -905,9 +899,9 @@ What the design leaves open or defers, with the stories each item affects.
 - **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
 - **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
-- **Removing an element from an accumulator** (B2): README.md open question 3.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 4.
+- **Removing an element from an accumulator** (B2): README.md open question 2.
+- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 3.
 - **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
-- **Placing a session** (system story G3): the name and values of the placement argument; README.md open question 2.
+- **Placement** (system story G3): where a stage runs is the system's decision (README.md, Left to the system); how the system decides is not designed.
 - **Recomputing in a record's environment** (F2): deferred.
 - **Publishing a correction** (F4): deferred.

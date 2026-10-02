@@ -121,7 +121,7 @@ def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
 
 
 @pytest.mark.xfail(reason='a crash of the notebook process is not simulated')
-def test_b5_notebook_kernel_dies_mid_session(
+def test_b5_notebook_kernel_dies(
     client: Client, measure: Measure, connect: Callable[..., Client]
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])

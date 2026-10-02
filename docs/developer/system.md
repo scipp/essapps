@@ -1,20 +1,21 @@
 # ESS data-reduction framework: the system
 
 **Status: the design of how the system keeps history and values.
-The in-process backend implements the history and the holders.
-It keeps every value in memory, so dropping values, retention, and saving are not implemented.**
+The in-process backend implements the history, the clients, and dropping values.
+It keeps values in memory only, so retention and saving are not implemented.**
 
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
-Other parts of the system, such as the store of values, a hosted backend, and where sessions run, get sections here when they are designed.
+Other parts of the system, such as the store of values, a hosted backend, and where stages and accumulators run, get sections here when they are designed.
 [ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart.
 
-This document uses the terms of README.md (see its Terms table), in particular spec, binding, record, session, stage, accumulator, and snapshot.
+This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, stage, accumulator, and snapshot.
 Story IDs such as D7 refer to [user-stories.md](user-stories.md) and [system-stories.md](system-stories.md).
-It adds three terms of its own:
+It adds four terms of its own:
 
 | Term | What it is |
 |---|---|
+| client entry | what the backend keeps for one client: its proposal, the records whose values it keeps, its stages, and its accumulators |
 | event | one entry in the log, such as "record #2 finished" |
 | log | the backend's history: an append-only list of events |
 | view | an index the backend builds from the events, such as records by label; queries read views |
@@ -24,10 +25,10 @@ It adds three terms of its own:
 The backend keeps two things with different lifetimes:
 
 - **History**: what ran, with which inputs, and what came of it. It is small, and it is kept for a retention period.
-- **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while something holds it or once it is saved.
+- **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request has yet to read it (see Values), or once it is saved.
 
 A record is history; its output values are not.
-Reading an output that is no longer kept raises an error, and a request that references it is refused at submission; the record stays.
+Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record stays.
 
 ## The log
 
@@ -39,7 +40,7 @@ The backend's history is an append-only log with three kinds of event:
 | `finished` | record ID, status, failure message | a record completes, fails, or is cancelled |
 | `pushed` | accumulator ID, the element as a request over it holds it | an element is pushed into an accumulator |
 
-Sessions and their holders are not history: opening or ending one writes nothing, and none survives a restart.
+Client entries are not history: opening or ending a client, making a stage or an accumulator, and releasing anything write nothing, and no client entry survives a restart.
 A record does not say which stage it went through.
 A snapshot names its accumulator, so that the pushes it covers can be found.
 
@@ -93,7 +94,7 @@ It does this the same way when it appends a new event and when it reads an exist
 A view changes only when an event is applied, and how it changes depends only on the events.
 Queries read the views, never the log.
 
-Live state that is not history is not in the views either: sessions and their holders, output values, which records wait for which, and the queue of work ready to run.
+Live state that is not history is not in the views either: client entries, output values, which pending records have yet to read which values, which records wait for which, and the queue of work ready to run.
 The backend keeps it apart from the views, and it is lost when the backend stops.
 
 The views depend on three orders in the log:
@@ -124,9 +125,10 @@ A backend given a log that already has events applies them, then runs the record
 backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the events in the file
 ```
 
-- A pending record runs from scratch, without its stage, since sessions do not survive a restart.
+- A pending record runs from scratch, without its stage, since client entries do not survive a restart.
 - A snapshot is pending only if the backend stopped between its `submitted` and `finished` events. It fails, since its accumulator did not survive the restart.
-- A pending record whose inputs' values were not kept fails with "no output". The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
+- A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
+- No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once no pending record has yet to read them.
 
 This is what system stories B5 (notebook kernel dies) and H2 (backend upgrade with runs in flight) need from history.
 H2 also needs every event format to stay readable across versions.
@@ -148,7 +150,7 @@ This keeps the three orders the views depend on (see Views), since each lies wit
 
 ## Accumulators
 
-An accumulator lives in the backend; the `Accumulator` a session returns is a handle to it.
+An accumulator lives in its client's entry in the backend; the `Accumulator` that `client.accumulator` returns is a handle to it.
 In story D7, the driver pushes each angle into the volume once it has finished.
 The backend does this:
 
@@ -203,30 +205,46 @@ What the element accumulator holds need not be the outputs: one for a mean holds
 So a later push must not modify a value read before it: each push makes a new value instead of adding in place.
 `combine(operator.add)` is such a binding, since `operator.add` returns a new value; the stories bind `VOLUME` to it.
 
+## Clients
+
+A client is one entry in the backend, from `open_client` to `close_client`.
+The entry holds the client's proposal and submitter, the IDs of the records whose values it keeps, its stages, and its accumulators.
+Every call of the backend names its client, and the backend takes the proposal from the entry.
+A call of a client without an entry raises `ClientEnded`; the backend is the only place that checks.
+`client.close()` calls `close_client`, which removes the entry and releases everything in it.
+A hosted service also ends a client whose lease runs out, by the same call; leases are not implemented.
+
 ## Values
 
-An output value is kept while one of these holds:
+README.md states which output values are kept (How long records and values are kept).
+The backend keeps two things for that rule:
 
-1. a pending request reads it;
-2. a record in a client holds it, as a dask future holds its value: the value is released when the record object is garbage-collected, or when the client is gone and its lease has run out;
-3. a holder in a session holds it: a stage what it computed from its fixed values, an accumulator its combined value;
-4. it has been saved (part of the provenance and publication sub-design).
+- in each client entry, the IDs of the records the client made and has not released;
+- for each output, how many pending records reference it and have not yet read their inputs.
+
+A pending record reads its inputs when it starts to run, before its workflow computes.
+An output value is dropped once no client entry keeps its record and no pending record has yet to read it.
+The backend checks this when a client releases a record or ends, when a pending record has read its inputs or finishes without running, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
+
+A stage keeps what it computed from its fixed values, and an accumulator its combined value, until the client releases them or ends.
+What a stage computed is a cache: the backend may drop it at any time, and the next call through the stage computes it again and makes the same record.
+The in-process backend never drops it.
 
 A label names records and keeps no values.
-A value that must outlive its client is saved.
+A value that must outlive its client is saved (part of the provenance and publication sub-design).
 
 How the stories fare:
 
 | Story | What keeps the value |
 |---|---|
-| S1, S3, S8: compute, then read the output | the notebook's record (2) |
-| B1, S2: tuning steps | the record of the latest step (2); the stage's fixed part (3) |
-| C5: two stages tuned together, both results read afterwards | the records the notebook keeps in a list (2) |
-| C1, G4: a beam centre used by other requests or another notebook | the records of the notebooks that hold it (2); for tomorrow's batch, save it (4) |
-| D2: overnight batch, laptop closed | the requests submitted with a place to save to (4), not designed yet; without one, only the records survive the night |
-| D6: a batch's results read weeks later | saved (4); not designed yet |
-| D7: a snapshot per angle, a cut per snapshot | each snapshot until its cut has run (1); the accumulator's combined value (3); the cuts the notebook keeps in a list (2). The volumes of earlier snapshots are not kept |
-| E1: the curve a rule made, read later | the rule saves what it makes (4); not designed yet |
+| S1, S3, S8: compute, then read the output | the notebook's client |
+| B1, S2: tuning steps | each step: the notebook's client, until the notebook releases it; the loaded run: the stage |
+| C5: two stages tuned together, both results read afterwards | the notebook's client |
+| C1, G4: a beam centre used by other requests or another notebook | the client of the notebook that made it, until it releases it or ends; for tomorrow's batch, save it |
+| D2: overnight batch, laptop closed | the requests submitted with a place to save to, not designed yet; without one, only the records survive the night |
+| D6: a batch's results read weeks later | saved; not designed yet |
+| D7: a snapshot per angle, a cut per snapshot | a snapshot's volume: its pending cut, since the notebook releases the snapshot after submitting the cut; the combined value: the accumulator; the cuts: the notebook's client. The volumes of earlier snapshots are not kept |
+| E1: the curve a rule made, read later | the rule saves what it makes; not designed yet |
 | B5: kernel dies | what was saved; all history |
 
 ## Retention
@@ -245,6 +263,6 @@ Retention is not implemented.
 
 ## Open
 
-- Leases for records held by clients of a hosted backend.
+- Leases of the clients of a hosted backend: how long one lasts and how a client renews it.
 - The store of saved values, and where a batch or rule says to save to (with the provenance and publication sub-design).
-- A forwarder: a holder of the last value pushed into it, as in sciline. It joins the holders when a story needs one, for example a driving server that shows the latest curve of each sample.
+- A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.

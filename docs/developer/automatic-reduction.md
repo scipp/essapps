@@ -61,4 +61,4 @@ A dataset whose record failed counts as handled; running it again is the user's 
 
 - Adding, replacing, and listing rules in a running driving server.
 - A can measured after the sample, and other lookups than `LastBefore`.
-- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule); it needs a session owned by the loop (README open question 2).
+- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule); the loop's client keeps the accumulator.
