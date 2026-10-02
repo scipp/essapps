@@ -26,9 +26,11 @@ while a pending request has yet to read it. Releasing and ending stop no work.
 A request waits until every record it references has completed; this is the
 only scheduling there is.
 
-A request runs through its spec's binding. A request through a stage runs
-through the callable the binding returned for the stage's first call, so a
-binding that holds values computes only what depends on the blanks. A stage
+A request runs through its spec's binding. A stage checks its template's
+values as a request's and resolves dataset names when it is made, and a
+request through it must have its values outside the blanks. Such a request
+runs through the callable the binding returned for the stage's first call, so
+a binding that holds values computes only what depends on the blanks. A stage
 lives until its client releases it or ends, and the requests made through it
 have run.
 
@@ -45,7 +47,7 @@ from __future__ import annotations
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -79,6 +81,7 @@ from .records import (
     SpecId,
     Status,
     SubmitError,
+    Template,
     map_refs,
     output_refs,
 )
@@ -104,6 +107,15 @@ def _values(model: BaseModel) -> dict[str, Any]:
         f: [dict(row) for row in v] if f in tables and v is not None else v
         for f, v in values.items()
     }
+
+
+def _problems(error: ValidationError, blanks: Sequence[str] = ()) -> list[str]:
+    """What a validation error finds wrong, but for blanks that are missing."""
+    return [
+        f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
+        for e in error.errors()
+        if not (e['type'] == 'missing' and len(e['loc']) == 1 and e['loc'][0] in blanks)
+    ]
 
 
 def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
@@ -162,24 +174,29 @@ class Entry:
 
 class _Stage:
     """
-    A stage: the binding's callable, and the fixed values it was staged with.
+    A stage: its spec, its blanks, its fixed values, and the binding's callable.
 
-    The first call stages the binding. A call with other fixed values, such as
-    a dataset name that now resolves to another dataset, stages it again.
+    The fixed values are the template's, with dataset names resolved when the
+    stage was made. The first call stages the binding, and so does the call
+    after one that failed to stage. What the callable holds is a cache: the
+    backend may drop it at any time, and the next call stages the binding
+    again and makes the same record.
     """
 
-    def __init__(self, spec: SpecId, blanks: tuple[str, ...]) -> None:
+    def __init__(
+        self, spec: SpecId, blanks: tuple[str, ...], fixed: dict[str, Any]
+    ) -> None:
         self.spec = spec
         self.blanks = blanks
+        self.fixed = fixed
         self._lock = threading.Lock()
-        self._fixed: dict[str, Any] | None = None
         self._call: Function | None = None
 
-    def staged(self, fixed: dict[str, Any], stage: Callable[[], Function]) -> Function:
-        """The binding's callable for ``fixed``; ``stage`` makes it if needed."""
+    def staged(self, stage: Callable[[], Function]) -> Function:
+        """The binding's callable; ``stage`` makes it if there is none."""
         with self._lock:
-            if self._call is None or fixed != self._fixed:
-                self._call, self._fixed = stage(), fixed
+            if self._call is None:
+                self._call = stage()
             return self._call
 
 
@@ -379,28 +396,38 @@ class Backend:
         """The request with names resolved and defaults filled; needs no lock."""
         request = entry.request
         try:
-            spec = self.spec(request.spec)
-            unknown = set(request.params) - set(spec.params.model_fields)
-            if unknown:
-                raise SubmitError(
-                    f'{sorted(unknown)}: not parameters of {request.spec}'
-                )
-            _check_cells(spec.params, request.params)
-            params = {
-                field: map_refs(value, self._resolver(field, proposal))
-                for field, value in request.params.items()
-            }
+            params = self._resolve(request.spec, request.params, (), proposal)
             try:
-                model = spec.params.model_validate(params)
+                model = self.spec(request.spec).params.model_validate(params)
             except ValidationError as error:
-                problems = '; '.join(
-                    f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
-                    for e in error.errors()
-                )
+                problems = '; '.join(_problems(error))
                 raise SubmitError(f'{request.spec}: {problems}') from None
         except SubmitError as error:
             raise entry.refused(error) from None
         return Request(request.spec, _values(model))
+
+    def _resolve(
+        self,
+        spec_id: SpecId,
+        params: Mapping[str, Any],
+        blanks: tuple[str, ...],
+        proposal: str,
+    ) -> dict[str, Any]:
+        """
+        ``params`` with dataset names resolved; needs no lock.
+
+        Refuses a param or blank the spec lacks, and a row of a table with a
+        field its row model lacks.
+        """
+        spec = self.spec(spec_id)
+        unknown = (set(params) | set(blanks)) - set(spec.params.model_fields)
+        if unknown:
+            raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
+        _check_cells(spec.params, params)
+        return {
+            field: map_refs(value, self._resolver(field, proposal))
+            for field, value in params.items()
+        }
 
     def _resolver(
         self, field: str, proposal: str
@@ -447,7 +474,12 @@ class Backend:
             raise entry.refused(error) from None
 
     def _check_stage(self, entry: Entry, request: Request, caller: _Client) -> None:
-        """Check the stage a request goes through; lock held."""
+        """
+        Check the stage a request goes through; lock held.
+
+        The request must have the stage's values outside the blanks, as given
+        or resolved when the stage was made.
+        """
         if entry.stage is None:
             return
         stage = caller.stages.get(entry.stage)
@@ -456,6 +488,18 @@ class Backend:
         if stage.spec != request.spec:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
+            )
+        given = {
+            k: map_refs(v, lambda ref: ref)
+            for k, v in entry.request.params.items()
+            if k not in stage.blanks
+        }
+        differ = (given.keys() ^ stage.fixed.keys()) | {
+            k for k in given.keys() & stage.fixed.keys() if given[k] != stage.fixed[k]
+        }
+        if differ:
+            raise entry.refused(
+                SubmitError(f"{sorted(differ)}: differ from the stage's values")
             )
 
     def _readable(self, ref: OutputRef, field: str, proposal: str) -> SpecId:
@@ -517,9 +561,7 @@ class Backend:
         if stage is None:
             return binding.stage(self._read(values), ()), {}
         fixed = {k: v for k, v in values.items() if k not in stage.blanks}
-        call = stage.staged(
-            fixed, lambda: binding.stage(self._read(fixed), stage.blanks)
-        )
+        call = stage.staged(lambda: binding.stage(self._read(fixed), stage.blanks))
         return call, self._read({k: values[k] for k in stage.blanks})
 
     def _typed(self, request: Request) -> dict[str, Any]:
@@ -670,16 +712,30 @@ class Backend:
                     caller.kept.remove(i)
                     self._drop(i, *self._views.records[i].outputs)
 
-    def open_stage(self, spec_id: SpecId, blanks: tuple[str, ...], client: str) -> str:
-        """A stage of the client; its first call stages the binding."""
+    def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
+        """
+        A stage of the client, and its template as the stage holds it.
+
+        The template's values are checked as a request's are, but for the
+        blanks, and dataset names are resolved now. The stage keeps the
+        values; a request through it must have them. Its first call stages
+        the binding.
+        """
+        spec_id, blanks = template.spec, template.blanks
+        proposal = self._client(client).proposal
+        fixed = self._resolve(spec_id, template.params, blanks, proposal)
+        try:
+            self.spec(spec_id).params.model_validate(fixed)
+        except ValidationError as error:
+            if problems := _problems(error, blanks):
+                raise SubmitError(f'{spec_id}: {"; ".join(problems)}') from None
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            unknown = set(blanks) - set(self.spec(spec_id).params.model_fields)
-            if unknown:
-                raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
-            caller.stages[stage_id] = _Stage(spec_id, blanks)
-        return stage_id
+            request = Request(spec_id, fixed)
+            self._check_reads(Entry(request), request, proposal)
+            caller.stages[stage_id] = _Stage(spec_id, blanks, fixed)
+        return stage_id, Template(spec_id, fixed, blanks)
 
     def open_accumulator(self, spec_id: SpecId, client: str) -> str:
         """

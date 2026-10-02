@@ -323,7 +323,7 @@ def test_the_log_holds_submissions_finished_records_and_pushes_only(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    client.stage(Template(LOAD, blanks=('window',)))
+    client.stage(Template(LOAD, params={'run': dataset(run=1)}, blanks=('window',)))
     total = client.accumulator(TOTAL)
     total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
 

@@ -298,19 +298,22 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     assert shifting.staged == [('offset',)]
 
 
-def test_a_stage_is_staged_again_when_its_dataset_name_resolves_elsewhere(
+def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     client: Client, scaling: Staging, datasets: FakeDatasets
 ) -> None:
+    run = datasets.resolve(dataset(run=1))
     scale = client.stage(
         Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',))
     )
     before = client.compute(scale, {'factor': 2.0})
-    datasets.correct(datasets.resolve(dataset(run=1)), run=99)
+    datasets.correct(run, run=99)
     datasets.measure(1, 5.0, pid='again')
     after = client.compute(scale, {'factor': 2.0})
 
-    assert [client.output(r, 'value') for r in (before, after)] == [2.0, 10.0]
-    assert scaling.staged == [('factor',), ('factor',)]
+    assert scale.template.params == {'run': run}
+    assert after.request == before.request
+    assert [client.output(r, 'value') for r in (before, after)] == [2.0, 2.0]
+    assert scaling.staged == [('factor',)]
 
 
 def test_a_stage_that_failed_to_stage_is_staged_on_the_next_call(
@@ -328,18 +331,31 @@ def test_a_stage_that_failed_to_stage_is_staged_on_the_next_call(
     assert client.output(scaled, 'value') == 4.0
 
 
-def test_a_request_through_a_stage_of_another_spec_is_refused(
+def test_a_request_through_a_stage_must_have_the_stage_s_values(
     backend: Backend,
 ) -> None:
     client = backend.open_client('p1', 'anna')
     (load,) = backend.submit(
         [Entry(Request(LOAD, {'run': dataset(run=1)}))], client=client
     )
-    scale = backend.open_stage(SpecId.of(SCALE), ('factor',), client=client)
-    request = Request(SHIFT, {'value': load.ref('value')})
+    scale, template = backend.open_stage(
+        Template(SCALE, params={'run': dataset(run=1)}, blanks=('factor',)),
+        client=client,
+    )
+    refused = {
+        'the stage holds scale': Request(SHIFT, {'value': load.ref('value')}),
+        r"\['run'\]: differ from the stage's values": Request(
+            SCALE, {'run': dataset(run=2), 'factor': 2.0}
+        ),
+    }
+    for reason, request in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            backend.submit([Entry(request, stage=scale)], client=client)
 
-    with pytest.raises(SubmitError, match='the stage holds scale'):
-        backend.submit([Entry(request, stage=scale)], client=client)
+    (record,) = backend.submit(
+        [Entry(template.fill({'factor': 2.0}), stage=scale)], client=client
+    )
+    assert record.request.params['run'] == template.params['run']
 
 
 def test_the_stages_and_accumulators_of_another_client_are_refused(
@@ -359,9 +375,35 @@ def test_the_stages_and_accumulators_of_another_client_are_refused(
         theirs.submit(total)
 
 
-def test_a_stage_refuses_blanks_that_are_not_parameters(client: Client) -> None:
-    with pytest.raises(SubmitError, match='speed'):
-        client.stage(Template(SCALE, blanks=('speed',)))
+def test_a_stage_refuses_a_template_that_a_request_would_refuse(
+    client: Client,
+) -> None:
+    cancelled = client.submit(LOAD, {'run': dataset(run=1)})
+    client.cancel(cancelled)
+    released = client.compute(LOAD, {'run': dataset(run=1)})
+    client.release(released)
+    refused = {
+        r"\['speed'\]: not parameters": Template(SCALE, blanks=('speed',)),
+        r"\['scale'\]: not parameters": Template(
+            SCALE, params={'scale': 2.0}, blanks=('factor',)
+        ),
+        'run: Field required': Template(SCALE, blanks=('factor',)),
+        'factor: Input should be a valid number': Template(
+            SCALE, params={'factor': 'x'}, blanks=('run',)
+        ),
+        'run: unknown dataset run:9': Template(
+            SCALE, params={'run': dataset(run=9)}, blanks=('factor',)
+        ),
+        f'record {cancelled.id} cancelled': Template(
+            SHIFT, params={'value': cancelled.ref('value')}, blanks=('offset',)
+        ),
+        'the value is not kept': Template(
+            SHIFT, params={'value': released.ref('value')}, blanks=('offset',)
+        ),
+    }
+    for reason, template in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            client.stage(template)
 
 
 # What a client keeps
@@ -417,7 +459,9 @@ def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) 
 
 def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
-    shift = client.stage(Template(SHIFT, blanks=('offset',)))
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
     total = client.accumulator(TOTAL)
     total.push(load.refs('value'))
     client.close()

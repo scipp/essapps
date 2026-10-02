@@ -310,11 +310,15 @@ class Client:
     # Stages, accumulators, and what the client keeps
 
     def stage(self, template: Template) -> Stage:
-        """A stage of the template; the client keeps it until it releases it."""
-        stage_id = self._backend.open_stage(
-            template.spec, template.blanks, client=self._id
-        )
-        return Stage(template, stage_id)
+        """
+        A stage of the template; the client keeps it until it releases it.
+
+        A template a request would refuse is refused here. The stage's
+        template holds the values as the backend resolved them, so a dataset
+        name stays the dataset it named when the stage was made.
+        """
+        stage_id, resolved = self._backend.open_stage(template, client=self._id)
+        return Stage(resolved, stage_id)
 
     def accumulator(self, spec: WorkflowSpec) -> Accumulator:
         """
