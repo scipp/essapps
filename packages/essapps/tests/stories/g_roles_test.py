@@ -8,9 +8,10 @@ from collections.abc import Callable
 
 import pytest
 
-from ess.apps import Client, SubmitError
+from ess.apps import Client, SubmitError, local
+from ess.apps.testing import FakeDatasets
 
-from .conftest import BEAM_CENTRE, IOFQ, VANADIUM, Measure
+from .conftest import BEAM_CENTRE, IOFQ, VANADIUM, Measure, iofq
 
 
 @pytest.mark.xfail(reason='grants across proposals are not implemented')
@@ -34,11 +35,13 @@ def test_g1_instrument_scientist_prepares_a_beamtime(
 
 
 @pytest.mark.xfail(
-    reason='local(bind=...), publish, and provenance.software are not implemented'
+    reason='client.publish, scicat, and Provenance.software are not implemented'
 )
-def test_g2_developer_iterates_on_a_workflow(measure: Measure) -> None:
-    draft = make_iofq_workflow()
-    dev = local(proposal='p1', bind={IOFQ: draft})
+def test_g2_developer_iterates_on_a_workflow(
+    measure: Measure, datasets: FakeDatasets
+) -> None:
+    draft = iofq
+    dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})
     result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
     pid = dev.publish(result.ref('iofq'), 'scicat')
 

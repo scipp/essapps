@@ -131,7 +131,7 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the ev
 - A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
 - No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once the pending records that read them have run.
 
-This is what system stories B5 (notebook kernel dies) and H2 (backend upgrade with runs in flight) need from history.
+This is what system story H2 (backend upgrade with runs in flight) needs from history.
 H2 also needs every event format to stay readable across versions.
 
 ## Where the log lives

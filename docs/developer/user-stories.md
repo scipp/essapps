@@ -30,11 +30,13 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
 
 `FINALIZE` over `PARTS_SUM` over `CONTRIBUTE` computes what `NORMALIZE` computes.
+The binding of `IOFQ` is the function `iofq`.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
 ## Conventions
 
 Fixtures: `client` is `connect(url, proposal='p1')`, a client of a fresh hosted backend at `url`.
+`connect` is the planned client of a hosted backend (README.md, Client and backend); the story tests make a `Client` of one in-process `Backend` instead.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same backend, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
 `other` is a client of a second hosted backend.
 Every backend in the stories, including one that `local(...)` makes, reads the same datasets and publishes to the same `scicat`.
@@ -303,8 +305,7 @@ total.push(parts[r613].refs('numerator', 'denominator'))
 added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
 kept = [parts[r611], parts[r613]]
-summed = client.compute(PARTS_SUM, {'numerator': [p.ref('numerator') for p in kept],
-                                    'denominator': [p.ref('denominator') for p in kept]})
+summed = client.compute(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in kept]})
 removed = client.compute(FINALIZE, summed.refs(), label='sum')
 
 assert [client.output(r, 'normalized').values.tolist() for r in (first, added, removed)] == [
@@ -811,8 +812,8 @@ That an operator grants the read, and the backend enforces it, is system story G
 Actor: workflow developer. Goal: run a workflow defined in a notebook without installing it; its records say what ran.
 
 ```python
-draft = make_iofq_workflow()                                  # IOFQ's implementation, being edited
-dev = local(proposal='p1', bind={IOFQ: draft})                # a backend in the notebook's process
+draft = iofq                                                  # IOFQ's binding, being edited
+dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})   # a backend in this process
 result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
 pid = dev.publish(result.ref('iofq'), 'scicat')               # publishing is not refused
 

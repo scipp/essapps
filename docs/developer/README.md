@@ -61,7 +61,7 @@ The terms this document defines, in the order they appear:
 | backend | the process that runs requests and keeps records | framework | operator; or a notebook or app with `local()` |
 | client | the object through which a notebook or app talks to one backend; it keeps what it makes until it releases it or ends | framework | notebook, app |
 | spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
-| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`PipelineBinding`) | workflow author |
+| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.apps.pipeline.PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
 | record | a request as the backend accepted it, with the names of its outputs; it never changes | framework | backend, at submission |
 | reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
@@ -79,12 +79,15 @@ The terms stage, accumulator, and driver follow sciline (scipp/sciline ADR 0003)
 
 ## Client and backend
 
-A client talks to one backend, for one proposal:
+A client talks to one backend, for one proposal.
+`local` makes a backend in this process and a client of it:
 
 ```python
-client = connect('https://reduce.example', proposal='p1')   # a hosted backend
-client = local(proposal='p1')                               # a backend in this process
+client = local(proposal='p1', datasets=..., bind={IOFQ: iofq, ...})
 ```
+
+`datasets` is the dataset source the backend reads through (see Datasets), and `bind` maps each spec the backend offers to its binding (see Specs and bindings).
+A client of a hosted backend, `connect('https://reduce.example', proposal='p1')`, is planned and not implemented.
 
 The backend runs requests and keeps records.
 A hosted backend runs only workflows from installed packages.
@@ -103,6 +106,7 @@ Notebooks and apps run specs; how the package implements a spec is invisible to 
 class IofQParams(BaseModel):
     run: NexusFile                          # a data field: a raw NeXus file
     bins: int = 100                         # a plain value
+    can: NexusFile | None = None            # the empty-can run, if any
     beam_centre: Array() | None = None      # a data field: a scipp array
 
 class IofQOutputs(BaseModel):
@@ -120,7 +124,7 @@ To inspect any other intermediate result, a scientist runs the package's sciline
 The simplest binding is a function that takes the parameters by name and returns the outputs by name:
 
 ```python
-def iofq(run, bins, beam_centre) -> dict:
+def iofq(run, bins, can, beam_centre) -> dict:
     ...
     return {'iofq': result}
 ```
@@ -131,15 +135,18 @@ Defaults belong in the params model only; a default in the binding would never b
 A sciline pipeline becomes a binding by naming the sciline key that each parameter sets and the key that computes each output:
 
 ```python
+from ess.apps.pipeline import PipelineBinding
+
 PipelineBinding(pipeline,
-                params={'run': Filename[SampleRun], 'bins': QBins, 'beam_centre': BeamCenter},
+                params={'run': Filename[SampleRun], 'bins': QBins,
+                        'can': Filename[BackgroundRun], 'beam_centre': BeamCenter},
                 outputs={'iofq': BackgroundSubtractedIofQ})
 ```
 
 A backend in the notebook's process can bind a spec to code defined in the notebook, for example to try out a change to a workflow:
 
 ```python
-local(proposal='p1', bind={IOFQ: draft})
+local(proposal='p1', datasets=..., bind={IOFQ: draft})
 ```
 
 Records made with such a binding say that the code was bound in the notebook.
@@ -195,7 +202,7 @@ result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.r
 `BEAM_CENTRE` is a spec with an output `centre`; `centre.ref('centre')` refers to that output of the pending record.
 The backend runs the second request once the first has completed.
 The first output is kept at least until the second request has run (see How long records and values are kept).
-An output can be passed to a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the same dims and unit.
+An output can be passed to a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the two are equal: the same dims, unit, coordinates with their units, and whether the data is binned.
 Otherwise the request is refused at submission.
 
 Each step of a chain is its own call.
@@ -233,8 +240,10 @@ client.records(label='iofq')             # oldest first; without a label, every 
 The loop from the start, with labels, so that another notebook finds the curves:
 
 ```python
+records = {}
 for run in (60339, 60340, 60341):
-    client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100}, label='iofq', member=str(run))
+    records[run] = client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100},
+                                 label='iofq', member=str(run))
 ```
 
 A label holds no values; it only names records.
@@ -247,7 +256,8 @@ A template can be made from any request's values; naming a field as a blank drop
 
 ```python
 template = Template(IOFQ, params={'bins': 100}, blanks=('run',))
-beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))  # reuse a tuned request
+final = client.latest('iofq', member='250K')   # a request to reuse
+beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
 ```
 
 Templates are frozen dataclasses; `dataclasses.replace` makes a changed copy.
@@ -485,13 +495,13 @@ for run in (r611, r612):
     total.push(client.compute(CONTRIBUTE, {'run': run}).refs('numerator', 'denominator'))
 first = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
 
-c613 = client.compute(CONTRIBUTE, {'run': r613})               # r611 and r612 are not reduced again
-total.push(c613.refs('numerator', 'denominator'))
+c613 = client.compute(CONTRIBUTE, {'run': r613})
+total.push(c613.refs('numerator', 'denominator'))              # c611 and c612 are not summed again
 added = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
 ```
 
 A snapshot's value is the output of the plain request over the elements pushed so far, in push order.
-For the second snapshot this is `PARTS_SUM(numerator=[c611.numerator, c612.numerator, c613.numerator], denominator=[...])`, the request that way 2 makes, where `c611` is the CONTRIBUTE record of run `r611`.
+For the second snapshot, that request is PARTS_SUM over `{'parts': [c.refs('numerator', 'denominator') for c in (c611, c612, c613)]}`, the request that way 2 makes; `c611` and `c612` are the CONTRIBUTE records of runs `r611` and `r612`.
 A snapshot's record names the accumulator and how many elements it covers, not the elements themselves; provenance lists them:
 
 ```python
@@ -578,6 +588,7 @@ For example, a sample needs the empty-can run measured most recently before it:
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
 requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, datasets, lookup=cans)
+client.submit(requests, label='iofq')
 ```
 
 A *rule* is plain data: a name, a template, a selector, and a label, and optionally a lookup or a series.
@@ -596,7 +607,7 @@ The *trigger loop* is the driver for rules. It runs in a driving server, which h
 Like any driver, it keeps what it makes through its client, such as an accumulator for a sum that grows with each new dataset under a rule.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
-Templates and rules serialize to JSON; the core keeps no store of them, and records do not name them.
+Templates and rules are plain data; the core keeps no store of them, and records do not name them.
 
 ## Provenance and publication
 

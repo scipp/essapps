@@ -6,12 +6,14 @@
 
 import pytest
 
-from ess.apps import Client, SubmitError
+from ess.apps import Client, SubmitError, Template
 
 from .conftest import BEAM_CENTRE, IOFQ, Measure
 
 
-@pytest.mark.xfail(reason='publish and provenance.software are not implemented')
+@pytest.mark.xfail(
+    reason='client.publish, scicat, and Provenance.software are not implemented'
+)
 def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:

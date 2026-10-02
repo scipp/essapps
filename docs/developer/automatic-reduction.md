@@ -39,7 +39,7 @@ rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, bl
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 
-Templates and rules are frozen dataclasses that serialize to JSON; `dataclasses.replace` changes them.
+Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.
 The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
 
 ## The trigger loop

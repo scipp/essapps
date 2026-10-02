@@ -4,10 +4,9 @@
 Requests and records: what a user asks for and what the backend made of it.
 
 Both are plain data. A request names a spec and parameter values; a record is
-the request with every value filled in, or a snapshot of an accumulator, plus
-what happened. A record returned to a client is a copy as of the call: a
-pending record is replaced by a newer copy as it finishes, and a finished
-record never changes.
+the request with every value filled in, or a snapshot of an accumulator, as
+the backend accepted it. A record never changes. Its status, which changes
+once from pending to finished, is asked of the client.
 """
 
 from __future__ import annotations
