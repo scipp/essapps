@@ -8,37 +8,20 @@ from collections.abc import Callable
 
 import pytest
 
-from ess.apps import Client, SubmitError
+from ess.apps import Client, SubmitError, local
+from ess.apps.testing import FakeDatasets
 
-from .conftest import BEAM_CENTRE, IOFQ, VANADIUM, Measure
-
-
-@pytest.mark.xfail(reason='grants across proposals are not implemented')
-def test_g1_instrument_scientist_prepares_a_beamtime(
-    connect: Callable[..., Client], measure: Measure
-) -> None:
-    scientist = connect(proposal='commissioning', user='anna')
-    user = connect(proposal='p2', user='eve')
-    vanadium = scientist.compute(
-        VANADIUM, {'run': measure(1, [1.0, 1.0], proposal='commissioning')}
-    )
-    sample = measure(2, [2.0, 2.0, 2.0, 2.0], proposal='p2')
-    result = user.compute(
-        IOFQ, {'run': sample, 'normalization': vanadium.ref('normalization')}
-    )
-
-    assert user.output(result, 'iofq').values.tolist() == [2.0, 2.0]
-    with pytest.raises(SubmitError, match='p2'):
-        scientist.compute(IOFQ, {'run': sample})
-    assert scientist.records() == [vanadium]
+from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
 
 
 @pytest.mark.xfail(
-    reason='local(bind=...), publish, and provenance.software are not implemented'
+    reason='client.publish, scicat, and Provenance.software are not implemented'
 )
-def test_g2_developer_iterates_on_a_workflow(measure: Measure) -> None:
-    draft = make_iofq_workflow()
-    dev = local(proposal='p1', bind={IOFQ: draft})
+def test_g2_developer_iterates_on_a_workflow(
+    measure: Measure, datasets: FakeDatasets
+) -> None:
+    draft = iofq
+    dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})
     result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
     pid = dev.publish(result.ref('iofq'), 'scicat')
 

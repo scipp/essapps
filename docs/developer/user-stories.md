@@ -30,21 +30,22 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
 
 `FINALIZE` over `PARTS_SUM` over `CONTRIBUTE` computes what `NORMALIZE` computes.
+The binding of `IOFQ` is the function `iofq`.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
 ## Conventions
 
 Fixtures: `client` is `connect(url, proposal='p1')`, a client of a fresh hosted backend at `url`.
+`connect` is the planned client of a hosted backend (README.md, Client and backend); the story tests make a `Client` of one in-process `Backend` instead.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same backend, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
 `other` is a client of a second hosted backend.
 Every backend in the stories, including one that `local(...)` makes, reads the same datasets and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw dataset with the given counts and metadata, and returns its reference.
 The metadata of such a dataset also holds its run number, as `run`; `measure(..., proposal=...)` makes the dataset belong to another proposal.
 `datasets` is the fake dataset source of every backend; stories query it through `client.datasets` as in README.md.
-It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a dataset's metadata, and `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
-`scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance` and `.supersedes`.
+It has a helper for tests: `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
+`scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
-`crash()` ends the notebook's process without cleanup.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
 `upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets: the specs it offers and the software versions its records name.
 `replace` is `dataclasses.replace`.
@@ -128,30 +129,21 @@ Both calls return at once. The sum runs once both parts have completed.
 
 ### S5. Sum runs
 
-Actor: user in a notebook. Goal: reduce three runs of one sample as one measurement.
+Actor: user in a notebook. Goal: reduce three runs of one sample as one measurement, and subtract the sum of two background runs.
 
 ```python
 runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
 total = client.compute(NORMALIZE, {'runs': runs, 'scale': 2.0})
+backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
+result = client.compute(BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds})
 
 assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]   # [2, 6] / 8 * 2
 assert total.request.datasets() == runs
+assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 6] - [1, 2]
+assert result.request.datasets() == runs + backgrounds
 ```
 
-This is way 1 of "One sum, three ways" in the README. B2 uses ways 2 and 3.
-
-### S6. Sum sample runs and background runs
-
-Actor: user in a notebook. Goal: sum each set of runs and subtract the background.
-
-```python
-samples = [measure(1, [5.0, 5.0]), measure(2, [7.0, 5.0])]
-backgrounds = [measure(3, [1.0, 1.0]), measure(4, [1.0, 2.0])]
-result = client.compute(BACKGROUND, {'sample_runs': samples, 'background_runs': backgrounds})
-
-assert client.output(result, 'subtracted').values.tolist() == [10.0, 7.0]   # [12, 10] - [2, 3]
-assert result.request.datasets() == samples + backgrounds
-```
+This is way 1 of "One sum, three ways" in the README; `BACKGROUND` sums two lists of runs. B2 uses all three ways.
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -229,35 +221,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 ### A4. Mistaken copy into the shared service
 
-Actor: user of the shared service. Goal: remove a file that should not have left their machine.
-
-```python
-private_file = next(folder.glob('*.h5'))                # should have stayed on the laptop
-first = client.compute(IOFQ, {'run': dataset(path=private_file)})
-(uploaded,) = first.request.datasets()
-client.remove(uploaded)
-
-with pytest.raises(SubmitError, match='run'):
-    client.compute(IOFQ, first.request.params)
-assert client.records() == [first]                      # the first record stays
-```
-
-Gap: no call removes a dataset. This is deferred, together with whether the outputs derived from it go too.
-That no copy of the file stays in the service is system story A4.
-
-### A5. Metadata corrected after the fact
-
-Actor: instrument scientist. Goal: see the corrected sample name of a run already reduced.
-
-```python
-runs = [measure(n, [1.0, 2.0], sample='water') for n in (1, 2, 3)]
-reduced = [client.compute(IOFQ, {'run': run}) for run in runs]
-datasets.correct(runs[1], sample='heavy water')
-
-(named,) = reduced[1].request.datasets()
-assert named == runs[1]                                  # the correction keeps the dataset
-assert client.datasets.metadata(named)['sample'] == 'heavy water'
-```
+System story only; see [system-stories.md](system-stories.md).
 
 ## B. Manual and interactive reduction
 
@@ -282,11 +246,11 @@ assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
 assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]    # [2, 0, 4, 3] in 2 groups
 ```
 
-The template is plain data, kept in the notebook or in a file. That each change comes back quickly is system story B1.
+The template is plain data, kept in the notebook or in a file. That each change comes back quickly is system story S2.
 
-### B2. Add a run to a sum, then remove one
+### B2. Add a run to a sum, then start over without one
 
-Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and is added; 612 turns out bad and is removed.
+Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and is added; 612 turns out bad, and the sum starts over without it.
 
 ```python
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
@@ -302,40 +266,22 @@ parts[r613] = client.compute(contribute, {'run': r613})
 total.push(parts[r613].refs('numerator', 'denominator'))
 added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
 
-kept = [parts[r611], parts[r613]]
-summed = client.compute(PARTS_SUM, {'numerator': [p.ref('numerator') for p in kept],
-                                    'denominator': [p.ref('denominator') for p in kept]})
-removed = client.compute(FINALIZE, summed.refs(), label='sum')
+kept = [parts[r611], parts[r613]]                       # the client still keeps their outputs
+summed = client.compute(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in kept]})
+restarted = client.compute(FINALIZE, summed.refs(), label='sum')
+again = client.compute(NORMALIZE, {'runs': [r611, r613]})  # or submit again from the runs
 
-assert [client.output(r, 'normalized').values.tolist() for r in (first, added, removed)] == [
+assert [client.output(r, 'normalized').values.tolist() for r in (first, added, restarted)] == [
     [0.25, 0.75], [0.375, 0.625], [0.5, 0.5]]
-way_1 = client.compute(NORMALIZE, {'runs': [r611, r612]})
-assert client.output(way_1, 'normalized').values.tolist() == [0.25, 0.75]
-assert client.provenance(removed).datasets() == [r611, r613]
-assert client.records(label='sum') == [first, added, removed]
+assert client.output(again, 'normalized').values.tolist() == [0.5, 0.5]
+assert client.provenance(restarted).datasets() == [r611, r613]
+assert client.records(label='sum') == [first, added, restarted]
 ```
 
-Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (README.md open question 2).
+Starting over discards nothing: `first` and `added` stay under `sum`.
+The user starts over with a request over the contributions the client still keeps (way 2 of "One sum, three ways" in the README), or submits again from the runs (way 1).
+An accumulator has no `remove` (README.md open question 2).
 That adding 613 costs about one run is system story B2.
-
-### B3. Compare two parameter sets side by side
-
-Actor: user in a notebook. Goal: look at the result with and without a mask, keep one, discard the other.
-
-```python
-run = measure(1, [1.0, 2.0, 3.0, 4.0])
-tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
-plain = client.compute(tune, {'bins': 2, 'threshold': 0.0}, label='iofq')
-masked = client.compute(tune, {'bins': 2, 'threshold': 2.5}, label='iofq-masked')
-finer = client.compute(tune, {'bins': 4, 'threshold': 2.5}, label='iofq-masked')
-
-assert [client.output(r, 'iofq').values.tolist() for r in (plain, masked, finer)] == [
-    [3.0, 7.0], [0.0, 7.0], [0.0, 0.0, 3.0, 4.0]]
-assert client.latest('iofq') == plain
-assert client.records(label='iofq-masked') == [masked, finer]
-```
-
-Keeping a variant means reading its label from now on. Discarding the other needs no call.
 
 ### B4. Explore a 4D volume
 
@@ -357,25 +303,7 @@ The chosen cut is a parameter of the next request. How fast a view comes back is
 
 ### B5. Notebook kernel dies
 
-Actor: user in a notebook. Goal: after a restart, continue where they were.
-
-```python
-run = measure(1, [1.0, 2.0, 3.0, 4.0])
-tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
-tuned = client.compute(tune, {'bins': 1}, label='iofq')
-crash()                                            # the kernel dies
-
-client = connect()
-last = client.latest('iofq')
-tune = client.stage(Template(IOFQ, params={'run': last.request.params['run']}, blanks=('bins',)))
-again = client.compute(tune, {'bins': 4}, label='iofq')
-
-assert last == tuned
-assert client.records(label='iofq') == [tuned, again]
-assert client.output(again, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
-```
-
-The stage ends with the kernel's client, so the new client's stage loads the run again. What the backend does with the dead client is system story B5.
+System story only; see [system-stories.md](system-stories.md).
 
 ### B6. Find last week's result
 
@@ -405,7 +333,7 @@ A beam centre found again later is a new record under `beam-centre`; the templat
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend published to SciCat.
+Actor: user. Goal: use a vanadium result that another backend, or another proposal, published to SciCat.
 
 ```python
 vanadium = other.compute(VANADIUM, {'run': measure(1, [1.0, 1.0]), 'scale': 2.0})
@@ -421,6 +349,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
+A result of another proposal, such as the vanadium an instrument scientist made in a commissioning proposal for the users of the coming one, is read the same way, or from a saved output, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
 
@@ -437,7 +366,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it is one spec over a list of runs, not an accumulation.
+The stitch fits scale factors over all angles at once, so it is one request over all runs, not an accumulation.
 
 ### C5. Vanadium and sample tuned together
 
@@ -488,7 +417,7 @@ Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
 
-Actor: NMX user. Goal: submit thirty long runs, close the laptop, and the next day rerun the failed ones.
+Actor: NMX user. Goal: submit thirty long runs, close the laptop, and the next day read why some failed and rerun them.
 
 ```python
 runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
@@ -499,16 +428,19 @@ for member, run in runs.items():
 morning = connect()                                                  # the next day, a new client
 night = {r.member: r for r in morning.records(label='night')}
 failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
+reasons = morning.failure(failed)
 repair(runs['7'])                                                    # the transfer is repeated
 reruns = [morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
           for r in failed]
 morning.wait(reruns)
 
 assert [r.member for r in failed] == ['7']
+assert reasons == ['file signature not found']
 assert reruns[0].request == failed[0].request
 assert morning.latest('night', member='7') == reruns[0]
 assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
-assert len(morning.records(label='night')) == 31                     # the failed record stays
+assert morning.status(failed) == ['failed']                          # the failure stays
+assert len(morning.records(label='night')) == 31                     # and so does its record
 ```
 
 Gap: labels and members on records are tentative, as in D1.
@@ -546,31 +478,6 @@ with pytest.raises(SubmitError, match='threshold'):
     client.submit(requests, label='scan')
 assert client.records() == []
 ```
-
-### D5. Understand why a run failed
-
-Actor: user. Goal: read why a member failed, fix its input, and rerun that member.
-
-```python
-good = measure(1, [1.0, 1.0, 1.0, 1.0], temperature='250K')
-bad = measure(2, [2.0, 2.0, 2.0, 2.0], temperature='260K')
-corrupt(bad)
-template = Template(IOFQ, blanks=('run',))
-requests = apply(template, [good, bad], client.datasets, member_field='temperature')
-failed = client.compute(requests, label='scan')['260K']
-
-repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')     # the measurement is repeated
-rerun = client.compute(IOFQ, {**failed.request.params, 'run': repeat}, label=failed.label,
-                       member=failed.member)
-
-assert client.failure(failed) == 'file signature not found'
-assert client.latest('scan', member='260K') == rerun
-assert client.output(rerun, 'iofq').values.tolist() == [4.0, 4.0]
-assert client.records(label='scan')[-1] == rerun
-assert client.status(failed) == 'failed'                                   # the failure stays
-```
-
-Gap: `member_field`, and labels and members on records, are tentative, as in D1.
 
 ### D6. Rerun a batch with a new workflow version
 
@@ -746,7 +653,7 @@ assert [r.request.params for r in provenance.records()] == [centre.request.param
 assert {'essapps', 'scipp'} <= provenance.software.keys()
 ```
 
-The entry carries what lasts. The history behind it expires after the retention period (system story H3).
+The entry carries what lasts. The history behind it is dropped with the proposal (system story H3).
 
 ### F2. Reproduce after two upgrades
 
@@ -768,51 +675,15 @@ assert client.provenance(result).software['scipp'] != '99.0'
 Gap: `client.recompute(record)`, which runs a request in its record's environment or refuses before running, is deferred.
 That the recorded environment can be installed again is system story F2.
 
-### F4. Publish a corrected version (deferred)
-
-Actor: user. Goal: publish a correction that names what it supersedes; the old entry stays.
-
-```python
-run = measure(1, [1.0, 2.0, 3.0, 4.0])
-bad = client.compute(IOFQ, {'run': run, 'threshold': 5.0})
-old = client.publish(bad.ref('iofq'), 'scicat')
-fixed = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
-new = client.publish(fixed.ref('iofq'), 'scicat', supersedes=old)
-
-assert scicat.entries[new].supersedes == old
-assert scicat.entries[old].provenance == client.provenance(bad)
-```
-
-Gap: `publish` takes no `supersedes`. Corrections that supersede a published entry are deferred.
-
 ## G. Roles and deployment
-
-### G1. Instrument scientist prepares a beamtime
-
-Actor: instrument scientist, then an external user. Goal: results made in a commissioning proposal are readable by the users of the coming proposal; nothing else crosses proposals.
-
-```python
-scientist = connect(proposal='commissioning', user='anna')
-user = connect(proposal='p2', user='eve')                      # p2 may read commissioning
-vanadium = scientist.compute(VANADIUM, {'run': measure(1, [1.0, 1.0], proposal='commissioning')})
-sample = measure(2, [2.0, 2.0, 2.0, 2.0], proposal='p2')
-result = user.compute(IOFQ, {'run': sample, 'normalization': vanadium.ref('normalization')})
-
-assert user.output(result, 'iofq').values.tolist() == [2.0, 2.0]   # [2, 2, 2, 2] / 2
-with pytest.raises(SubmitError, match='p2'):
-    scientist.compute(IOFQ, {'run': sample})
-assert scientist.records() == [vanadium]
-```
-
-That an operator grants the read, and the backend enforces it, is system story G1.
 
 ### G2. Developer iterates on a workflow
 
 Actor: workflow developer. Goal: run a workflow defined in a notebook without installing it; its records say what ran.
 
 ```python
-draft = make_iofq_workflow()                                  # IOFQ's implementation, being edited
-dev = local(proposal='p1', bind={IOFQ: draft})                # a backend in the notebook's process
+draft = iofq                                                  # IOFQ's binding, being edited
+dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})   # a backend in this process
 result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
 pid = dev.publish(result.ref('iofq'), 'scicat')               # publishing is not refused
 
@@ -871,7 +742,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 System story only; see [system-stories.md](system-stories.md).
 
-### H3. Records expire
+### H3. Records end with the proposal
 
 System story only; see [system-stories.md](system-stories.md).
 
@@ -879,12 +750,10 @@ System story only; see [system-stories.md](system-stories.md).
 
 What the design leaves open or defers, with the stories each item affects.
 
-- **Removing a dataset** (A4): deferred, together with whether the outputs derived from it go too.
+- **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
 - **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
-- **Removing an element from an accumulator** (B2): README.md open question 2.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
+- **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
 - **Placement** (system story G3): where a stage runs is the system's decision (README.md, Left to the system); how the system decides is not designed.
 - **Recomputing in a record's environment** (F2): deferred.
-- **Publishing a correction** (F4): deferred.

@@ -69,22 +69,15 @@ def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> 
 def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
     total = client.compute(NORMALIZE, {'runs': runs, 'scale': 2.0})
+    backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
+    result = client.compute(
+        BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds}
+    )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
     assert total.request.datasets() == runs
-
-
-def test_s6_sum_sample_runs_and_background_runs(
-    client: Client, measure: Measure
-) -> None:
-    samples = [measure(1, [5.0, 5.0]), measure(2, [7.0, 5.0])]
-    backgrounds = [measure(3, [1.0, 1.0]), measure(4, [1.0, 2.0])]
-    result = client.compute(
-        BACKGROUND, {'sample_runs': samples, 'background_runs': backgrounds}
-    )
-
-    assert client.output(result, 'subtracted').values.tolist() == [10.0, 7.0]
-    assert result.request.datasets() == samples + backgrounds
+    assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]
+    assert result.request.datasets() == runs + backgrounds
 
 
 def test_s7_reduce_each_sample_with_the_can_measured_before_it(

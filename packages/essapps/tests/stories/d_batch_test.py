@@ -56,6 +56,7 @@ def test_d2_overnight_cluster_batch(
     morning = connect()
     night = {r.member: r for r in morning.records(label='night')}
     failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
+    reasons = morning.failure(failed)
     repair(runs['7'])
     reruns = [
         morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
@@ -64,9 +65,11 @@ def test_d2_overnight_cluster_batch(
     morning.wait(reruns)
 
     assert [r.member for r in failed] == ['7']
+    assert reasons == ['file signature not found']
     assert reruns[0].request == failed[0].request
     assert morning.latest('night', member='7') == reruns[0]
     assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
+    assert morning.status(failed) == ['failed']
     assert len(morning.records(label='night')) == 31
 
 
@@ -97,33 +100,6 @@ def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) ->
     with pytest.raises(SubmitError, match='threshold'):
         client.submit(requests, label='scan')
     assert client.records() == []
-
-
-def test_d5_understand_why_a_run_failed(
-    client: Client,
-    measure: Measure,
-    corrupt: Callable[..., None],
-) -> None:
-    good = measure(1, [1.0, 1.0, 1.0, 1.0], temperature='250K')
-    bad = measure(2, [2.0, 2.0, 2.0, 2.0], temperature='260K')
-    corrupt(bad)
-    template = Template(IOFQ, blanks=('run',))
-    requests = apply(template, [good, bad], client.datasets, member_field='temperature')
-    failed = client.compute(requests, label='scan')['260K']
-
-    repeat = measure(3, [2.0, 2.0, 2.0, 2.0], temperature='260K')
-    rerun = client.compute(
-        IOFQ,
-        {**failed.request.params, 'run': repeat},
-        label=failed.label,
-        member=failed.member,
-    )
-
-    assert client.failure(failed) == 'file signature not found'
-    assert client.latest('scan', member='260K') == rerun
-    assert client.output(rerun, 'iofq').values.tolist() == [4.0, 4.0]
-    assert client.records(label='scan')[-1] == rerun
-    assert client.status(failed) == 'failed'
 
 
 def test_d6_rerun_a_batch_with_a_new_workflow_version(

@@ -1,6 +1,6 @@
 # ADR 0001: Keep the backend's history as an event log, apart from values
 
-- Status: accepted
+- Status: accepted, amended 2026-10-02
 - Deciders: Simon
 - Date: 2026-09-30
 
@@ -46,3 +46,8 @@ Keep a time machine for history, for a retention period, and none for values.
 - A snapshot is not a request: `record.request` exists only for requests, and what a snapshot read comes from the backend.
 - Keeping values while a client holds a record handle needs leases in a hosted backend, so that a client that disappears releases them.
 - A value that must outlive its client, such as a beam centre for tomorrow's batch, is saved. A forwarder, a holder of the last value pushed into it (as in sciline), joins the holders when a story needs one.
+
+## Amendment 2026-10-02
+
+- The consequence on restarting from the log cites system stories B5 and H2. Only H2, a backend upgrade with runs in flight, restarts the backend. B5 is a notebook kernel that dies; its client ends, and the backend keeps running.
+- History is not kept for a retention period. Records are the proposal's history: they are kept as long as the proposal, and dropped with it as a whole. The trigger loop knows which datasets a rule has handled only from the records under the rule's label, so a retention that dropped old records would make it reduce those datasets again.

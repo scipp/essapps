@@ -9,8 +9,8 @@ Where a story shares a goal with an API story in [user-stories.md](user-stories.
 
 ### S2. Tune one parameter
 
-Actor: user in a notebook. Goal: a new binning comes back in a second or two.
-Property: a call through a stage does not load the run again.
+Actor: user in a notebook. Goal: a new binning comes back in a second or two, and so does each change of binning and mask in user story B1.
+Property: a call through a stage does not load the run again, with one blank such as `bins` or with several such as `bins` and `threshold`.
 
 ## A. Getting data in
 
@@ -31,11 +31,6 @@ Property: a local file reaches the service only when a request that names it is 
 
 ## B. Manual and interactive reduction
 
-### B1. Tune a SANS reduction
-
-Actor: user in a notebook. Goal: each change of binning or mask comes back in a second or two.
-Property: a call through a stage whose blanks are `bins` and `threshold` does not load the run again.
-
 ### B2. Add a run to a sum
 
 Actor: user in a notebook. Goal: after a new run finishes, the sum including it comes back quickly.
@@ -54,14 +49,14 @@ Property: records completed before the crash are kept, and requests submitted be
 ### B6. Find last week's result
 
 Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
-Property: records survive restarts of the client and of the backend for the retention period (H3). Saved outputs survive as long as their store keeps them.
+Property: records survive restarts of the client and of the backend, as long as the proposal (H3). Saved outputs survive as long as their store keeps them.
 
 ## C. Chaining
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend published.
-Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage.
+Actor: user. Goal: use a vanadium result that another backend, or another proposal, published.
+Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage. A result of another proposal on the same backend is read the same way, or from a saved output: no proposal reads another's records.
 
 ### C5. Vanadium and sample tuned together
 
@@ -98,11 +93,6 @@ Property: the software environment recorded with a record is enough to install i
 
 ## G. Roles and deployment
 
-### G1. Instrument scientist prepares a beamtime
-
-Actor: operator, for an instrument scientist. Goal: records of the commissioning proposal are readable by the users of the coming proposal.
-Property: an operator lets one proposal read another's records and datasets by configuration. The backend enforces the grant.
-
 ### G2. Developer iterates on a workflow
 
 Actor: workflow developer. Goal: edit a workflow in a notebook and see the result within seconds.
@@ -116,21 +106,21 @@ Property: the application's stages run on the laptop while they read outputs of 
 ### G5. Reference across proposals refused
 
 Actor: operator. Goal: no user reads another proposal's data, whatever client they use.
-Property: the backend checks every reference against the submitter's proposal and its grants. A modified client cannot get around the check.
+Property: the backend checks every reference against the submitter's proposal. A modified client cannot get around the check.
 
 ## H. Operations
 
 ### H1. Disk fills up
 
 Actor: operator. Goal: free disk space without losing provenance.
-Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay for the retention period (H3). The operator sees the space used per proposal before the disk is full.
+Property: stored outputs can be dropped by proposal, label, or age. Every record and its provenance stay as long as the proposal (H3). The operator sees the space used per proposal before the disk is full.
 
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
 Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on a log that another backend still holds is refused, so the old and the new version never write the same log.
 
-### H3. Records expire
+### H3. Records end with the proposal
 
-Actor: operator. Goal: history is kept while an experiment needs it and removed afterwards; what was published lasts.
-Property: history is kept for a configured period that covers a running experiment. An older event is kept while a kept event depends on it, so a kept record's provenance is complete. A published entry still answers what produced it after the history behind it has expired.
+Actor: operator. Goal: history is kept while the proposal needs it and removed afterwards; what was published lasts.
+Property: a proposal's history is kept as long as the proposal and dropped with it as a whole, never in part. So a kept record's provenance is complete, and a trigger loop never reduces a dataset again. A published entry still answers what produced it after the history behind it is dropped.

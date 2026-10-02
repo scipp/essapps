@@ -2,7 +2,8 @@
 
 **Status: the design of how the system keeps history and values.
 The in-process backend implements the history, the clients, and dropping values.
-It keeps values in memory only, so retention and saving are not implemented.**
+It keeps values in memory only, so saving is not implemented.
+It never drops history.**
 
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
@@ -17,14 +18,14 @@ It adds four terms of its own:
 |---|---|
 | client entry | what the backend keeps for one client: its proposal, the records whose values it keeps, its stages, and its accumulators |
 | event | one entry in the log, such as "record #2 finished" |
+| index | a lookup the backend builds from the events, such as record IDs by label; queries read indexes. The code calls them views (`views.py`) |
 | log | the backend's history: an append-only list of events |
-| view | an index the backend builds from the events, such as records by label; queries read views |
 
 ## History and values
 
 The backend keeps two things with different lifetimes:
 
-- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept for a retention period.
+- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept as long as the proposal (see How long history is kept).
 - **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request that reads it has yet to run (see Values), or once it is saved.
 
 A record is history; its output values are not.
@@ -80,25 +81,25 @@ Each angle adds seven events of constant size, however many angles came before.
 - **JSON only.** Events are JSON. Request values already are, since references in `ess.reduce.spec` are plain dicts.
 - **The same values, live or read back.** The backend converts each event to JSON and back before applying it. A record therefore holds the same values whether it was just made or read from a file. For example, a tuple given as a parameter is a list in the record. A binding gets the values after the spec's params model has validated them again, so it receives the types the model declares.
 
-## Views
+## Indexes
 
-The backend applies each event to its views (`Views.apply` in `views.py`).
-It does this the same way when it appends a new event and when it reads an existing log, so a backend that reads its log again has the same views.
+The backend applies each event to its indexes (`Views.apply` in `views.py`).
+It does this the same way when it appends a new event and when it reads an existing log, so a backend that reads its log again has the same indexes.
 
-| View | Used by |
+| Index | Used by |
 |---|---|
 | records by ID | `client.records`, `client.provenance`, checks of references |
 | the `finished` event by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, the trigger loop |
 | each accumulator's elements | what its snapshots read (see Records) |
 
-A view changes only when an event is applied, and how it changes depends only on the events.
-Queries read the views, never the log.
+An index changes only when an event is applied, and how it changes depends only on the events.
+Queries read the indexes, never the log.
 
-Live state that is not history is not in the views either: client entries, output values, which pending records hold which values, which snapshots have ended, which records wait for which, and the queue of work ready to run.
-The backend keeps it apart from the views, and it is lost when the backend stops.
+Live state that is not history is not in the indexes either: client entries, output values, which pending records hold which values, which snapshots have ended, which records wait for which, and the queue of work ready to run.
+The backend keeps it apart from the indexes, and it is lost when the backend stops.
 
-The views depend on three orders in the log:
+The indexes depend on three orders in the log:
 
 - a record's `submitted` before its `finished`;
 - the submissions under one label, since `client.latest` returns the newest;
@@ -108,13 +109,13 @@ The views depend on three orders in the log:
 
 A record stores what its `submitted` event holds: a request, or for a snapshot `Snapshot(spec, accumulator, upto)`.
 Its status is in its `finished` event, so a record never changes and a client's copy of it is never out of date.
-A snapshot does not list what it read; that is the first `upto` elements in its accumulator's view.
+A snapshot does not list what it read; that is the first `upto` elements in the index of its accumulator's elements.
 Provenance asks the backend what each record read (`Backend.inputs`), so it works for a snapshot as for a request:
 
 ```python
 total = client.submit(volume)          # a snapshot of volume, upto=1000
 total.submitted                        # Snapshot(spec=volume/v1, accumulator=volume.id, upto=1000)
-client.provenance(total).records()     # the 1000 angles, from the accumulator's view
+client.provenance(total).records()     # the 1000 angles, from the index of the accumulator's elements
 total.request                          # TypeError: a snapshot is not a request
 ```
 
@@ -131,7 +132,7 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the ev
 - A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
 - No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once the pending records that read them have run.
 
-This is what system stories B5 (notebook kernel dies) and H2 (backend upgrade with runs in flight) need from history.
+This is what system story H2 (backend upgrade with runs in flight) needs from history.
 H2 also needs every event format to stay readable across versions.
 
 ## Where the log lives
@@ -147,7 +148,7 @@ The operating system releases the lock when the process ends, so a backend start
 Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
 
 A hosted backend may split its log by proposal.
-This keeps the three orders the views depend on (see Views), since each lies within one proposal.
+This keeps the three orders the indexes depend on (see Indexes), since each lies within one proposal.
 
 ## Accumulators
 
@@ -212,7 +213,7 @@ No request waits for a push, so the wait ends; a long request that reads a snaps
 Releasing the accumulator or ending its client ends its snapshots in the same way, but does not wait: their values are dropped once the requests that read them have run.
 
 `client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push; the next push waits for the copy as for a request.
-A request that reads a snapshot reads the value itself, so its outputs must not share memory with it, such as a view of it: they would change at the next push.
+A request that reads a snapshot reads the value itself, so its outputs must not share memory with it, such as a slice of it: they would change at the next push.
 To keep an earlier state, a driver submits a request that reduces or copies the snapshot; saving it is part of the provenance and publication sub-design.
 
 **Binding.** An accumulator needs a binding that makes element accumulators, like `sciline.Accumulator` does for one key; opening one with any other binding is refused.
@@ -276,19 +277,16 @@ How the stories fare:
 | E1: the curve a rule made, read later | the rule saves what it makes; not designed yet |
 | B5: kernel dies | what was saved; all history |
 
-## Retention
+## How long history is kept
 
-History is kept for a retention period.
-This works like a garbage collector whose roots are the events younger than that period: an older event is kept while a kept event depends on it, directly or through other kept events; everything else is dropped.
-A record's submission depends on the submissions of the records it references, and a snapshot depends on the pushes it covers.
+Records are the proposal's history.
+The events of a proposal are kept as long as the proposal, and dropped with it as a whole; no event is dropped earlier.
+The trigger loop knows that it has handled a dataset only from the records under its rule's label ([automatic-reduction.md](automatic-reduction.md)).
+A backend that dropped old records would make a restarted loop reduce those datasets again.
+History is small enough to keep: in story D7, each angle adds seven events of constant size (see An example).
+A hosted backend that splits its log by proposal (see Where the log lives) drops a proposal's history by dropping its part of the log.
 
-Dependencies point only backwards in time, so there are no cycles: a set of old events that no young event reaches is dropped as a whole.
-A long history stays alive only if something young depends on it.
-For example, an accumulator with a snapshot every day for a whole cycle keeps all its pushes; pushes are small.
-Without this rule, a snapshot whose pushes had expired could not state what it covers.
-Publishing writes the provenance, flattened from the log, into the catalogue entry, so what is published does not depend on retention.
-
-Retention is not implemented.
+Publishing writes the provenance, flattened from the log, into the catalogue entry, so what is published outlives the proposal's history.
 
 ## Open
 
