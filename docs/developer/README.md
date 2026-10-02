@@ -264,10 +264,11 @@ The backend keeps two kinds of things with different lifetimes:
 Records are kept for a retention period, together with the older records they depend on.
 They are kept long because they are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
 
-Output values are large, so the backend keeps them by one rule:
+Output values are large, so the backend keeps a value only while something keeps it.
+Two things do:
 
-- **A client keeps the output values of the records it makes until it releases them or ends.**
-- **A pending request keeps the values it reads until it has read them.**
+- **the client that made its record, until the client releases it or ends;**
+- **a pending request that reads it, until the request has read it.**
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
