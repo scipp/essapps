@@ -200,16 +200,17 @@ The first output is kept at least until the second request has read it (see How 
 An output can be passed to a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the same dims and unit.
 Otherwise the request is refused at submission.
 
-Several requests that refer to each other can be submitted in one call.
-`Request(spec, params)` makes a request without submitting it.
-A reference to a request in the same call becomes a reference to its record:
+Each step of a chain is its own call.
+`Request(spec, params)` makes a request without submitting it, so that the independent requests of one step go in one call:
 
 ```python
-centre = Request(BEAM_CENTRE, {'run': centre_run})
-samples = {name: Request(IOFQ, {'run': run, 'beam_centre': centre.ref('centre')})
-           for name, run in sample_runs.items()}
-records = client.submit({'centre': centre, **samples})    # pending records, same keys
+centre = client.submit(BEAM_CENTRE, {'run': centre_run})            # pending
+samples = client.submit({name: Request(IOFQ, {'run': run, 'beam_centre': centre.ref('centre')})
+                         for name, run in sample_runs.items()})     # pending records, same keys
 ```
+
+A request references records and datasets, never another request of the same call.
+Each call is checked on its own: if the samples are refused, the beam-centre record stays.
 
 Chain requests where the intermediate result is worth having as a result of its own, such as a beam centre or a vanadium normalization.
 Each step is a separate record.
