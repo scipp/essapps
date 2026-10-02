@@ -9,7 +9,7 @@ values when staged or on the first call, and hold it; a request outside a
 stage is staged with no blanks and called once::
 
     binding.stage(values, ())()                      # a plain request
-    call = binding.stage(fixed, ('bins',))           # a stage in a session
+    call = binding.stage(fixed, ('bins',))           # a stage
     call(bins=100)
 
 A plain function is a binding that computes nothing ahead. How a binding
@@ -17,8 +17,8 @@ computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
 A binding of a spec over a table may also make element accumulators, like
-``sciline.Accumulator`` for a whole element. An accumulator in a session holds
-one, so it needs such a binding::
+``sciline.Accumulator`` for a whole element. An accumulator holds one, so it
+needs such a binding::
 
     held = binding.accumulator()
     held.push({'numerator': n1, 'denominator': d1})

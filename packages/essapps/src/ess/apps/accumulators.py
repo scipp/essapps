@@ -5,7 +5,7 @@ Specs over a table: specs that combine a list of elements into one value.
 
 The only param of such a spec is a table field (``ess.reduce.spec``): a list
 of a flat model, one row per element. A request gives the whole table; an
-accumulator in a session takes one row at a time::
+accumulator takes one row at a time::
 
     class SumParams(BaseModel):
         parts: list[NormalizationParts]
@@ -86,8 +86,8 @@ def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     The binding of a spec over a table that outputs the row's fields: each
     field combined with ``operation``, as in ``operation(operation(a, b), c)``.
 
-    A plain request and an accumulator in a session combine the elements in
-    the same order, so they give the same value. ``operation`` must return a
+    A plain request and an accumulator combine the elements in the same
+    order, so they give the same value. ``operation`` must return a
     new value and not modify its arguments.
     """
     return _Combine(operation)

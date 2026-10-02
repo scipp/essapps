@@ -3,10 +3,10 @@
 """Framework for ESS data-reduction applications."""
 
 from .accumulators import combine
-from .backend import Backend
+from .backend import Backend, ClientEnded
 from .batch import LastBefore, Lookup, apply
 from .bindings import Binding
-from .client import Client, Datasets, Provenance, local
+from .client import Accumulator, Client, Datasets, Provenance, Stage, local
 from .datasets import DatasetSource, Selector, dataset
 from .records import (
     Record,
@@ -18,13 +18,13 @@ from .records import (
     Template,
 )
 from .rules import Rule, RuleStatus, TriggerLoop
-from .sessions import Accumulator, Session, Stage
 
 __all__ = [
     'Accumulator',
     'Backend',
     'Binding',
     'Client',
+    'ClientEnded',
     'DatasetSource',
     'Datasets',
     'LastBefore',
@@ -35,7 +35,6 @@ __all__ = [
     'Rule',
     'RuleStatus',
     'Selector',
-    'Session',
     'Snapshot',
     'SpecId',
     'Stage',

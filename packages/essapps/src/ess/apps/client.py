@@ -8,31 +8,40 @@ requests accept one, a list, or a dict, and return the same shape.
 
 A record never changes; its status changes once, from pending to finished,
 and is asked with :meth:`Client.status` or :meth:`Client.wait`.
+
+A client is the lifetime of what it keeps: the outputs of the records it
+makes, its stages, and its accumulators. It keeps each until it releases it or
+ends. Releasing and ending stop no work: a pending request still runs, and
+keeps the values it reads until it has read them.
 """
 
 from __future__ import annotations
 
+import functools
 import queue
 import threading
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Self
 
 from ess.reduce.spec import DatasetRef, WorkflowSpec
 from pydantic import BaseModel
 
+from .accumulators import element_table
 from .backend import Backend, Entry
 from .bindings import Binding, Function
 from .datasets import DatasetSource, Selector
 from .records import (
+    Element,
     Record,
     Request,
     SpecId,
     Status,
     Submission,
+    Template,
 )
-from .sessions import Accumulator, Session, Stage
 
 
 def _items(what: Any) -> list[Any]:
@@ -90,29 +99,103 @@ class Datasets:
     and read their metadata. A request names a dataset with ``dataset(...)``.
     """
 
-    def __init__(self, backend: Backend, proposal: str) -> None:
+    def __init__(self, backend: Backend, client: str) -> None:
         self._backend = backend
-        self._proposal = proposal
+        self._client = client
 
     def list(self, selector: Selector) -> list[DatasetRef]:
         """The datasets the selector matches, in the order they were measured."""
-        return self._backend.datasets(selector, self._proposal)
+        return self._backend.datasets(selector, self._client)
 
     def watch(self, selector: Selector) -> Iterator[DatasetRef]:
         """Matching datasets: the existing ones first, then new ones, each once."""
-        return self._backend.watch_datasets(selector, self._proposal)
+        return self._backend.watch_datasets(selector, self._client)
 
     def metadata(self, ref: DatasetRef) -> dict[str, Any]:
         """The dataset's current metadata; raises ``KeyError`` if not readable."""
-        return self._backend.dataset_metadata(ref, self._proposal)
+        return self._backend.dataset_metadata(ref, self._client)
+
+
+@dataclass(frozen=True)
+class Stage:
+    """
+    A template whose fixed part the backend computes once; a call fills its blanks.
+
+    A stage never changes what a record says: a call through it makes the
+    record of the filled template. ``id`` names the stage in the backend.
+    """
+
+    template: Template
+    id: str
+
+
+class Accumulator:
+    """
+    The output of its spec over the elements pushed into it so far.
+
+    ``id`` names the accumulator in the backend; submitting it makes a
+    snapshot, a record of the combined value of the elements pushed so far.
+    """
+
+    def __init__(
+        self, spec: WorkflowSpec, accumulator_id: str, push: Callable[[Element], None]
+    ) -> None:
+        self.spec = spec
+        self.id = accumulator_id
+        self._push = push
+
+    def push(self, element: Element) -> None:
+        """
+        Push a row of the spec's table, as a request over the table takes it.
+
+        Select a record's outputs with ``record.refs('numerator', ...)``.
+        The push waits for the records to finish, and refuses them unless they
+        have completed. A driver that pushes records as they finish, as
+        ``client.as_completed`` yields them, never waits here.
+        """
+        self._push(element)
 
 
 class Client:
-    def __init__(self, backend: Backend, *, proposal: str, submitter: str) -> None:
+    """
+    A connection to a backend, for one proposal.
+
+    ``with client:`` closes the client at the end of the block. A client that
+    owns its backend, as :func:`local` makes one, also closes the backend.
+    Any call of a client that has ended raises ``ClientEnded``.
+    """
+
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        proposal: str,
+        submitter: str,
+        owns_backend: bool = False,
+    ) -> None:
         self._backend = backend
+        self._owns_backend = owns_backend
+        self._id = backend.open_client(proposal, submitter)
         self.proposal = proposal
         self.submitter = submitter
-        self.datasets = Datasets(backend, proposal)
+        self.datasets = Datasets(backend, self._id)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """
+        End the client: release everything it keeps, and stop no work.
+
+        A client that owns its backend then closes it, which waits until no
+        record is pending.
+        """
+        self._backend.close_client(self._id)
+        if self._owns_backend:
+            self._backend.close()
 
     # Submitting
 
@@ -136,15 +219,13 @@ class Client:
         if isinstance(what, WorkflowSpec | SpecId):
             what = Request(what, params)
         elif isinstance(what, Stage):
-            stage, what = what.id, what.request(params or {})
+            stage, what = what.id, what.template.fill(params or {})
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         elif isinstance(what, Accumulator):
             if label is not None or member is not None:
                 raise TypeError('a snapshot takes no label or member')
-            return self._backend.snapshot(
-                what.id, proposal=self.proposal, submitter=self.submitter
-            )
+            return self._backend.snapshot(what.id, client=self._id)
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -157,9 +238,7 @@ class Client:
                 _items(what), members, _names(what), strict=True
             )
         ]
-        records = self._backend.submit(
-            entries, proposal=self.proposal, submitter=self.submitter
-        )
+        records = self._backend.submit(entries, client=self._id)
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
@@ -171,16 +250,16 @@ class Client:
     def status(self, records: Any) -> Any:
         """The status of each record now."""
         ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.status(ids, self.proposal))
+        return _reshape(records, self._backend.status(ids, self._id))
 
     def wait(self, records: Any) -> Any:
         """The status of each record once all have finished; a failure is not raised."""
         ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.wait(ids, self.proposal))
+        return _reshape(records, self._backend.wait(ids, self._id))
 
     def failure(self, records: Any) -> Any:
         """Why each record failed; ``None`` for a record that has not failed."""
-        failures = [self._backend.failure(r.id, self.proposal) for r in _items(records)]
+        failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
         return _reshape(records, failures)
 
     def as_completed(self, records: Iterable[Record]) -> Iterator[Record]:
@@ -201,9 +280,7 @@ class Client:
                 for record in records:
                     if record.id not in seen:
                         seen.add(record.id)
-                        self._backend.when_finished(
-                            record.id, self.proposal, finished.put
-                        )
+                        self._backend.when_finished(record.id, self._id, finished.put)
                     if stop.is_set():
                         return
             except Exception as error:  # raised in the caller's thread
@@ -228,27 +305,51 @@ class Client:
 
     def cancel(self, records: Any) -> None:
         """End the unfinished records as cancelled."""
-        self._backend.cancel([r.id for r in _items(records)], self.proposal)
+        self._backend.cancel([r.id for r in _items(records)], self._id)
 
-    def session(self, where: str | None = None) -> Session:
-        """
-        A session for stages and accumulators, released when it ends.
+    # Stages, accumulators, and what the client keeps
 
-        ``where`` places the session's process; only this process is supported.
+    def stage(self, template: Template) -> Stage:
+        """A stage of the template; the client keeps it until it releases it."""
+        stage_id = self._backend.open_stage(
+            template.spec, template.blanks, client=self._id
+        )
+        return Stage(template, stage_id)
+
+    def accumulator(self, spec: WorkflowSpec) -> Accumulator:
         """
-        if where not in (None, 'local'):
-            raise NotImplementedError(f'sessions {where!r}')
-        return Session(self._backend, self.proposal, where)
+        An accumulator of ``spec``, whose only param must be a table.
+
+        The client keeps it until it releases it.
+        """
+        if element_table(spec) is None:
+            raise TypeError(f'{spec.name} does not take one table')
+        accumulator_id = self._backend.open_accumulator(
+            SpecId.of(spec), client=self._id
+        )
+        push = functools.partial(self._backend.push, accumulator_id, client=self._id)
+        return Accumulator(spec, accumulator_id, push)
+
+    def release(self, what: Any) -> None:
+        """
+        Release records, stages, or accumulators: one, a list, or a dict.
+
+        A released record's outputs are dropped once no pending request is yet
+        to read them; the record stays. A released stage takes no more calls,
+        and a released accumulator no more pushes or snapshots. Releasing stops
+        no work.
+        """
+        self._backend.release([x.id for x in _items(what)], client=self._id)
 
     # Reading
 
     def output(self, record: Record, name: str) -> Any:
         """The value of an output, once the record has completed."""
-        (status,) = self._backend.wait([record.id], self.proposal)
+        (status,) = self._backend.wait([record.id], self._id)
         if status is not Status.COMPLETED:
-            failure = self._backend.failure(record.id, self.proposal)
+            failure = self._backend.failure(record.id, self._id)
             raise RuntimeError(f'record {record.id} {status}: {failure}')
-        return self._backend.output(record.id, name, self.proposal)
+        return self._backend.output(record.id, name, self._id)
 
     def records(
         self,
@@ -262,7 +363,7 @@ class Client:
         spec_id = None if spec is None else SpecId.of(spec)
         return [
             r
-            for r in self._backend.records(self.proposal, label=label)
+            for r in self._backend.records(self._id, label=label)
             if (spec_id is None or r.spec == spec_id)
             and (since is None or r.created >= since)
             and (until is None or r.created < until)
@@ -290,13 +391,13 @@ class Client:
         while todo:
             record_id = todo.popleft()
             if record_id not in upstream:
-                upstream[record_id] = self._backend.record(record_id, self.proposal)
+                upstream[record_id] = self._backend.record(record_id, self._id)
                 todo.extend(self._inputs(record_id))
         return Provenance(submitted=record.submitted, upstream=tuple(upstream.values()))
 
     def _inputs(self, record_id: str) -> list[str]:
         """The IDs of the records a record read."""
-        return [ref.record for ref in self._backend.inputs(record_id, self.proposal)]
+        return [ref.record for ref in self._backend.inputs(record_id, self._id)]
 
 
 def local(
@@ -307,7 +408,14 @@ def local(
     submitter: str = 'user',
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Client:
-    """A client of a backend in this process, running the workflows bound here."""
+    """
+    A client of its own backend in this process, running the workflows bound here.
+
+    Closing the client closes the backend.
+    """
     return Client(
-        Backend(datasets, bind, clock=clock), proposal=proposal, submitter=submitter
+        Backend(datasets, bind, clock=clock),
+        proposal=proposal,
+        submitter=submitter,
+        owns_backend=True,
     )
