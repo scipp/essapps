@@ -89,7 +89,7 @@ It does this the same way when it appends a new event and when it reads an exist
 |---|---|
 | records by ID | `client.records`, `client.provenance`, checks of references |
 | the `finished` event by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
-| record IDs by proposal and label | `client.records(label=)`, `latest`, `members`, the trigger loop |
+| record IDs by proposal and label | `client.records(label=)`, `latest`, the trigger loop |
 | each accumulator's elements | what its snapshots read (see Records) |
 
 A view changes only when an event is applied, and how it changes depends only on the events.

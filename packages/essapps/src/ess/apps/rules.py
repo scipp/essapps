@@ -5,10 +5,12 @@ Rules and the trigger loop: automatic reduction of new datasets.
 
 A rule is plain data. The trigger loop is a driver: it uses a client, never
 runs in the backend, and keeps no memory of its own. It finds new datasets
-through the client. Which datasets a rule
-has handled is read from the records under the rule's label, so a restarted
-or replaced loop picks up where the last one stopped. A dataset whose record
-failed counts as handled; running it again is the user's decision.
+through the client. Which datasets a rule has handled is read from the records
+under the rule's label, so a restarted or replaced loop picks up where the last
+one stopped. The label belongs to the rule: any record under it counts,
+whoever submitted it and whether or not it failed. So the loop does not retry a
+failed dataset, which could fail again at every step; running it again is the
+user's decision.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from dataclasses import dataclass
 
 from ess.reduce.spec import DatasetRef
 
-from .batch import Lookup, apply, dataset_blank, run_number
+from .batch import Lookup, dataset_blank, run_number, try_apply
 from .client import Client
 from .datasets import Selector
 from .records import Record, Request, SubmitError, Template
@@ -48,8 +50,9 @@ class RuleStatus:
     """
     A rule's last step.
 
-    ``reason`` says why the rule submitted nothing; it is ``None`` if the rule
-    submitted.
+    ``reason`` says why the rule submitted nothing, or which datasets it
+    skipped and why; it is ``None`` if the rule submitted a request for each
+    new dataset.
     """
 
     reason: str | None = None
@@ -66,22 +69,26 @@ class TriggerLoop:
         """
         Submit what arrived since the last step; return the records submitted.
 
-        A rule whose requests cannot be made or are refused submits nothing,
-        and its status says why; the other rules still submit.
+        A dataset whose request cannot be made, such as a sample with no can
+        measured before it, is skipped: no record names it, so the next step
+        tries it again. A rule whose requests cannot be made as a whole or are
+        refused submits nothing. The rule's status says why; the other
+        datasets and rules still submit.
         """
         submitted: list[Record] = []
         for rule in self._rules:
-            status = self._status[rule.name] = RuleStatus()
+            reasons: list[str] = []
             try:
-                requests = self._requests(rule)
-                if not requests:
-                    status.reason = 'no new dataset'
-                    continue
-                records = self._client.submit(requests, label=rule.label)
+                requests, skipped = self._requests(rule)
+                reasons += [f'skipped {r.dataset}: {e}' for r, e in skipped.items()]
+                if requests:
+                    records = self._client.submit(requests, label=rule.label)
+                    submitted.extend(records.values())
+                elif not skipped:
+                    reasons.append('no new dataset')
             except (SubmitError, LookupError, ValueError) as error:
-                status.reason = str(error)
-                continue
-            submitted.extend(records.values())
+                reasons.append(str(error))
+            self._status[rule.name] = RuleStatus('; '.join(reasons) or None)
         return submitted
 
     def run(self, interval: float = 1.0) -> None:
@@ -93,7 +100,10 @@ class TriggerLoop:
     def status(self, rule: Rule) -> RuleStatus:
         return self._status[rule.name]
 
-    def _requests(self, rule: Rule) -> dict[str, Request]:
+    def _requests(
+        self, rule: Rule
+    ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
+        """The requests for the new datasets, and the datasets skipped, with why."""
         handled = {
             ref
             for record in self._client.records(label=rule.label)
@@ -102,14 +112,14 @@ class TriggerLoop:
         matching = self._source.list(rule.selector)
         new = [ref for ref in matching if ref not in handled]
         if rule.series is None:
-            return apply(
+            return try_apply(
                 rule.template,
                 new,
                 self._source,
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
-        return self._series_requests(rule, matching, new)
+        return self._series_requests(rule, matching, new), {}
 
     def _series_requests(
         self, rule: Rule, matching: list[DatasetRef], new: list[DatasetRef]

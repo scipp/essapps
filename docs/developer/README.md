@@ -225,9 +225,9 @@ A record shows both.
 client.compute(IOFQ, {'run': run, 'bins': 50}, label='iofq', member='250K')
 client.submit({'250K': a, '260K': b}, label='iofq')       # with a label, dict keys become the members
 client.latest('iofq', member='250K')
-client.members('iofq')                   # {member: latest record}
-client.labels()
-client.records(label='iofq', since=monday, until=friday)
+client.latest('iofq')                    # the newest record of any member
+client.records(label='iofq')             # oldest first; without a label, every record of the proposal
+{r.member: r for r in client.records(label='iofq')}      # the newest record of each member
 ```
 
 The loop from the start, with labels, so that another notebook finds the curves:
@@ -595,6 +595,7 @@ TriggerLoop(client, rules=[rule]).run()
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
 Like any driver, it keeps what it makes through its client, such as an accumulator for a sum that grows with each new dataset under a rule.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
+The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
 Templates and rules serialize to JSON; the core keeps no store of them, and records do not name them.
 
 ## Provenance and publication
@@ -640,5 +641,5 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 
 1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it.
 2. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
-3. **Labels and members** on records, `member_field`, and `client.members` are tentative.
+3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.

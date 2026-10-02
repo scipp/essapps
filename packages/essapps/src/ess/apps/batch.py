@@ -71,14 +71,42 @@ def apply(
     dataset fills the one blank the lookup leaves. The requests are keyed
     by member: the value of the metadata field ``member_field`` of each
     dataset. Submitting them under a label makes the keys the members of their
-    records.
+    records. Raises ``LookupError`` if the request of a dataset cannot be made.
+    """
+    requests, failed = try_apply(
+        template, datasets, source, member_field=member_field, lookup=lookup
+    )
+    if failed:
+        raise next(iter(failed.values()))
+    return requests
+
+
+def try_apply(
+    template: Template,
+    datasets: Iterable[DatasetRef],
+    source: Datasets,
+    *,
+    member_field: str = 'run',
+    lookup: Lookup | None = None,
+) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
+    """
+    As :func:`apply`, but leave out each dataset whose request cannot be made.
+
+    A request cannot be made if the lookup finds nothing for the dataset, or
+    its metadata lacks ``member_field``. Returns the requests, and the error of
+    each dataset left out.
     """
     blank = dataset_blank(template, lookup)
     requests: dict[str, Request] = {}
+    failed: dict[DatasetRef, LookupError] = {}
     for ref in datasets:
-        member = str(source.metadata(ref)[member_field])
+        try:
+            member = str(source.metadata(ref)[member_field])
+            values = {blank: ref, **(lookup.fill(ref, source) if lookup else {})}
+        except LookupError as error:
+            failed[ref] = error
+            continue
         if member in requests:
             raise ValueError(f'two datasets have {member_field} {member}')
-        values = {blank: ref, **(lookup.fill(ref, source) if lookup else {})}
         requests[member] = template.fill(values)
-    return requests
+    return requests, failed

@@ -213,9 +213,8 @@ def test_the_keys_of_a_dict_become_members(client: Client, gate: Gate) -> None:
     gate.open.set()
     records = client.compute({'250K': load(1), '260K': load(2)}, label='scan')
 
-    assert client.members('scan') == records
+    assert {r.member: r for r in client.records(label='scan')} == records
     assert client.latest('scan', member='260K') == records['260K']
-    assert client.labels() == ['scan']
 
 
 def test_latest_without_a_member_is_the_newest_record_of_any_member(

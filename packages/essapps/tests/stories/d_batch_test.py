@@ -38,7 +38,7 @@ def test_d1_temperature_scan(
         '280K': 'completed',
         '290K': 'completed',
     }
-    assert client.members('scan') == scan
+    assert {r.member: r for r in client.records(label='scan')} == scan
 
 
 def test_d2_overnight_cluster_batch(
@@ -54,7 +54,7 @@ def test_d2_overnight_cluster_batch(
         client.submit(IOFQ, {'run': run}, label='night', member=member)
 
     morning = connect()
-    night = morning.members('night')
+    night = {r.member: r for r in morning.records(label='night')}
     failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
     repair(runs['7'])
     reruns = [
@@ -190,5 +190,4 @@ def test_d7_rotation_scan_over_a_thousand_angles(
     ]
     assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
     assert client.provenance(total).records() == pushed  # the angles, in push order
-    assert len(client.records(spec=ANGLE)) == 1000
     assert len(client.provenance(total).datasets()) == 1000

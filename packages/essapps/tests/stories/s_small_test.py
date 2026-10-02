@@ -38,9 +38,9 @@ def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
     for bins in (1, 2, 4):
-        result = client.compute(tune, {'bins': bins}, label='iofq')
+        result = client.compute(tune, {'bins': bins}, label='tuning')
 
-    assert client.latest('iofq') == result
+    assert client.latest('tuning') == result
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
     plain = client.compute(IOFQ, result.request.params)
     assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))

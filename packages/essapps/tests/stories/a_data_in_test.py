@@ -48,7 +48,7 @@ def test_a4_mistaken_copy_into_the_shared_service(client: Client) -> None:
 
     with pytest.raises(SubmitError, match='run'):
         client.compute(IOFQ, first.request.params)
-    assert client.records(spec=IOFQ) == [first]
+    assert client.records() == [first]
 
 
 def test_a5_metadata_corrected_after_the_fact(

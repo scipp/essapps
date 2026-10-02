@@ -5,7 +5,6 @@
 # ruff: noqa: F821
 
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,11 +18,8 @@ from .conftest import (
     IOFQ,
     NORMALIZE,
     PARTS_SUM,
-    FakeClock,
     Measure,
 )
-
-tuesday = datetime(2026, 9, 8, tzinfo=UTC)
 
 
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
@@ -34,9 +30,9 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold'))
     )
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-        client.compute(tune, {'bins': bins, 'threshold': threshold}, label='iofq')
+        client.compute(tune, {'bins': bins, 'threshold': threshold}, label='tuning')
 
-    final = client.latest('iofq')
+    final = client.latest('tuning')
     beamtime = Template(
         final.request.spec, params=final.request.params, blanks=('run',)
     )
@@ -44,7 +40,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     requests = apply(beamtime, [new], client.datasets, member_field='run')
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
-    assert len(client.records(label='iofq')) == 4
+    assert len(client.records(label='tuning')) == 4
     assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
     assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]
 
@@ -87,7 +83,6 @@ def test_b2_add_a_run_to_a_sum_then_remove_one(
     )
     assert client.provenance(removed).datasets() == [r611, r613]
     assert client.records(label='sum') == [first, added, removed]
-    assert len(client.records(spec=CONTRIBUTE)) == 3
 
 
 def test_b3_compare_two_parameter_sets_side_by_side(
@@ -139,25 +134,3 @@ def test_b5_notebook_kernel_dies(
     assert last == tuned
     assert client.records(label='iofq') == [tuned, again]
     assert client.output(again, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
-
-
-def test_b6_find_last_weeks_result(
-    client: Client, measure: Measure, clock: FakeClock
-) -> None:
-    run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    clock.set(tuesday)
-    made = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
-    clock.set(tuesday + timedelta(days=7))
-    client.compute(IOFQ, {'run': run, 'threshold': 2.5})
-
-    (found,) = client.records(since=tuesday, until=tuesday + timedelta(days=1))
-    assert found == made
-    assert found.created == tuesday
-    assert found.request.params == {
-        'run': run,
-        'bins': 2,
-        'threshold': 1.5,
-        'can': None,
-        'beam_centre': None,
-        'normalization': None,
-    }
