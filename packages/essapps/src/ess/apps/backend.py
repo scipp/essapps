@@ -21,7 +21,8 @@ backend started from an existing log has no clients and cannot read the
 outputs of the backend that wrote it.
 
 An output value is kept while the client that made its record keeps it, or
-while a pending request has yet to read it. Releasing and ending stop no work.
+while a pending request that reads it has yet to run. Releasing and ending
+stop no work.
 
 A request waits until every record it references has completed; this is the
 only scheduling there is.
@@ -36,14 +37,19 @@ have run.
 
 An accumulator takes only elements whose records have completed; a push
 waits for the records it references to finish. A push then combines the
-element into the value the accumulator holds, and a snapshot's record
-completes at submission with that value. A snapshot's record names the
+element into the value the accumulator holds, in place if its binding does
+so, and a snapshot's record completes at submission with that value itself,
+not a copy. So a snapshot's value is kept until the next push into its
+accumulator, or until the accumulator is released or its client ends. That
+push first refuses new requests that reference the snapshot and waits until
+the requests that read it have run. A snapshot's record names the
 accumulator and how many elements it covers, so it costs the same however
 many elements that is.
 """
 
 from __future__ import annotations
 
+import copy
 import threading
 import uuid
 from collections import Counter
@@ -202,20 +208,28 @@ class _Stage:
 
 class _Held:
     """
-    An accumulator: what it holds, and the lock that orders its pushes.
+    An accumulator: what it holds, its current snapshots, and its lock.
 
     A push combines its element into ``accumulator``, the binding's, under
-    ``lock`` and outside the backend's lock. ``value`` is the combined value of
-    the accumulator's elements in the views; it changes under the backend's
-    lock together with them, so a snapshot reads the two as one. ``stopped``
-    says why the accumulator takes no more pushes or snapshots.
+    ``lock`` and outside the backend's lock; a snapshot reads the binding's
+    value under ``lock`` too. ``snapshots`` lists the snapshots taken since the
+    last push, whose values are that value. ``stopped`` says why the
+    accumulator takes no more pushes or snapshots.
+
+    Nothing reads the value in the middle of a push. A snapshot reads it under
+    ``lock``, which the push holds while it combines. A request reads it as a
+    snapshot's value, which the push ends before it combines: from then on a
+    new request that references the snapshot is refused, and the push
+    combines only once the requests that read it have run, which drops it.
+    A copy that :meth:`Backend.output` makes counts as such a request. The
+    lock order is ``lock``, then the backend's.
     """
 
     def __init__(self, spec: SpecId, accumulator: ElementAccumulator) -> None:
         self.spec = spec
         self.lock = threading.Lock()
         self.accumulator = accumulator
-        self.value: Mapping[str, Any] | None = None
+        self.snapshots: list[str] = []
         self.stopped: str | None = None
 
 
@@ -263,9 +277,12 @@ class Backend:
         # Not history
         self._clients: dict[str, _Client] = {}  # by client ID, until it ends
         self._outputs: dict[tuple[str, str], Any] = {}  # by record ID and name
-        # (record ID, name) to the number of pending records yet to read it
+        # (record ID, name) to the number of pending records that read it and
+        # have yet to run, and of copies being made of it
         self._readers: Counter[tuple[str, str]] = Counter()
-        self._unread: dict[str, list[tuple[str, str]]] = {}  # the reverse
+        # the reverse, for the records that have not started
+        self._unread: dict[str, list[tuple[str, str]]] = {}
+        self._ended: dict[str, str] = {}  # snapshot record ID to how its value ended
         self._waiting: dict[str, set[str]] = {}
         self._dependents: dict[str, set[str]] = {}
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
@@ -363,20 +380,20 @@ class Backend:
         A record of the accumulator's combined value, completed at once.
 
         It covers the elements pushed so far, and names the accumulator and how
-        many elements that is. The client keeps its outputs.
+        many elements that is. Its outputs are the value the accumulator holds,
+        not a copy. The client keeps them until the next push into the
+        accumulator, its release, or the client's end.
         """
         record_id = uuid.uuid4().hex
         with self._changed:
+            held = self._accumulator(self._client(client), accumulator_id)
+        with held.lock, self._changed:  # no push combines meanwhile
             caller = self._client(client)
-            held = self._accumulator(caller, accumulator_id)
-            value = held.value
-            if value is None:
+            self._accumulator(caller, accumulator_id)  # not released meanwhile
+            upto = len(self._views.elements.get(accumulator_id, ()))
+            if not upto:
                 raise SubmitError('nothing has been pushed')
-            snapshot = Snapshot(
-                spec=held.spec,
-                accumulator=accumulator_id,
-                upto=len(self._views.elements[accumulator_id]),
-            )
+            snapshot = Snapshot(spec=held.spec, accumulator=accumulator_id, upto=upto)
             outputs = tuple(self._specs[held.spec].outputs.model_fields)
             self._append(
                 Submitted(
@@ -389,7 +406,8 @@ class Backend:
                 )
             )
             caller.kept.add(record_id)
-            self._complete(record_id, dict(value))
+            held.snapshots.append(record_id)
+            self._complete(record_id, dict(held.accumulator.value))
             return self._views.records[record_id]
 
     def _prepare(self, entry: Entry, proposal: str) -> Request:
@@ -467,7 +485,7 @@ class Backend:
                         raise SubmitError(f'{where}: {ref} does not fit the field')
                     if self._views.status(ref.record) is Status.COMPLETED:
                         try:
-                            self._value(ref)
+                            self._value(ref, new_reader=True)
                         except LookupError as error:
                             raise SubmitError(f'{where}: {error}') from None
         except SubmitError as error:
@@ -532,22 +550,30 @@ class Backend:
             self._dependents.setdefault(input_id, set()).add(record_id)
 
     def _run(self, record_id: str) -> None:
+        """
+        Run a record's workflow, holding the values it reads until it returns.
+
+        It holds them even once the record is cancelled: a snapshot's value is
+        its accumulator's, which a push changes once no running workflow
+        holds it.
+        """
         with self._changed:
             if record_id in self._views.finished:
                 return
             record = self._views.records[record_id]
             stage = self._stage_of.get(record_id)
+            reads = self._unread.pop(record_id)
         try:
             call, blanks = self._call(record.request, stage)
-            with self._changed:
-                self._has_read(record_id)
             outputs = dict(call(**blanks))
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
                 self._finish(record_id, Status.FAILED, str(error) or repr(error))
+                self._let_go(reads)
             return
         with self._changed:
             self._complete(record_id, outputs)
+            self._let_go(reads)
 
     def _call(
         self, request: Request, stage: _Stage | None
@@ -583,27 +609,37 @@ class Backend:
         """The value of an output; a dataset is read later, outside the lock."""
         return ref if isinstance(ref, DatasetRef) else self._value(ref)
 
-    def _value(self, ref: OutputRef) -> Any:
-        """The value of an output of a completed record, if kept; lock held."""
-        try:
-            return self._outputs[(ref.record, ref.output)]
-        except KeyError:
-            raise LookupError(
-                f'record {ref.record} output {ref.output}: the value is not kept'
-            ) from None
+    def _value(self, ref: OutputRef, *, new_reader: bool = False) -> Any:
+        """
+        The value of an output of a completed record, if kept; lock held.
 
-    def _has_read(self, record_id: str) -> None:
-        """Let go of the values a record was yet to read; lock held."""
-        for key in self._unread.pop(record_id, ()):
+        A new reader is refused the value of a snapshot that has ended,
+        although the requests that already read it still hold it.
+        """
+        ended = self._ended.get(ref.record)
+        key = (ref.record, ref.output)
+        if key in self._outputs and not (new_reader and ended):
+            return self._outputs[key]
+        why = (
+            'the value is not kept'
+            if ended is None
+            else f"the snapshot's value ended {ended}"
+        )
+        raise LookupError(f'record {ref.record} output {ref.output}: {why}')
+
+    def _let_go(self, keys: Iterable[tuple[str, str]]) -> None:
+        """Count one reader less of each value, and drop it if unkept; lock held."""
+        for key in keys:
             self._readers[key] -= 1
             if not self._readers[key]:
                 del self._readers[key]
                 self._drop(*key)
+        self._changed.notify_all()
 
     def _drop(self, record_id: str, *names: str) -> None:
         """
         Drop the record's outputs that no client keeps and no pending record
-        is yet to read; lock held.
+        that reads them has yet to run; lock held.
         """
         if any(record_id in c.kept for c in self._clients.values()):
             return
@@ -647,7 +683,7 @@ class Backend:
             self._append(Finished(record=finished_id, status=finished, failure=message))
             for call in self._on_finished.pop(finished_id, ()):
                 call(self._views.records[finished_id])
-            self._has_read(finished_id)
+            self._let_go(self._unread.pop(finished_id, ()))  # if it never started
             self._waiting.pop(finished_id, None)
             self._stage_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
@@ -682,7 +718,11 @@ class Backend:
         """
         with self._changed:
             caller = self._clients.pop(client, None)
-            for record_id in () if caller is None else caller.kept:
+            if caller is None:
+                return
+            for held in caller.accumulators.values():
+                self._end(caller, held, 'with its client')
+            for record_id in caller.kept:
                 self._drop(record_id, *self._views.records[record_id].outputs)
 
     def _client(self, client: str) -> _Client:
@@ -697,17 +737,19 @@ class Backend:
         """
         Release records, stages, and accumulators the client keeps; stops no work.
 
-        A released record's outputs are dropped once no pending record is yet
-        to read them. A released stage takes no more requests, and those made
-        through it still run through it. A released accumulator takes no more
-        pushes or snapshots, and its combined value is dropped. Releasing what
-        the client does not keep does nothing.
+        A released record's outputs are dropped once the pending records that
+        read them have run. A released stage takes no more requests, and those
+        made through it still run through it. A released accumulator takes no
+        more pushes or snapshots; its snapshots end, and its combined value is
+        dropped once the requests that read them have run. Releasing what the
+        client does not keep does nothing.
         """
         with self._changed:
             caller = self._client(client)
             for i in ids:
                 caller.stages.pop(i, None)
-                caller.accumulators.pop(i, None)
+                if (held := caller.accumulators.pop(i, None)) is not None:
+                    self._end(caller, held, 'at the release of its accumulator')
                 if i in caller.kept:
                     caller.kept.remove(i)
                     self._drop(i, *self._views.records[i].outputs)
@@ -764,20 +806,25 @@ class Backend:
 
         The push waits for the records the element references to finish, so
         whether it is refused does not depend on timing; they must have
-        completed. The element is
-        combined before its event is appended, under the accumulator's lock,
-        so the pushes into one accumulator are logged in the order they were
-        combined. If combining fails, the push is refused and the accumulator
-        stops, since the binding may hold part of the element.
+        completed. It then ends the accumulator's snapshots and waits until
+        the requests that read them have run, since the binding may combine
+        into their value in place. No request waits for a push, so this wait
+        ends. The element is combined before its event is appended, under the
+        accumulator's lock, so the pushes into one accumulator are logged in
+        the order they were combined. If combining fails, the push is refused
+        and the accumulator stops, since the binding may hold part of the
+        element.
         """
         held, filled, values = self._pushable(accumulator_id, element, client)
         with held.lock:
             with self._changed:
-                self._accumulator(self._client(client), accumulator_id)
+                caller = self._client(client)
+                self._accumulator(caller, accumulator_id)
                 position = len(self._views.elements.get(accumulator_id, ()))
+                ending = self._end(caller, held, 'at a push into its accumulator')
+                self._changed.wait_for(lambda: self._outputs.keys().isdisjoint(ending))
             try:
                 held.accumulator.push(values)
-                value = held.accumulator.value
             except Exception as error:  # the binding may hold part of the element
                 reason = str(error) or repr(error)
                 failure = f'element {position} failed to combine: {reason}'
@@ -787,7 +834,24 @@ class Backend:
             with self._changed:
                 self._accumulator(self._client(client), accumulator_id)
                 self._append(Pushed(accumulator=accumulator_id, element=filled))
-                held.value = value
+
+    def _end(self, caller: _Client, held: _Held, why: str) -> list[tuple[str, str]]:
+        """
+        End the values of the accumulator's snapshots; lock held.
+
+        From now on a request that references one is refused. Each value is
+        dropped once the requests that read it have run, whether the client
+        keeps the snapshot or not. Returns the snapshots' outputs.
+        """
+        ending = []
+        for snapshot in held.snapshots:
+            self._ended[snapshot] = why
+            caller.kept.discard(snapshot)
+            outputs = self._views.records[snapshot].outputs
+            self._drop(snapshot, *outputs)
+            ending += [(snapshot, name) for name in outputs]
+        held.snapshots.clear()
+        return ending
 
     def _pushable(
         self, accumulator_id: str, element: Element, client: str
@@ -797,7 +861,9 @@ class Backend:
 
         The element is checked and read as the request over it alone is, once
         the records it references have finished, and comes back as that
-        request holds it: names resolved and defaults filled in.
+        request holds it: names resolved and defaults filled in. An element
+        that references a snapshot is refused, since no accumulator combines
+        another's value; accumulators meet in a request.
         """
         ids = [ref.record for ref in output_refs(element)]
         with self._changed:
@@ -810,6 +876,13 @@ class Backend:
         entry = Entry(Request(held.spec, {name: [element]}))
         request = self._prepare(entry, caller.proposal)
         with self._changed:
+            for ref in request.inputs():
+                record = self._views.records.get(ref.record)
+                if record is not None and isinstance(record.submitted, Snapshot):
+                    raise SubmitError(
+                        f'record {ref.record} is a snapshot: pushing a snapshot '
+                        'into an accumulator is not supported'
+                    )
             self._check_reads(entry, request, caller.proposal)
         try:
             values = self._read(request.params)
@@ -925,10 +998,25 @@ class Backend:
             return [r for r in records.values() if r.proposal == proposal]
 
     def output(self, record_id: str, name: str, client: str) -> Any:
-        """The value of an output of a completed record, if it is still kept."""
+        """
+        The value of an output of a completed record, if it is still kept.
+
+        A snapshot's value is copied, since its accumulator combines into it
+        at the next push. That push waits for the copy, as for a request that
+        reads the snapshot.
+        """
         with self._changed:
             record = self._mine(record_id, self._client(client).proposal)
-            return self._value(record.ref(name))
+            value = self._value(record.ref(name))
+            if not isinstance(record.submitted, Snapshot):
+                return value
+            key = (record_id, name)
+            self._readers[key] += 1
+        try:
+            return copy.deepcopy(value)
+        finally:
+            with self._changed:
+                self._let_go([key])
 
     # Datasets, within the client's proposal
 

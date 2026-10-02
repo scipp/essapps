@@ -24,7 +24,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FINALIZE` | `numerator`, `denominator`, `scale=1.0` | `normalized` | `numerator / denominator * scale` | the part of `NORMALIZE` after the sum |
 | `ANGLE` | `run` | `counts` | the counts | one angle of a rotation scan |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `VOLUME` | `angles`: a table of `Counts` (`counts`) | `counts` | the sum | the accumulation of a rotation scan |
+| `VOLUME` | `angles`: a table of `Counts` (`counts`) | `counts` | the sum, added in place | the accumulation of a rotation scan |
 | `STITCH` | `runs: list`, `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
@@ -634,12 +634,12 @@ volume = client.accumulator(VOLUME)
 angles = (client.submit(ANGLE, {'run': run})
           for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
 for angle in client.as_completed(angles):                      # in the order they finish
-    volume.push(angle.refs())
+    volume.push(angle.refs())                                  # waits until the previous cut has run
+    client.release(angle)                                      # the volume holds what it needs of it
     pushed.append(angle)
     snapshot = client.submit(volume)
     cuts.append(client.submit(CUT, {'data': snapshot.ref('counts'), 'index': 0},
                               label='cut', member='17'))
-    client.release(snapshot)                                   # the cut still reads it
 total = client.compute(volume)
 
 assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
@@ -651,7 +651,9 @@ assert len(client.provenance(total).datasets()) == 1000
 
 `watch` yields run 5 once, although its file arrives twice.
 The angles are reduced in parallel and pushed in the order they finish, so the volume's request lists them in that order.
-The notebook releases each snapshot once its cut is submitted, so the volume of a snapshot is dropped once its cut has read it.
+`VOLUME` adds each angle in place, and each snapshot shares the volume, so one volume is kept, not one per snapshot.
+A snapshot's value ends at the next push, which waits until the snapshot's cut has run; the cut references the snapshot taken after the push of its angle.
+The notebook releases each angle once it is pushed, since its client would otherwise keep all thousand.
 The client keeps the cuts.
 That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
 

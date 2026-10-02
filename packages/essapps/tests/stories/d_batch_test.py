@@ -171,7 +171,8 @@ def test_d7_rotation_scan_over_a_thousand_angles(
         for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
     )
     for angle in client.as_completed(angles):
-        volume.push(angle.refs())
+        volume.push(angle.refs())  # waits until the previous cut has run
+        client.release(angle)  # the volume holds what it needs of it
         pushed.append(angle)
         snapshot = client.submit(volume)
         cuts.append(
@@ -182,7 +183,6 @@ def test_d7_rotation_scan_over_a_thousand_angles(
                 member='17',
             )
         )
-        client.release(snapshot)  # its value stays until the cut has read it
     total = client.compute(volume)
 
     assert [client.output(c, 'cut').value for c in cuts] == [

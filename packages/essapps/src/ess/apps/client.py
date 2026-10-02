@@ -11,8 +11,9 @@ and is asked with :meth:`Client.status` or :meth:`Client.wait`.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
-ends. Releasing and ending stop no work: a pending request still runs, and
-keeps the values it reads until it has read them.
+ends, but a snapshot's value only until the next push into its accumulator.
+Releasing and ending stop no work: a pending request still runs, and keeps the
+values it reads until it has run.
 """
 
 from __future__ import annotations
@@ -135,6 +136,9 @@ class Accumulator:
 
     ``id`` names the accumulator in the backend; submitting it makes a
     snapshot, a record of the combined value of the elements pushed so far.
+    A snapshot's value is kept until the next push or the accumulator's
+    release. To keep an earlier state, submit a request that reduces or
+    copies the snapshot; the next push waits until it has run.
     """
 
     def __init__(
@@ -151,7 +155,11 @@ class Accumulator:
         Select a record's outputs with ``record.refs('numerator', ...)``.
         The push waits for the records to finish, and refuses them unless they
         have completed. A driver that pushes records as they finish, as
-        ``client.as_completed`` yields them, never waits here.
+        ``client.as_completed`` yields them, never waits for them here.
+
+        The push ends the values of the snapshots taken since the last push:
+        it refuses new requests that reference them and waits until the
+        requests that read them have run.
         """
         self._push(element)
 
@@ -338,17 +346,21 @@ class Client:
         """
         Release records, stages, or accumulators: one, a list, or a dict.
 
-        A released record's outputs are dropped once no pending request is yet
-        to read them; the record stays. A released stage takes no more calls,
-        and a released accumulator no more pushes or snapshots. Releasing stops
-        no work.
+        A released record's outputs are dropped once the pending requests that
+        read them have run; the record stays. A released stage takes no more
+        calls. A released accumulator takes no more pushes or snapshots, and its
+        snapshots' values end as at a push. Releasing stops no work.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
     # Reading
 
     def output(self, record: Record, name: str) -> Any:
-        """The value of an output, once the record has completed."""
+        """
+        The value of an output, once the record has completed.
+
+        A snapshot's value is a copy, so a later push does not change it.
+        """
         (status,) = self._backend.wait([record.id], self._id)
         if status is not Status.COMPLETED:
             failure = self._backend.failure(record.id, self._id)
