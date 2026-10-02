@@ -168,8 +168,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     again = restart(tmp_path / 'log')
 
     assert again.records() == first.records()
-    assert again.members('loads') == loads
-    assert again.records(spec=TOTAL) == [snapshot]
+    assert again.records(label='loads') == list(loads.values())
     assert again.provenance(snapshot) == first.provenance(snapshot)
     assert again.provenance(snapshot).records() == list(loads.values())
 

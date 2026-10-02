@@ -367,23 +367,9 @@ class Client:
             raise RuntimeError(f'record {record.id} {status}: {failure}')
         return self._backend.output(record.id, name, self._id)
 
-    def records(
-        self,
-        *,
-        label: str | None = None,
-        spec: WorkflowSpec | SpecId | None = None,
-        since: datetime | None = None,
-        until: datetime | None = None,
-    ) -> list[Record]:
-        """The proposal's records, oldest first, filtered by what is given."""
-        spec_id = None if spec is None else SpecId.of(spec)
-        return [
-            r
-            for r in self._backend.records(self._id, label=label)
-            if (spec_id is None or r.spec == spec_id)
-            and (since is None or r.created >= since)
-            and (until is None or r.created < until)
-        ]
+    def records(self, *, label: str | None = None) -> list[Record]:
+        """The proposal's records, oldest first, under ``label`` if given."""
+        return self._backend.records(self._id, label=label)
 
     def latest(self, label: str, member: str | None = None) -> Record:
         """The newest record under a label, of ``member`` if given, pending or not."""
@@ -393,13 +379,6 @@ class Client:
         if not matching:
             raise KeyError(f'no record under {label!r}, member {member!r}')
         return matching[-1]
-
-    def members(self, label: str) -> dict[str | None, Record]:
-        """The latest record of each member of a label."""
-        return {r.member: r for r in self.records(label=label)}
-
-    def labels(self) -> list[str]:
-        return sorted({r.label for r in self.records() if r.label is not None})
 
     def provenance(self, record: Record) -> Provenance:
         upstream: dict[str, Record] = {}

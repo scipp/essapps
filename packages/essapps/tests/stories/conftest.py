@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -300,45 +299,25 @@ TOYS = {
 }
 
 
-class FakeClock:
-    """A clock that stands still until a test sets it."""
-
-    def __init__(self) -> None:
-        self.now = datetime(2026, 9, 1, tzinfo=UTC)
-
-    def set(self, now: datetime) -> None:
-        self.now = now
-
-    def __call__(self) -> datetime:
-        return self.now
-
-
 @pytest.fixture
 def datasets() -> FakeDatasets:
     return FakeDatasets(proposal='p1')
 
 
 @pytest.fixture
-def clock() -> FakeClock:
-    return FakeClock()
-
-
-@pytest.fixture
-def backend(datasets: FakeDatasets, clock: FakeClock) -> Iterator[Backend]:
-    backend = Backend(datasets, TOYS, clock=clock)
+def backend(datasets: FakeDatasets) -> Iterator[Backend]:
+    backend = Backend(datasets, TOYS)
     yield backend
     backend.close()
 
 
 @pytest.fixture
-def upgrade(
-    datasets: FakeDatasets, clock: FakeClock
-) -> Iterator[Callable[..., Client]]:
+def upgrade(datasets: FakeDatasets) -> Iterator[Callable[..., Client]]:
     """A client of a new backend that offers only the given toy specs."""
     backends: list[Backend] = []
 
     def upgrade(specs: list[WorkflowSpec]) -> Client:
-        backends.append(Backend(datasets, {s: TOYS[s] for s in specs}, clock=clock))
+        backends.append(Backend(datasets, {s: TOYS[s] for s in specs}))
         return Client(backends[-1], proposal='p1', submitter='anna')
 
     yield upgrade

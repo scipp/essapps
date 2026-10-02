@@ -44,15 +44,14 @@ The metadata of such a dataset also holds its run number, as `run`; `measure(...
 It has two helpers for tests: `datasets.correct(dataset, **fields)` changes a dataset's metadata, and `datasets.add_published(entry)` lists a published entry as a derived dataset, as SciCat does, and returns its reference.
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance` and `.supersedes`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
-`clock` is a fake clock the backend reads; `crash()` ends the notebook's process without cleanup.
+`crash()` ends the notebook's process without cleanup.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
 `upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets: the specs it offers and the software versions its records name.
 `replace` is `dataclasses.replace`.
 
-Besides the calls in README.md, the stories use these:
+Besides the calls in README.md, the stories use this one:
 
 ```python
-client.records(spec=IOFQ)    # records, oldest first; filters by spec= as by label=, since=, until=
 record.request.datasets()    # the datasets the request names directly
 ```
 
@@ -240,7 +239,7 @@ client.remove(uploaded)
 
 with pytest.raises(SubmitError, match='run'):
     client.compute(IOFQ, first.request.params)
-assert client.records(spec=IOFQ) == [first]             # the first record stays
+assert client.records() == [first]                      # the first record stays
 ```
 
 Gap: no call removes a dataset. This is deferred, together with whether the outputs derived from it go too.
@@ -314,7 +313,6 @@ way_1 = client.compute(NORMALIZE, {'runs': [r611, r612]})
 assert client.output(way_1, 'normalized').values.tolist() == [0.25, 0.75]
 assert client.provenance(removed).datasets() == [r611, r613]
 assert client.records(label='sum') == [first, added, removed]
-assert len(client.records(spec=CONTRIBUTE)) == 3                     # each run reduced once
 ```
 
 Gap: removing uses a plain request over the kept contributions, because an accumulator has no `remove` (README.md open question 2).
@@ -381,23 +379,7 @@ The stage ends with the kernel's client, so the new client's stage loads the run
 
 ### B6. Find last week's result
 
-Actor: user after a week. Goal: find the reduction made last Tuesday and its parameters.
-
-```python
-run = measure(1, [1.0, 2.0, 3.0, 4.0])
-clock.set(tuesday)
-made = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
-clock.set(tuesday + timedelta(days=7))
-client.compute(IOFQ, {'run': run, 'threshold': 2.5})
-
-(found,) = client.records(since=tuesday, until=tuesday + timedelta(days=1))
-assert found == made
-assert found.created == tuesday
-assert found.request.params == {'run': run, 'bins': 2, 'threshold': 1.5, 'can': None,
-                                'beam_centre': None, 'normalization': None}
-```
-
-That the record is still there after a week is system story B6.
+System story only; see [system-stories.md](system-stories.md).
 
 ## C. Chaining
 
@@ -498,10 +480,10 @@ assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K',
 assert client.wait(scan) == {
     '250K': 'completed', '260K': 'failed', '270K': 'completed', '280K': 'completed',
     '290K': 'completed'}
-assert client.members('scan') == scan
+assert {r.member: r for r in client.records(label='scan')} == scan
 ```
 
-Gap: `member_field` and `client.members` are tentative (README.md open question 3).
+Gap: `member_field`, and labels and members on records, are tentative (README.md open question 3).
 Later, the result at 250 K is `client.latest('scan', member='250K')`.
 
 ### D2. Overnight cluster batch
@@ -515,7 +497,7 @@ for member, run in runs.items():
     client.submit(IOFQ, {'run': run}, label='night', member=member)
 
 morning = connect()                                                  # the next day, a new client
-night = morning.members('night')
+night = {r.member: r for r in morning.records(label='night')}
 failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
 repair(runs['7'])                                                    # the transfer is repeated
 reruns = [morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
@@ -529,7 +511,7 @@ assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
 assert len(morning.records(label='night')) == 31                     # the failed record stays
 ```
 
-Gap: labels and members on records, and `client.members`, are tentative, as in D1.
+Gap: labels and members on records are tentative, as in D1.
 That the runs continue while no client is connected is system story D2.
 
 ### D3. Cancel and resubmit
@@ -645,8 +627,7 @@ total = client.compute(volume)
 assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
 assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
 assert client.provenance(total).records() == pushed            # the angles, in push order
-assert len(client.records(spec=ANGLE)) == 1000                 # run 5 is reduced once
-assert len(client.provenance(total).datasets()) == 1000
+assert len(client.provenance(total).datasets()) == 1000        # run 5 is reduced once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
@@ -902,7 +883,7 @@ What the design leaves open or defers, with the stories each item affects.
 - **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Removing an element from an accumulator** (B2): README.md open question 2.
-- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, `client.members`, and labels and members on records are tentative; README.md open question 3.
+- **Labels and members** (D1, D2, D5, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
 - **Placement** (system story G3): where a stage runs is the system's decision (README.md, Left to the system); how the system decides is not designed.
 - **Recomputing in a record's environment** (F2): deferred.
