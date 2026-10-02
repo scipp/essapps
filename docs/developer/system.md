@@ -37,7 +37,7 @@ The backend's history is an append-only log with three kinds of event:
 |---|---|---|
 | `submitted` | time, proposal, submitter, and for each record: its ID, its request or snapshot, its output names, label, member | a submission is accepted |
 | `finished` | record ID, status, failure message | a record completes, fails, or is cancelled |
-| `pushed` | accumulator ID, the element: a reference per field | an element is pushed into an accumulator |
+| `pushed` | accumulator ID, the element as a request over it holds it | an element is pushed into an accumulator |
 
 Sessions and their holders are not history: opening or ending one writes nothing, and none survives a restart.
 A record does not say which stage it went through.
@@ -155,7 +155,7 @@ The backend does this:
 ```python
 held = binding.accumulator()             # when the accumulator opens: the combined value, not history
 
-def push(element):                       # element: a reference per field
+def push(element):                       # element: a row of the table, as a request takes it
     wait(element)                        # until its records have finished
     check(element)                       # as for a request over [element]; its records have completed
     held.push(read(element))             # combine the values (see Push for which lock)
@@ -167,7 +167,8 @@ def snapshot():
     complete(record, held.value)         # nothing runs
 ```
 
-**Push.** A push gets the check a request over that one element gets: the element has the fields of the table's model, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+**Push.** A push gets the check a request over that one element gets: the element is a valid row of the table's model, with no field the model lacks, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+The log holds the element as that request would hold it, with names resolved and defaults filled in.
 A push that does not fit, or whose combining fails, appends nothing.
 After a failed combine the accumulator takes no more pushes or snapshots, since the binding may hold part of the element; the driver opens a new accumulator.
 The accumulator does not keep its elements' values after combining them.

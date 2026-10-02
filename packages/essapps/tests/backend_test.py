@@ -111,6 +111,18 @@ def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> N
     assert client.output(records['total'], 'value') == 3.0
 
 
+def test_closing_waits_until_no_record_is_pending(
+    backend: Backend, client: Client, gate: Gate
+) -> None:
+    a = load(1)
+    total = Request(ADD, {'a': a.ref('value'), 'b': a.ref('value')})
+    records = client.submit([a, total])  # total waits for a
+    threading.Timer(0.05, gate.open.set).start()
+    backend.close()
+
+    assert client.status(records) == [Status.COMPLETED, Status.COMPLETED]
+
+
 def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) -> None:
     bad, good = load(3), load(1)
     first = Request(ADD, {'a': bad.ref('value'), 'b': good.ref('value')})
@@ -202,6 +214,19 @@ def test_the_keys_of_a_dict_become_members(client: Client, gate: Gate) -> None:
     assert client.members('scan') == records
     assert client.latest('scan', member='260K') == records['260K']
     assert client.labels() == ['scan']
+
+
+def test_latest_without_a_member_is_the_newest_record_of_any_member(
+    client: Client, gate: Gate
+) -> None:
+    gate.open.set()
+    cold = client.submit(load(1), label='scan', member='250K')
+    warm = client.submit(load(2), label='scan', member='260K')
+
+    assert client.latest('scan') == warm
+    assert client.latest('scan', member='250K') == cold
+    with pytest.raises(KeyError, match="'270K'"):
+        client.latest('scan', member='270K')
 
 
 def test_reading_an_output_of_a_failed_record_raises(

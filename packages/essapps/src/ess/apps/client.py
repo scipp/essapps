@@ -285,8 +285,10 @@ class Client:
         ]
 
     def latest(self, label: str, member: str | None = None) -> Record:
-        """The latest record under a label and member, pending or not."""
-        matching = [r for r in self.records(label=label) if r.member == member]
+        """The newest record under a label, of ``member`` if given, pending or not."""
+        matching = [
+            r for r in self.records(label=label) if member is None or r.member == member
+        ]
         if not matching:
             raise KeyError(f'no record under {label!r}, member {member!r}')
         return matching[-1]

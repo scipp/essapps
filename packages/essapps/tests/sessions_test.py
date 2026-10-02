@@ -118,6 +118,46 @@ class Averaging:
         return _Averaging()
 
 
+class Weighted(BaseModel):
+    value: Array()  # type: ignore[valid-type]
+    weight: float = 1.0
+
+
+class WeightedTable(BaseModel):
+    rows: list[Weighted]
+
+
+WEIGHTED = _spec('weighted', WeightedTable, Parts)
+
+
+class _Weighing:
+    def __init__(self) -> None:
+        self._total = 0.0
+
+    def push(self, element: Mapping[str, Any]) -> None:
+        self._total += element['value'] * element['weight']
+
+    @property
+    def value(self) -> Mapping[str, Any]:
+        return {'value': self._total}
+
+
+class WeightedSum:
+    """WEIGHTED: the sum of each value times its weight."""
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        def total(**values: Any) -> Mapping[str, Any]:
+            held = self.accumulator()
+            for row in {**fixed, **values}['rows']:
+                held.push(row)
+            return held.value
+
+        return total
+
+    def accumulator(self) -> _Weighing:
+        return _Weighing()
+
+
 def pairs(pairs: list[dict[str, float]]) -> dict[str, float]:
     """PAIRS as a plain function over its table."""
     return {f: sum(row[f] for row in pairs) for f in ('value', 'extra')}
@@ -192,6 +232,7 @@ def backend(
             PAIRS: pairs,
             DIGITS: combine(append_digit),
             MEAN: Averaging(),
+            WEIGHTED: WeightedSum(),
             FILES_SUM: combine(operator.add),
         },
     )
@@ -390,6 +431,40 @@ def test_a_push_of_more_fields_than_the_element_is_refused(client: Client) -> No
         total = session.accumulator(TOTAL)
         with pytest.raises(SubmitError, match='fields'):
             total.push(load.refs())  # 'value' and 'extra'
+
+
+def test_a_push_takes_values_and_defaults_as_the_request_does(client: Client) -> None:
+    loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    rows = [
+        {'value': loads[0].ref('value'), 'weight': 3.0},
+        {'value': loads[1].ref('value')},  # the default weight
+    ]
+    with client.session() as session:
+        weighted = session.accumulator(WEIGHTED)
+        for row in rows:
+            weighted.push(row)
+        snapshot = client.compute(weighted)
+    plain = client.compute(WEIGHTED, {'rows': rows})
+
+    assert client.output(snapshot, 'value') == client.output(plain, 'value') == 5.0
+    assert client.provenance(snapshot).records() == loads
+
+
+def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    elements = [
+        {'weight': 2.0},  # a required field left out
+        {'value': load.ref('value'), 'scale': 2.0},  # a field the row lacks
+        {'value': 1.0},  # a value where a reference goes
+    ]
+    with client.session() as session:
+        weighted = session.accumulator(WEIGHTED)
+        for element in elements:
+            with pytest.raises(SubmitError) as refused:
+                client.submit(WEIGHTED, {'rows': [element]})
+            with pytest.raises(SubmitError) as pushed:
+                weighted.push(element)
+            assert str(pushed.value) == str(refused.value)
 
 
 class Files(BaseModel):

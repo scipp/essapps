@@ -66,7 +66,10 @@ _event = TypeAdapter(Event)
 
 
 def _with_refs(event: Event) -> Event:
-    """The event with references in request values read as references, not dicts."""
+    """The event with references in values read as references, not dicts."""
+    if isinstance(event, Pushed):
+        element = map_refs(event.element, lambda ref: ref)
+        return event.model_copy(update={'element': element})
     if not isinstance(event, Submitted):
         return event
     records = tuple(

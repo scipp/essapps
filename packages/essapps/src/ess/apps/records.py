@@ -128,10 +128,6 @@ class Status(StrEnum):
     FAILED = 'failed'
     CANCELLED = 'cancelled'
 
-    @property
-    def finished(self) -> bool:
-        return self is not Status.PENDING
-
 
 class Snapshot(BaseModel, frozen=True):
     """
@@ -149,8 +145,11 @@ class Snapshot(BaseModel, frozen=True):
     upto: int = Field(ge=1)
 
 
-Element = dict[str, OutputRef]
-"""One element of an accumulator: a row of its spec's table, a reference per field."""
+Element = dict[str, Any]
+"""
+One element of an accumulator: a row of its spec's table, as a request over the
+table takes it.
+"""
 
 Submission = Annotated[Snapshot | Request, Field(union_mode='left_to_right')]
 """

@@ -95,6 +95,24 @@ def _values(model: BaseModel) -> dict[str, Any]:
     }
 
 
+def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
+    """
+    Refuse a row of a table with a field its row model lacks.
+
+    Validating the row would drop such a field silently; it is refused
+    instead, as a parameter the spec lacks is.
+    """
+    for field, row in table_fields(params).items():
+        rows = values.get(field)
+        for i, cells in enumerate(rows if isinstance(rows, list) else []):
+            if isinstance(cells, dict) and (
+                extra := set(cells) - set(row.model_fields)
+            ):
+                raise SubmitError(
+                    f'{field}[{i}]: {sorted(extra)}: not fields of {row.__name__}'
+                )
+
+
 def _reads(
     params: type[BaseModel], field: str, value: Any
 ) -> Iterator[tuple[str, OutputRef, DataField | None]]:
@@ -234,7 +252,16 @@ class Backend:
                     self._schedule(record.id)
 
     def close(self) -> None:
-        """Wait for the running requests, then let go of the log."""
+        """
+        Wait until no record is pending, then let go of the workers and the log.
+
+        Closing stops no work: a request that waits for an input runs once the
+        input has finished, and its dependents after it.
+        """
+        with self._changed:
+            self._changed.wait_for(
+                lambda: self._views.records.keys() <= self._views.finished.keys()
+            )
         self._executor.shutdown(wait=True)
         self._log.close()
 
@@ -340,6 +367,7 @@ class Backend:
                 raise SubmitError(
                     f'{sorted(unknown)}: not parameters of {request.spec}'
                 )
+            _check_cells(spec.params, request.params)
             params = {
                 field: map_refs(value, self._resolver(field, ids, proposal))
                 for field, value in request.params.items()
@@ -612,13 +640,11 @@ class Backend:
         combined. If combining fails, the push is refused and the accumulator
         stops, since the binding may hold part of the element.
         """
-        ids = [ref.record for ref in element.values()]
-        with self._changed:
-            held = self._open_accumulator(accumulator_id, proposal)
-            self._changed.wait_for(lambda: not self._pending(ids, proposal))
+        held, filled, values = self._pushable(accumulator_id, element, proposal)
         with held.lock:
             with self._changed:
-                position, values = self._pushable(accumulator_id, element, proposal)
+                self._open_accumulator(accumulator_id, proposal)
+                position = len(self._views.elements.get(accumulator_id, ()))
             try:
                 held.accumulator.push(values)
                 value = held.accumulator.value
@@ -630,27 +656,36 @@ class Backend:
                 raise SubmitError(failure) from error
             with self._changed:
                 self._open_accumulator(accumulator_id, proposal)
-                self._append(Pushed(accumulator=accumulator_id, element=element))
+                self._append(Pushed(accumulator=accumulator_id, element=filled))
                 held.value = value
 
     def _pushable(
         self, accumulator_id: str, element: Element, proposal: str
-    ) -> tuple[int, dict[str, Any]]:
-        """The position of a push and the element's values, once checked; lock held."""
-        held = self._open_accumulator(accumulator_id, proposal)
+    ) -> tuple[_Held, Element, dict[str, Any]]:
+        """
+        The accumulator, the element, and its values read, once checked.
+
+        The element is checked and read as the request over it alone is, once
+        the records it references have finished, and comes back as that
+        request holds it: names resolved and defaults filled in.
+        """
+        ids = [ref.record for ref in output_refs(element)]
+        with self._changed:
+            held = self._open_accumulator(accumulator_id, proposal)
+            self._changed.wait_for(lambda: not self._pending(ids, proposal))
         table = element_table(self._specs[held.spec])
         assert table is not None  # noqa: S101
-        name, row = table
-        if set(element) != set(row.model_fields):
-            raise SubmitError(f'an element has the fields {tuple(row.model_fields)}')
-        position = len(self._views.elements.get(accumulator_id, ()))
-        request = Request(held.spec, {name: [element]})
-        entry = Entry(request, name=f'element {position}')
-        self._check_reads(entry, request, {}, proposal)
+        name, _ = table
+        entry = Entry(Request(held.spec, {name: [element]}))
+        request = self._prepare(entry, [], proposal)
+        with self._changed:
+            self._check_reads(entry, request, {}, proposal)
         try:
-            return position, {f: self._read_output(ref) for f, ref in element.items()}
-        except LookupError as error:  # its value is no longer kept
-            raise entry.refused(SubmitError(str(error))) from None
+            values = self._read(request.params)
+        except LookupError as error:  # such as an output no longer kept
+            raise SubmitError(str(error)) from None
+        ((filled,), (read,)) = request.params[name], values[name]
+        return held, filled, read
 
     def _open_accumulator(self, accumulator_id: str, proposal: str) -> _Held:
         held = self._held.get(accumulator_id)
@@ -756,7 +791,7 @@ class Backend:
                     f'the log lacks elements of accumulator {snapshot.accumulator} '
                     f'that record {record_id} covers'
                 )
-            return [ref for e in elements[: snapshot.upto] for ref in e.values()]
+            return [ref for e in elements[: snapshot.upto] for ref in output_refs(e)]
 
     def records(self, proposal: str, label: str | None = None) -> list[Record]:
         """The records of a proposal, oldest first, under ``label`` if given."""
