@@ -48,12 +48,6 @@ class Selector:
         metadata = {'kind': 'raw', **metadata}
         return all(metadata.get(k) == v for k, v in self._fields)
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Selector) and self._fields == other._fields
-
-    def __hash__(self) -> int:
-        return hash(self._fields)
-
     def __repr__(self) -> str:
         return f'Selector({self.fields})'
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ess.reduce.spec import DatasetRef
 
@@ -45,9 +45,13 @@ class Rule:
 
 @dataclass
 class RuleStatus:
-    """A rule's last step: what it submitted, or the reason it submitted nothing."""
+    """
+    A rule's last step.
 
-    submitted: list[Record] = field(default_factory=list)
+    ``reason`` says why the rule submitted nothing; it is ``None`` if the rule
+    submitted.
+    """
+
     reason: str | None = None
 
 
@@ -77,8 +81,7 @@ class TriggerLoop:
             except (SubmitError, LookupError, ValueError) as error:
                 status.reason = str(error)
                 continue
-            status.submitted = list(records.values())
-            submitted.extend(status.submitted)
+            submitted.extend(records.values())
         return submitted
 
     def run(self, interval: float = 1.0) -> None:

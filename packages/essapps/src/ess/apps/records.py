@@ -128,10 +128,6 @@ class Status(StrEnum):
     FAILED = 'failed'
     CANCELLED = 'cancelled'
 
-    @property
-    def finished(self) -> bool:
-        return self is not Status.PENDING
-
 
 class Snapshot(BaseModel, frozen=True):
     """
