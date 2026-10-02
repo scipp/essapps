@@ -5,10 +5,12 @@ Rules and the trigger loop: automatic reduction of new datasets.
 
 A rule is plain data. The trigger loop is a driver: it uses a client, never
 runs in the backend, and keeps no memory of its own. It finds new datasets
-through the client. Which datasets a rule
-has handled is read from the records under the rule's label, so a restarted
-or replaced loop picks up where the last one stopped. A dataset whose record
-failed counts as handled; running it again is the user's decision.
+through the client. Which datasets a rule has handled is read from the records
+under the rule's label, so a restarted or replaced loop picks up where the last
+one stopped. The label belongs to the rule: any record under it counts,
+whoever submitted it and whether or not it failed. So the loop does not retry a
+failed dataset, which could fail again at every step; running it again is the
+user's decision.
 """
 
 from __future__ import annotations

@@ -55,7 +55,10 @@ loop.run()                   # steps forever
 ```
 
 The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label names it, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
-A dataset whose record failed counts as handled; running it again is the user's decision (D2, D5).
+
+The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
+A record that a notebook submits under a rule's label stops the rule from reducing the datasets it names, so manual work uses labels of its own.
+A failed record counts so that the loop does not retry a failed dataset, which could fail again at every step; running it again is the user's decision (D2, D5).
 
 A dataset whose request cannot be made, such as a sample with no can measured before it, is skipped: the rule submits the other new datasets, and its status names the skipped one and why.
 No record names the skipped dataset, so the next step tries it again, for example once a can whose file arrived late is listed.

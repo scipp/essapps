@@ -30,9 +30,9 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
         Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold'))
     )
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-        client.compute(tune, {'bins': bins, 'threshold': threshold}, label='iofq')
+        client.compute(tune, {'bins': bins, 'threshold': threshold}, label='tuning')
 
-    final = client.latest('iofq')
+    final = client.latest('tuning')
     beamtime = Template(
         final.request.spec, params=final.request.params, blanks=('run',)
     )
@@ -40,7 +40,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     requests = apply(beamtime, [new], client.datasets, member_field='run')
     (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
-    assert len(client.records(label='iofq')) == 4
+    assert len(client.records(label='tuning')) == 4
     assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
     assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]
 

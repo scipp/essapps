@@ -595,6 +595,7 @@ TriggerLoop(client, rules=[rule]).run()
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
 Like any driver, it keeps what it makes through its client, such as an accumulator for a sum that grows with each new dataset under a rule.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
+The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
 Templates and rules serialize to JSON; the core keeps no store of them, and records do not name them.
 
 ## Provenance and publication

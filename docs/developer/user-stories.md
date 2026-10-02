@@ -88,9 +88,9 @@ Actor: user in a notebook. Goal: change the binning several times, looking at th
 run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
 tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
 for bins in (1, 2, 4):
-    result = client.compute(tune, {'bins': bins}, label='iofq')
+    result = client.compute(tune, {'bins': bins}, label='tuning')
 
-assert client.latest('iofq') == result
+assert client.latest('tuning') == result
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
 plain = client.compute(IOFQ, result.request.params)                  # the record alone reproduces it
 assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))
@@ -269,15 +269,15 @@ Actor: user in a notebook. Goal: change binning and mask several times, looking 
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
 tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
 for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-    client.compute(tune, {'bins': bins, 'threshold': threshold}, label='iofq')
+    client.compute(tune, {'bins': bins, 'threshold': threshold}, label='tuning')
 
-final = client.latest('iofq')
+final = client.latest('tuning')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
 requests = apply(beamtime, [new], client.datasets, member_field='run')
 (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
-assert len(client.records(label='iofq')) == 4
+assert len(client.records(label='tuning')) == 4
 assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
 assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]    # [2, 0, 4, 3] in 2 groups
 ```
