@@ -25,7 +25,7 @@ It adds four terms of its own:
 The backend keeps two things with different lifetimes:
 
 - **History**: what ran, with which inputs, and what came of it. It is small, and it is kept for a retention period.
-- **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request has yet to read it (see Values), or once it is saved.
+- **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request that reads it has yet to run (see Values), or once it is saved.
 
 A record is history; its output values are not.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record stays.
@@ -58,16 +58,17 @@ submitted  #3  volume/v1  snapshot of a, upto=1
 finished   #3  completed
 submitted  #4  cut/v1  {data: #3.counts, energy_transfer: 2.0}  label=cut member=17
 finished   #1  completed
+finished   #4  completed
 pushed     a   {counts: #1.counts}
 submitted  #5  volume/v1  snapshot of a, upto=2
 finished   #5  completed
 submitted  #6  cut/v1  {data: #5.counts, energy_transfer: 2.0}  label=cut member=17
-finished   #4  completed
 finished   #6  completed
 ```
 
 `uuid:run-1` is the dataset identity the backend resolved `dataset(run=1)` to.
 `upto=2` says that the snapshot covers the first two pushes into `a`.
+The second push waits until cut `#4` has finished, since `#4` reads the value that the push adds to (see Accumulators).
 Each angle adds seven events of constant size, however many angles came before.
 
 ### What the log records
@@ -94,7 +95,7 @@ It does this the same way when it appends a new event and when it reads an exist
 A view changes only when an event is applied, and how it changes depends only on the events.
 Queries read the views, never the log.
 
-Live state that is not history is not in the views either: client entries, output values, which pending records have yet to read which values, which records wait for which, and the queue of work ready to run.
+Live state that is not history is not in the views either: client entries, output values, which pending records hold which values, which snapshots have ended, which records wait for which, and the queue of work ready to run.
 The backend keeps it apart from the views, and it is lost when the backend stops.
 
 The views depend on three orders in the log:
@@ -128,7 +129,7 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the ev
 - A pending record runs from scratch, without its stage, since client entries do not survive a restart.
 - A snapshot is pending only if the backend stopped between its `submitted` and `finished` events. It fails, since its accumulator did not survive the restart.
 - A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
-- No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once no pending record has yet to read them.
+- No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once the pending records that read them have run.
 
 This is what system stories B5 (notebook kernel dies) and H2 (backend upgrade with runs in flight) need from history.
 H2 also needs every event format to stay readable across versions.
@@ -156,17 +157,23 @@ The backend does this:
 
 ```python
 held = binding.accumulator()             # when the accumulator opens: the combined value, not history
+snapshots = []                           # the snapshots taken since the last push
 
 def push(element):                       # element: a row of the table, as a request takes it
     wait(element)                        # until its records have finished
     check(element)                       # as for a request over [element]; its records have completed
-    held.push(read(element))             # combine the values (see Push for which lock)
-    append(Pushed(accumulator, element))
+    with lock:                           # the accumulator's (see Push)
+        end(snapshots)                   # refuse new requests that reference them
+        wait(snapshots)                  # until the requests that read them have run; drops their values
+        held.push(read(element))         # combine the values, in place if the binding does
+        append(Pushed(accumulator, element))
 
 def snapshot():
-    upto = len(elements)                 # the elements pushed so far
-    append(Submitted(Snapshot(spec, accumulator, upto)))
-    complete(record, held.value)         # nothing runs
+    with lock:
+        upto = len(elements)             # the elements pushed so far
+        append(Submitted(Snapshot(spec, accumulator, upto)))
+        complete(record, held.value)     # nothing runs; the outputs are held.value itself, not a copy
+        snapshots.append(record)
 ```
 
 **Push.** A push gets the check a request over that one element gets: the element is a valid row of the table's model, with no field the model lacks, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
@@ -177,11 +184,12 @@ The accumulator does not keep its elements' values after combining them.
 
 A push waits for the records it references to finish before it is checked, so whether it is refused does not depend on timing.
 The element gets its position only once it is combined, so a snapshot never waits for an unfinished element, and an element that finished first is never held back behind one pushed earlier.
-A driver that pushes records as they finish, as `client.as_completed` yields them, never waits in the push.
+A driver that pushes records as they finish, as `client.as_completed` yields them, never waits for them in the push.
 
 Combining can take long.
-It runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long combine holds up only the pushes into the same accumulator.
-Those are logged in the order they were combined.
+It runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long combine holds up only the pushes and snapshots of the same accumulator.
+The pushes are logged in the order they were combined.
+A snapshot takes the accumulator's lock too, then the backend's, as a push does, so it never reads a value in the middle of a combine.
 
 **Snapshot.** The `finished` event of a snapshot follows its `submitted` event at once.
 A snapshot takes no label or member; the requests that read it do.
@@ -189,6 +197,21 @@ Its value is the value of the plain request over the same list of elements, sinc
 The list is in push order, which in D7 is the order in which the angles finished, so two runs over the same scan may list the angles in different orders.
 The `submitted` event names the accumulator and a count instead of the list, since the elements are already in the log as the accumulator's `pushed` events (ADR 0001).
 The section Records above describes how provenance reads the elements.
+
+A snapshot's outputs are `held.value` itself, not a copy, and the snapshots between two pushes share it.
+A binding that adds in place changes that value at the next push, so a snapshot's value is kept until the next push into its accumulator, or until the accumulator is released or its client ends.
+The client keeping the snapshot does not extend it.
+
+A push ends the snapshots taken since the previous push before it combines.
+From then on a request that references one is refused at submission, with a message that says the value ended at a push.
+The push then waits until the requests that read those snapshots and were accepted before have run, not only started, since a running workflow holds the value; this includes a cancelled request whose workflow still runs.
+Their values are then dropped, and reading one raises as for any value not kept; the records stay.
+No request waits for a push, so the wait ends; a long request that reads a snapshot holds back the next push.
+Releasing the accumulator or ending its client ends its snapshots in the same way, but does not wait: their values are dropped once the requests that read them have run.
+
+`client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push; the next push waits for the copy as for a request.
+A request that reads a snapshot reads the value itself, so its outputs must not share memory with it, such as a view of it: they would change at the next push.
+To keep an earlier state, a driver submits a request that reduces or copies the snapshot; saving it is part of the provenance and publication sub-design.
 
 **Binding.** An accumulator needs a binding that makes element accumulators, like `sciline.Accumulator` does for one key; opening one with any other binding is refused.
 A plain request over a table works with any binding.
@@ -200,10 +223,13 @@ held.push({'counts': counts_2})
 held.value                                # {'counts': counts_1 + counts_2}
 ```
 
-The backend reads `value` after every push, and that value becomes a snapshot's outputs.
+The backend reads `value` when a snapshot is taken, and that value itself becomes the snapshot's outputs.
 What the element accumulator holds need not be the outputs: one for a mean holds a sum and a count, and `value` divides them.
-So a later push must not modify a value read before it: each push makes a new value instead of adding in place.
-`combine(operator.add)` is such a binding, since `operator.add` returns a new value; the stories bind `VOLUME` to it.
+A push may modify the value in place, since the snapshots that share it have ended and their readers have run.
+A push must not modify its element, and an element accumulator that starts from the first element copies it, so that adding in place never changes the output the element came from.
+The backend calls `push` and `value` under the accumulator's lock, so from one thread at a time.
+`combine(operator.iadd)` adds in place, and `combine(operator.add)` makes a new value at each push; both copy the first element and give the same values, for an accumulator and a plain request over the table alike.
+The stories bind `VOLUME` to `combine(operator.iadd)`.
 
 ## Clients
 
@@ -220,11 +246,12 @@ README.md states which output values are kept (How long records and values are k
 The backend keeps two things for that rule:
 
 - in each client entry, the IDs of the records the client made and has not released;
-- for each output, how many pending records reference it and have not yet read their inputs.
+- for each output, how many pending records reference it and have not yet run.
 
-A pending record reads its inputs when it starts to run, before its workflow computes.
-An output value is dropped once no client entry keeps its record and no pending record has yet to read it.
-The backend checks this when a client releases a record or ends, when a pending record has read its inputs or finishes without running, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
+A pending record holds its inputs from submission until its workflow returns, even if the record is cancelled meanwhile, since the workflow still reads them.
+An output value is dropped once no client entry keeps its record and no pending record that reads it has yet to run.
+A snapshot leaves its client entry when it ends (see Accumulators), so its value is then dropped once the records that read it have run.
+The backend checks this when a client releases a record or ends, when a snapshot ends, when a workflow returns or a record finishes without running, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
 
 A stage keeps what it computed from its fixed values, and an accumulator its combined value, until the client releases them or ends.
 What a stage computed is a cache: the backend may drop it at any time, and the next call through the stage computes it again and makes the same record.
@@ -243,7 +270,7 @@ How the stories fare:
 | C1, G4: a beam centre used by other requests or another notebook | the client of the notebook that made it, until it releases it or ends; for tomorrow's batch, save it |
 | D2: overnight batch, laptop closed | the requests submitted with a place to save to, not designed yet; without one, only the records survive the night |
 | D6: a batch's results read weeks later | saved; not designed yet |
-| D7: a snapshot per angle, a cut per snapshot | a snapshot's volume: its pending cut, since the notebook releases the snapshot after submitting the cut; the combined value: the accumulator; the cuts: the notebook's client. The volumes of earlier snapshots are not kept |
+| D7: a snapshot per angle, a cut per snapshot | the volume: the accumulator, which adds each angle in place, and each snapshot shares it until the next push, which waits until the snapshot's cut has run; each angle: the notebook's client, until it releases the angle after pushing it; the cuts: the notebook's client. One volume is kept, not one per snapshot |
 | E1: the curve a rule made, read later | the rule saves what it makes; not designed yet |
 | B5: kernel dies | what was saved; all history |
 

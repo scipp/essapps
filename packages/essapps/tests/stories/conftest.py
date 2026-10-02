@@ -296,7 +296,7 @@ TOYS = {
     STITCH: stitch,
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
-    VOLUME: combine(operator.add),
+    VOLUME: combine(operator.iadd),
 }
 
 

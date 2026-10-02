@@ -639,7 +639,7 @@ class Backend:
     def _drop(self, record_id: str, *names: str) -> None:
         """
         Drop the record's outputs that no client keeps and no pending record
-        is yet to read; lock held.
+        that reads them has yet to run; lock held.
         """
         if any(record_id in c.kept for c in self._clients.values()):
             return

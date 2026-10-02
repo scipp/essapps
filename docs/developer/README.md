@@ -71,7 +71,7 @@ The terms this document defines, in the order they appear:
 | spec over a table | a spec whose only parameter is a list of elements of one model, such as a sum over runs | workflow author | workflow author |
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
 | accumulator | a spec over a table the backend keeps for a client, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
-| snapshot | a record of an accumulator's current value | framework | backend, when an accumulator is submitted |
+| snapshot | a record of an accumulator's current value, kept until the next push | framework | backend, when an accumulator is submitted |
 | driver | code that decides over time what to submit, such as a loop over new datasets | framework (`apply`, `TriggerLoop`), app author, notebook | notebook, app |
 
 The rows down to template are enough for most work.
@@ -194,7 +194,7 @@ result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.r
 
 `BEAM_CENTRE` is a spec with an output `centre`; `centre.ref('centre')` refers to that output of the pending record.
 The backend runs the second request once the first has completed.
-The first output is kept at least until the second request has read it (see How long records and values are kept).
+The first output is kept at least until the second request has run (see How long records and values are kept).
 An output can be passed to a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the same dims and unit.
 Otherwise the request is refused at submission.
 
@@ -268,9 +268,10 @@ Output values are large, so the backend keeps a value only while something keeps
 Two things do:
 
 - **the client that made its record, until the client releases it or ends;**
-- **a pending request that reads it, until the request has read it.**
+- **a pending request that reads it, until the request has run.**
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
+A snapshot's value also ends at the next push into its accumulator, or when the accumulator is released, even while its client keeps it (see Stages and accumulators).
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
 
 | Call | Does |
@@ -452,7 +453,7 @@ A `PipelineBinding` computes what does not depend on the blanks once, through `s
 A request of a spec over a table needs the whole table at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
 A push takes the same dict that one element of the request takes.
 As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: the combination of the elements so far, such as their sum.
-Any spec over a table can be an accumulator if its binding provides `accumulator()`, as `combine(operator.add)` does; [system.md](system.md) describes the protocol.
+Any spec over a table can be an accumulator if its binding provides `accumulator()`, as `combine(operator.iadd)` does; [system.md](system.md) describes the protocol.
 
 ```python
 total = client.accumulator(PARTS_SUM)
@@ -498,6 +499,32 @@ snapshot.submitted                       # what a record ran: a Request, or here
 client.provenance(snapshot).records()    # [c611, c612, c613]: the records it read, in push order
 ```
 
+**Adding in place.** An accumulator may add each element into the value it holds, as `combine(operator.iadd)` does, so that a push needs no memory for a second combined value.
+A snapshot's output is that value itself, not a copy, and several snapshots between two pushes share it.
+So the next push would change it, and the snapshot rule is:
+
+> A snapshot's value is kept until the next push into its accumulator, or until the accumulator is released.
+
+A push first ends the snapshots taken since the previous push: from then on a request that references one is refused at submission, and reading one raises; the records stay.
+The push then waits until the requests that read those snapshots, submitted before the push, have run, and only then adds the element.
+No request waits for a push, so this wait ends; a long request that reads a snapshot holds back the next push.
+Releasing the accumulator or ending the client ends its snapshots in the same way, but waits for nothing: their value is dropped once the requests that read them have run.
+
+```python
+total = client.accumulator(PARTS_SUM)
+total.push(c611.refs('numerator', 'denominator'))
+snapshot = client.submit(total)
+normalized = client.submit(FINALIZE, {**snapshot.refs(), 'scale': 2.0})   # reads the snapshot's value
+numerator = client.output(snapshot, 'numerator')                           # a copy
+total.push(c612.refs('numerator', 'denominator'))                          # waits until FINALIZE has run
+client.output(snapshot, 'numerator')                                       # raises: the value ended at the push
+client.output(normalized, 'normalized')                                    # from the value before the push
+```
+
+`client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push.
+A request that reads a snapshot reads the value itself; it is not copied.
+To keep an earlier state, submit a request that reduces or copies the snapshot, such as a cut or FINALIZE above; saving a value is not designed yet.
+
 ## Drivers
 
 The backend runs requests and keeps records; it does not decide what to run.
@@ -525,16 +552,18 @@ volume = client.accumulator(VOLUME)
 angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
 for angle in client.as_completed(angles):                       # in the order they finish
     volume.push(angle.refs())                                   # ANGLE outputs only counts
+    client.release(angle)                                       # the volume holds the sum
     snapshot = client.submit(volume)
     client.submit(CUT, {'data': snapshot.ref('counts'), 'energy_transfer': 2.0},
                   label='cut', member='17')
-    client.release(snapshot)                                    # the cut still reads it
 ```
 
 The generator `angles` submits a request for each run as it arrives.
 `as_completed` consumes it in a thread, so submitting does not wait for the loop body.
 It yields each record once it has finished, so the angles are reduced in parallel while the loop pushes one at a time.
-Releasing each snapshot once its cut is submitted keeps one volume per pending cut, not one per angle.
+`VOLUME` adds in place, and each snapshot shares the volume's value, so the loop holds one volume, not one per angle or per pending cut.
+Each push waits until the previous cut has run, since the cut reads the volume the push adds to.
+Releasing each angle once it is pushed keeps the client from keeping a thousand angles.
 
 ## Batch and automatic reduction
 
@@ -587,7 +616,7 @@ Corrections that supersede a published entry, and recomputing in a record's envi
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
-- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs.
+- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice that is a view of it, since the snapshot's value changes at the next push.
 - A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - Records are kept for a retention period, together with the older records they depend on. A published entry answers what produced it without access to the records.
