@@ -60,7 +60,7 @@ The stories use two of its calls:
 
 ```python
 loop.step()                  # handles what arrived since the last step; returns the records it made
-loop.status(rule).reason     # why a rule submitted nothing
+loop.status(rule).reason     # why a rule submitted nothing or skipped a dataset
 ```
 
 ## S. Small stories
