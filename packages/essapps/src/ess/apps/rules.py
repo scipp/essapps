@@ -59,15 +59,20 @@ class TriggerLoop:
         self._status = {rule.name: RuleStatus() for rule in rules}
 
     def step(self) -> list[Record]:
-        """Submit what arrived since the last step; return the records submitted."""
+        """
+        Submit what arrived since the last step; return the records submitted.
+
+        A rule whose requests cannot be made or are refused submits nothing,
+        and its status says why; the other rules still submit.
+        """
         submitted: list[Record] = []
         for rule in self._rules:
             status = self._status[rule.name] = RuleStatus()
-            requests = self._requests(rule)
-            if not requests:
-                status.reason = 'no new dataset'
-                continue
             try:
+                requests = self._requests(rule)
+                if not requests:
+                    status.reason = 'no new dataset'
+                    continue
                 records = self._client.submit(requests, label=rule.label)
             except (SubmitError, LookupError, ValueError) as error:
                 status.reason = str(error)
