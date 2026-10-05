@@ -68,6 +68,7 @@ from ess.reduce.spec import (
     table_fields,
 )
 from pydantic import BaseModel, ValidationError
+from pydantic_core import PydanticSerializationError, to_json
 
 from .accumulators import element_table
 from .bindings import (
@@ -113,6 +114,14 @@ def _values(model: BaseModel) -> dict[str, Any]:
         f: [dict(row) for row in v] if f in tables and v is not None else v
         for f, v in values.items()
     }
+
+
+def _check_storable(field: str, value: Any) -> None:
+    """Refuse a value that cannot be stored in the log, which holds JSON."""
+    try:
+        to_json(value)
+    except PydanticSerializationError as error:
+        raise SubmitError(f'{field}: cannot be stored as JSON: {error}') from None
 
 
 def _problems(error: ValidationError, blanks: Sequence[str] = ()) -> list[str]:
@@ -418,9 +427,12 @@ class Backend:
             except ValidationError as error:
                 problems = '; '.join(_problems(error))
                 raise SubmitError(f'{request.spec}: {problems}') from None
+            values = _values(model)
+            for field, value in values.items():
+                _check_storable(field, value)
         except SubmitError as error:
             raise entry.refused(error) from None
-        return Request(request.spec, _values(model))
+        return Request(request.spec, values)
 
     def _resolve(
         self,

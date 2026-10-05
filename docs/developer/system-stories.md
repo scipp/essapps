@@ -41,11 +41,6 @@ Property: pushing a contribution into an accumulator and computing it reduces on
 Actor: spectroscopy user in the web UI. Goal: cuts follow a slider as it is dragged.
 Property: a view of an output returns in a fraction of a second, and only the slice leaves the backend; the volume is not copied to the UI.
 
-### B5. Notebook kernel dies
-
-Actor: user in a notebook. Goal: after a restart, nothing made before the crash is lost, and nothing stays held.
-Property: records completed before the crash are kept, and requests submitted before it still complete. The backend ends the dead kernel's client and drops what the client kept, although the client was never closed.
-
 ### B6. Find last week's result
 
 Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
@@ -55,7 +50,7 @@ Property: records survive restarts of the client and of the backend, until the p
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend, or another proposal, published.
+Actor: user. Goal: use a vanadium result that another backend published.
 Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage. A result of another proposal on the same backend is read the same way, or from a saved output: no proposal reads another's records.
 
 ### C5. Vanadium and sample tuned together
@@ -97,11 +92,6 @@ Property: the software environment recorded with a record is enough to install i
 
 Actor: workflow developer. Goal: edit a workflow in a notebook and see the result within seconds.
 Property: a backend in the notebook's process runs a workflow bound there, and uses an edited binding for the next request without a restart. A hosted backend runs only installed workflows.
-
-### G3. Local application, remote compute
-
-Actor: user of a desktop application. Goal: the expensive reduction runs on the cluster; the cheap post-processing is tuned on the laptop with sub-second feedback.
-Property: the application's stages run on the laptop while they read outputs of records made on the cluster. A stage fetches such an output once, and each call through it computes on the laptop. The records made through the stages go to the cluster's backend. Where a stage runs is the system's decision, not an argument of the API.
 
 ### G5. Reference across proposals refused
 

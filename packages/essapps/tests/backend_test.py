@@ -156,6 +156,26 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     assert client.records() == [a]
 
 
+def test_a_value_that_cannot_be_stored_is_refused(datasets: FakeDatasets) -> None:
+    class AnyParams(BaseModel):
+        value: Any
+
+    spec = _spec('anything', AnyParams)
+    backend = Backend(datasets, {spec: lambda value: {}})
+    client = Client(backend, proposal='p1', submitter='anna')
+    try:
+        with pytest.raises(SubmitError, match=r'^second: value: cannot be stored'):
+            client.submit(
+                {
+                    'first': Request(spec, {'value': 1}),
+                    'second': Request(spec, {'value': len}),
+                }
+            )
+        assert client.records() == []
+    finally:
+        backend.close()
+
+
 def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
     missing = {'record': 'missing', 'output': 'value'}
 

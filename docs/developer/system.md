@@ -296,12 +296,11 @@ How the stories fare:
 | S1, S3, S8: compute, then read the output | the notebook's client |
 | B1, S2: tuning steps | each step: the notebook's client, until the notebook releases it; the loaded run: the stage |
 | C5: two stages tuned together, both results read afterwards | the notebook's client |
-| C1, G4: a beam centre used by other requests or another notebook | the client of the notebook that made it, until it releases it or ends; for tomorrow's batch, save it |
+| C1: a beam centre used by other requests | the client of the notebook that made it, until it releases it or ends; for tomorrow's batch, save it |
 | D2: overnight batch, laptop closed | the requests submitted with a place to save to, not designed yet; without one, only the records survive the night |
 | D6: a batch's results read weeks later | saved; not designed yet |
 | D7: a snapshot per angle, a cut per snapshot | the volume: the accumulator, which adds each angle in place, and each snapshot shares it until the next push, which waits until the snapshot's cut has run; each angle: the notebook's client, until it releases the angle after pushing it; the cuts: the notebook's client. One volume is kept, not one per snapshot |
 | E1: the curve a rule made, read later | the rule saves what it makes; not designed yet |
-| B5: kernel dies | what was saved; all history |
 
 ## How long history is kept
 

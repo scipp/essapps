@@ -2,7 +2,7 @@
 
 **Status: the design of the API. Implementation starts with the core.**
 
-[../requirements/](../requirements/README.md) states the goals and what we know, assume, and do not know about the problem. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
+[../requirements/](../requirements/README.md) states the goals and what we know, assume, and do not know about the problem. [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it. The first release that the requirements describe combines no runs and tunes no parameters interactively, so it uses neither stages nor accumulators.
 
 This document describes the API we want: what workflow authors, app authors, and notebooks write, and what they can rely on.
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
@@ -411,7 +411,7 @@ PARTS_SUM = WorkflowSpec(name='sans-parts-sum', ..., params=PartsSumParams, outp
 FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, outputs=IofQOutputs)
 ```
 
-`ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, such as a transmission per run, which are not summed.
+`ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, which are not summed.
 `FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
 A FINALIZE may read several sums, for example one over sample runs and one over background runs.
 Each element of a PARTS_SUM request holds the numerator and denominator of one run, so the two cannot be paired with different runs.
@@ -597,7 +597,7 @@ A *rule* is plain data: a name, a template, a selector, and a label, and optiona
 It says: for each new dataset the selector matches, fill the template and submit it under the label.
 
 With a *series*, one request takes all matching datasets with the same value of a metadata field so far, in run order.
-In reflectometry, a sample is measured at several angles, one run each; with `series='sample'`, each new angle submits a request that stitches all angles of that sample measured so far, with the sample as the member:
+At ESTIA, a sample is measured at several angles, one run each; with `series='sample'`, each new angle submits a request that stitches all angles of that sample measured so far, with the sample as the member:
 
 ```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
@@ -648,7 +648,7 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
 - whether a request of a spec over a table with many elements is computed in parts on many processes, such as a tree of partial sums, and how that is configured. The record is the same. Computing in parts needs the author to declare that grouping does not change the result, as for a sum (open question 1).
-- where a stage or an accumulator is kept and computes, for example next to a desktop application; whether a value passed in memory is also written; and how a client whose process is gone is ended
+- where a stage or an accumulator is kept and computes; whether a value passed in memory is also written; and how a client whose process is gone is ended
 - how access across proposals is enforced
 
 ## Open questions

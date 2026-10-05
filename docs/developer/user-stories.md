@@ -301,10 +301,6 @@ assert client.records() == [volume, fit]                     # the views made no
 Gap: the form of a view waits for the plotting work; `client.output(..., index=)` stands in for it.
 The chosen cut is a parameter of the next request. How fast a view comes back is system story B4.
 
-### B5. Notebook kernel dies
-
-System story only; see [system-stories.md](system-stories.md).
-
 ### B6. Find last week's result
 
 System story only; see [system-stories.md](system-stories.md).
@@ -333,7 +329,7 @@ A beam centre found again later is a new record under `beam-centre`; the templat
 
 ### C2. Vanadium from the catalogue
 
-Actor: user. Goal: use a vanadium result that another backend, or another proposal, published to SciCat.
+Actor: user. Goal: use a vanadium result that another backend published to SciCat.
 
 ```python
 vanadium = other.compute(VANADIUM, {'run': measure(1, [1.0, 1.0]), 'scale': 2.0})
@@ -349,7 +345,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-A result of another proposal, such as the vanadium an instrument scientist made in a commissioning proposal for the users of the coming one, is read the same way, or from a saved output, never through the other proposal's records (G5).
+A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, or from a saved output, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
 
@@ -693,29 +689,6 @@ assert scicat.entries[pid].provenance == dev.provenance(result)
 
 That a hosted backend runs only installed workflows, and that an edited binding takes effect for the next request, is system story G2.
 
-### G3. Local application, remote compute
-
-System story only; see [system-stories.md](system-stories.md).
-
-### G4. Two notebooks on one machine
-
-Actor: user with two notebooks. Goal: one notebook uses a result made in the other.
-
-```python
-first, second = connect(), connect()                           # two notebooks, one proposal
-centre = first.compute(BEAM_CENTRE, {'run': measure(1, [1.0, 1.0, 1.0, 1.0])}, label='beam-centre')
-found = second.latest('beam-centre')
-result = second.compute(IOFQ, {'run': measure(2, [2.0, 3.0, 4.0, 5.0]),
-                               'beam_centre': found.ref('centre')})
-
-assert found == centre
-assert second.output(result, 'iofq').values.tolist() == [3.0, 7.0]
-```
-
-Both notebooks are clients of one backend, such as a hosted one; a backend in each notebook shares nothing.
-
-Gap: without a shared backend, the first notebook saves the centre to a folder both can read, and the second names the file as a dataset, `dataset(path=...)`, instead of referencing the output. Saving belongs to the provenance and publication sub-design.
-
 ### G5. Reference across proposals refused
 
 Actor: external user. Goal: a reference to another proposal's record is refused before any record exists.
@@ -751,9 +724,8 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **Saving** (D6, E1, G4): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+- **Saving** (D6, E1): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
-- **Placement** (system story G3): where a stage runs is the system's decision (README.md, Left to the system); how the system decides is not designed.
 - **Recomputing in a record's environment** (F2): deferred.
