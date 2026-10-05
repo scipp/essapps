@@ -7,6 +7,7 @@ Reversing or replacing a decision gets a new ADR that links back.
 The format follows [scipp's ADR convention](https://github.com/scipp/scipp/tree/main/docs/development/adr).
 
 - [ADR 0001: Keep the backend's history as an event log, apart from values](0001-history-as-an-event-log.md) (superseded by ADR 0004)
-- [ADR 0002: The client is the one lifetime of values, stages, and accumulators](0002-the-client-is-the-lifetime.md)
-- [ADR 0003: Accumulators add in place, and a snapshot lasts until the next push](0003-accumulators-add-in-place.md)
-- [ADR 0004: History is three append-only lists, dropped per proposal once it is idle](0004-history-is-append-only-lists.md)
+- [ADR 0002: In the user's process, the client is the one lifetime of values, stages, and accumulators](0002-the-client-is-the-lifetime.md)
+- [ADR 0003: Accumulators add rows in place, and a reference to one lasts until the next push](0003-accumulators-add-in-place.md)
+- [ADR 0004: History is append-only lists, dropped per proposal once it is idle](0004-history-is-append-only-lists.md)
+- [ADR 0005: The service writes every output to a file, and holds an accumulator only as a job with a size and a deadline](0005-the-service-writes-every-output.md)

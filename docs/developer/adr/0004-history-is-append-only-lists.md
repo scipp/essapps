@@ -1,4 +1,4 @@
-# ADR 0004: History is three append-only lists, dropped per proposal once it is idle
+# ADR 0004: History is append-only lists, dropped per proposal once it is idle
 
 - Status: accepted
 - Deciders: Simon
@@ -40,23 +40,24 @@ So history only grows until it is dropped, with or without a log.
 
 ## Decision
 
-History is three lists, each only appended to:
+History is four lists, each only appended to:
 
 | List | One item per | Holds |
 |---|---|---|
-| records | record | ID, time, proposal, submitter, request or snapshot, output names, label, member |
+| records | record | ID, time, proposal, submitter, request, output names, label, member |
+| accumulators | opened accumulator | ID, proposal, template |
 | finishes | finished record | record ID, status, failure message |
-| pushes | push into an accumulator | accumulator ID, element |
+| pushes | push into an accumulator | accumulator ID, row |
 
 - A record never changes. Its status is its finish; a record without one is pending.
-- A snapshot covers the first pushes into its accumulator, and its record names the accumulator and how many.
+- A reference to an accumulator names it and how many pushes it covers. The accumulator's template and those pushes say what that state is ([ADR 0003](0003-accumulators-add-in-place.md)).
 - Output values are not history. [ADR 0002](0002-the-client-is-the-lifetime.md) says what keeps them.
 - A proposal is idle while none of its clients is open and none of its records is pending. Once it has been idle for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. A result needed for longer is published.
 - How a backend stores the lists is its choice. The in-process backend stores them as one event log, in memory or in a file of JSON lines.
 
 ## Alternatives considered
 
-- **History as an event log (ADR 0001).** The lists hold the same history. The log adds one order across all three lists, and views rebuilt by applying the events in that order; nothing outside storage reads either. It would also tie a hosted backend to a log.
+- **History as an event log (ADR 0001).** The lists hold the same history. The log adds one order across all the lists, and views rebuilt by applying the events in that order; nothing outside storage reads either. It would also tie a hosted backend to a log.
 - **History kept as long as the proposal (ADR 0001).** Possibly forever, and so a second record of what ran next to SciCat.
 - **Each record dropped by age, keeping the older records that a kept record reads.** Bounds the history of every proposal, and a kept record's provenance stays complete. But the trigger loop would reduce again every dataset whose records were dropped, so it would need a memory of its own: a set of handled datasets per rule, or the inputs that the derived datasets in SciCat list. The second needs automatic reduction to publish every result, which the requirements leave open.
 - **A proposal's history dropped a retention period after its last record.** The same unit with a simpler clock. But a trigger loop that sees no new dataset for that long loses its rule's records and then reduces every dataset again, and the proposal's open clients would keep values of dropped records.
@@ -67,7 +68,7 @@ History is three lists, each only appended to:
 - Dropping a proposal's history leaves no dangling reference: no other proposal reads its records (system story G5), and an idle proposal has no client that keeps a value and no record that waits. The provenance of every kept record is complete.
 - A running trigger loop keeps a client of its proposal open, so the proposal is not idle and the loop never reduces a handled dataset again. A loop started for a proposal whose history was dropped reduces its datasets again.
 - A proposal that is never idle, such as one whose automatic reduction runs all year, keeps its history that long.
-- A client whose process ended without closing it keeps its proposal from being idle until the backend ends it. A hosted backend ends it when its lease runs out ([ADR 0002](0002-the-client-is-the-lifetime.md)).
+- A client whose process ended without closing it keeps its proposal from being idle until the backend ends it. How the service notices such a client is open (scipp/essapps#34).
 - A backend that restarts does not know when its earlier clients ended, so it counts idle time from its start.
 - The in-process backend keeps its log and never drops history. system.md describes the lists first, and the log as how this backend stores them.
 - What the in-process backend shows for a hosted one:
