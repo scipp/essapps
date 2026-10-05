@@ -55,6 +55,7 @@ loop.run()                   # steps forever
 ```
 
 The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label names it, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
+This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([system.md](system.md), How long history is kept).
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
 A record that a notebook submits under a rule's label stops the rule from reducing the datasets it names, so manual work uses labels of its own.

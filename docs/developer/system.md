@@ -8,7 +8,7 @@ It never drops history.**
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
 Other parts of the system, such as the store of values, a hosted backend, and where stages and accumulators run, get sections here when they are designed.
-[ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart, and [ADR 0004](adr/0004-history-is-append-only-lists.md) why history is three lists that a backend stores as it chooses.
+[ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart, and [ADR 0004](adr/0004-history-is-append-only-lists.md) why history is three lists that a backend stores as it chooses and drops per proposal.
 
 This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, stage, accumulator, and snapshot.
 Story IDs such as D7 refer to [user-stories.md](user-stories.md) and [system-stories.md](system-stories.md).
@@ -23,7 +23,7 @@ It adds two terms of its own:
 
 The backend keeps two things with different lifetimes:
 
-- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept as long as the proposal (see How long history is kept).
+- **History**: what ran, with which inputs, and what came of it. It is small, and it is kept until its proposal has been idle for days to weeks (see How long history is kept).
 - **Values**: the outputs of records, what a stage computed, the combined value of an accumulator. They are large, and each is kept only while a client keeps it or a pending request that reads it has yet to run (see Values), or once it is saved.
 
 A record is history; its output values are not.
@@ -120,7 +120,7 @@ total.request                          # TypeError: a snapshot is not a request
 
 The design needs three things from how a backend stores history, and nothing more:
 
-- the lists only grow, keep the orders above, and last as long as the proposal;
+- the lists only grow and keep the orders above, until a proposal's part is dropped as a whole;
 - a submission is stored whole or not at all;
 - one backend writes them.
 
@@ -150,7 +150,7 @@ A backend holds an exclusive lock (`flock`) on its log file from start to close,
 The operating system releases the lock when the process ends, so a backend started after a crash or for an upgrade (system story H2) takes the file over.
 Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
 
-Event formats must stay readable for as long as the log is kept, which is as long as the proposal.
+Event formats must stay readable for as long as the log is kept.
 The maps may change between versions.
 
 ### Restart
@@ -174,7 +174,7 @@ H2 also needs every event format to stay readable across versions, and a store o
 
 A hosted backend may store history as the same log in a file, in Kafka, or as one database table per list.
 It may split history by proposal.
-This keeps the orders the maps depend on (see Queries), since each lies within one proposal.
+This keeps the orders the maps depend on (see Queries), since each lies within one proposal, and it drops a proposal's history by dropping its part.
 
 ## Accumulators
 
@@ -305,18 +305,33 @@ How the stories fare:
 
 ## How long history is kept
 
-Records are the proposal's history.
-A proposal's history is kept as long as the proposal, and dropped with it as a whole; nothing is dropped earlier.
-The trigger loop knows that it has handled a dataset only from the records under its rule's label ([automatic-reduction.md](automatic-reduction.md)).
-A backend that dropped old records would make a restarted loop reduce those datasets again.
-History is small enough to keep: in story D7, each angle appends seven items of constant size (see An example).
-A hosted backend that splits history by proposal (see Storage) drops a proposal's history by dropping its part.
+Users find the records of their work while they consider it ongoing, as with an application they leave open: for batch and automatic reduction, days to weeks ([requirements](../requirements/tensions.md)).
+The lasting history of what ran belongs in SciCat.
 
-Publishing writes the provenance, flattened from history, into the catalogue entry, so what is published outlives the proposal's history.
+A proposal is *idle* while none of its clients is open and none of its records is pending.
+Once a proposal has been idle for the retention period, which the deployment sets, its history is dropped as a whole.
+With a retention period R:
+
+```text
+day 0     a batch of 500 runs is submitted; the laptop closes, so its client ends
+day 1     the last record of the batch finishes; the proposal is idle from now
+day 3     the user opens a notebook: the records are there, and the proposal is no longer idle
+day 3     the notebook closes; the proposal is idle from now
+day 3+R   the proposal's history is dropped
+```
+
+- Dropping leaves no dangling reference. No other proposal reads the proposal's records (system story G5), and an idle proposal has no client that keeps a value and no record that waits. The provenance of every kept record is complete.
+- The trigger loop knows that it has handled a dataset only from the records under its rule's label ([automatic-reduction.md](automatic-reduction.md)). A running loop keeps a client of its proposal open, so the proposal is not idle and the loop never reduces a handled dataset again. A loop started for a proposal whose history was dropped reduces its datasets again.
+- A client whose process ended without closing it is open until the backend ends it, in a hosted backend when its lease runs out (see Clients).
+- A backend that restarts does not know when its earlier clients ended, so it counts idle time from its start.
+- A proposal that is never idle, such as one whose automatic reduction runs all year, keeps its history that long. History is small: in story D7, each angle appends seven items of constant size (see An example).
+
+Publishing writes the provenance, flattened from history, into the catalogue entry, so what is published outlives the history.
+A result needed after its proposal's history is dropped is published.
 
 ## Open
 
 - Leases of the clients of a hosted backend: how long one lasts and how a client renews it.
-- The store of saved values, and where a batch or rule says to save to (with the provenance and publication sub-design).
+- The store of saved values, where a batch or rule says to save to (with the provenance and publication sub-design), and whether a saved value is dropped with its proposal's history.
 - How a hosted backend stores history: the in-process backend's log, Kafka, or database tables ([ADR 0004](adr/0004-history-is-append-only-lists.md) lists what the in-process backend shows).
 - A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.
