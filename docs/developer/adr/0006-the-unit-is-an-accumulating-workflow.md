@@ -80,6 +80,13 @@ client.output(iofq, 'iofq')          # what the plain request over these rows gi
 - **The plain request of the same spec**, with every row given at once, gives the same outputs. The author promises this, as `StreamProcessor` asks its users to promise that the workflow is linear in its dynamic keys up to the accumulated keys.
 - **A running combination of the pushed values themselves** is the degenerate case of such a workflow (`combine(operation)`), not a concept of its own.
 
+**What the framework sees is flat.**
+A spec's parameters are values, data fields, and tables, and the rows of a table are flat models; `ess.reduce.spec` refuses a row that holds another model or table.
+A table has one level of rows, and a row is the outermost level of the reduction, the unit that arrives: a run, or the runs that belong together.
+Any structure below a row, such as detector banks, angle settings read from a log, sections of a large file, or groups by a value found in the data, belongs to the binding.
+This is deliberate.
+Records, checks, forms, and pushes stay the same for every technique, push order needs no rules, and the binding is the one place that knows the workflow's structure.
+
 **`PipelineBinding` accumulates with `StreamProcessor`.**
 A package describes its workflow once, and both esslivedata and this framework use that description:
 
@@ -102,6 +109,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - **The low-level accumulator as the unit** (the forms in the table above). The reduction splits into a per-run spec, a sum, and a finalizing spec. The partial sum is a value the framework sees and records. Two tables, shared and per-run values, and the finalizing step each need their own mechanism.
 - **Only list parameters, with the framework finding the new runs by comparing lists.** Comparing lists, and tracking which tuned parameters the per-run part read, was the complexity that ended this form on 09-28. An explicit push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record no longer means the sum of its runs, and a total that grows is copied at every step.
+- **Nested tables**, such as rows that hold a table of banks, or a table per level. The framework would need a push for each level, rules on the order of pushes, and rules on which work is repeated at which level. All of that is structure of the workflow, which the binding knows and the framework does not.
 - **Fan-out over nodes as part of the unit.** This needs merging two held states, which neither `StreamProcessor` nor this binding protocol offers. No requirement needs it now: runs arrive over hours, and a finished scan can be reduced again in one job.
 
 ## Consequences
@@ -115,7 +123,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, stops `StreamProcessor` from building.
 - A row holds what the per-run part needs at once. A run and its own transmission run, if it has one, go in one row. Rows of different tables are independent pushes, and pairing runs into rows is the application's job.
 - Each held key depends only on the fixed values and on the fields of one table. Then pushes may come in any order and give the same state, up to rounding, and the framework has no rules on order. A binding in which a held key depends on two tables is refused when it opens; `StreamProcessor` computes these dependencies at construction. The esssans masks above are such a case.
-- A row is the outermost level, the unit that arrives: a run, or the runs that belong together. Levels inside a run, such as detector banks, angle settings read from a log, or sections of a large file, are never rows. They are loops of the binding's own driver over sciline stages, nested inside the per-run work, so that the per-run work runs once per row and not once per bank. A row of (bank, run) would repeat the per-run work for every bank. The framework sees only rows and cannot tell a bank index from a per-run value, so this is a rule for workflow authors.
+- Levels below a row are loops of the binding's own driver over sciline stages, nested inside the per-run work, so that the per-run work runs once per row and not once per bank. A row of (bank, run) would repeat the per-run work for every bank. The framework cannot tell a bank index from a per-run value, so keeping such levels out of rows is a rule for workflow authors.
 - A plain request over a table runs through the same driver, pushing every row and then computing the outputs once. A run that appears in several rows can be memoized by the binding by its dataset identity.
 - Results per bank or per angle are outputs, for example with a bank dimension, and the held state may be keyed by a bank or by a value read from each run.
 - If two levels ever both arrive over time, such as sections of runs that are still being written, rows become (run, section). The binding must then keep the per-run work between the rows of one run, as `StreamProcessor` does with context keys. The result still does not depend on the order of pushes, but the cost does. Nothing needs this yet: offline rows are complete files, and watching a file that is still being written is esslivedata's.
