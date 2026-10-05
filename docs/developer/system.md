@@ -214,7 +214,7 @@ Releasing the accumulator or ending its client ends its snapshots in the same wa
 
 `client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push; the next push waits for the copy as for a request.
 A request that reads a snapshot reads the value itself, so its outputs must not share memory with it, such as a slice of it: they would change at the next push.
-To keep an earlier state, a driver submits a request that reduces or copies the snapshot; saving it is part of the provenance and publication sub-design.
+The backend keeps no earlier state of an accumulator: what it keeps past the next push are the outputs of the requests that read the snapshot, such as a cut.
 
 **Binding.** An accumulator needs a binding that makes element accumulators, like `sciline.Accumulator` does for one key; opening one with any other binding is refused.
 A plain request over a table works with any binding.
