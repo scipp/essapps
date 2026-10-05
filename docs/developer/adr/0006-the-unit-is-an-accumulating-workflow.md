@@ -80,12 +80,85 @@ client.output(iofq, 'iofq')          # what the plain request over these rows gi
 - **The plain request of the same spec**, with every row given at once, gives the same outputs. The author promises this, as `StreamProcessor` asks its users to promise that the workflow is linear in its dynamic keys up to the accumulated keys.
 - **A running combination of the pushed values themselves** is the degenerate case of such a workflow (`combine(operation)`), not a concept of its own.
 
+**The caller chooses how rows arrive; the binding chooses how a state is computed.**
+Every spec with a table parameter can be run both ways.
+A caller who has every row gives them in one request.
+A caller whose rows arrive over time, such as the runs of a scan or of a growing sum, opens an accumulator.
+Both give the same outputs for the same rows.
+How an accumulator computes a state is its binding's choice, which the caller sees only in cost:
+
+- A binding that provides `accumulator(fixed)` keeps a held state and adds each push to it. A read computes the outputs from the held state.
+- For any other binding, the framework keeps the pushed rows and computes the plain request over all of them when a state is read. The part that depends only on the fixed values is still computed once where the binding stages, as `PipelineBinding` does. A read then repeats the per-run part of every row so far.
+
+This is what the requirements ask: "Reducing a growing series again at every new run, such as all angles of one sample so far, must be possible, but not as the only behaviour" ([users](../../requirements/users.md)).
+The second kind of binding reduces again at every read; the first is the other behaviour.
+A joint fit, such as the scale factors of reflectometry angles, cannot add in place, but it can still be accumulated this way:
+
+```python
+stitched = client.accumulator(Template(STITCH, params={'reference': reference}, blanks=('runs',)))
+stitched.push({'runs': {'run': dataset(run=608)}})
+stitched.push({'runs': {'run': dataset(run=609)}})
+client.output(stitched, 'curve')     # STITCH over runs 608 and 609, fitted again at this read
+```
+
+Opening an accumulator is refused only when its template has no table blank, or a blank that is not a table.
+
 **What the framework sees is flat.**
 A spec's parameters are values, data fields, and tables, and the rows of a table are flat models; `ess.reduce.spec` refuses a row that holds another model or table.
 A table has one level of rows, and a row is the outermost level of the reduction, the unit that arrives: a run, or the runs that belong together.
 Any structure below a row, such as detector banks, angle settings read from a log, sections of a large file, or groups by a value found in the data, belongs to the binding.
 This is deliberate.
 Records, checks, forms, and pushes stay the same for every technique, push order needs no rules, and the binding is the one place that knows the workflow's structure.
+
+**Two examples.**
+The first has one table whose rows have two columns.
+Suppose a package lets each sample run have its own transmission run.
+A row holds what the per-run part needs at once, so the run and its transmission run are two fields of one row, and one push hands both to the binding; for `StreamProcessor`, both are dynamic keys of one `accumulate`.
+Two lists that must stay aligned, one of runs and one of their transmission runs, would be two tables whose rows could be paired wrongly; they are one table with two columns.
+A per-run value, such as a time range to keep, is a column in the same way.
+
+```python
+class SampleRow(BaseModel):
+    run: NexusFile
+    transmission: NexusFile              # this run's own transmission run
+
+class CanRow(BaseModel):
+    run: NexusFile
+
+class IofQParams(BaseModel):
+    sample_runs: list[SampleRow]         # one table, two columns
+    can_runs: list[CanRow]
+    beam_centre: Array()
+    direct_beam: Array()
+
+iofq = client.accumulator(Template(SANS_IOFQ, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
+                                   blanks=('sample_runs',)))
+iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
+iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)}})
+client.output(iofq, 'iofq')
+# the plain request of this state:
+# {**shared, 'can_runs': [{'run': 614}],
+#  'sample_runs': [{'run': 611, 'transmission': 610}, {'run': 613, 'transmission': 612}]}
+```
+
+The second has two independent tables: the sample runs and the can runs of SANS, each a blank, pushed as they arrive.
+The held keys of the sample depend only on sample rows, and those of the can only on can rows, so the order of pushes does not change any state, and a push may add a row to each table at once.
+
+```python
+iofq = client.accumulator(Template(SANS_IOFQ, params=shared, blanks=('sample_runs', 'can_runs')))
+iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
+client.output(iofq, 'iofq')          # refused while there is no can run, if the spec requires one
+iofq.push({'can_runs': {'run': dataset(run=614)}})
+client.output(iofq, 'iofq')          # sample 611 minus can 614
+iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)},
+           'can_runs': {'run': dataset(run=615)}})          # one push, one state
+client.output(iofq, 'iofq')
+# the plain request of this state:
+# {**shared, 'sample_runs': [{'run': 611, ...}, {'run': 613, ...}],
+#  'can_runs': [{'run': 614}, {'run': 615}]}
+```
+
+For `StreamProcessor`, the two tables are separate dynamic keys, such as `Filename[SampleRun]` and `Filename[BackgroundRun]`, and a push into one table accumulates only the keys that depend on it.
 
 **`PipelineBinding` accumulates with `StreamProcessor`.**
 A package describes its workflow once, and both esslivedata and this framework use that description:
@@ -110,6 +183,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - **The low-level accumulator as the unit** (the forms in the table above). The reduction splits into a per-run spec, a sum, and a finalizing spec. The partial sum is a value the framework sees and records. Two tables, shared and per-run values, and the finalizing step each need their own mechanism.
 - **Only list parameters, with the framework finding the new runs by comparing lists.** Comparing lists, and tracking which tuned parameters the per-run part read, was the complexity that ended this form on 09-28. An explicit push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record no longer means the sum of its runs, and a total that grows is copied at every step.
+- **Only specs whose binding keeps a held state can be accumulated.** The caller would then have to know which specs accumulate, and the same spec could be given rows over time or not depending on how its package implements it. Opening an accumulator would fail for the rest.
 - **Nested tables**, such as rows that hold a table of banks, or a table per level. The framework would need a push for each level, rules on the order of pushes, and rules on which work is repeated at which level. All of that is structure of the workflow, which the binding knows and the framework does not.
 - **Fan-out over nodes as part of the unit.** This needs merging two held states, which neither `StreamProcessor` nor this binding protocol offers. No requirement needs it now: runs arrive over hours, and a finished scan can be reduced again in one job.
 
@@ -117,6 +191,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 
 - A package offers one spec for a sum, such as I(Q) with lists of sample and can runs. The split into a per-run spec, a sum, and a finalizing spec is no longer needed for combining runs. A sum can be written in two ways: as a plain request over the tables, or as an accumulator over them.
 - A partial sum is never a record. A read binds to a state, and a record of a state is a request that copies it ([ADR 0003](0003-accumulators-add-in-place.md)).
+- An accumulator whose binding keeps no held state keeps the values of every pushed row, so a row that references a record output keeps that value alive while the accumulator lives. A driver that reads such an accumulator after every push repeats the per-run part of every row so far at each read. A held state is how a binding avoids that.
 - The binding protocol is `accumulator(fixed)`, with `push(rows)` and `outputs(names)`.
 - `StreamProcessor` needs `finalize(keys)`, which computes only some of its target keys and feeds only the accumulators they read. That is about ten lines in essreduce. What `on_finalize` means for an accumulator a partial finalize did not read is open.
 - The binding chooses where to accumulate, and the point must be linear in the runs. For esssans this is the numerator and denominator in Q, summed over wavelength bands. One step earlier, the numerator is event data that grows with each run.

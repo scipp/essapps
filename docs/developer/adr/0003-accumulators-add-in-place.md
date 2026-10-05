@@ -78,6 +78,7 @@ Accumulators meet in a request.
 **A record of a state** is a request of a spec that returns a copy of what it reads. There is no special call.
 
 **Binding protocol.** A binding that accumulates provides `accumulator(fixed)`, which returns a held state with `push(rows)` and `outputs(names)`.
+For a binding without it, the framework's held state keeps the pushed rows and computes the plain request over them when a state is read ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 `push` takes the rows of one push, one per table, so that a binding can add them at once.
 It may modify what it holds in place, but not the rows.
 `outputs(names)` computes the named outputs from what it holds; what it returns may be what it holds, not a copy.
