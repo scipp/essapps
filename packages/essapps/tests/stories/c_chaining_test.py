@@ -5,6 +5,7 @@
 # ruff: noqa: F821
 
 import pytest
+import scipp as sc
 
 from ess.apps import Client, Template, apply, dataset
 from ess.apps.testing import FakeDatasets
@@ -61,11 +62,34 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(13, [4.0, 2.0], angle=2.0),
         measure(14, [2.0, 0.5], angle=4.0),
     ]
-    stitched = client.submit(STITCH, {'runs': angles, 'reference': reference})
+    rows = [{'run': angle} for angle in angles]
+    stitched = client.submit(STITCH, {'runs': rows, 'reference': reference})
     exported = client.compute(EXPORT, {'data': stitched.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
     assert set(client.provenance(exported).datasets()) == {reference, *angles}
+
+
+def test_c4_angle_series_accumulated_reads_as_the_plain_request(
+    client: Client, measure: Measure
+) -> None:
+    reference = measure(10, [2.0, 2.0], role='reference')
+    rows = [
+        {'run': measure(n, counts)}
+        for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
+    ]
+    series = client.accumulator(
+        Template(STITCH, params={'reference': reference}, blanks=('runs',))
+    )
+    reads, plains = [], []
+    for n, row in enumerate(rows, start=1):
+        series.push({'runs': row})  # STITCH keeps the rows and stitches at each read
+        plain = client.compute(STITCH, {'runs': rows[:n], 'reference': reference})
+        reads.append(client.output(series, 'stitched'))
+        plains.append(client.output(plain, 'stitched'))
+
+    assert all(sc.identical(r, p) for r, p in zip(reads, plains, strict=True))
+    assert reads[-1].values.tolist() == [4.0, 2.0, 2.0, 1.0, 1.0, 0.5]
 
 
 def test_c5_vanadium_and_sample_tuned_together(

@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .bindings import AccumulatorBinding, Function, HeldState
+from .bindings import Function, HeldState, HeldStateBinding
 
 
 class _Fold:
@@ -55,7 +55,7 @@ class _Fold:
                     self.total[field] = self._operation(self.total[field], value)
 
     def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
-        return {name: self.total[name] for name in names}
+        return self.total
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,13 @@ class _Combine:
             fold.push({name: row})
         return fold.total
 
-    def accumulator(self, fixed: Mapping[str, Any]) -> HeldState:
+    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
         if fixed:
             raise TypeError(f'combine takes only a table, not also {sorted(fixed)}')
         return _Fold(self.operation)
 
 
-def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
+def combine(operation: Callable[[Any, Any], Any]) -> HeldStateBinding:
     """
     The binding of a spec whose only param is one table, and whose outputs
     are the row's fields: each field combined with ``operation``, as in
@@ -86,11 +86,13 @@ def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
 
     A plain request and an accumulator combine the rows in the same order, so
     they give the same value. ``operation(total, row)`` may modify ``total``
-    in place, and returns the combined value: with ``operator.iadd`` an
-    accumulator adds in place, and with ``operator.add`` each push makes a new
+    in place, and returns the combined value: with ``operator.iadd`` the
+    held state adds in place, and with ``operator.add`` each push makes a new
     value. It must not modify ``row``. ``total`` starts as a copy of the first
-    row, so neither way changes the output a row came from. Since the table is
-    the spec's only param, an accumulator that opens with other values is
-    refused, and so is a push into a second table.
+    row, so neither way changes the output a row came from. With no rows it
+    returns no outputs, so a read of a state with nothing pushed fails, as the
+    plain request over no rows does. Since the table is the spec's only param,
+    an accumulator that opens with other values is refused, and so is a push
+    into a second table.
     """
     return _Combine(operation)

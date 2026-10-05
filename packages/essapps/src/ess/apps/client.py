@@ -127,10 +127,12 @@ class Accumulator:
     """
     A template whose blanks, tables, are filled one push at a time.
 
-    The backend adds each row to what it holds and does not compute the
-    earlier rows again. Its outputs are those of the plain request over the
-    rows pushed so far, read as a record's are: with ``client.output``, or by
-    a request through :meth:`ref` and :meth:`refs`. ``template`` holds the
+    Its outputs are those of the plain request over the rows pushed so far,
+    read as a record's are: with ``client.output``, or by a request through
+    :meth:`ref` and :meth:`refs`. A binding with a held state of its own
+    adds each row to it, so earlier rows are not computed again; for any
+    other binding, the backend keeps the rows and computes the plain request
+    over all of them for each state read. ``template`` holds the
     other values as the backend accepted them, ``outputs`` the output names
     the spec declares, and ``id`` names the accumulator in the backend.
     """
@@ -165,7 +167,7 @@ class Accumulator:
         """
         A reference to an output of the accumulator.
 
-        A request that holds it is bound at submission to the rows pushed so
+        A request that holds it is pinned at submission to the rows pushed so
         far, and reads the output of that state.
         """
         if output not in self.outputs:
@@ -363,8 +365,9 @@ class Client:
 
         A released record's outputs are dropped once the pending requests that
         read them have run; the record stays. A released stage takes no more
-        calls. A released accumulator takes no more pushes or readers, and its
-        state is dropped once its readers are done. Releasing stops no work.
+        calls. A released accumulator takes no more pushes or readers, a push
+        that waits for its readers is refused, and its state is dropped once
+        its readers are done. Releasing stops no work.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -411,8 +414,7 @@ class Client:
         far, so its provenance is that of the record of this request.
         """
         if isinstance(what, Accumulator):
-            upto = self._backend.upto(what.id, self._id)
-            request = self._backend.accumulated(what.id, upto, self._id)
+            request = self._backend.accumulated(what.id, None, self._id)
         else:
             request = what.request
         upstream: dict[str, Record] = {}

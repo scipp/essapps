@@ -43,9 +43,9 @@ def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
     return value
 
 
-def output_refs(value: Any) -> list[OutputRef]:
-    """The references to outputs in ``value``."""
-    return [ref for _, ref in walk_refs(value) if isinstance(ref, OutputRef)]
+def as_refs(value: Any) -> Any:
+    """``value`` with references read as references, not dicts."""
+    return map_refs(value, lambda ref: ref)
 
 
 class SpecId(BaseModel, frozen=True):
@@ -81,7 +81,7 @@ class Request(BaseModel, frozen=True):
 
     def inputs(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
-        return output_refs(self.params)
+        return [ref for _, ref in walk_refs(self.params) if isinstance(ref, OutputRef)]
 
     def accumulators(self) -> list[AccumulatorRef]:
         """The states of accumulators this request reads."""
@@ -136,7 +136,7 @@ class Record(BaseModel, frozen=True):
     A request as the backend accepted it.
 
     ``request`` has every value filled in: dataset names resolved, defaults
-    filled, and references to accumulators bound to the state they read.
+    filled, and references to accumulators pinned to the state they read.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 

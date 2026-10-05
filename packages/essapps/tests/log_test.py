@@ -216,8 +216,8 @@ def test_an_accumulator_is_logged_as_its_template_and_a_reference_with_a_count(
             for load in loads
         ),
     ]
-    bound = AccumulatorRef(accumulator=total.id, output='value', upto=3)
-    assert read.request.params == {'values': [{'value': bound}]}
+    pinned = AccumulatorRef(accumulator=total.id, output='value', upto=3)
+    assert read.request.params == {'values': [{'value': pinned}]}
     assert client.output(read, 'value') == 6.0
 
 
@@ -349,9 +349,9 @@ def test_a_refused_call_writes_nothing_to_the_log(
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, {'values': [{'value': other}]})
-    with pytest.raises(SubmitError, match='nothing has been pushed'):
-        client.submit(TOTAL, _read(_total(client)))
-    written += 1  # the accumulator opened
+    earlier = AccumulatorRef(accumulator=total.id, output='value', upto=0)
+    with pytest.raises(SubmitError, match='only its state after 1 pushes'):
+        client.submit(TOTAL, {'values': [{'value': earlier}]})
     with pytest.raises(SubmitError, match='fields'):
         total.push({'values': {'other': load.ref('value')}})
 

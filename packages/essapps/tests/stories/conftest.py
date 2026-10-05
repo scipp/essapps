@@ -154,8 +154,8 @@ def normalize(runs: np.ndarray, scale: float) -> dict[str, sc.Variable]:
 
 
 class BackgroundParams(BaseModel):
-    sample_runs: list[NexusFile]
-    background_runs: list[NexusFile]
+    sample_runs: list[RunParams]
+    background_runs: list[RunParams]
 
 
 class BackgroundOutputs(BaseModel):
@@ -165,10 +165,10 @@ class BackgroundOutputs(BaseModel):
 BACKGROUND = _spec('background', BackgroundParams, BackgroundOutputs)
 
 
-def background(sample_runs: list[Any], background_runs: list[Any]) -> dict[str, Any]:
-    samples = sum(_counts(r) for r in sample_runs)
-    backgrounds = sum(_counts(r) for r in background_runs)
-    return {'subtracted': _array(samples - backgrounds)}
+def background(
+    sample_runs: np.ndarray, background_runs: np.ndarray
+) -> dict[str, sc.Variable]:
+    return {'subtracted': _array(sample_runs - background_runs)}
 
 
 class ContributeOutputs(BaseModel):
@@ -243,7 +243,7 @@ class Summing:
 
         return compute
 
-    def accumulator(self, fixed: Mapping[str, Any]) -> HeldState:
+    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
         return _Sums(self._finalize, self._tables, **fixed)
 
 
@@ -291,7 +291,7 @@ def cut(data: sc.Variable, index: int) -> dict[str, sc.Variable]:
 
 
 class StitchParams(BaseModel):
-    runs: list[NexusFile]
+    runs: list[RunParams]
     reference: NexusFile
 
 
@@ -302,8 +302,8 @@ class StitchOutputs(BaseModel):
 STITCH = _spec('stitch', StitchParams, StitchOutputs)
 
 
-def stitch(runs: list[Any], reference: Any) -> dict[str, sc.Variable]:
-    curves = [_counts(run) / _counts(reference) for run in runs]
+def stitch(runs: list[dict[str, Any]], reference: Any) -> dict[str, sc.Variable]:
+    curves = [_counts(row['run']) / _counts(reference) for row in runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
@@ -331,7 +331,7 @@ TOYS = {
     BEAM_CENTRE: beam_centre,
     VANADIUM: vanadium,
     NORMALIZE: Summing(normalize, 'runs'),
-    BACKGROUND: background,
+    BACKGROUND: Summing(background, 'sample_runs', 'background_runs'),
     CONTRIBUTE: contribute,
     ANGLE: angle,
     CUT: cut,

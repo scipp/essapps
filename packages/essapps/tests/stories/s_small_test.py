@@ -72,7 +72,8 @@ def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     total = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
-        BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds}
+        BACKGROUND,
+        {'sample_runs': rows, 'background_runs': [{'run': r} for r in backgrounds]},
     )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]

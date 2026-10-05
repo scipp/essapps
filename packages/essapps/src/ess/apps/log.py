@@ -26,11 +26,11 @@ from collections.abc import Iterator
 from datetime import datetime
 from io import FileIO
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from .records import Request, Row, Status, Template, map_refs
+from .records import Request, Row, Status, Template, as_refs
 
 
 class NewRecord(BaseModel, frozen=True):
@@ -83,28 +83,25 @@ Event = Annotated[Submitted | Finished | Opened | Pushed, Field(discriminator='k
 _event = TypeAdapter(Event)
 
 
-def _refs(value: Any) -> Any:
-    """``value`` with references read as references, not dicts."""
-    return map_refs(value, lambda ref: ref)
-
-
 def _with_refs(event: Event) -> Event:
     """The event with references in values read as references, not dicts."""
     match event:
         case Submitted():
             records = tuple(
                 r.model_copy(
-                    update={'request': Request(r.request.spec, _refs(r.request.params))}
+                    update={
+                        'request': Request(r.request.spec, as_refs(r.request.params))
+                    }
                 )
                 for r in event.records
             )
             return event.model_copy(update={'records': records})
         case Opened():
-            params = _refs(event.template.params)
+            params = as_refs(event.template.params)
             template = dataclasses.replace(event.template, params=params)
             return event.model_copy(update={'template': template})
         case Pushed():
-            return event.model_copy(update={'rows': _refs(event.rows)})
+            return event.model_copy(update={'rows': as_refs(event.rows)})
     return event
 
 
