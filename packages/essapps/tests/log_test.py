@@ -12,23 +12,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ess.reduce.spec import Array, NexusFile, OutputRef, WorkflowSpec
+from ess.reduce.spec import AccumulatorRef, Array, NexusFile, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.apps import (
+    Accumulator,
     Backend,
     Client,
     Record,
     Request,
-    SpecId,
     Status,
     SubmitError,
     Template,
     combine,
     dataset,
 )
-from ess.apps.log import Event, Finished, Log, NewRecord, Pushed, Submitted
-from ess.apps.records import Snapshot
+from ess.apps.log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
 from ess.apps.testing import FakeDatasets
 
 
@@ -130,17 +129,25 @@ def _write(path: Path, *events: Event) -> None:
             log.append(event)
 
 
-def _submitted(
-    record_id: str, submitted: Request | Snapshot, **fields: Any
-) -> Submitted:
+def _submitted(record_id: str, request: Request, **fields: Any) -> Submitted:
     return Submitted(
         time=datetime(2026, 9, 30, tzinfo=UTC),
         proposal='p1',
         submitter='anna',
         records=(
-            NewRecord(id=record_id, submitted=submitted, outputs=('value',), **fields),
+            NewRecord(id=record_id, request=request, outputs=('value',), **fields),
         ),
     )
+
+
+def _total(client: Client) -> Accumulator:
+    """An accumulator of TOTAL, the sum of a table of values."""
+    return client.accumulator(Template(TOTAL, blanks=('values',)))
+
+
+def _read(total: Accumulator) -> dict[str, Any]:
+    """The params of a request of TOTAL that reads the value of ``total``."""
+    return {'values': [{'value': total.ref('value')}]}
 
 
 def _record(client: Client, record_id: str) -> Record:
@@ -160,17 +167,17 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
         )
         for n in (1, 2, 3)
     }
-    total = first.accumulator(TOTAL)
+    total = _total(first)
     for load in loads.values():
         total.push(load.refs('value'))
-    snapshot = first.compute(total)
+    read = first.compute(TOTAL, _read(total))
 
     again = restart(tmp_path / 'log')
 
     assert again.records() == first.records()
     assert again.records(label='loads') == list(loads.values())
-    assert again.provenance(snapshot) == first.provenance(snapshot)
-    assert again.provenance(snapshot).records() == list(loads.values())
+    assert again.provenance(read) == first.provenance(read)
+    assert again.provenance(read).records() == list(loads.values())
 
 
 def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
@@ -191,22 +198,24 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.output(rerun, 'value') == 3.0
 
 
-def test_a_snapshot_is_logged_as_its_accumulator_and_a_count_then_finished(
+def test_an_accumulator_is_logged_as_its_template_and_a_reference_with_a_count(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    total = client.accumulator(TOTAL)
-    for n in (1, 2, 3):
-        total.push(client.compute(LOAD, {'run': dataset(run=n)}).refs('value'))
-    snapshot = client.submit(total)
+    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 3)]
+    total = _total(client)
+    for load in loads:
+        total.push(load.refs('value'))
+    read = client.compute(TOTAL, _read(total))
 
-    *_, logged, finished = Log.read(tmp_path / 'log')
-    assert isinstance(logged, Submitted)
-    assert logged.records[0].submitted == Snapshot(
-        spec=snapshot.spec, accumulator=total.id, upto=3
-    )
-    assert finished == Finished(record=snapshot.id, status=Status.COMPLETED)
-    assert client.output(snapshot, 'value') == 6.0
+    template = Template(TOTAL, blanks=('values',))
+    assert Log.read(tmp_path / 'log')[6:10] == [
+        Opened(accumulator=total.id, proposal='p1', template=template),
+        *(Pushed(accumulator=total.id, row=load.refs('value')) for load in loads),
+    ]
+    bound = AccumulatorRef(accumulator=total.id, output='value', upto=3)
+    assert read.request.params == {'values': [{'value': bound}]}
+    assert client.output(read, 'value') == 6.0
 
 
 def test_a_record_pending_in_the_log_runs_after_a_restart(
@@ -232,16 +241,24 @@ def test_accumulators_do_not_survive_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
+    loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=1)})
-    total = first.accumulator(TOTAL)
-    total.push(load.refs('value'))
+    total = _total(first)
+    total.push(first.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
+    loading.clear()
+    pending = first.submit(LOAD, {'run': dataset(run=2)})
+    params = {'values': [{'value': total.ref('value')}, pending.refs('value')]}
+    holding = first.submit(TOTAL, params)  # holds the state until ``pending`` is done
 
     again = restart(tmp_path / 'log')
+    loading.set()
 
+    assert again.wait(holding) == Status.FAILED
+    assert again.failure(holding) == 'the accumulator ended at a restart'
     with pytest.raises(SubmitError, match='released or is unknown'):
-        again.submit(total)
+        again.submit(TOTAL, _read(total))
+    assert again.wait(pending) == Status.COMPLETED
 
 
 def test_outputs_are_not_in_the_log(
@@ -267,66 +284,45 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
 
     again = restart(tmp_path / 'log')
 
-    total = again.accumulator(TOTAL)
+    total = _total(again)
     with pytest.raises(SubmitError, match='the value is not kept'):
         total.push(load.refs('value'))
 
 
-def test_a_snapshot_left_pending_by_a_crash_fails_after_a_restart(
+def test_provenance_refuses_a_state_whose_rows_the_log_lacks(
     tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
 ) -> None:
     run = datasets.resolve(dataset(run=1))
+    load = OutputRef(record='load', output='value')
+    state = AccumulatorRef(accumulator='a', output='value', upto=2)
     _write(
         tmp_path / 'log',
         _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
         Finished(record='load', status=Status.COMPLETED),
-        Pushed(
-            accumulator='a', element={'value': OutputRef(record='load', output='value')}
+        Opened(
+            accumulator='a', proposal='p1', template=Template(TOTAL, blanks=('values',))
         ),
-        _submitted(
-            'snapshot', Snapshot(spec=SpecId.of(TOTAL), accumulator='a', upto=1)
-        ),
-    )
-
-    client = start(tmp_path / 'log')
-    snapshot = _record(client, 'snapshot')
-
-    assert client.wait(snapshot) == Status.FAILED
-    assert 'accumulator ended' in client.failure(snapshot)
-
-
-def test_provenance_refuses_a_snapshot_whose_elements_the_log_lacks(
-    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
-) -> None:
-    run = datasets.resolve(dataset(run=1))
-    _write(
-        tmp_path / 'log',
-        _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
-        Finished(record='load', status=Status.COMPLETED),
-        Pushed(
-            accumulator='a', element={'value': OutputRef(record='load', output='value')}
-        ),
-        _submitted(
-            'snapshot', Snapshot(spec=SpecId.of(TOTAL), accumulator='a', upto=2)
-        ),
-        Finished(record='snapshot', status=Status.COMPLETED),
+        Pushed(accumulator='a', row={'value': load}),
+        _submitted('read', Request(TOTAL, {'values': [{'value': state}]})),
+        Finished(record='read', status=Status.COMPLETED),
     )
 
     client = start(tmp_path / 'log')
 
-    with pytest.raises(LookupError, match='lacks elements'):
-        client.provenance(_record(client, 'snapshot'))
+    with pytest.raises(LookupError, match=r'the log lacks rows that a\[:2\]\.value'):
+        client.provenance(_record(client, 'read'))
 
 
-def test_the_log_holds_submissions_finished_records_and_pushes_only(
+def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
     client.stage(Template(LOAD, params={'run': dataset(run=1)}, blanks=('window',)))
-    total = client.accumulator(TOTAL)
+    total = _total(client)
     total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
+        Opened,
         Submitted,
         Finished,
         Pushed,
@@ -342,9 +338,12 @@ def test_a_refused_call_writes_nothing_to_the_log(
 
     with pytest.raises(SubmitError, match='not parameters'):
         client.submit(LOAD, {'run': dataset(run=1), 'bins': 2})
-    total = client.accumulator(TOTAL)
-    with pytest.raises(SubmitError, match='nothing has been pushed'):
-        client.submit(total)
+    with pytest.raises(SubmitError, match='one blank'):
+        client.accumulator(Template(TOTAL))
+    total = _total(client)
+    written += 1  # the accumulator opened
+    with pytest.raises(SubmitError, match='has no output'):
+        client.submit(TOTAL, {'values': [{'value': total.ref('other')}]})
     with pytest.raises(SubmitError, match='fields'):
         total.push({'other': load.ref('value')})
 

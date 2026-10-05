@@ -10,8 +10,9 @@ hand.
 
 from __future__ import annotations
 
+import functools
 import operator
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -21,6 +22,7 @@ from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSp
 from pydantic import BaseModel
 
 from ess.apps import Backend, Client, combine
+from ess.apps.bindings import ElementAccumulator, Function
 from ess.apps.testing import FakeDatasets
 
 
@@ -176,13 +178,15 @@ class ContributeOutputs(BaseModel):
 CONTRIBUTE = _spec('sans-contribute', RunParams, ContributeOutputs)
 
 
+def normalization_parts(run: Any) -> dict[str, sc.Variable]:
+    counts = _counts(run)
+    return {'numerator': _array(counts), 'denominator': sc.scalar(float(counts.sum()))}
+
+
 def contribute(run: Any) -> dict[str, sc.Variable]:
     counts = _counts(run)
-    return {
-        'numerator': _array(counts),
-        'denominator': sc.scalar(float(counts.sum())),
-        'transmission': sc.scalar(float(counts[0] / counts.sum())),
-    }
+    transmission = sc.scalar(float(counts[0] / counts.sum()))
+    return {**normalization_parts(run), 'transmission': transmission}
 
 
 class FinalizeParams(BaseModel):
@@ -212,22 +216,69 @@ class PartsSumParams(BaseModel):
 PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
 
 
+class RunsParams(BaseModel):
+    runs: list[RunParams]
+
+
+class _RunTotal:
+    def __init__(self, reduce: Callable[[Any], dict[str, sc.Variable]]) -> None:
+        self._reduce = reduce
+        self._sum = combine(operator.iadd).accumulator({})
+
+    def push(self, row: Mapping[str, Any]) -> None:
+        self._sum.push(self._reduce(row['run']))
+
+    @property
+    def value(self) -> Mapping[str, Any]:
+        return self._sum.value
+
+
+class RunSum:
+    """
+    The binding of a spec over a table of runs: ``reduce`` reduces each run,
+    and the results are added in place.
+    """
+
+    def __init__(self, reduce: Callable[[Any], dict[str, sc.Variable]]) -> None:
+        self._reduce = reduce
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        def total(runs: list[Mapping[str, Any]]) -> Mapping[str, Any]:
+            held = self.accumulator({})
+            for row in runs:
+                held.push(row)
+            return held.value
+
+        return functools.partial(total, **fixed)
+
+    def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
+        return _RunTotal(self._reduce)
+
+
+SANS_SUM = _spec('sans-sum', RunsParams, NormalizationParts)
+
+
 class Counts(BaseModel):
     counts: Array()  # type: ignore[valid-type]
 
 
 ANGLE = _spec('angle', RunParams, Counts)
-
-
-class VolumeParams(BaseModel):
-    angles: list[Counts]
-
-
-VOLUME = _spec('volume', VolumeParams, Counts)
+VOLUME = _spec('volume', RunsParams, Counts)
 
 
 def angle(run: Any) -> dict[str, sc.Variable]:
     return {'counts': _array(run)}
+
+
+class Data(BaseModel):
+    data: Array()  # type: ignore[valid-type]
+
+
+COPY = _spec('copy', Data, Data)
+
+
+def copy(data: sc.Variable) -> dict[str, sc.Variable]:
+    return {'data': data.copy()}
 
 
 class CutParams(BaseModel):
@@ -295,7 +346,9 @@ TOYS = {
     STITCH: stitch,
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
-    VOLUME: combine(operator.iadd),
+    SANS_SUM: RunSum(normalization_parts),
+    VOLUME: RunSum(angle),
+    COPY: copy,
 }
 
 

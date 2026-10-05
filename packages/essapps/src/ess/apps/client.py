@@ -11,9 +11,8 @@ and is asked with :meth:`Client.status` or :meth:`Client.wait`.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
-ends, but a snapshot's value only until the next push into its accumulator.
-Releasing and ending stop no work: a pending request still runs, and keeps the
-values it reads until it has run.
+ends. Releasing and ending stop no work: a pending request still runs, and
+keeps the values it reads until it has run.
 """
 
 from __future__ import annotations
@@ -26,22 +25,13 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Self
 
-from ess.reduce.spec import DatasetRef, WorkflowSpec
+from ess.reduce.spec import AccumulatorRef, DatasetRef, WorkflowSpec
 from pydantic import BaseModel
 
-from .accumulators import element_table
 from .backend import Backend, Entry
 from .bindings import Binding, Function
 from .datasets import DatasetSource, Selector
-from .records import (
-    Element,
-    Record,
-    Request,
-    SpecId,
-    Status,
-    Submission,
-    Template,
-)
+from .records import Record, Request, Row, SpecId, Status, Template
 
 
 def _items(what: Any) -> list[Any]:
@@ -73,22 +63,25 @@ def _names(what: Any) -> list[str | None]:
 
 class Provenance(BaseModel, frozen=True):
     """
-    Where a record came from: what it ran, the records it read, and their datasets.
+    Where a record came from: what it ran, what it read, and their datasets.
 
-    ``submitted`` is the record's request or snapshot. ``records`` lists every
-    record read through all inputs, nearest first; it stops at datasets.
+    ``request`` is the record's request. ``records`` lists every record read
+    through all inputs, nearest first; it stops at datasets. ``accumulated``
+    lists every state of an accumulator read on the way as the plain request
+    whose outputs it is: the accumulator's template with its table filled by
+    the rows pushed before the state was read.
     """
 
-    submitted: Submission
+    request: Request
     upstream: tuple[Record, ...]
+    accumulated: tuple[Request, ...]
 
     def records(self) -> list[Record]:
         return list(self.upstream)
 
     def datasets(self) -> list[DatasetRef]:
-        ran = (self.submitted, *(r.submitted for r in self.upstream))
-        requests = [r for r in ran if isinstance(r, Request)]
-        return list(dict.fromkeys(d for r in requests for d in r.datasets()))
+        ran = (self.request, *(r.request for r in self.upstream), *self.accumulated)
+        return list(dict.fromkeys(d for r in ran for d in r.datasets()))
 
 
 class Datasets:
@@ -131,36 +124,40 @@ class Stage:
 
 class Accumulator:
     """
-    The output of its spec over the elements pushed into it so far.
+    A template whose one blank, a table, is filled one row at a time.
 
-    ``id`` names the accumulator in the backend; submitting it makes a
-    snapshot, a record of the combined value of the elements pushed so far.
-    A snapshot's value is kept until the next push or the accumulator's
-    release. To keep an earlier state, submit a request that reduces or
-    copies the snapshot; the next push waits until it has run.
+    The backend adds each row to the value it holds and does not compute the
+    earlier rows again. ``template`` holds the other values as the backend
+    accepted them, and ``id`` names the accumulator in the backend. A request
+    reads its value through ``ref``.
     """
 
     def __init__(
-        self, spec: WorkflowSpec, accumulator_id: str, push: Callable[[Element], None]
+        self, template: Template, accumulator_id: str, push: Callable[[Row], None]
     ) -> None:
-        self.spec = spec
+        self.template = template
         self.id = accumulator_id
         self._push = push
 
-    def push(self, element: Element) -> None:
+    def push(self, row: Row) -> None:
         """
-        Push a row of the spec's table, as a request over the table takes it.
+        Add a row of the template's table, as a request over the table takes it.
 
-        Select a record's outputs with ``record.refs('numerator', ...)``.
-        The push waits for the records to finish, and refuses them unless they
-        have completed. A driver that pushes records as they finish, as
-        ``client.as_completed`` yields them, never waits for them here.
-
-        The push ends the values of the snapshots taken since the last push:
-        it refuses new requests that reference them and waits until the
-        requests that read them have run.
+        A row names datasets or references outputs of records, never an
+        accumulator. The push waits for the records to finish, and refuses
+        them unless they have completed. It then waits until the requests
+        that read the accumulator's value, submitted before it, have run.
         """
-        self._push(element)
+        self._push(row)
+
+    def ref(self, output: str) -> AccumulatorRef:
+        """
+        A reference to an output of the accumulator.
+
+        A request that holds it is bound at submission to the rows pushed so
+        far, and reads the value as it is then.
+        """
+        return AccumulatorRef(accumulator=self.id, output=output)
 
 
 class Client:
@@ -215,12 +212,11 @@ class Client:
         member: str | None = None,
     ) -> Any:
         """
-        Submit a spec or a stage with values, an accumulator, or requests.
+        Submit a spec or a stage with values, or requests.
 
         Requests may be one, a list, or a dict. The records come back pending,
         in the shape given. Under a label, the keys of a dict become the
-        members of their records. An accumulator makes a snapshot, which is
-        completed at once and takes no label or member.
+        members of their records.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -229,10 +225,6 @@ class Client:
             stage, what = what.id, what.template.fill(params or {})
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
-        elif isinstance(what, Accumulator):
-            if label is not None or member is not None:
-                raise TypeError('a snapshot takes no label or member')
-            return self._backend.snapshot(what.id, client=self._id)
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -327,19 +319,20 @@ class Client:
         stage_id, resolved = self._backend.open_stage(template, client=self._id)
         return Stage(resolved, stage_id)
 
-    def accumulator(self, spec: WorkflowSpec) -> Accumulator:
+    def accumulator(self, template: Template) -> Accumulator:
         """
-        An accumulator of ``spec``, whose only param must be a table.
+        An accumulator of the template; the client keeps it until it releases it.
 
-        The client keeps it until it releases it.
+        The template's one blank is a table field. Its other values are
+        checked as a request's, and held as the backend resolved them, with
+        defaults filled in. Opening waits for the records they reference to
+        finish, and reads them once.
         """
-        if element_table(spec) is None:
-            raise TypeError(f'{spec.name} does not take one table')
-        accumulator_id = self._backend.open_accumulator(
-            SpecId.of(spec), client=self._id
+        accumulator_id, resolved = self._backend.open_accumulator(
+            template, client=self._id
         )
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
-        return Accumulator(spec, accumulator_id, push)
+        return Accumulator(resolved, accumulator_id, push)
 
     def release(self, what: Any) -> None:
         """
@@ -347,19 +340,16 @@ class Client:
 
         A released record's outputs are dropped once the pending requests that
         read them have run; the record stays. A released stage takes no more
-        calls. A released accumulator takes no more pushes or snapshots, and its
-        snapshots' values end as at a push. Releasing stops no work.
+        calls. A released accumulator takes no more pushes or references, and
+        its value is dropped once the requests that read it have run.
+        Releasing stops no work.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
     # Reading
 
     def output(self, record: Record, name: str) -> Any:
-        """
-        The value of an output, once the record has completed.
-
-        A snapshot's value is a copy, so a later push does not change it.
-        """
+        """The value of an output, once the record has completed."""
         (status,) = self._backend.wait([record.id], self._id)
         if status is not Status.COMPLETED:
             failure = self._backend.failure(record.id, self._id)
@@ -381,17 +371,24 @@ class Client:
 
     def provenance(self, record: Record) -> Provenance:
         upstream: dict[str, Record] = {}
-        todo = deque(self._inputs(record.id))
+        accumulated: dict[tuple[str, int | None], Request] = {}
+        todo = deque([record.request])
         while todo:
-            record_id = todo.popleft()
-            if record_id not in upstream:
-                upstream[record_id] = self._backend.record(record_id, self._id)
-                todo.extend(self._inputs(record_id))
-        return Provenance(submitted=record.submitted, upstream=tuple(upstream.values()))
-
-    def _inputs(self, record_id: str) -> list[str]:
-        """The IDs of the records a record read."""
-        return [ref.record for ref in self._backend.inputs(record_id, self._id)]
+            request = todo.popleft()
+            for ref in request.inputs():
+                if ref.record not in upstream:
+                    upstream[ref.record] = self._backend.record(ref.record, self._id)
+                    todo.append(upstream[ref.record].request)
+            for state in request.accumulators():
+                key = (state.accumulator, state.upto)
+                if key not in accumulated:
+                    accumulated[key] = self._backend.accumulated(state, self._id)
+                    todo.append(accumulated[key])
+        return Provenance(
+            request=record.request,
+            upstream=tuple(upstream.values()),
+            accumulated=tuple(accumulated.values()),
+        )
 
 
 def local(

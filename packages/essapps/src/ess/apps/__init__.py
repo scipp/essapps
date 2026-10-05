@@ -11,7 +11,6 @@ from .datasets import DatasetSource, Selector, dataset
 from .records import (
     Record,
     Request,
-    Snapshot,
     SpecId,
     Status,
     SubmitError,
@@ -35,7 +34,6 @@ __all__ = [
     'Rule',
     'RuleStatus',
     'Selector',
-    'Snapshot',
     'SpecId',
     'Stage',
     'Status',

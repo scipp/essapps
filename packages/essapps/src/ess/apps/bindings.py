@@ -16,18 +16,18 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of a spec over a table may also make element accumulators, like
-``sciline.Accumulator`` for a whole element. An accumulator holds one, so it
-needs such a binding::
+A binding of a spec with a table field may also make element accumulators,
+like ``sciline.Accumulator`` for a whole row. An accumulator holds one, made
+for the values of every other field, so it needs such a binding::
 
-    held = binding.accumulator()
-    held.push({'numerator': n1, 'denominator': d1})
-    held.value                       # {'numerator': ..., 'denominator': ...}
+    held = binding.accumulator({'scale': 2.0})   # what depends on them, once
+    held.push({'run': run_611})                  # one row, with data read
+    held.value                                   # {'numerator': ..., ...}
 
-Its value after the elements are pushed in order is the output of the plain
-request over them. It may add each element in place, and its value may be
-what it holds, not a copy: the backend reads the value only between pushes,
-and lets go of it before the next push.
+Its value after the rows are pushed in order is the output of the plain
+request over them with the same other values. It may add each row in place,
+and its value may be what it holds, not a copy: requests read the value
+itself, and the backend pushes the next row only once they have run.
 """
 
 from __future__ import annotations
@@ -61,21 +61,21 @@ class Binding(Protocol):
 
 
 class ElementAccumulator(Protocol):
-    def push(self, element: Mapping[str, Any]) -> None:
+    def push(self, row: Mapping[str, Any]) -> None:
         """
-        Add an element: a row of the spec's table, with data read.
+        Add a row of the spec's table, with data read.
 
         It may modify what the accumulator holds in place, and so change a
-        value read before it, but not the element. An accumulator that starts
-        from the first element copies it, so that adding in place never
-        changes the output the element came from.
+        value read before it, but not the row. An accumulator that starts from
+        the first row's values copies them, so that adding in place never
+        changes the output they came from.
         """
         ...
 
     @property
     def value(self) -> Mapping[str, Any]:
         """
-        The outputs of the spec over the elements pushed so far.
+        The outputs of the spec over the rows pushed so far.
 
         They may be what the accumulator holds, not a copy.
         """
@@ -84,11 +84,13 @@ class ElementAccumulator(Protocol):
 
 @runtime_checkable
 class AccumulatorBinding(Binding, Protocol):
-    def accumulator(self) -> ElementAccumulator:
+    def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
         """
         A new element accumulator with nothing pushed.
 
-        Its ``push`` and ``value`` are called from one thread at a time.
+        ``fixed`` holds every parameter but the table, with data read, as a
+        call gets them. Its ``push`` and ``value`` are called from one thread
+        at a time.
         """
         ...
 

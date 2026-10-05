@@ -8,9 +8,9 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Client, Selector, SubmitError, Template, apply
+from ess.apps import Client, Request, Selector, SubmitError, Template, apply
 
-from .conftest import ANGLE, CUT, IOFQ, IOFQ_V2, VOLUME, Measure
+from .conftest import COPY, CUT, IOFQ, IOFQ_V2, VOLUME, Measure
 
 
 def test_d1_temperature_scan(
@@ -141,29 +141,26 @@ def test_d7_rotation_scan_over_a_thousand_angles(
             measure(5, [1.0, 5.0], scan='17')
 
     cuts, pushed = [], []
-    volume = client.accumulator(VOLUME)
-    angles = (
-        client.submit(ANGLE, {'run': run})
-        for run in islice(client.datasets.watch(Selector(scan='17')), 1000)
-    )
-    for angle in client.as_completed(angles):
-        volume.push(angle.refs())  # waits until the previous cut has run
-        client.release(angle)  # the volume holds what it needs of it
-        pushed.append(angle)
-        snapshot = client.submit(volume)
+    volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+    for run in islice(client.datasets.watch(Selector(scan='17')), 1000):
+        volume.push({'run': run})  # waits until the previous cut has run
+        pushed.append(run)
         cuts.append(
             client.submit(
                 CUT,
-                {'data': snapshot.ref('counts'), 'index': 0},
+                {'data': volume.ref('counts'), 'index': 0},
                 label='cut',
                 member='17',
             )
         )
-    total = client.compute(volume)
+    total = client.compute(COPY, {'data': volume.ref('counts')})
 
     assert [client.output(c, 'cut').value for c in cuts] == [
         float(k) for k in range(1, 1001)
     ]
-    assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-    assert client.provenance(total).records() == pushed  # the angles, in push order
-    assert len(client.provenance(total).datasets()) == 1000
+    assert client.output(total, 'data').values.tolist() == [1000.0, 500500.0]
+    provenance = client.provenance(total)
+    assert provenance.accumulated == (  # the runs, in push order
+        Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),
+    )
+    assert len(provenance.datasets()) == 1000  # run 5, measured again, once
