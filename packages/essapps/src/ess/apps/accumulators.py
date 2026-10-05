@@ -12,7 +12,7 @@ both combine the rows in the same order::
     rows = [c.refs('numerator', 'denominator') for c in contributions]
     client.submit(PARTS_SUM, {'parts': rows})
     total = client.accumulator(Template(PARTS_SUM, blanks=('parts',)))
-    total.push(rows[0])                              # one row, the same shape
+    total.push('parts', rows[0])                     # one row, the same shape
 
 ``combine`` belongs in ess.reduce next to ``PipelineBinding``; it lives here
 until that is proposed there.
@@ -31,7 +31,7 @@ from .bindings import AccumulatorBinding, ElementAccumulator, Function
 
 class _Fold:
     """
-    Each field combined with ``operation``, in push order.
+    Each field of one table's rows combined with ``operation``, in push order.
 
     The first row is copied, so that combining in place never changes the
     output it came from.
@@ -39,20 +39,20 @@ class _Fold:
 
     def __init__(self, operation: Callable[[Any, Any], Any]) -> None:
         self._operation = operation
-        self._value: dict[str, Any] | None = None
+        self._table: str | None = None
+        self.total: dict[str, Any] = {}
 
-    def push(self, row: Mapping[str, Any]) -> None:
-        if self._value is None:
-            self._value = copy.deepcopy(dict(row))
+    def push(self, table: str, row: Mapping[str, Any]) -> None:
+        if self._table is None:
+            self._table, self.total = table, copy.deepcopy(dict(row))
+        elif table != self._table:
+            raise ValueError(f'combine takes one table, not {self._table} and {table}')
         else:
             for field, value in row.items():
-                self._value[field] = self._operation(self._value[field], value)
+                self.total[field] = self._operation(self.total[field], value)
 
-    @property
-    def value(self) -> Mapping[str, Any]:
-        if self._value is None:
-            raise ValueError('nothing has been pushed')
-        return self._value
+    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+        return {name: self.total[name] for name in names}
 
 
 @dataclass(frozen=True)
@@ -63,11 +63,11 @@ class _Combine:
         return functools.partial(self._compute, **fixed)
 
     def _compute(self, **table: list[Mapping[str, Any]]) -> Mapping[str, Any]:
-        (rows,) = table.values()
+        ((name, rows),) = table.items()
         fold = _Fold(self.operation)
         for row in rows:
-            fold.push(row)
-        return fold.value
+            fold.push(name, row)
+        return fold.total
 
     def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
         if fixed:
@@ -77,8 +77,8 @@ class _Combine:
 
 def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     """
-    The binding of a spec whose only param is a table, and that outputs the
-    row's fields: each field combined with ``operation``, as in
+    The binding of a spec whose only param is one table, and whose outputs
+    are the row's fields: each field combined with ``operation``, as in
     ``operation(operation(a, b), c)``.
 
     A plain request and an accumulator combine the rows in the same order, so
@@ -88,6 +88,6 @@ def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
     value. It must not modify ``row``. ``total`` starts as a copy of the first
     row, so neither way changes the output a row came from. Since the table is
     the spec's only param, an accumulator that opens with other values is
-    refused.
+    refused, and so is a push into a second table.
     """
     return _Combine(operation)

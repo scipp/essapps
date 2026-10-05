@@ -65,11 +65,12 @@ class Provenance(BaseModel, frozen=True):
     """
     Where a record came from: what it ran, what it read, and their datasets.
 
-    ``request`` is the record's request. ``records`` lists every record read
-    through all inputs, nearest first; it stops at datasets. ``accumulated``
-    lists every state of an accumulator read on the way as the plain request
-    whose outputs it is: the accumulator's template with its table filled by
-    the rows pushed before the state was read.
+    ``request`` is the record's request, or for the state of an accumulator,
+    the plain request over the rows pushed so far. ``records`` lists every
+    record read through all inputs, nearest first; it stops at datasets.
+    ``accumulated`` lists every state of an accumulator read on the way as the
+    plain request whose outputs it is: the accumulator's template with its
+    tables filled by the rows pushed before the state was read.
     """
 
     request: Request
@@ -124,40 +125,53 @@ class Stage:
 
 class Accumulator:
     """
-    A template whose one blank, a table, is filled one row at a time.
+    A template whose blanks, tables, are filled one row at a time.
 
-    The backend adds each row to the value it holds and does not compute the
-    earlier rows again. ``template`` holds the other values as the backend
-    accepted them, and ``id`` names the accumulator in the backend. A request
-    reads its value through ``ref``.
+    The backend adds each row to what it holds and does not compute the
+    earlier rows again. Its outputs are those of the plain request over the
+    rows pushed so far, read as a record's are: with ``client.output``, or by
+    a request through :meth:`ref` and :meth:`refs`. ``template`` holds the
+    other values as the backend accepted them, ``outputs`` the output names
+    the spec declares, and ``id`` names the accumulator in the backend.
     """
 
     def __init__(
-        self, template: Template, accumulator_id: str, push: Callable[[Row], None]
+        self,
+        template: Template,
+        accumulator_id: str,
+        outputs: tuple[str, ...],
+        push: Callable[[str, Row], None],
     ) -> None:
         self.template = template
         self.id = accumulator_id
+        self.outputs = outputs
         self._push = push
 
-    def push(self, row: Row) -> None:
+    def push(self, table: str, row: Row) -> None:
         """
-        Add a row of the template's table, as a request over the table takes it.
+        Add a row to one of the template's tables, as a request over it takes it.
 
         A row names datasets or references outputs of records, never an
         accumulator. The push waits for the records to finish, and refuses
-        them unless they have completed. It then waits for the requests that
-        read the accumulator; see :mod:`ess.apps.backend`.
+        them unless they have completed. It then waits for the readers of the
+        accumulator; see :mod:`ess.apps.backend`.
         """
-        self._push(row)
+        self._push(table, row)
 
     def ref(self, output: str) -> AccumulatorRef:
         """
         A reference to an output of the accumulator.
 
         A request that holds it is bound at submission to the rows pushed so
-        far, and reads the value as it is then.
+        far, and reads the output of that state.
         """
+        if output not in self.outputs:
+            raise KeyError(f'{self.template.spec} has no output {output!r}')
         return AccumulatorRef(accumulator=self.id, output=output)
+
+    def refs(self, *outputs: str) -> dict[str, AccumulatorRef]:
+        """A reference to each of ``outputs`` by name; to every output if none."""
+        return {name: self.ref(name) for name in outputs or self.outputs}
 
 
 class Client:
@@ -328,16 +342,17 @@ class Client:
         """
         An accumulator of the template; the client keeps it until it releases it.
 
-        The template's one blank is a table field. Its other values are
-        checked as a request's, and held as the backend resolved them, with
-        defaults filled in. Opening waits for the records they reference to
-        finish, and reads them once.
+        The template's blanks are table fields. A template a request would
+        refuse is refused here, with the blanks left out, and its values are
+        held as the backend resolved them. Opening waits for the records they
+        reference to finish, and reads them once.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
         )
+        outputs = tuple(self._backend.spec(resolved.spec).outputs.model_fields)
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
-        return Accumulator(resolved, accumulator_id, push)
+        return Accumulator(resolved, accumulator_id, outputs, push)
 
     def release(self, what: Any) -> None:
         """
@@ -345,21 +360,31 @@ class Client:
 
         A released record's outputs are dropped once the pending requests that
         read them have run; the record stays. A released stage takes no more
-        calls. A released accumulator takes no more pushes or references, and
-        its value is dropped once the requests that read it have run.
-        Releasing stops no work.
+        calls. A released accumulator takes no more pushes or readers, and its
+        state is dropped once its readers are done. Releasing stops no work.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
     # Reading
 
-    def output(self, record: Record, name: str) -> Any:
-        """The value of an output, once the record has completed."""
-        (status,) = self._backend.wait([record.id], self._id)
-        if status is not Status.COMPLETED:
-            failure = self._backend.failure(record.id, self._id)
-            raise RuntimeError(f'record {record.id} {status}: {failure}')
-        return self._backend.output(record.id, name, self._id)
+    def output(self, what: Record | Accumulator, name: str | None = None) -> Any:
+        """
+        The value of an output, or every output by name if ``name`` is None.
+
+        A record's, once it has completed. An accumulator's are those of its
+        state after the pushes so far, copied, so that like a record's they do
+        not change; a read waits while a push waits or adds.
+        """
+        names = list(what.outputs) if name is None else [name]
+        if isinstance(what, Accumulator):
+            values = self._backend.accumulator_outputs(what.id, names, self._id)
+        else:
+            (status,) = self._backend.wait([what.id], self._id)
+            if status is not Status.COMPLETED:
+                failure = self._backend.failure(what.id, self._id)
+                raise RuntimeError(f'record {what.id} {status}: {failure}')
+            values = {n: self._backend.output(what.id, n, self._id) for n in names}
+        return values if name is None else values[name]
 
     def records(self, *, label: str | None = None) -> list[Record]:
         """The proposal's records, oldest first, under ``label`` if given."""
@@ -374,23 +399,33 @@ class Client:
             raise KeyError(f'no record under {label!r}, member {member!r}')
         return matching[-1]
 
-    def provenance(self, record: Record) -> Provenance:
+    def provenance(self, what: Record | Accumulator) -> Provenance:
+        """
+        Where a record, or the current state of an accumulator, came from.
+
+        An accumulator's state is the plain request over the rows pushed so
+        far, so its provenance is that of the record of this request.
+        """
+        if isinstance(what, Accumulator):
+            request = self._backend.accumulated(what.id, None, self._id)
+        else:
+            request = what.request
         upstream: dict[str, Record] = {}
         accumulated: dict[tuple[str, int | None], Request] = {}
-        todo = deque([record.request])
+        todo = deque([request])
         while todo:
-            request = todo.popleft()
-            for ref in request.inputs():
+            ran = todo.popleft()
+            for ref in ran.inputs():
                 if ref.record not in upstream:
                     upstream[ref.record] = self._backend.record(ref.record, self._id)
                     todo.append(upstream[ref.record].request)
-            for state in request.accumulators():
+            for state in ran.accumulators():
                 key = (state.accumulator, state.upto)
                 if key not in accumulated:
-                    accumulated[key] = self._backend.accumulated(state, self._id)
+                    accumulated[key] = self._backend.accumulated(*key, self._id)
                     todo.append(accumulated[key])
         return Provenance(
-            request=record.request,
+            request=request,
             upstream=tuple(upstream.values()),
             accumulated=tuple(accumulated.values()),
         )

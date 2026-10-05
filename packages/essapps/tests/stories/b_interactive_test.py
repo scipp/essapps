@@ -6,15 +6,7 @@ import pytest
 
 from ess.apps import Client, Template, apply
 
-from .conftest import (
-    ANGLE,
-    CUT,
-    FINALIZE,
-    IOFQ,
-    NORMALIZE,
-    SANS_SUM,
-    Measure,
-)
+from .conftest import ANGLE, CUT, IOFQ, NORMALIZE, Measure
 
 
 def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
@@ -48,30 +40,26 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         measure(612, [2.0, 6.0]),
         measure(613, [3.0, 1.0]),
     )
-    total = client.accumulator(Template(SANS_SUM, blanks=('runs',)))
+    total = client.accumulator(
+        Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',))
+    )
     for run in (r611, r612):
-        total.push({'run': run})
-    parts = {
-        'numerator': total.ref('numerator'),
-        'denominator': total.ref('denominator'),
-    }
-    first = client.compute(FINALIZE, parts, label='sum')  # reads runs 611 and 612
+        total.push('runs', {'run': run})
+    first = client.output(total, 'normalized')  # runs 611 and 612
 
-    total.push({'run': r613})  # 611 and 612 are not reduced again
-    added = client.compute(FINALIZE, parts, label='sum')  # reads all three
+    total.push('runs', {'run': r613})  # 611 and 612 are not reduced again
+    added = client.output(total, 'normalized')  # all three
 
-    summed = client.compute(SANS_SUM, {'runs': [{'run': r} for r in (r611, r613)]})
-    restarted = client.compute(FINALIZE, summed.refs(), label='sum')
-    again = client.compute(NORMALIZE, {'runs': [r611, r613]})
+    rows = [{'run': run} for run in (r611, r613)]
+    again = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 
     assert [
-        client.output(r, 'normalized').values.tolist()
-        for r in (first, added, restarted)
-    ] == [[0.25, 0.75], [0.375, 0.625], [0.5, 0.5]]
-    assert client.output(again, 'normalized').values.tolist() == [0.5, 0.5]
-    assert client.provenance(added).datasets() == [r611, r612, r613]
-    assert client.provenance(restarted).datasets() == [r611, r613]
-    assert client.records(label='sum') == [first, added, restarted]
+        value.values.tolist()
+        for value in (first, added, client.output(again, 'normalized'))
+    ] == [[0.5, 1.5], [0.75, 1.25], [1.0, 1.0]]
+    assert client.provenance(total).datasets() == [r611, r612, r613]
+    assert client.provenance(again).datasets() == [r611, r613]
+    assert client.records() == [again]
 
 
 @pytest.mark.xfail(reason='views (client.output(..., index=)) are not implemented')

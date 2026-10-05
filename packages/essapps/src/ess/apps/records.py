@@ -128,7 +128,7 @@ class Status(StrEnum):
 
 
 Row = dict[str, Any]
-"""One row of an accumulator's table, as a request over the table takes it."""
+"""One row of a table of an accumulator, as a request over the table takes it."""
 
 
 class Record(BaseModel, frozen=True):

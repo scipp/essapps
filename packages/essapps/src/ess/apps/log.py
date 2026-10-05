@@ -62,7 +62,7 @@ class Opened(BaseModel, frozen=True):
     """
     An accumulator that opened, with its template as the backend accepted it.
 
-    The template's one blank is the table that the pushes fill.
+    The template's blanks are the tables that the pushes fill.
     """
 
     kind: Literal['opened'] = 'opened'
@@ -74,6 +74,7 @@ class Opened(BaseModel, frozen=True):
 class Pushed(BaseModel, frozen=True):
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
+    table: str
     row: Row
 
 

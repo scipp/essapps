@@ -16,18 +16,19 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of a spec with a table field may also make element accumulators,
-like ``sciline.Accumulator`` for a whole row. An accumulator holds one, made
-for the values of every other field, so it needs such a binding::
+A binding of a spec with table fields may also make element accumulators,
+like ``ess.reduce.streaming.StreamProcessor``. An accumulator holds one, made
+for the values of every field but the tables it fills, so it needs such a
+binding::
 
     held = binding.accumulator({'scale': 2.0})   # what depends on them, once
-    held.push({'run': run_611})                  # one row, with data read
-    held.value                                   # {'numerator': ..., ...}
+    held.push('runs', {'run': run_611})          # one row of a table, data read
+    held.outputs(['normalized'])                 # {'normalized': ...}
 
-Its value after the rows are pushed in order is the output of the plain
-request over them with the same other values. It may add each row in place,
-and its value may be what it holds, not a copy; :mod:`ess.apps.backend` says
-why that is safe.
+Its outputs after rows are pushed in order are those of the plain request
+whose tables hold these rows, with the same other values. It may add each row
+in place, and its outputs may be what it holds, not a copy;
+:mod:`ess.apps.backend` says why that is safe.
 """
 
 from __future__ import annotations
@@ -61,21 +62,20 @@ class Binding(Protocol):
 
 
 class ElementAccumulator(Protocol):
-    def push(self, row: Mapping[str, Any]) -> None:
+    def push(self, table: str, row: Mapping[str, Any]) -> None:
         """
-        Add a row of the spec's table, with data read.
+        Add a row to the table field ``table``, with data read.
 
-        It may modify what the accumulator holds in place, and so change a
-        value read before it, but not the row. An accumulator that starts from
-        the first row's values copies them, so that adding in place never
+        It may modify what the accumulator holds in place, and so change an
+        output returned before it, but not the row. An accumulator that starts
+        from the first row's values copies them, so that adding in place never
         changes the output they came from.
         """
         ...
 
-    @property
-    def value(self) -> Mapping[str, Any]:
+    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
         """
-        The outputs of the spec over the rows pushed so far.
+        The named outputs of the spec over the rows pushed so far.
 
         They may be what the accumulator holds, not a copy.
         """
@@ -88,9 +88,10 @@ class AccumulatorBinding(Binding, Protocol):
         """
         A new element accumulator with nothing pushed.
 
-        ``fixed`` holds every parameter but the table, with data read, as a
-        call gets them. Its ``push`` and ``value`` are called from one thread
-        at a time.
+        ``fixed`` holds every parameter but the tables it fills, with data
+        read and defaults filled in. Each value is typed by its field alone,
+        since the params model's own validators may need the tables. Its
+        ``push`` and ``outputs`` are called from one thread at a time.
         """
         ...
 

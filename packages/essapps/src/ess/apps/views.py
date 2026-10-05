@@ -13,7 +13,7 @@ backend keeps elsewhere.
 from __future__ import annotations
 
 from .log import Event, Finished, Opened, Pushed, Submitted
-from .records import Record, Row, Status
+from .records import Record, Status
 
 
 class Views:
@@ -22,8 +22,8 @@ class Views:
 
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``accumulators`` holds the event that opened each accumulator,
-    and ``pushes`` its rows in push order; a record that read it after ``upto``
-    pushes read the first ``upto``.
+    and ``pushes`` its pushes in order, each a table and a row; a record that
+    read it after ``upto`` pushes read the first ``upto``.
     """
 
     def __init__(self) -> None:
@@ -31,7 +31,7 @@ class Views:
         self.finished: dict[str, Finished] = {}
         self.labels: dict[tuple[str, str], list[str]] = {}  # (proposal, label)
         self.accumulators: dict[str, Opened] = {}
-        self.pushes: dict[str, list[Row]] = {}  # accumulator ID to rows
+        self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
 
     def apply(self, event: Event) -> None:
         match event:
@@ -55,7 +55,7 @@ class Views:
             case Opened():
                 self.accumulators[event.accumulator] = event
             case Pushed():
-                self.pushes.setdefault(event.accumulator, []).append(event.row)
+                self.pushes.setdefault(event.accumulator, []).append(event)
 
     def status(self, record_id: str) -> Status:
         finished = self.finished.get(record_id)

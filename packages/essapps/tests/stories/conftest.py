@@ -10,7 +10,6 @@ hand.
 
 from __future__ import annotations
 
-import functools
 import operator
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
@@ -134,8 +133,12 @@ def vanadium(run: Any, scale: float) -> dict[str, sc.Variable]:
     return {'normalization': sc.scalar(float(_counts(run).sum()) * scale)}
 
 
+class RunsParams(BaseModel):
+    runs: list[RunParams]
+
+
 class NormalizeParams(BaseModel):
-    runs: list[NexusFile]
+    runs: list[RunParams]
     scale: float = 1.0
 
 
@@ -146,9 +149,8 @@ class NormalizedOutputs(BaseModel):
 NORMALIZE = _spec('normalize', NormalizeParams, NormalizedOutputs)
 
 
-def normalize(runs: list[Any], scale: float) -> dict[str, sc.Variable]:
-    total = sum(_counts(r) for r in runs)
-    return {'normalized': _array(total / total.sum() * scale)}
+def normalize(runs: np.ndarray, scale: float) -> dict[str, sc.Variable]:
+    return {'normalized': _array(runs / runs.sum() * scale)}
 
 
 class BackgroundParams(BaseModel):
@@ -178,30 +180,13 @@ class ContributeOutputs(BaseModel):
 CONTRIBUTE = _spec('sans-contribute', RunParams, ContributeOutputs)
 
 
-def normalization_parts(run: Any) -> dict[str, sc.Variable]:
-    counts = _counts(run)
-    return {'numerator': _array(counts), 'denominator': sc.scalar(float(counts.sum()))}
-
-
 def contribute(run: Any) -> dict[str, sc.Variable]:
     counts = _counts(run)
-    transmission = sc.scalar(float(counts[0] / counts.sum()))
-    return {**normalization_parts(run), 'transmission': transmission}
-
-
-class FinalizeParams(BaseModel):
-    numerator: Array()  # type: ignore[valid-type]
-    denominator: Array()  # type: ignore[valid-type]
-    scale: float = 1.0
-
-
-FINALIZE = _spec('sans-finalize', FinalizeParams, NormalizedOutputs)
-
-
-def finalize(
-    numerator: sc.Variable, denominator: sc.Variable, scale: float
-) -> dict[str, sc.Variable]:
-    return {'normalized': numerator / denominator * scale}
+    return {
+        'numerator': _array(counts),
+        'denominator': sc.scalar(float(counts.sum())),
+        'transmission': sc.scalar(float(counts[0] / counts.sum())),
+    }
 
 
 class NormalizationParts(BaseModel):
@@ -216,46 +201,49 @@ class PartsSumParams(BaseModel):
 PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
 
 
-class RunsParams(BaseModel):
-    runs: list[RunParams]
+class _Sums:
+    def __init__(
+        self,
+        finalize: Callable[..., dict[str, Any]],
+        tables: Sequence[str],
+        **fixed: Any,
+    ) -> None:
+        self._finalize = finalize
+        self._fixed = fixed
+        self._sums: dict[str, Any] = dict.fromkeys(tables, 0.0)
+
+    def push(self, table: str, row: Mapping[str, Any]) -> None:
+        self._sums[table] += _counts(row['run'])  # in place from the second row
+
+    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+        outputs = self._finalize(**self._sums, **self._fixed)
+        return {name: outputs[name] for name in names}
 
 
-class _RunTotal:
-    def __init__(self, reduce: Callable[[Any], dict[str, sc.Variable]]) -> None:
-        self._reduce = reduce
-        self._sum = combine(operator.iadd).accumulator({})
-
-    def push(self, row: Mapping[str, Any]) -> None:
-        self._sum.push(self._reduce(row['run']))
-
-    @property
-    def value(self) -> Mapping[str, Any]:
-        return self._sum.value
-
-
-class RunSum:
+class Summing:
     """
-    The binding of a spec over a table of runs: ``reduce`` reduces each run,
-    and the results are added in place.
+    The binding of a spec over tables of runs, a toy ``StreamProcessor``: the
+    counts of each table's runs are summed, and ``finalize`` computes the
+    outputs from the sums, by table name, and the other values.
     """
 
-    def __init__(self, reduce: Callable[[Any], dict[str, sc.Variable]]) -> None:
-        self._reduce = reduce
+    def __init__(self, finalize: Callable[..., dict[str, Any]], *tables: str) -> None:
+        self._finalize = finalize
+        self._tables = tables
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        def total(runs: list[Mapping[str, Any]]) -> Mapping[str, Any]:
-            held = self.accumulator({})
-            for row in runs:
-                held.push(row)
-            return held.value
+        def compute(**values: Any) -> Mapping[str, Any]:
+            params = {**fixed, **values}
+            sums = {
+                t: sum((_counts(row['run']) for row in params.pop(t)), 0.0)
+                for t in self._tables
+            }
+            return self._finalize(**sums, **params)
 
-        return functools.partial(total, **fixed)
+        return compute
 
     def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
-        return _RunTotal(self._reduce)
-
-
-SANS_SUM = _spec('sans-sum', RunsParams, NormalizationParts)
+        return _Sums(self._finalize, self._tables, **fixed)
 
 
 class Counts(BaseModel):
@@ -268,6 +256,10 @@ VOLUME = _spec('volume', RunsParams, Counts)
 
 def angle(run: Any) -> dict[str, sc.Variable]:
     return {'counts': _array(run)}
+
+
+def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
+    return {'counts': _array(runs)}
 
 
 class Data(BaseModel):
@@ -337,17 +329,15 @@ TOYS = {
     IOFQ_V2: iofq_v2,
     BEAM_CENTRE: beam_centre,
     VANADIUM: vanadium,
-    NORMALIZE: normalize,
+    NORMALIZE: Summing(normalize, 'runs'),
     BACKGROUND: background,
     CONTRIBUTE: contribute,
-    FINALIZE: finalize,
     ANGLE: angle,
     CUT: cut,
     STITCH: stitch,
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
-    SANS_SUM: RunSum(normalization_parts),
-    VOLUME: RunSum(angle),
+    VOLUME: Summing(volume, 'runs'),
     COPY: copy,
 }
 
