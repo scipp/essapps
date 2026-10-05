@@ -36,8 +36,9 @@ lives until its client releases it or ends, and the requests made through it
 have run.
 
 An accumulator opens from a template whose blanks are table fields, checked
-as a stage's template is. Its binding makes a held state from the other
-values, read when it opens, and each push adds one row to each table it
+as a stage's template is. Its held state is made from the other values, read
+when it opens, by the binding or, for a binding that makes none, by keeping
+the rows (see ``bindings.py``). Each push adds one row to each table it
 names, in place if the binding does so. A push takes only rows whose records
 have completed; it waits for the records it references to finish. A row is
 checked by its table's row model alone; rules on a whole table, such as its
@@ -91,7 +92,7 @@ from ess.reduce.spec import (
 from pydantic import BaseModel, ValidationError, create_model
 from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 
-from .bindings import AccumulatorBinding, Binding, Function, HeldState, as_binding
+from .bindings import Binding, Function, HeldState, as_binding, held_state
 from .datasets import DatasetSource, Selector, readable
 from .log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
 from .records import (
@@ -958,13 +959,12 @@ class Backend:
         """
         An accumulator of the client, and its template as history holds it.
 
-        The template's blanks are table fields, which the pushes fill, and the
-        spec's binding must make held states; a plain request over the tables
-        works with any binding. The template is checked as a stage's is (see
-        :meth:`_check_template`). Opening waits for the records its values
-        reference to finish, and refuses them unless they have completed. The
-        binding then makes the held state with those values read and defaults
-        filled in, so what depends only on them is computed once.
+        The template's blanks are table fields, which the pushes fill. The
+        template is checked as a stage's is (see :meth:`_check_template`).
+        Opening waits for the records its values reference to finish, and
+        refuses them unless they have completed. The held state is then made
+        with those values read and defaults filled in, so what depends only on
+        them is computed once (see :func:`~.bindings.held_state`).
         """
         spec_id, blanks = template.spec, template.blanks
         caller = self._client(client)
@@ -974,17 +974,11 @@ class Backend:
                 f'{spec_id}: the blanks of an accumulator are table fields of '
                 f'{sorted(tables)}, not {list(blanks)}'
             )
-        binding = self._bindings[spec_id]
-        if not isinstance(binding, AccumulatorBinding):
-            raise SubmitError(
-                f'{spec_id} is bound to code that cannot accumulate; '
-                'submit the request over the tables instead'
-            )
         fixed = self._check_template(template, caller.proposal)
         typed = Request(spec_id, self._typed(spec_id, fixed, blanks))
         values = self._read_checked(typed, caller)
         try:
-            state = binding.accumulator(values)
+            state = held_state(self._bindings[spec_id], values, blanks)
         except Exception as error:  # the binding refuses the values
             reason = str(error) or repr(error)
             raise SubmitError(

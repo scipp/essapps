@@ -16,10 +16,9 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of a spec with table fields may also make held states, like
-``ess.reduce.streaming.StreamProcessor``. An accumulator holds one, made for
-the values of every field but the tables it fills, so it needs such a
-binding::
+An accumulator holds a held state, made for the values of every field but the
+tables it fills. A binding of a spec with table fields may make held states,
+like ``ess.reduce.streaming.StreamProcessor``::
 
     held = binding.accumulator({'scale': 2.0})   # what depends on them, once
     held.push({'runs': {'run': run_611}})        # a row per named table, data read
@@ -29,6 +28,9 @@ Its outputs after rows are pushed in order are those of the plain request
 whose tables hold these rows, with the same other values. It may add each push
 in place, and its outputs may be what it holds, not a copy;
 :mod:`ess.apps.backend` says why that is safe.
+
+For any other binding, :func:`held_state` makes a held state that keeps the
+rows and computes the plain request over them at each read.
 """
 
 from __future__ import annotations
@@ -113,3 +115,42 @@ class FunctionBinding:
 def as_binding(code: Binding | Function) -> Binding:
     """``code`` as a binding; a plain function is wrapped."""
     return code if isinstance(code, Binding) else FunctionBinding(code)
+
+
+class _KeptRows:
+    """
+    The held state of a binding that makes none: the rows pushed so far.
+
+    ``call`` is the binding staged with the fixed values and the tables as
+    blanks. A read calls it with every row so far, so it computes the plain
+    request over them. What depends only on the fixed values is computed once
+    if the stage holds it, as a stage of ``PipelineBinding`` does; the part
+    that depends on the rows is computed again at each read.
+    """
+
+    def __init__(self, call: Function, tables: Sequence[str]) -> None:
+        self._call = call
+        self._rows: dict[str, list[Mapping[str, Any]]] = {t: [] for t in tables}
+
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            self._rows[table].append(row)
+
+    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+        outputs = self._call(**{t: list(rows) for t, rows in self._rows.items()})
+        return {name: outputs[name] for name in names if name in outputs}
+
+
+def held_state(
+    binding: Binding, fixed: Mapping[str, Any], tables: Sequence[str]
+) -> HeldState:
+    """
+    A held state with nothing pushed, of an accumulator that fills ``tables``.
+
+    It is the binding's own if the binding makes held states, and one that
+    keeps the rows otherwise. ``fixed`` is as for
+    :meth:`AccumulatorBinding.accumulator`.
+    """
+    if isinstance(binding, AccumulatorBinding):
+        return binding.accumulator(fixed)
+    return _KeptRows(binding.stage(fixed, tables), tables)

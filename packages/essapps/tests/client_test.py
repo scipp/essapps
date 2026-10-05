@@ -86,6 +86,19 @@ class PairsTable(BaseModel):
 
 TOTAL = _spec('total', PartsTable, Parts)
 PAIRS = _spec('pairs', PairsTable, LoadOutputs)
+
+
+class StitchParams(BaseModel):
+    reference: float
+    low: list[Parts]
+    high: list[Parts]
+
+
+class Curve(BaseModel):
+    curve: Array()  # type: ignore[valid-type]
+
+
+STITCH = _spec('stitch', StitchParams, Curve)
 DIGITS = _spec('digits', PartsTable, Parts)
 
 
@@ -249,6 +262,17 @@ def pairs(pairs: list[dict[str, float]]) -> dict[str, float]:
     return {f: sum(row[f] for row in pairs) for f in ('value', 'extra')}
 
 
+def stitch(
+    reference: float, low: list[dict[str, float]], high: list[dict[str, float]]
+) -> dict[str, list[float]]:
+    """
+    STITCH as a plain function, a joint computation over both tables: their
+    values, low ones first, scaled together so that they sum to ``reference``.
+    """
+    values = [row['value'] for row in (*low, *high)]
+    return {'curve': [reference * value / sum(values) for value in values]}
+
+
 def append_digit(number: float, digit: float) -> float:
     """An order-sensitive combination, slow enough for pushes to overlap."""
     time.sleep(0.001)
@@ -341,6 +365,7 @@ def backend(
             SCALE: scaling,
             TOTAL: combine(operator.add),
             PAIRS: pairs,
+            STITCH: stitch,
             DIGITS: combine(append_digit),
             MEAN: Averaging(),
             MEAN_OF_TWO: Averaging(),
@@ -824,18 +849,43 @@ def test_an_accumulator_is_read_through_a_reference(client: Client) -> None:
         client.submit(_total(client))
 
 
-def test_the_blanks_of_an_accumulator_are_tables_and_its_binding_accumulates(
-    client: Client,
-) -> None:
+def test_the_blanks_of_an_accumulator_are_table_fields(client: Client) -> None:
     refused = {
         r"are table fields of \['runs'\], not \[\]$": Template(SUM),
         r"not \['scale'\]$": Template(SUM, blanks=('scale',)),
         r"not \['runs', 'scale'\]$": Template(SUM, blanks=('runs', 'scale')),
-        'cannot accumulate': Template(PAIRS, blanks=('pairs',)),
+        r"of \['high', 'low'\], not \[\]$": Template(STITCH),
+        r"not \['reference'\]$": Template(STITCH, blanks=('reference',)),
     }
     for reason, template in refused.items():
         with pytest.raises(SubmitError, match=reason):
             client.accumulator(template)
+
+
+def test_an_accumulator_of_a_plain_function_reads_as_the_plain_request(
+    client: Client,
+) -> None:
+    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    stitched = client.accumulator(
+        Template(STITCH, params={'reference': 6.0}, blanks=('low', 'high'))
+    )
+    pushes = [
+        {'low': loads[0].refs('value')},
+        {'high': loads[1].refs('value')},
+        {'low': loads[1].refs('value'), 'high': loads[0].refs('value')},
+    ]
+    reads, plains = [], []
+    for n, rows in enumerate(pushes, start=1):
+        stitched.push(rows)
+        tables = {t: [p[t] for p in pushes[:n] if t in p] for t in ('low', 'high')}
+        plain = client.compute(STITCH, {'reference': 6.0, **tables})
+        reads.append(client.output(stitched, 'curve'))
+        plains.append(client.output(plain, 'curve'))
+    client.release(loads)  # the accumulator keeps the values of its rows
+
+    assert reads == plains == [[6.0], [2.0, 4.0], [1.0, 2.0, 2.0, 1.0]]
+    assert client.output(stitched, 'curve') == [1.0, 2.0, 2.0, 1.0]
+    assert client.provenance(stitched).request == plain.request
 
 
 def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(

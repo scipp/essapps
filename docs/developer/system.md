@@ -177,11 +177,12 @@ This keeps the orders the maps depend on (see Queries), since each lies within o
 ## Accumulators
 
 An accumulator lives in its client's entry in the backend; the `Accumulator` that `client.accumulator` returns is a handle to it.
-Its binding holds its held state ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+If its binding provides `accumulator(fixed)`, its held state is the binding's own.
+Otherwise it is a held state that keeps the rows (see The held state that keeps the rows below; [ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 The backend does this:
 
 ```python
-held = binding.accumulator(read(fixed))  # when it opens: computes what depends only on the fixed values
+held = held_state(binding, read(fixed), tables)   # when it opens; what depends only on the fixed values is computed once
 unreadable = 'nothing has been pushed into the accumulator'
 
 def push(rows):                          # {table: row, ...}
@@ -202,7 +203,8 @@ def bind(reference):                     # a request at submission, or a client.
         return reference with upto
 ```
 
-**Opening.** The template's blanks must be tables of the spec, and the binding must provide `accumulator(fixed)`; otherwise opening is refused.
+**Opening.** The template's blanks must be one or more tables of the spec; a template with no blank, or with a blank that is not a table, is refused.
+Any binding can be accumulated.
 The template is checked as a stage's template is: what a request would refuse is refused, with the tables left out.
 Opening waits for the records the template references, refuses them unless they have completed, and reads them once.
 The binding gets every value but the tables, with data read and defaults filled in.
@@ -256,6 +258,26 @@ held.outputs(['normalized'])                   # {'normalized': ...}, computed f
 - The backend calls `push` and `outputs` from one thread at a time, and never `outputs` while a push adds.
 - The stories bind `NORMALIZE` and `VOLUME` to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs and computes the outputs from the sums.
 
+**The held state that keeps the rows.** For a binding without `accumulator(fixed)`, `held_state` in `ess.apps.bindings` makes a held state that keeps the rows pushed so far and computes the plain request over them at each read:
+
+```python
+call = binding.stage(fixed, tables)        # when it opens; tables: the accumulator's blanks
+rows = {table: [] for table in tables}
+
+def push(pushed):                          # {table: row, ...}, data read
+    for table, row in pushed.items():
+        rows[table].append(row)
+
+def outputs(names):                        # the plain request over every row so far
+    return {name: value for name, value in call(**rows).items() if name in names}
+```
+
+- It meets the protocol above, since its outputs are those of the plain request it computes.
+- What depends only on the fixed values is computed once if the binding's stage keeps it, as a stage of `PipelineBinding` does through `sciline.Stage`. A function binding computes everything at each read.
+- Each read repeats the work per run for every row so far. A driver that reads after every push pays work that grows with the number of rows.
+- It keeps the value of every row, with data read. A row that references an output of a record keeps that value in memory while the accumulator lives, even after the client releases the record.
+- A binding avoids both costs by providing `accumulator(fixed)`.
+
 ## Clients
 
 A client is one entry in the backend, from `open_client` to `close_client`.
@@ -277,6 +299,7 @@ An output value is dropped once no client entry keeps its record and no pending 
 The backend checks this when a client releases a record or ends, when a workflow returns or a record finishes without running, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
 
 A stage keeps what it computed from its fixed values, and an accumulator its held state, until the client releases them or ends.
+A held state that keeps the rows (see Accumulators) holds the value of each row, also an output of a record that the client has released.
 What a stage computed is a cache: the backend may drop it at any time, and the next call through the stage computes it again and makes the same record.
 The in-process backend never drops it.
 

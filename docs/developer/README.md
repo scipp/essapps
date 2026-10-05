@@ -71,7 +71,7 @@ The terms this document defines, in the order they appear:
 | table, row | a parameter whose value is a list of rows of one flat model; a row is the unit that arrives, such as a run | workflow author | notebook, app |
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
 | accumulator | an accumulating workflow the backend keeps for a client: a template whose blanks are tables, into which each push adds one row to one or more of them, and which is read like a record | framework | notebook, app |
-| held state | what an accumulator's binding holds between pushes, such as a numerator and a denominator; no spec, call, or record names it | workflow author | backend, when the accumulator opens |
+| held state | what an accumulator holds between pushes: what its binding holds, such as a numerator and a denominator, or, for a binding without `accumulator(fixed)`, the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
 | state | an accumulator after its first n pushes; a read binds to the state at that moment | framework | backend, at each push |
 
 The terms down to template are enough for most work.
@@ -158,8 +158,8 @@ A request outside a stage is the case with no blanks: `binding.stage(values, ())
 A function binding computes everything in each call.
 A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
 
-A binding of a spec with tables may also provide `accumulator(fixed)`, which an accumulator needs (see Stages and accumulators).
-It returns an object that holds the accumulator's held state ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
+A binding of a spec with tables may also provide `accumulator(fixed)`, which makes the held state of an accumulator (see Stages and accumulators).
+It returns an object that holds the held state ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
 held = binding.accumulator(fixed)        # every value but the tables, data read; computes what depends only on them
@@ -175,7 +175,23 @@ It may modify the held state in place, but not the rows.
 It must not modify what an earlier call for the same state returned, since running readers still use it.
 The backend calls both from one thread at a time.
 `combine(operation)` is such a binding, for a spec whose only parameter is one table and whose outputs are the rows' fields, each combined with `operation`.
-`PipelineBinding` will accumulate with `StreamProcessor` ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)); this is designed and not implemented.
+
+A binding without `accumulator(fixed)` is accumulated by the framework ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+Its held state keeps the rows pushed so far, with data read.
+A read computes the plain request over them, through a stage of the binding made when the accumulator opens:
+
+```python
+call = binding.stage(fixed, tables)        # once, when the accumulator opens; tables: its blanks
+call(sample_runs=[row_611, row_612], can_runs=[row_614])   # at each read, with every row so far
+```
+
+The outputs are those of the plain request, as for any held state.
+Only the cost differs.
+A `PipelineBinding` computes what depends only on the fixed values once, through `sciline.Stage`.
+Each read repeats the work per run for every row so far.
+The held state keeps the value of every row, so a row that references an output of a record keeps that value while the accumulator lives.
+A binding avoids both costs by providing `accumulator(fixed)`.
+`PipelineBinding` provides none; accumulating it with `StreamProcessor` is designed and not implemented.
 
 A backend in the notebook's process can bind a spec to code defined in the notebook, for example to try out a change to a workflow:
 
@@ -442,10 +458,42 @@ client.output(total, 'normalized')
 
 Both give the same outputs: the workflow author promises that the accumulator over the rows pushed so far gives what the plain request over those rows gives.
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
-The binding decides it, and the quantity must be linear in the runs; for esssans it is the numerator and denominator in Q.
+The binding decides it.
+A binding that adds each push to its held state must sum a quantity that is linear in the runs.
+For esssans it is the numerator and denominator in Q.
+
+Any spec with a table can be given its rows both ways.
+The caller chooses how rows arrive: all in one request, or over time through an accumulator.
+The binding chooses how a state is computed, which the caller sees only in cost (see Specs and bindings).
+A joint fit, such as the scale factors of reflectometry angles, cannot add one run at a time.
+It can be accumulated too: each read fits again over the rows so far.
 
 A table may also hold references to outputs of records.
 `combine(operator.add)` binds a spec whose only parameter is such a table and whose outputs are the rows' fields, each summed; story S4 sums the outputs of two records this way.
+
+### Rows and tables: two examples
+
+[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) ("Two examples") works through both in full.
+
+**One table with two columns.**
+If each sample run has its own transmission run, the two are fields of one row.
+One push hands both to the binding, which needs them at once to reduce the run.
+Two tables, one of runs and one of transmission runs, could be paired wrongly.
+
+```python
+shared = {'beam_centre': ..., 'direct_beam': ...}
+iofq = client.accumulator(Template(SANS_IOFQ, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
+                                   blanks=('sample_runs',)))
+iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
+iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)}})
+```
+
+**Two independent tables.**
+The sample runs and the can runs are two tables, each a blank, pushed as their runs arrive.
+What the binding holds for the sample depends only on sample rows, and what it holds for the can only on can rows, so the order of pushes does not change a state.
+One push may add a row to each table, and the rows enter one state.
+A state with no can run is refused if the spec requires one, as its plain request would be.
+The example in Stages and accumulators is of this kind.
 
 ## Stages and accumulators
 
@@ -485,10 +533,11 @@ client.output(iofq, 'iofq')                              # what the plain reques
 ```
 
 As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: what it computed from the fixed values, and its *held state*, such as the numerators and denominators summed so far.
-The held state is private to the binding: no spec, call, or record names it.
+For a binding without a held state of its own, the held state is the rows pushed so far (see Specs and bindings).
+No spec, call, or record names the held state.
 The outputs are the spec's outputs, computed from the held state when they are read.
 
-- `client.accumulator` checks the template as `client.stage` does, with the tables left out. Its blanks must be one or more of the spec's tables, and the spec's binding must provide `accumulator(fixed)` (see Specs and bindings). A plain request over the tables works with any binding.
+- `client.accumulator` checks the template as `client.stage` does, with the tables left out. Its blanks must be one or more of the spec's tables; a template with no blank, or with a blank that is not a table, is refused. Any binding can be accumulated.
 - Opening waits for the records the template references, refuses them unless they have completed, and reads them once. `iofq.template` holds the values as resolved, as a stage's template does.
 - `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it. It waits for the records the rows reference to finish, and refuses them unless they have completed.
 - Rules on a whole table, such as its length, and the params model's own validators apply to the plain request over all rows pushed so far. A push that the plain request would not yet accept is added, and its state cannot be read until a later push makes the request acceptable. A push is refused if the plain request gives a fixed value other than the one the accumulator opened with, as a validator of the params model may.
