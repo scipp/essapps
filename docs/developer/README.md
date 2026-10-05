@@ -52,13 +52,13 @@ The table names who writes each thing and who makes one at run time, with these 
 - *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
 - *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
 - *notebook*: a scientist's notebook that uses the client directly.
-- *operator*: deploys a hosted backend and its dataset source.
+- *DMSC*: deploys a hosted backend and its dataset source, and keeps them running.
 
 The terms this document defines, in the order they appear:
 
 | Term | What it is | Code from | Made by |
 |---|---|---|---|
-| backend | the process that runs requests and keeps records | framework | operator; or a notebook or app with `local()` |
+| backend | the process that runs requests and keeps records | framework | DMSC; or a notebook or app with `local()` |
 | client | the object through which a notebook or app talks to one backend; it keeps what it makes until it releases it or ends | framework | notebook, app |
 | spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
 | binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.apps.pipeline.PipelineBinding`) | workflow author |
@@ -67,7 +67,7 @@ The terms this document defines, in the order they appear:
 | reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
-| dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | operator; a fake one in tests |
+| dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | DMSC; a fake one in tests |
 | spec over a table | a spec whose only parameter is a list of elements of one model, such as a sum over runs | workflow author | workflow author |
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
 | accumulator | a spec over a table the backend keeps for a client, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
@@ -280,11 +280,13 @@ The backend keeps two kinds of things with different lifetimes:
 
 | | What | Kept |
 |---|---|---|
-| record | what ran, with which inputs, and what came of it | as long as the proposal |
+| record | what ran, with which inputs, and what came of it | until its proposal has been idle for days to weeks |
 | output value | the data an output holds, such as an I(Q) array | while a client keeps it, see below |
 
-Records are the proposal's history: they are kept as long as the proposal, and dropped with it as a whole.
+Records are the proposal's history.
 They are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
+A proposal is idle while none of its clients is open and none of its records is pending; once it has been idle for a retention period of days to weeks, its records are dropped as a whole.
+A result needed for longer is published (see Provenance and publication).
 
 Output values are large, so the backend keeps a value only while something keeps it.
 Two things do:
@@ -334,7 +336,7 @@ dataset(path='/home/user/data/run1.h5')
 dataset(pid='20.500.12269/vanadium')     # for example a result published elsewhere
 ```
 
-**Dataset source.** A backend finds datasets through its *dataset source*, which the operator deploys with it, for example one backed by the facility's data catalogue.
+**Dataset source.** A backend finds datasets through its *dataset source*, which DMSC deploys with it, for example one backed by the facility's data catalogue.
 The backend resolves names and reads data through it.
 Listing datasets, waiting for new ones, and reading their metadata are queries to the same source, made through the client as `client.datasets`.
 A client sees only the datasets its proposal may read.
@@ -634,7 +636,7 @@ Recomputing in a record's environment comes later.
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice of it, since the snapshot's value changes at the next push.
 - A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
-- Records are kept as long as the proposal, and dropped with it as a whole. A published entry answers what produced it without access to the records.
+- A proposal's records are kept until the proposal has been idle for the retention period, and then dropped as a whole. A published entry answers what produced it without access to the records.
 - Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
 
 ## Left to the system

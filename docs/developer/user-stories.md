@@ -577,7 +577,7 @@ Gap: no client holds the curve the loop made, so reading its output needs the ru
 
 ### E2. Automatic reduction goes quiet
 
-Actor: instrument operator. Goal: after an upgrade removed the template's spec version, see why nothing is reduced.
+Actor: instrument scientist. Goal: after an upgrade removed the template's spec version, see why nothing is reduced.
 
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
@@ -653,7 +653,7 @@ assert [r.request.params for r in provenance.records()] == [centre.request.param
 assert {'essapps', 'scipp'} <= provenance.software.keys()
 ```
 
-The entry carries what lasts. The history behind it is dropped with the proposal (system story H3).
+The entry carries what lasts. The history behind it is dropped once the proposal has been idle for the retention period (system story H3).
 
 ### F2. Reproduce after two upgrades
 
@@ -742,7 +742,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 System story only; see [system-stories.md](system-stories.md).
 
-### H3. Records end with the proposal
+### H3. History ends when the work does
 
 System story only; see [system-stories.md](system-stories.md).
 

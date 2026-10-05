@@ -1,6 +1,6 @@
 # ADR 0001: Keep the backend's history as an event log, apart from values
 
-- Status: accepted, amended 2026-10-02
+- Status: accepted, amended 2026-10-02, superseded by [ADR 0004](0004-history-is-append-only-lists.md) on 2026-10-05
 - Deciders: Simon
 - Date: 2026-09-30
 
