@@ -125,7 +125,7 @@ class Stage:
 
 class Accumulator:
     """
-    A template whose blanks, tables, are filled one row at a time.
+    A template whose blanks, tables, are filled one push at a time.
 
     The backend adds each row to what it holds and does not compute the
     earlier rows again. Its outputs are those of the plain request over the
@@ -140,23 +140,26 @@ class Accumulator:
         template: Template,
         accumulator_id: str,
         outputs: tuple[str, ...],
-        push: Callable[[str, Row], None],
+        push: Callable[[Mapping[str, Row]], None],
     ) -> None:
         self.template = template
         self.id = accumulator_id
         self.outputs = outputs
         self._push = push
 
-    def push(self, table: str, row: Row) -> None:
+    def push(self, rows: Mapping[str, Row]) -> None:
         """
-        Add a row to one of the template's tables, as a request over it takes it.
+        Add one row to each named table of the template, as a request over the
+        table takes it; the rows enter one state.
 
         A row names datasets or references outputs of records, never an
-        accumulator. The push waits for the records to finish, and refuses
-        them unless they have completed. It then waits for the readers of the
-        accumulator; see :mod:`ess.apps.backend`.
+        accumulator. It is checked by its table's row model; rules on a whole
+        table, such as its length, decide only whether a state may be read.
+        The push waits for the records to finish, and refuses them unless they
+        have completed. It then waits for the readers of the accumulator; see
+        :mod:`ess.apps.backend`.
         """
-        self._push(table, row)
+        self._push(rows)
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -369,13 +372,14 @@ class Client:
 
     def output(self, what: Record | Accumulator, name: str | None = None) -> Any:
         """
-        The value of an output, or every output by name if ``name`` is None.
+        The value of an output, or every output returned, by name, if ``name``
+        is None; an optional output that was not returned is left out.
 
         A record's, once it has completed. An accumulator's are those of its
         state after the pushes so far, copied, so that like a record's they do
         not change; a read waits while a push waits or adds.
         """
-        names = list(what.outputs) if name is None else [name]
+        names = None if name is None else [name]
         if isinstance(what, Accumulator):
             values = self._backend.accumulator_outputs(what.id, names, self._id)
         else:
@@ -383,7 +387,7 @@ class Client:
             if status is not Status.COMPLETED:
                 failure = self._backend.failure(what.id, self._id)
                 raise RuntimeError(f'record {what.id} {status}: {failure}')
-            values = {n: self._backend.output(what.id, n, self._id) for n in names}
+            values = self._backend.outputs(what.id, names, self._id)
         return values if name is None else values[name]
 
     def records(self, *, label: str | None = None) -> list[Record]:
@@ -407,7 +411,8 @@ class Client:
         far, so its provenance is that of the record of this request.
         """
         if isinstance(what, Accumulator):
-            request = self._backend.accumulated(what.id, None, self._id)
+            upto = self._backend.upto(what.id, self._id)
+            request = self._backend.accumulated(what.id, upto, self._id)
         else:
             request = what.request
         upstream: dict[str, Record] = {}

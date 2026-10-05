@@ -64,14 +64,14 @@ A spike on LoKI@Larmor data checked the shape on the real esssans workflow:
 ## Decision
 
 **The unit is an accumulating workflow.**
-A client opens it from a template whose blanks are table fields, such as `sample_runs` and `can_runs`, pushes rows into those tables one at a time, and reads it like a record ([ADR 0003](0003-accumulators-add-in-place.md)).
+A client opens it from a template whose blanks are table fields, such as `sample_runs` and `can_runs`, pushes rows into those tables, one row per table and push, and reads it like a record ([ADR 0003](0003-accumulators-add-in-place.md)).
 In the API it is still called an accumulator.
 
 ```python
 iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': ...},
                                    blanks=('sample_runs', 'can_runs')))
-iofq.push('sample_runs', {'run': dataset(run=611)})
-iofq.push('can_runs', {'run': dataset(run=614)})
+iofq.push({'sample_runs': {'run': dataset(run=611)}})
+iofq.push({'can_runs': {'run': dataset(run=614)}})
 client.output(iofq, 'iofq')          # what the plain request over these rows gives
 ```
 
@@ -94,6 +94,7 @@ A package describes its workflow once, and both esslivedata and this framework u
 |---|---|
 | base workflow, with its static part computed once | the template's fixed values, computed once when it opens |
 | `dynamic_keys` | the fields of the table rows, such as `Filename[SampleRun]` |
+| `accumulate(chunks)` | `push(rows)`: the rows of one push, one per table, added at once |
 | `accumulators` | private to the binding |
 | `target_keys`, `finalize()` | the spec's outputs, computed for each state that is read, and only those read |
 | `context_keys`, `set_context` | none: a value that differs per run is a field of its row, and a changed shared value opens a new accumulator |
@@ -116,18 +117,18 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 
 - A package offers one spec for a sum, such as I(Q) with lists of sample and can runs. The split into a per-run spec, a sum, and a finalizing spec is no longer needed for combining runs. A sum can be written in two ways: as a plain request over the tables, or as an accumulator over them.
 - A partial sum is never a record. A read binds to a state, and a record of a state is a request that copies it ([ADR 0003](0003-accumulators-add-in-place.md)).
-- The binding protocol is `accumulator(fixed)`, with `push(table, row)` and `outputs(names)`.
+- The binding protocol is `accumulator(fixed)`, with `push(rows)` and `outputs(names)`.
 - `StreamProcessor` needs `finalize(keys)`, which computes only some of its target keys and feeds only the accumulators they read. That is about ten lines in essreduce. What `on_finalize` means for an accumulator a partial finalize did not read is open.
 - The binding chooses where to accumulate, and the point must be linear in the runs. For esssans this is the numerator and denominator in Q, summed over wavelength bands. One step earlier, the numerator is event data that grows with each run.
 - esssans builds its pixel masks from the sample run's detector, so the can accumulators also depend on the sample file, and a can run cannot be pushed alone. Masks per run type, or detector IDs from a fixed run, would fix this in esssans.
 - sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, stops `StreamProcessor` from building.
-- A row holds what the per-run part needs at once. A run and its own transmission run, if it has one, go in one row. Rows of different tables are independent pushes, and pairing runs into rows is the application's job.
+- A row holds what the per-run part needs at once. A run and its own transmission run, if it has one, go in one row. Rows of different tables are independent, even when one push adds them together, and pairing runs into rows is the application's job.
 - Each held key depends only on the fixed values and on the fields of one table. Then pushes may come in any order and give the same state, up to rounding, and the framework has no rules on order. A binding in which a held key depends on two tables is refused when it opens; `StreamProcessor` computes these dependencies at construction. The esssans masks above are such a case.
 - Levels below a row are loops of the binding's own driver over sciline stages, nested inside the per-run work, so that the per-run work runs once per row and not once per bank. A row of (bank, run) would repeat the per-run work for every bank. The framework cannot tell a bank index from a per-run value, so keeping such levels out of rows is a rule for workflow authors.
 - A plain request over a table runs through the same driver, pushing every row and then computing the outputs once. A run that appears in several rows can be memoized by the binding by its dataset identity.
 - Results per bank or per angle are outputs, for example with a bank dimension, and the held state may be keyed by a bank or by a value read from each run.
 - If two levels ever both arrive over time, such as sections of runs that are still being written, rows become (run, section). The binding must then keep the per-run work between the rows of one run, as `StreamProcessor` does with context keys. The result still does not depend on the order of pushes, but the cost does. Nothing needs this yet: offline rows are complete files, and watching a file that is still being written is esslivedata's.
-- Reading a state whose rows fill only some tables computes what those rows allow, such as the can's own I(Q). An output that needs a table with no rows fails when it is read.
+- A state is read only if its plain request would be accepted ([ADR 0003](0003-accumulators-add-in-place.md)). If the spec requires rows in every table, a state whose rows fill only some tables is refused with that reason until each has a row. If the spec lets a table be empty, reading such a state computes what its rows allow, such as the can's own I(Q), and an output that needs a table with no rows fails when it is read.
 - Reducing the runs of one accumulator in parallel would split a push into a part that can run in parallel and an add under the accumulator's lock. Order would stay free. Nothing needs it yet: a LoKI run takes 1.3 to 1.6 seconds.
 - A beam centre found from the sample runs would be both computed once and per run. It is a fixed value, given by reference to the record that found it.
 - Spreading one accumulation over several nodes needs a merge of two held states (README.md, open question "Grouping"). On 2026-09-28 Simon noted that spectroscopy needs fan-out across processes. If a requirement confirms that, for example to reduce a finished scan again quickly, the binding protocol gains a merge.

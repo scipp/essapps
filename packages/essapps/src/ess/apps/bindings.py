@@ -16,17 +16,17 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of a spec with table fields may also make element accumulators,
-like ``ess.reduce.streaming.StreamProcessor``. An accumulator holds one, made
-for the values of every field but the tables it fills, so it needs such a
+A binding of a spec with table fields may also make held states, like
+``ess.reduce.streaming.StreamProcessor``. An accumulator holds one, made for
+the values of every field but the tables it fills, so it needs such a
 binding::
 
     held = binding.accumulator({'scale': 2.0})   # what depends on them, once
-    held.push('runs', {'run': run_611})          # one row of a table, data read
+    held.push({'runs': {'run': run_611}})        # a row per named table, data read
     held.outputs(['normalized'])                 # {'normalized': ...}
 
 Its outputs after rows are pushed in order are those of the plain request
-whose tables hold these rows, with the same other values. It may add each row
+whose tables hold these rows, with the same other values. It may add each push
 in place, and its outputs may be what it holds, not a copy;
 :mod:`ess.apps.backend` says why that is safe.
 """
@@ -61,14 +61,15 @@ class Binding(Protocol):
         ...
 
 
-class ElementAccumulator(Protocol):
-    def push(self, table: str, row: Mapping[str, Any]) -> None:
+class HeldState(Protocol):
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         """
-        Add a row to the table field ``table``, with data read.
+        Add one row to each named table field, with data read.
 
-        It may modify what the accumulator holds in place, and so change an
-        output returned before it, but not the row. An accumulator that starts
-        from the first row's values copies them, so that adding in place never
+        The rows of one push enter one state, so a binding may add them at
+        once. It may modify what it holds in place, and so change an output
+        returned before it, but not the rows. A held state that starts from
+        the first row's values copies them, so that adding in place never
         changes the output they came from.
         """
         ...
@@ -77,16 +78,19 @@ class ElementAccumulator(Protocol):
         """
         The named outputs of the spec over the rows pushed so far.
 
-        They may be what the accumulator holds, not a copy.
+        They may be what the held state holds, not a copy. An output the spec
+        declares optional may be left out. A call must not modify what an
+        earlier call for the same state returned: running readers still use
+        it while later names are computed.
         """
         ...
 
 
 @runtime_checkable
 class AccumulatorBinding(Binding, Protocol):
-    def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
+    def accumulator(self, fixed: Mapping[str, Any]) -> HeldState:
         """
-        A new element accumulator with nothing pushed.
+        A new held state with nothing pushed.
 
         ``fixed`` holds every parameter but the tables it fills, with data
         read and defaults filled in. Each value is typed by its field alone,

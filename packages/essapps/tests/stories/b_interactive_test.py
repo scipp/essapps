@@ -44,10 +44,10 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',))
     )
     for run in (r611, r612):
-        total.push('runs', {'run': run})
+        total.push({'runs': {'run': run}})
     first = client.output(total, 'normalized')  # runs 611 and 612
 
-    total.push('runs', {'run': r613})  # 611 and 612 are not reduced again
+    total.push({'runs': {'run': r613}})  # 611 and 612 are not reduced again
     added = client.output(total, 'normalized')  # all three
 
     rows = [{'run': run} for run in (r611, r613)]

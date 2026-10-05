@@ -21,7 +21,7 @@ from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSp
 from pydantic import BaseModel
 
 from ess.apps import Backend, Client, combine
-from ess.apps.bindings import ElementAccumulator, Function
+from ess.apps.bindings import Function, HeldState
 from ess.apps.testing import FakeDatasets
 
 
@@ -212,8 +212,9 @@ class _Sums:
         self._fixed = fixed
         self._sums: dict[str, Any] = dict.fromkeys(tables, 0.0)
 
-    def push(self, table: str, row: Mapping[str, Any]) -> None:
-        self._sums[table] += _counts(row['run'])  # in place from the second row
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            self._sums[table] += _counts(row['run'])  # in place from the second row
 
     def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
         outputs = self._finalize(**self._sums, **self._fixed)
@@ -242,7 +243,7 @@ class Summing:
 
         return compute
 
-    def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
+    def accumulator(self, fixed: Mapping[str, Any]) -> HeldState:
         return _Sums(self._finalize, self._tables, **fixed)
 
 

@@ -72,10 +72,11 @@ class Opened(BaseModel, frozen=True):
 
 
 class Pushed(BaseModel, frozen=True):
+    """A push into an accumulator: one row for each table it names."""
+
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
-    table: str
-    row: Row
+    rows: dict[str, Row]
 
 
 Event = Annotated[Submitted | Finished | Opened | Pushed, Field(discriminator='kind')]
@@ -103,7 +104,7 @@ def _with_refs(event: Event) -> Event:
             template = dataclasses.replace(event.template, params=params)
             return event.model_copy(update={'template': template})
         case Pushed():
-            return event.model_copy(update={'row': _refs(event.row)})
+            return event.model_copy(update={'rows': _refs(event.rows)})
     return event
 
 

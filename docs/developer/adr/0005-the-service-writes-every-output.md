@@ -44,7 +44,7 @@ night = client.records(label='night')
 client.output(night[0], 'iofq')                     # read from the file the record names
 
 volume = client.accumulator(Template(VOLUME, params={'grid': grid}, blanks=('runs',)))
-volume.push('runs', {'run': dataset(run=611)})      # reduced and added in the volume's job
+volume.push({'runs': {'run': dataset(run=611)}})    # reduced and added in the volume's job
 cut = client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
                                                     # runs in the volume's job; the cut is written
 ```

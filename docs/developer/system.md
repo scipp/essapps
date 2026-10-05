@@ -38,7 +38,7 @@ History is four lists, each only appended to:
 | records | record | ID, time, proposal, submitter, request, output names, label, member | a submission is accepted |
 | accumulators | opened accumulator | ID, proposal, template | an accumulator opens |
 | finishes | finished record | record ID, status, failure message | a record completes, fails, or is cancelled |
-| pushes | push into an accumulator | accumulator ID, table, the row as a request over it holds it | a row is added to an accumulator |
+| pushes | push into an accumulator | accumulator ID, one row per table, each as a request over it holds it | rows are added to an accumulator |
 
 Client entries are not history: opening or ending a client, making a stage, and releasing anything append nothing, and no client entry survives a restart.
 A record does not say which stage it went through.
@@ -51,10 +51,10 @@ With two runs, these items are appended, in this order (`#n` is a record, `a` th
 
 ```text
 accumulators  a   volume/v1  {}  blanks=(runs)
-pushes        a   runs  {run: uuid:run-1}
+pushes        a   {runs: {run: uuid:run-1}}
 records       #1  cut/v1  {data: a[:1].counts, index: 0}  label=cut member=17
 finishes      #1  completed
-pushes        a   runs  {run: uuid:run-2}
+pushes        a   {runs: {run: uuid:run-2}}
 records       #2  cut/v1  {data: a[:2].counts, index: 0}  label=cut member=17
 finishes      #2  completed
 records       #3  copy/v1  {data: a[:2].counts}
@@ -104,7 +104,7 @@ A finish always names a record appended before it.
 Every record is a request.
 Its status is its finish, so a record never changes and a client's copy of it is never out of date.
 A reference to a state of an accumulator holds the accumulator's ID and a count, `upto`, not the rows.
-Provenance expands it into the plain request over the first `upto` rows (`Backend.accumulated`): the accumulator's template with each table filled by the rows pushed into it, in push order, and defaults filled in.
+Provenance expands it into the plain request over the rows of the first `upto` pushes (`Backend.accumulated`): the accumulator's template with each table filled by the rows pushed into it, in push order, and defaults filled in.
 
 ```python
 total = client.compute(COPY, {'data': volume.ref('counts')})
@@ -182,18 +182,22 @@ The backend does this:
 
 ```python
 held = binding.accumulator(read(fixed))  # when it opens: computes what depends only on the fixed values
+unreadable = 'nothing has been pushed into the accumulator'
 
-def push(table, row):
-    wait(row)                            # until its records have finished
-    check(row)                           # as the request over [row] with the fixed values
+def push(rows):                          # {table: row, ...}
+    wait(rows)                           # until their records have finished
+    check(rows)                          # each by its table's row model
     with lock:                           # the accumulator's
+        reason = validate(pushes[accumulator] + [rows])   # the plain request; refused if a fixed value changes
         wait(readers)                    # until the readers of the current state have run
-        held.push(table, read(row))      # in place if the binding does so
-        append_push(accumulator, table, row)
+        held.push(read(rows))            # in place if the binding does so
+        append_push(accumulator, rows)
+        unreadable = reason              # None if the plain request is accepted
 
 def bind(reference):                     # a request at submission, or a client.output call
     with lock:                           # so never during an add
-        upto = len(pushes[accumulator])  # refused if 0
+        refuse(unreadable)               # if not None
+        upto = len(pushes[accumulator])
         readers += 1                     # until the request has run, or the copy is made
         return reference with upto
 ```
@@ -204,24 +208,29 @@ Opening waits for the records the template references, refuses them unless they 
 The binding gets every value but the tables, with data read and defaults filled in.
 Each value is typed by its field alone, since the params model's own validators may need the tables.
 
-**Push.** A push gets the check that the request over that one row, with the accumulator's other values, gets: the row is valid for the table's row model, with no field the model lacks, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
-History holds the row as that request would hold it, with names resolved and defaults filled in.
-A push waits for the records the row references to finish before it is checked, so whether it is refused does not depend on timing.
+**Push.** A push names one row for each of one or more of the accumulator's tables, and its rows enter one state; a key that is not one of them is refused.
+Each row gets the check that the request over that one row gets, by its table's row model alone: it is valid for the row model, with no field the model lacks, its values can be stored, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
+History holds each row as that request would hold it, with names resolved and defaults filled in.
+A push waits for the records the rows reference to finish before it is checked, so whether it is refused does not depend on timing.
+Rules on a whole table, such as its length, and the params model's own validators apply to the plain request over all rows pushed so far, which each push validates once.
+If that request would be refused, the rows are still added, and the accumulator keeps the reason as the reason its state cannot be read.
+If it is accepted but gives a fixed value other than the one the binding was opened with, as a `field_validator` that changes a value may, the push is refused and nothing is added.
 A row that references an accumulator is refused: it would read the other accumulator's state while it adds, without holding back that accumulator's next push.
 A stage or an accumulator whose template references an accumulator is refused too, since it would hold that state, and so hold back every push, for as long as it lives.
 A push that does not fit, or whose add fails, appends nothing.
-After a failed add the accumulator takes no more pushes or reads, since the binding may hold part of the row; the driver opens a new accumulator.
+After a failed add the accumulator takes no more pushes or reads, since the binding may hold part of the rows; the driver opens a new accumulator.
 Adding can take long.
 It runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long add holds up only the pushes and reads of the same accumulator.
 The pushes are appended in the order they were added.
 
 **Reads.** A reader binds to the state after the pushes so far: a request when it is submitted, a `client.output` call when it is made.
+`client.provenance` binds in the same way, but reads no output, so it is not a reader.
 It takes the accumulator's lock, then the backend's, as a push does, so it never binds in the middle of an add.
 A submission that references several accumulators takes their locks in the order of their IDs.
 The record holds the count; a reference that names another count than the current one is refused, since the accumulator holds no earlier state.
-A state with nothing pushed is refused, and so is an accumulator of another client.
+A state whose plain request would be refused, such as one with nothing pushed, is refused with that reason, and so is an accumulator of another client.
 
-The outputs of a state are computed outside the backend's lock, once: the first reader computes the outputs it reads, and later readers of the same state compute only those not yet computed.
+The outputs of a state are computed outside the backend's lock, once while the state has readers: the first reader computes the outputs it reads, and later readers of the same state compute only those not yet computed.
 They are dropped when the state's last reader is done.
 A request reads them as the binding returns them, not a copy, so its outputs must not share memory with them, such as a slice of them; this is documented, not enforced.
 `client.output` copies them.
@@ -232,18 +241,18 @@ No reader waits for a push, so the wait ends; a long reader holds back the next 
 A reader that binds while a push waits or adds blocks until the push is done, and binds to the state after it.
 Releasing the accumulator or ending its client waits for nothing: a push that waits is refused, and the held state is dropped once its readers are done.
 
-**Binding.** The protocol is `accumulator(fixed)`, which returns an object with `push(table, row)` and `outputs(names)` ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
+**Binding.** The protocol is `accumulator(fixed)`, which returns a held state with `push(rows)` and `outputs(names)` ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
 held = binding.accumulator({'scale': 2.0})     # nothing pushed yet
-held.push('runs', {'run': counts_611})         # values, not references
-held.push('runs', {'run': counts_612})
+held.push({'runs': {'run': counts_611}})       # values, not references
+held.push({'runs': {'run': counts_612}})
 held.outputs(['normalized'])                   # {'normalized': ...}, computed from the held state
 ```
 
 - After rows are pushed in order, `outputs` gives what the plain request over those rows gives, with the same other values.
-- `push` may modify the held state in place, but not the row. A binding whose held state starts from the first row's values copies them, so that adding in place never changes the output they came from.
-- `outputs` may return part of the held state, not a copy.
+- `push` takes the rows of one push, one per table, so that a binding such as `StreamProcessor` can add them at once. It may modify the held state in place, but not the rows. A binding whose held state starts from the first row's values copies them, so that adding in place never changes the output they came from.
+- `outputs` may return part of the held state, not a copy. It may leave out an output that the spec declares optional, and `client.output` without a name then leaves it out, as for a record. It must not modify what an earlier call for the same state returned, since running readers still use it while later names are computed.
 - The backend calls `push` and `outputs` from one thread at a time, and never `outputs` while a push adds.
 - The stories bind `NORMALIZE` and `VOLUME` to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs and computes the outputs from the sums.
 

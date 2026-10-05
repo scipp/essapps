@@ -261,10 +261,10 @@ Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and i
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
 total = client.accumulator(Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',)))
 for run in (r611, r612):
-    total.push('runs', {'run': run})
+    total.push({'runs': {'run': run}})
 first = client.output(total, 'normalized')                # runs 611 and 612
 
-total.push('runs', {'run': r613})                         # 611 and 612 are not reduced again
+total.push({'runs': {'run': r613}})                       # 611 and 612 are not reduced again
 added = client.output(total, 'normalized')                # all three
 
 rows = [{'run': run} for run in (r611, r613)]
@@ -517,7 +517,7 @@ for n in range(1, 1001):
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 1000):
-    volume.push('runs', {'run': run})                          # waits until the previous cut has run
+    volume.push({'runs': {'run': run}})                        # waits until the previous cut has run
     pushed.append(run)
     cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0},
                               label='cut', member='17'))

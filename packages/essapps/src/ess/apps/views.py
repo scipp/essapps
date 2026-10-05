@@ -22,7 +22,7 @@ class Views:
 
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``accumulators`` holds the event that opened each accumulator,
-    and ``pushes`` its pushes in order, each a table and a row; a record that
+    and ``pushes`` its pushes in order, each a row per table; a record that
     read it after ``upto`` pushes read the first ``upto``.
     """
 

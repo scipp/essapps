@@ -40,7 +40,7 @@ client.output(records[60339], 'iofq')
 
 What the framework adds to the plain loop:
 
-- Each call is kept as a record and can be found later, by this notebook or another one.
+- Each call is kept as a record and can be found later: in the user's process (`local()`) by that process, and on the service by other notebooks and programs too.
 - Calls can run elsewhere and in parallel.
 - Every result can answer where it came from: which spec, which parameter values, which datasets, which software versions.
 
@@ -70,7 +70,7 @@ The terms this document defines, in the order they appear:
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | DMSC; a fake one in tests |
 | table, row | a parameter whose value is a list of rows of one flat model; a row is the unit that arrives, such as a run | workflow author | notebook, app |
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
-| accumulator | an accumulating workflow the backend keeps for a client: a template whose blanks are tables, into which rows are pushed one at a time, and which is read like a record | framework | notebook, app |
+| accumulator | an accumulating workflow the backend keeps for a client: a template whose blanks are tables, into which each push adds one row to one or more of them, and which is read like a record | framework | notebook, app |
 | held state | what an accumulator's binding holds between pushes, such as a numerator and a denominator; no spec, call, or record names it | workflow author | backend, when the accumulator opens |
 | state | an accumulator after its first n pushes; a read binds to the state at that moment | framework | backend, at each push |
 
@@ -162,15 +162,17 @@ A binding of a spec with tables may also provide `accumulator(fixed)`, which an 
 It returns an object that holds the accumulator's held state ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
-held = binding.accumulator(fixed)      # every value but the tables, data read; computes what depends only on them
-held.push('runs', {'run': run_611})    # adds one row of one table, data read
-held.outputs(['normalized'])           # {'normalized': ...}, computed from the held state
+held = binding.accumulator(fixed)        # every value but the tables, data read; computes what depends only on them
+held.push({'runs': {'run': run_611}})    # adds one row to each named table, data read
+held.outputs(['normalized'])             # {'normalized': ...}, computed from the held state
 ```
 
 After rows are pushed, `outputs` gives what the plain request over those rows gives, with the same other values.
 The workflow author promises this, as `StreamProcessor` asks its users to promise that a workflow is linear in its dynamic keys.
-`push` may modify the held state in place, but not the row.
-`outputs` may return part of the held state, not a copy.
+`push` takes the rows of one push, one per table, so that a binding can add them at once.
+It may modify the held state in place, but not the rows.
+`outputs` may return part of the held state, not a copy, and may leave out an output the spec declares optional.
+It must not modify what an earlier call for the same state returned, since running readers still use it.
 The backend calls both from one thread at a time.
 `combine(operation)` is such a binding, for a spec whose only parameter is one table and whose outputs are the rows' fields, each combined with `operation`.
 `PipelineBinding` will accumulate with `StreamProcessor` ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)); this is designed and not implemented.
@@ -269,7 +271,7 @@ client.records(label='iofq')             # oldest first; without a label, every 
 {r.member: r for r in client.records(label='iofq')}      # the newest record of each member
 ```
 
-The loop from the start, with labels, so that another notebook finds the curves:
+The loop from the start, with labels, so that the curves are found later: in the user's process by that process, and on the service by other notebooks too:
 
 ```python
 records = {}
@@ -434,7 +436,7 @@ client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 # 2. an accumulator over the table, see Stages and accumulators
 total = client.accumulator(Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',)))
 for row in rows:
-    total.push('runs', row)
+    total.push({'runs': row})
 client.output(total, 'normalized')
 ```
 
@@ -470,15 +472,16 @@ What the stage computed is a cache: the backend may drop it at any time, and the
 How the backend calls the binding for a stage is in Specs and bindings.
 
 **Accumulator.** An *accumulator* is an accumulating workflow that the backend keeps for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
-It opens from a template whose blanks are tables, and takes one row at a time:
+It opens from a template whose blanks are tables, and takes rows one push at a time:
 
 ```python
 iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': ...},
                                    blanks=('sample_runs', 'can_runs')))
-iofq.push('sample_runs', {'run': dataset(run=611)})   # the dict one row of the request takes
-iofq.push('can_runs', {'run': dataset(run=614)})
-iofq.push('sample_runs', {'run': dataset(run=612)})   # reduces run 612 only
-client.output(iofq, 'iofq')                            # what the plain request over these rows gives
+iofq.push({'sample_runs': {'run': dataset(run=611)}})   # the dict one row of the request takes
+iofq.push({'can_runs': {'run': dataset(run=614)}})
+iofq.push({'sample_runs': {'run': dataset(run=612)},    # one row in each of two tables
+           'can_runs': {'run': dataset(run=615)}})       # reduces runs 612 and 615 only
+client.output(iofq, 'iofq')                              # what the plain request over these rows gives
 ```
 
 As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: what it computed from the fixed values, and its *held state*, such as the numerators and denominators summed so far.
@@ -487,15 +490,16 @@ The outputs are the spec's outputs, computed from the held state when they are r
 
 - `client.accumulator` checks the template as `client.stage` does, with the tables left out. Its blanks must be one or more of the spec's tables, and the spec's binding must provide `accumulator(fixed)` (see Specs and bindings). A plain request over the tables works with any binding.
 - Opening waits for the records the template references, refuses them unless they have completed, and reads them once. `iofq.template` holds the values as resolved, as a stage's template does.
-- `push(table, row)` adds one row to one table. It is checked as the request over that one row, with the accumulator's other values, would be. It waits for the records the row references to finish, and refuses them unless they have completed.
+- `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it. It waits for the records the rows reference to finish, and refuses them unless they have completed.
+- Rules on a whole table, such as its length, and the params model's own validators apply to the plain request over all rows pushed so far. A push that the plain request would not yet accept is added, and its state cannot be read until a later push makes the request acceptable. A push is refused if the plain request gives a fixed value other than the one the accumulator opened with, as a validator of the params model may.
 - A row that references an accumulator is refused, and so is a stage or an accumulator whose template references one, since it would hold back every push for as long as it lives. Accumulators meet in a request.
-- If adding a row fails, the push is refused and the accumulator takes no more pushes or reads, since the binding may hold part of the row.
+- If adding the rows of a push fails, the push is refused and the accumulator takes no more pushes or reads, since the binding may hold part of them.
 
 **Reads.** An accumulator is read as a record is ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
 client.output(iofq, 'iofq')                                 # as client.output(record, 'iofq')
-client.output(iofq)                                         # every output, by name
+client.output(iofq)                                         # every output it returned, by name
 client.provenance(iofq)                                     # that of the plain request over the rows so far
 exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # bound when submitted
 iofq.refs()                                                 # a reference to every output, by name
@@ -506,7 +510,7 @@ It gives what the same call gives on the record of the plain request over those 
 
 - A reference binds when its request is submitted. The record holds `{'accumulator': id, 'output': name, 'upto': n}`, the output after the first `n` pushes. All references to one accumulator in one submission bind to the same state, and a reference to an earlier state is refused.
 - `client.output` returns a copy, so that, like a record's output, the value does not change afterwards. A request reads the output itself.
-- A read of an accumulator with nothing pushed is refused. Only the client that opened an accumulator reads it.
+- A state is read only if its plain request would be accepted. A read of any other state, such as one with nothing pushed, or with no row in a table that needs one, is refused with the reason that request would be refused. Only the client that opened an accumulator reads it.
 - `client.submit(iofq)` raises `TypeError`. A record of a state is a request of a spec that copies what it reads, such as `COPY` in Drivers.
 
 **Pushes wait for readers.** An accumulator holds one state, and its binding may add each row to it in place, so that a push needs no second copy of a large volume.
@@ -516,7 +520,7 @@ Readers are the requests that reference the state and were accepted before the p
 No reader waits for a push, so the wait ends.
 A read made while a push waits or adds blocks until the push is done, and binds to the state after it.
 A long reader holds back the next push, so the driver decides how often it looks.
-The outputs of a state are computed when the state is first read for them: once, and only those asked for.
+The outputs of a state are computed when the state is first read for them: once while the state has readers, and only those asked for.
 Releasing the accumulator, or ending its client, waits for nothing; its held state is dropped once its readers have run.
 
 ## Drivers
@@ -544,7 +548,7 @@ This one adds each run of a rotation scan to a volume as it arrives, and cuts th
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 1000):   # the scan's 1000 runs
-    volume.push('runs', {'run': run})                    # waits until the previous cut has run
+    volume.push({'runs': {'run': run}})                  # waits until the previous cut has run
     client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}, label='cut', member='17')
 total = client.compute(COPY, {'data': volume.ref('counts')})   # a record of the last state
 ```

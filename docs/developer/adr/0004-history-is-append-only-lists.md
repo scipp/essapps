@@ -47,7 +47,7 @@ History is four lists, each only appended to:
 | records | record | ID, time, proposal, submitter, request, output names, label, member |
 | accumulators | opened accumulator | ID, proposal, template |
 | finishes | finished record | record ID, status, failure message |
-| pushes | push into an accumulator | accumulator ID, table, row |
+| pushes | push into an accumulator | accumulator ID, one row per table |
 
 - A record never changes. Its status is its finish; a record without one is pending.
 - A reference to an accumulator names it and how many pushes it covers. The accumulator's template and those pushes say what that state is ([ADR 0003](0003-accumulators-add-in-place.md)).

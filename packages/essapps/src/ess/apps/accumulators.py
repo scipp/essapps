@@ -12,7 +12,7 @@ both combine the rows in the same order::
     rows = [c.refs('numerator', 'denominator') for c in contributions]
     client.submit(PARTS_SUM, {'parts': rows})
     total = client.accumulator(Template(PARTS_SUM, blanks=('parts',)))
-    total.push('parts', rows[0])                     # one row, the same shape
+    total.push({'parts': rows[0]})                   # one row, the same shape
 
 ``combine`` belongs in ess.reduce next to ``PipelineBinding``; it lives here
 until that is proposed there.
@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .bindings import AccumulatorBinding, ElementAccumulator, Function
+from .bindings import AccumulatorBinding, Function, HeldState
 
 
 class _Fold:
@@ -42,14 +42,17 @@ class _Fold:
         self._table: str | None = None
         self.total: dict[str, Any] = {}
 
-    def push(self, table: str, row: Mapping[str, Any]) -> None:
-        if self._table is None:
-            self._table, self.total = table, copy.deepcopy(dict(row))
-        elif table != self._table:
-            raise ValueError(f'combine takes one table, not {self._table} and {table}')
-        else:
-            for field, value in row.items():
-                self.total[field] = self._operation(self.total[field], value)
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            if self._table is None:
+                self._table, self.total = table, copy.deepcopy(dict(row))
+            elif table != self._table:
+                raise ValueError(
+                    f'combine takes one table, not {self._table} and {table}'
+                )
+            else:
+                for field, value in row.items():
+                    self.total[field] = self._operation(self.total[field], value)
 
     def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
         return {name: self.total[name] for name in names}
@@ -66,10 +69,10 @@ class _Combine:
         ((name, rows),) = table.items()
         fold = _Fold(self.operation)
         for row in rows:
-            fold.push(name, row)
+            fold.push({name: row})
         return fold.total
 
-    def accumulator(self, fixed: Mapping[str, Any]) -> ElementAccumulator:
+    def accumulator(self, fixed: Mapping[str, Any]) -> HeldState:
         if fixed:
             raise TypeError(f'combine takes only a table, not also {sorted(fixed)}')
         return _Fold(self.operation)
