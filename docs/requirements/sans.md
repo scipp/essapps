@@ -4,7 +4,7 @@ LoKI and SKADI at ESS; LoKI has 3.2 M pixels, and SKADI has no reduction code ye
 One I(Q) needs runs in up to five roles (sample, can, a transmission run for each, empty beam) plus a direct-beam function, a beam centre and masks; today a person names every run by hand.
 The runs of one sample are summed; the 9 LoKI detector banks give 9 separate curves today, and instrument scientists want them merged into one as well.
 Samples are independent of each other, and a batch may hold hundreds of them.
-Open: events per run at LoKI, and what automatic reduction should produce for each new run.
+Automatic reduction is assumed to give one I(Q) per run, with merging of runs a later, manual step.
 
 ## Known
 
@@ -38,16 +38,14 @@ Open: events per run at LoKI, and what automatic reduction should produce for ea
 
 ## Assumed
 
-- All runs of a sample exist before its reduction starts, as in every notebook. *Ask the LoKI instrument scientist whether users want a sample's sum updated as its runs arrive.*
-- One beam centre serves all samples of one experiment in one instrument configuration ([users](users.md)). *Ask the LoKI instrument scientist.*
+- Automatic reduction gives one I(Q) per run. Merging runs is a later, manual step: a person judges which runs to merge and enters them in a batch-reduction table, so all runs of a merged sample exist before its reduction starts. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
+- One beam centre serves a series of samples, for example from a sample changer, and is found again when the sample environment changes. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
+- One LoKI reduction takes seconds and needs little memory; time grows with the number and length of the runs combined. *Simon, 2026-10-05; measure on real LoKI files once they exist.*
 - Each sample needs its own thickness for absolute scale; esssans has none today. *ISIS batch rows carry `sample_thickness`; ask the LoKI instrument scientist.*
 - Results are histograms; events are not kept to bin again in Q. *LoKI notebooks set `ReturnEvents = False`, ISIS notebooks keep events; ask the LoKI instrument scientist.*
 
 ## Open
 
-- How many events per second reach the LoKI detector, and how long is a run? *Decides memory per reduction and runs per hour. Ask: LoKI instrument scientist; read [Detector rates for the SANS instruments at ESS (arXiv:1805.12334)](https://arxiv.org/abs/1805.12334).*
 - How many runs per sample, samples per day, and samples per can are typical? *Decides batch size and how often one can serves many samples. Ask: LoKI instrument scientist.*
-- What should automatic reduction produce on each new run: a full I(Q) with can and transmission, or a per-run curve like the live one? *Decides whether it must wait for partner runs. Ask: LoKI instrument scientist.*
 - Will kinetic measurements be split into time slices of one run, and from when? *Decides the size of one result ([data](data.md)). Ask: LoKI and SKADI instrument scientists.*
-- How long does one LoKI reduction of all 9 banks take, and how much memory does it need? *Decides where reductions can run. Measure on real LoKI files once they exist.*
 - When will SKADI need reduction, and must polarised results be redone after the end-of-cell run? *Decides whether a later calibration run triggers reductions again. Ask: SKADI instrument scientist.*

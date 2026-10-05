@@ -38,6 +38,6 @@ Physics terms such as Q, I(Q), or S(Q, E) are not explained.
 - **esslivedata**: live reduction and dashboards while a run is measured.
 - **ess packages**: the reduction workflows in the scipp/ess repository (esssans, essreflectometry, ...), built with sciline on scipp.
 - **VISA**: ESS remote desktops (virtual machines) with JupyterLab, created by a user for a proposal.
-- **DMSC**: the ESS Data Management and Scientific Computing division; it runs the cluster and the data services.
+- **DMSC**: the ESS Data Management and Scientific Computing division; it runs the cluster and the data services, and the team that builds this framework belongs to it.
 - **Batch-reduction service** and **automatic-reduction service**: long-running programs that reduce data for many users; DMSC keeps them running, and users and instrument scientists configure them ([users](users.md)).
 - **ISIS**, **SNS**, **PSI**: neutron sources in the UK, the USA, and Switzerland; Amor (PSI) and Larmor, Sans2d, Zoom, Offspec (ISIS) were used to prototype ess code.

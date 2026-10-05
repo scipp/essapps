@@ -3,7 +3,8 @@
 ODIN at ESS, plus the test beamline (TBL) and imaging at BEER; essimaging reduces camera images (ODIN, TBL, and the ESS test bed YMIR) and ODIN wavelength-resolved event data.
 One normalised image needs a sample, an open-beam and a dark measurement, as three files (TBL) or as one file split by a time log (ODIN, YMIR); dark and open-beam frames are averaged, but each sample frame is normalised alone.
 A stack of 361 camera images of 2048 × 2048 pixels, as in one YMIR example, holds 6 GB as 32-bit integers and 12 GB in float64; a Timepix3 wavelength cube of 4096 × 4096 pixels × 256 bins holds 34 GB.
-Open: whether tomographic reconstruction or full-resolution wavelength cubes belong to reduction, and whether users watch normalised projections while a scan runs.
+Tomographic reconstruction is done by other software, not by reduction ([non-goals](README.md#non-goals)).
+Open: whether users need full-resolution wavelength cubes, and whether they watch normalised projections while a scan runs.
 
 ## Known
 
@@ -32,9 +33,8 @@ Open: whether tomographic reconstruction or full-resolution wavelength cubes bel
 
 ## Open
 
-- Does reduction produce a reconstructed volume, or only normalised projections for another program? *Decides whether one result needs all projections of a scan at once. Ask: ODIN instrument scientist.*
 - How many projections, frames per projection and runs does a tomography scan have at ODIN, and how long does it take? *Decides the size of the inputs to one result. Ask: ODIN instrument scientist.*
-- Do users look at normalised projections, or a partial reconstruction, while the scan still runs? *Decides whether partial results are needed. Ask: ODIN instrument scientist.*
+- Do users look at normalised projections while the scan still runs? *Decides whether partial results are needed. Ask: ODIN instrument scientist.*
 - At what spatial and wavelength binning do users want Bragg-edge cubes, and is the full 4096 × 4096 resolution needed? *At full resolution with 256 bins one cube holds 4.3e9 values, 34 GB in float64. Ask: ODIN instrument scientist.*
 - How many events per second does the ODIN Timepix3 detect, and how large is one run? *Decides memory per reduction; esslivedata has no rate for ODIN. Ask: ODIN instrument scientist, detector group.*
 - Will ODIN always write open-beam and dark frames into the sample run's file, or will users pick them from earlier runs? *Decides whether one result reads one run or several. Ask: ODIN instrument scientist.*

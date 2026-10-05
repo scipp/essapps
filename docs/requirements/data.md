@@ -4,7 +4,7 @@ A run is one measurement: NICOS asks the file writer to write the instrument's K
 A file is complete when the file writer reports it finished; the catalogue (SciCat) then lists it as `20.500.12269/<run UUID>`.
 An event takes 8 bytes, so at the highest event rate estimated for DREAM one hour would be about 2 TB.
 No ESS instrument has measured neutrons yet; ESS plans first neutrons for early 2027.
-Open: what the run number is unique within in user operation, and how large runs will be.
+Open: how large runs will be, and how files or the catalogue will say what role a run plays.
 
 ## Known
 
@@ -17,7 +17,7 @@ Open: what the run number is unique within in user operation, and how large runs
 - Raw files on ESS machines sit on read-only network file systems, synced from the machine that writes them.
   A file can still change while it is read if the file writer has not finished it. *[essreduce _nexus_loader.py](https://github.com/scipp/ess/blob/main/packages/essreduce/src/ess/reduce/nexus/_nexus_loader.py#L217-L238)*
 - A neutron event arrives as a 32-bit time offset and a 32-bit pixel ID, so it takes 8 bytes without compression. *[ev44 schema](https://github.com/ess-dmsc/streaming-data-types/blob/master/schemas/ev44_events.fbs)*
-- The best available event-rate estimates are 1e6 per second at BIFROST, 1e7 at LoKI and CSPEC, 5e7 at BEER and 7.5e7 at DREAM; 1e7 per second is 0.3 TB of events per hour, 7.5e7 is 2.2 TB.
+- The best available event-rate estimates, per second, are 1e5 to 1e6 at BIFROST, 5e4 to 1e7 at LoKI (mostly 1e5 to 2e6), 8e5 to 4e6 at ESTIA, 1e6 to 1e7 at CSPEC and MAGiC, 3e5 to 5e7 at BEER, and 1.3e6 to 7.5e7 at DREAM; 1e7 per second is 0.3 TB of events per hour.
   Simon gathered them from instrument scientists years ago; they have likely changed, but nothing better exists. *[esslivedata benchmark targets](https://github.com/scipp/esslivedata/blob/main/docs/about/ess_requirements.py#L48-L90); Simon, 2026-10-05*
 - One file can hold data of several roles: an ODIN camera file holds sample, open-beam and dark frames, told apart by an `image_key` log over time. *[odin/workflows.py](https://github.com/scipp/ess/blob/main/packages/essimaging/src/ess/odin/workflows.py#L116-L140)*
 - Splitting a run by time or by a sample-environment log adds a dimension to its result; it does not make many results. *Simon, 2026-10-05*
@@ -26,13 +26,12 @@ Open: what the run number is unique within in user operation, and how large runs
 ### Naming, finding and access
 
 - The run number is a counter that NICOS keeps in a file under its data root and increments for every file; it is written to `entry/entry_identifier` and the proposal to `entry/experiment_identifier`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L333-L343), [nexus_structure.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/nexus_structure.py#L169-L176)*
-- In the CODA test setup one NICOS drives several instruments, so consecutive run numbers go to different instruments (ESTIA 13947, FREIA 13948). *[scicat-ingestor scicat_kafka.py](https://github.com/SciCatProject/scicat-ingestor/blob/main/src/scicat_kafka.py#L155-L166)*
 - NICOS names the file `<proposal>_<run>.hdf`, with an 8-digit run number, in the folder `<instrument>/<proposal>/raw/`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L541-L552), [experiment.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/experiment.py#L259-L267)*
 - Each file carries a per-run UUID (`entry/entry_identifier_uuid`) built from proposal, run number and a random part.
   The catalogue ingestor's published ESS schemas make it the catalogue identifier `20.500.12269/<uuid>`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L422-L436), [ess-fallback.imsc.yml](https://github.com/SciCatProject/scicat-ingestor/blob/main/src/fallback_metadata_schema/ess-fallback.imsc.yml#L8-L18)*
-- A local file may carry no run number. *Simon, 2026-09-28*
+- A local file may carry no run number, come from another facility with another numbering, or carry a run number under a name the user changed. *Simon, 2026-09-28 and 2026-10-05*
 - Users name data by file path today: every ess reduction workflow reads a run from a `Filename` parameter. *[essreduce nexus/types.py](https://github.com/scipp/ess/blob/main/packages/essreduce/src/ess/reduce/nexus/types.py#L281)*
-- In the ESS catalogue a dataset's owner group is its single proposal ID, so who may read it follows the proposal. *[scitacean _ess.py](https://github.com/SciCatProject/scitacean/blob/main/src/scitacean/_profile/_ess.py#L84-L90)*
+- Mantid finds the file of a run from its run number in configured data search directories, and users will expect the same here. *[Mantid, Manage User Directories](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/framework/ManageUserDirectories.rst#L11-L21); Simon, 2026-10-05*
 - ESS intends data to become open: after an embargo, anyone may access it.
   This is part of making data FAIR, which requires that each result carry its provenance. *[ESS, 2020-07-06](https://ess.eu/article/2020/07/06/driven-data); Simon, 2026-10-05*
 
@@ -43,14 +42,14 @@ Open: what the run number is unique within in user operation, and how large runs
 
 ## Assumed
 
+- Instrument and run number name a run: a run number does not repeat within an instrument. *Simon, 2026-10-05; confirm with the NICOS team.*
 - In user operation, raw files land at `/ess/raw/<instrument>/<year>/<proposal>/raw/<proposal>_<run>.hdf`. *Seen in the `file_name` attribute of a 2025 ODIN commissioning file; confirm with the ECDC file-writer team.*
 - A file does not change after the file writer reports it finished. *Simon, 2026-10-05; confirm with the ECDC file-writer team.*
-- Users will name the runs of every role by run number or a SciCat identifier; this may change over time. *Simon, 2026-10-05; ask instrument scientists.*
+- Users will name the runs of every role by run number or a SciCat identifier; this may evolve over time into something more automated. *Simon, 2026-10-05; ask instrument scientists.*
 - The embargo lasts 3 years, and raw files are kept forever. *Simon, 2026-10-05, from memory; confirm with the ESS data policy owner.*
 
 ## Open
 
-- Does each instrument have its own NICOS and run counter in user operation, and can a run number repeat? *Decides whether instrument and run number name a run, or the proposal or UUID is needed. Ask: NICOS team.*
 - How will ESS files or the catalogue say what role a run plays (sample, can, transmission, empty beam, vanadium, reference, direct beam, open beam, dark), and which runs belong together, such as the angles of one sample? *Decides how an application pairs runs without a person ([tensions](tensions.md)). Ask: NICOS team, SciCat team, instrument scientists.*
 - How long after the file writer finishes does the catalogue list the run? *Decides how automatic reduction learns of new runs. Ask: DMSC SciCat team.*
 - How large is a typical and a largest run per instrument in user operation? *Decides memory per reduction, and which VISA machine size an instrument needs ([systems](systems.md)). Ask: instrument scientists.*
