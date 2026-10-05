@@ -2,7 +2,7 @@
 
 ESTIA and FREIA at ESS; Amor at PSI and Offspec at ISIS were used to prototype essreflectometry, and FREIA has code for simulated data only.
 A sample is measured at several angles, and each angle's curve is divided by a normalisation run; runs repeated at one angle are concatenated, and one joint fit scales the curves of all angles, so a new angle changes every factor.
-Simon expects reflectometry batch reduction might reach more than 1000 runs per hour; Amor tutorial runs started 11 to 47 minutes apart, so the source of that rate is open.
+Simon expects reflectometry batch reduction might reach more than 1000 runs per hour; what produces that many runs is open.
 Amor runs hold 0.2 to 4 M events (22 to 48 MB), and ESTIA aims at measurements of a few seconds.
 Open: events per run at ESTIA and FREIA, whether fast measurements are separate runs or time slices of one run, and whether automatic reduction should stitch angles as they arrive.
 
@@ -14,7 +14,7 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 - One ESTIA angle covers Q_max = 2.85 Q_min at 14 Hz, and 0.01 to 0.14 Å⁻¹ with the chopper at a third of the source frequency. *[Andersen et al. 2020, Table 4, §2.3.3](https://doi.org/10.1016/j.nima.2020.163402)*
 - ESTIA measures a 1 cm² sample in a few seconds and a 1 mm² sample in a few hours; FREIA measures a full curve in seconds (10 to 15 min at high resolution); both aim at sub-second time resolution for kinetics. *[Andersen et al. 2020, §2.3.1, §2.3.3, §2.4.2, §2.4.3](https://doi.org/10.1016/j.nima.2020.163402)*
 - essreflectometry cannot split a run into time slices; ISIS Mantid can, by time or by a log value. *[essreflectometry](https://github.com/scipp/ess/tree/main/packages/essreflectometry/src/ess), [Mantid ISIS Reflectometry](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/reflectometry/ISIS%20Reflectometry.rst)*
-- Amor tutorial runs 608 to 611 hold 4.0, 1.6, 0.56 and 0.21 M events in files of 48, 31, 23 and 23 MB, and started 11, 28 and 47 minutes apart. *[Amor run 608](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000608.hdf) to [611](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000611.hdf)*
+- Amor tutorial runs 608 to 611 hold 4.0, 1.6, 0.56 and 0.21 M events in files of 48, 31, 23 and 23 MB. *[Amor run 608](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000608.hdf) to [611](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000611.hdf)*
 
 ### Runs and normalisation
 
@@ -46,7 +46,7 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 - Users repeat runs at one angle and expect them summed. *Seen at ISIS and in the Amor GUI; the Amor "611+612" example joins runs at 5.05° and 0.65°, so it only demonstrates the code; ask the ESTIA instrument scientist.*
 - Runs are grouped by sample name and by angle within a tolerance (run 611 logs 5.0 and 4.999; ISIS uses 0.01). *Ask the ESTIA instrument scientist.*
 - One reduced reference serves all samples of an instrument configuration. *From the tutorials and the Amor GUI; ask the ESTIA instrument scientist how often the reference is remeasured.*
-- The 1000 runs per hour come from short kinetic runs or from reprocessing many runs, not from one instrument at Amor's pace. *Ask Simon which.*
+- The 1000 runs per hour come from short kinetic runs or from reprocessing many runs. *Ask Simon which.*
 
 ## Open
 

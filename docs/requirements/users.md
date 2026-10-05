@@ -14,7 +14,7 @@ Open: how many people reduce at once, and which way of working the first release
 - Workflow authors: the framework must not depend on how a reduction workflow is implemented (sciline pipeline or plain function), and a workflow must not depend on where it runs. *Simon, scoping.md; Simon, 2026-09-28*
 - A reduction that needs a change its workflow does not offer, such as a replaced geometry, falls back to a Jupyter notebook; a recurring need becomes an optional input that the workflow authors add. *Simon, 2026-10-05*
 - Instrument scientists choose calibration and background runs in different ways, and the framework must not prescribe how they operate their instruments. *Simon, 2026-09-28*
-- Instrument scientists prepare inputs that the users of later proposals reuse; a reduced vanadium or a beam centre is not one of them, as each experiment makes its own. *Simon, 2026-10-05*
+- Instrument scientists prepare inputs that the users of later proposals reuse, such as masks, detector calibration, or a direct-beam function; a reduced vanadium or a beam centre is not one of them, as each experiment makes its own. *Simon, 2026-10-05*
 - Users configure batch reduction, with support from instrument scientists; instrument scientists or users configure automatic reduction. A DMSC team keeps the services running but configures no reduction. *Simon, 2026-10-05*
 - Visiting users: many do not write Python and need forms or graphical interfaces, while some work in notebooks; this holds most for SANS and reflectometry and least for spectroscopy. *Simon, 2026-10-05*
 - ESS expects more than 1000 experiments a year, each lasting several days with a couple of users, who reduce data at ESS and after they leave. *Simon, 2026-10-05*
