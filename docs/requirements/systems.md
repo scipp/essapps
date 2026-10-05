@@ -43,7 +43,7 @@ Open: whether the batch- and automatic-reduction services may run cluster jobs a
   scitacean's fallback to SFTP serves laptops. *Simon, 2026-10-05*
 - During construction, the DMSC runs a mid-size cluster: 120 compute nodes with 4092 cores, 891 TB of storage and a batch system, hosted near Copenhagen and in Lund. *[ESS, Computing Centre](https://ess.eu/data-management-software/computing-centre)*
 - The DMSC cluster runs Slurm. *Simon, 2026-10-05*
-- Compute should be able to run locally or elsewhere (cluster, cloud), and the catalogue should be SciCat or another one. *Simon, scoping.md (2026-09-04)*
+- Compute should be able to run locally or elsewhere (cluster, cloud), and the catalogue should be SciCat or another one. *Simon, 2026-09-04*
 
 ### Software
 
@@ -52,12 +52,12 @@ Open: whether the batch- and automatic-reduction services may run cluster jobs a
 - The ess packages require Python 3.12 or later and are tested on 3.12 to 3.14. *[essreduce pyproject.toml](https://github.com/scipp/ess/blob/main/packages/essreduce/pyproject.toml#L20-L28)*
 - Users install ess packages with pip or from conda-forge; in practice environments are conda environments. *[essreduce installation.md](https://github.com/scipp/ess/blob/main/packages/essreduce/docs/user-guide/installation.md); Simon, 2026-09-28*
 - The ess packages had 55 releases from January to September 2026, 14 of them essreduce. *[scipp/ess tags](https://github.com/scipp/ess/tags)*
-- The software stack is Python, and so is most of the team's experience. *Simon, scoping.md (2026-09-04)*
+- The software stack is Python, and so is most of the team's experience. *Simon, 2026-09-04*
 - The batch- and automatic-reduction services need not run on Windows, but GUI applications should probably run on Windows too. *Simon, 2026-09-30 and 2026-10-05*
 
 ## Assumed
 
-Nothing at present.
+- DMSC, which keeps the batch- and automatic-reduction services running, needs their metrics and logs. *Simon, 2026-09-04, as an item for consideration; ask DMSC what they monitor.*
 
 ## Open
 

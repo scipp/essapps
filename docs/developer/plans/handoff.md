@@ -15,7 +15,7 @@ A living document for the next session on branch `event-log`. Read it first, the
 | System-tier stories | `docs/developer/system-stories.md`: actor, goal, property; no code yet |
 | Sub-design: batch and automatic reduction | `docs/developer/automatic-reduction.md` |
 | To-do list | `docs/developer/plans/todo.md` |
-| Scoping | `docs/developer/scoping.md` |
+| Goals and requirements | `docs/requirements/README.md` |
 | Code | `packages/essapps/src/ess/apps/`: `records.py`, `log.py`, `views.py`, `backend.py`, `client.py`, `bindings.py`, `pipeline.py`, `datasets.py`, `batch.py`, `accumulators.py`, `sessions.py`, `rules.py`, `testing.py` (about 2,000 lines) |
 | Tests | `packages/essapps/tests/`: `backend_test.py`, `log_test.py`, `sessions_test.py`, `pipeline_test.py`, `stories/*_test.py` (one test per API-tier story), toy specs and fixtures in `stories/conftest.py` |
 | The previous attempt of this session's work | branch `core-old` (README with 8 terms, stories with the old vocabulary, the accumulating-inputs draft) |

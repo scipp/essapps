@@ -6,11 +6,11 @@ Each mechanism of the design ([../developer/](../developer/README.md)) should tr
 
 ## Goal
 
-Run the reduction workflows of the ess packages on ESS data in three ways: by hand (interactively), in batches, and automatically on each new run. *Simon, scoping.md*
-Read inputs from and write results to SciCat or another catalogue, run locally or on a cluster, and let every result say where it came from. *Simon, scoping.md*
+Run the reduction workflows of the ess packages on ESS data in three ways: by hand (interactively), in batches, and automatically on each new run. *Simon, 2026-09-04*
+Read inputs from and write results to SciCat or another catalogue, run locally or on a cluster, and let every result say where it came from. *Simon, 2026-09-04*
 Stay simple: predictable behaviour, and nothing that no stated need forces. *Simon, 2026-09-30*
 
-Simon is Simon Heybrock, who leads the project; "Simon, scoping.md" cites his scoping notes in [../developer/scoping.md](../developer/scoping.md) (2026-09-04).
+Simon is Simon Heybrock, who leads the project; "Simon, 2026-09-04" cites his [scoping notes](https://github.com/scipp/essapps/blob/e72c374bffac264ca95b39c6acd5e0afc894187d/docs/developer/scoping.md).
 Terms such as VISA, DMSC, can, or transmission run are explained in the [glossary](glossary.md).
 
 ## In one minute
@@ -19,17 +19,17 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 - Today a person pairs runs by hand for every technique (sample with can, transmission, open beam); ISIS pairs them by run-title conventions, and whether ESS files will say what role a run plays is unknown.
 - "Combining runs" means a different operation per technique: a sum of counts and of normalisations, divided once (SANS), a concatenation of events (reflectometry, runs at one angle), a joint fit (reflectometry angles, NMX scaling), or nothing yet (powder, imaging). Several methods need all inputs at once.
 - One run is not always one file or one result: the BIFROST code expects one file to hold a whole angle scan, an ODIN file holds sample, open-beam and dark frames, a simulated FREIA run holds three angles, and splitting a run by time or by a sample-environment log adds a dimension to its result.
-- Results grow with events and frames, not only with bins: an imaging stack takes 12 GB and a Horace file at ISIS up to 500 GB.
+- Results can be large: a spectroscopy grid up to hundreds of GB, an imaging stack 12 GB, and a Horace file at ISIS, which lists every observation, up to 500 GB.
 - A run number alone may not name a run, since in the CODA test setup one NICOS numbers the runs of several instruments; the per-run UUID does. SciCat holds metadata and file paths, not file bytes.
 
 ## Numbers
 
 | What | Value | Source | Page |
 |---|---|---|---|
-| Reflectometry batch reduction | might reach more than 1000 runs per hour | Simon | [reflectometry](reflectometry.md) |
+| Reflectometry batch reduction | hundreds, perhaps more than 1000 runs per hour | an instrument scientist, via Simon | [reflectometry](reflectometry.md) |
 | Batch size | hundreds of independent samples | Simon | [users](users.md) |
 | Experiments per year | more than 1000, a couple of users each | Simon | [users](users.md) |
-| Spectroscopy 4D volume | up to hundreds of GB | Simon; grid or list of observations is open | [spectroscopy](spectroscopy.md) |
+| Spectroscopy 4D grid over Q and ΔE | up to hundreds of GB | Simon | [spectroscopy](spectroscopy.md) |
 | Horace SQW files at ISIS | 10 to 500 GB | publication | [spectroscopy](spectroscopy.md) |
 | Imaging stack, 361 frames of 2048² pixels | 12 GB in float64 | code | [imaging](imaging.md) |
 | ODIN wavelength cube at full resolution | 34 GB | computed | [imaging](imaging.md) |
@@ -41,18 +41,17 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 
 ## Questions that block the design
 
-1. Is the 4D volume of hundreds of GB a fixed grid that each run adds to, or a list of observations that grows with every run? *Ask: Simon, BIFROST instrument scientist.*
-2. What lies behind "more than 1000 runs per hour": short kinetic runs or reprocessing? *Ask: Simon.*
-3. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists ([data](data.md)).*
-4. What must users find again, for how long, and where: in files, in SciCat, or in the framework? *Ask: Simon, ESS data management.*
-5. Which way of working, and which instrument, must the first release serve? *Ask: Simon.*
+1. Are the reflectometry runs, hundreds to more than 1000 per hour, separate files, or partly sections of files? *Ask: reflectometry instrument scientists.*
+2. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists ([data](data.md)).*
+3. What must users find again, for how long, and where: in files, in SciCat, or in the framework? *Ask: Simon, ESS data management.*
+4. Which way of working, and which instrument, must the first release serve? *Ask: Simon.*
 
 ## Non-goals
 
 - A second catalogue of results next to SciCat. *Simon, 2026-09-30*
 - Windows for the batch- and automatic-reduction services; GUI applications should probably run on Windows too. *Simon, 2026-09-30 and 2026-10-05*
 - Knowing technique details such as normalisation, or prescribing how instrument scientists choose calibration and background runs. *Simon, 2026-09-28*
-- Knowing whether a reduction workflow is a sciline pipeline or a plain function. *Simon, scoping.md; Simon, 2026-09-28*
+- Knowing whether a reduction workflow is a sciline pipeline or a plain function. *Simon, 2026-09-04 and 2026-09-28*
 - Splitting one reduction into parts by values found only in the data, such as angles read from a log; a technique that needs this runs a first reduction to find them. *Simon, 2026-09-28*
 - Steps of one technique, such as applying the reflectometry scale factors back to the curve of each angle; an application built on the framework does that. *Simon, 2026-09-28*
 

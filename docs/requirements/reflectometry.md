@@ -2,9 +2,9 @@
 
 ESTIA and FREIA at ESS; Amor at PSI and Offspec at ISIS were used to prototype essreflectometry.
 A sample is measured at several angles, and each angle's curve is divided by a normalisation run; runs repeated at one angle are concatenated, and one joint fit scales the curves of all angles, so a new angle changes every factor.
-Simon expects reflectometry batch reduction might reach more than 1000 runs per hour; what produces that many runs is open.
+Batch reduction may reach more than 1000 runs per hour, some perhaps sections of files rather than files; hundreds per hour is realistic.
 Amor runs hold 0.2 to 4 M events (22 to 48 MB), and ESTIA aims at measurements of a few seconds.
-Open: events per run at ESTIA and FREIA, whether fast measurements are separate runs or time slices of one run, and whether automatic reduction should stitch angles as they arrive.
+Open: events per run at ESTIA and FREIA, whether fast measurements are separate files or sections of files, and whether automatic reduction should stitch angles as they arrive.
 
 ## Known
 
@@ -33,7 +33,7 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 
 ### Batch and automatic
 
-- Reflectometry is a heavy user of batch reduction, and might reach more than 1000 runs per hour. *Simon, 2026-10-02 and 2026-10-05*
+- Reflectometry is a heavy user of batch reduction: an instrument scientist expects more than 1000 runs per hour, though some may be sections of files rather than files; hundreds per hour is realistic. *Simon, 2026-10-02 and 2026-10-05*
 - The Amor batch GUI groups runs by sample name and angle, both read from the file; the user marks reference runs and exclusions by hand, and the reference run carries the same sample name (SM5) as the sample runs. *[gui.py](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/gui.py#L719-L826), [Amor run 614](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000614.hdf)*
 - At ISIS, runs with the same title and angle (`th=` in the title) are summed, and runs with the same title at another angle are stitched; automatic reduction polls for new runs and processes each group again when a run joins it. *[Mantid ISIS Reflectometry](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/reflectometry/ISIS%20Reflectometry.rst)*
 
@@ -43,12 +43,11 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 - Users repeat runs at one angle and expect them summed. *Seen at ISIS and in the Amor GUI; the Amor "611+612" example joins runs at 5.05° and 0.65°, so it only demonstrates the code; ask the ESTIA instrument scientist.*
 - Runs are grouped by sample name and by angle within a tolerance (run 611 logs 5.0 and 4.999; ISIS uses 0.01). *Ask the ESTIA instrument scientist.*
 - One reduced reference serves all samples of an instrument configuration. *From the tutorials and the Amor GUI; ask the ESTIA instrument scientist how often the reference is remeasured.*
-- The 1000 runs per hour come from short kinetic runs or from reprocessing many runs. *Ask Simon which.*
 
 ## Open
 
 - How many events does one ESTIA or FREIA run hold, and how long is it? *Decides memory per reduction and runs per hour. Ask: ESTIA and FREIA instrument scientists.*
-- Are fast and kinetic measurements separate runs or time slices of one run? *Decides whether a kinetic result comes from many runs, or from one run with a time dimension ([data](data.md)). Ask: ESTIA and FREIA instrument scientists.*
+- Are the fast and kinetic measurements behind 1000 runs per hour separate files, or sections of files? *Decides whether batch reduction runs 1000 reductions per hour, or fewer that each give a result with a time dimension ([data](data.md)). Ask: ESTIA and FREIA instrument scientists.*
 - Should automatic reduction scale and stitch a sample's angles as they arrive, or produce one curve per angle? *Decides whether a new run changes earlier results. Ask: ESTIA instrument scientist.*
 - Does FREIA always split one run into up to three curves, and are those stitched? *Decides whether one run yields several results. Ask: FREIA instrument scientist.*
 - How long does one reduction take at ESTIA scale? *1000 runs per hour leave 3.6 s per run on one core. Measure on ESTIA files once they exist.*

@@ -11,27 +11,27 @@ Open: how many people reduce at once, and which way of working the first release
 ### Who
 
 - Workflow authors: about 12 people committed to the reduction packages of the ess monorepo in the year to October 2026, all writing Python. *[scipp/ess history](https://github.com/scipp/ess/commits/main/packages)*
-- Workflow authors: the framework must not depend on how a reduction workflow is implemented (sciline pipeline or plain function), and a workflow must not depend on where it runs. *Simon, scoping.md; Simon, 2026-09-28*
+- Workflow authors: the framework must not depend on how a reduction workflow is implemented (sciline pipeline or plain function), and a workflow must not depend on where it runs. *Simon, 2026-09-04 and 2026-09-28*
 - A reduction that needs a change its workflow does not offer, such as a replaced geometry, falls back to a Jupyter notebook; a recurring need becomes an optional input that the workflow authors add. *Simon, 2026-10-05*
 - Instrument scientists choose calibration and background runs in different ways, and the framework must not prescribe how they operate their instruments. *Simon, 2026-09-28*
 - Instrument scientists prepare inputs that the users of later proposals reuse, such as masks, detector calibration, or a direct-beam function; a reduced vanadium or a beam centre is not one of them, as each experiment makes its own. *Simon, 2026-10-05*
 - Users configure batch reduction, with support from instrument scientists; instrument scientists or users configure automatic reduction. A DMSC team keeps the services running but configures no reduction. *Simon, 2026-10-05*
 - Visiting users: many do not write Python and need forms or graphical interfaces, while some work in notebooks; this holds most for SANS and reflectometry and least for spectroscopy. *Simon, 2026-10-05*
 - ESS expects more than 1000 experiments a year, each lasting several days with a couple of users, who reduce data at ESS and after they leave. *Simon, 2026-10-05*
-- Application developers: the team writes the user interfaces itself, in Python and with AI assistance, which favours web interfaces, although the team's plotting library plopp is not made for the web. *Simon, scoping.md*
+- Application developers: the team writes the user interfaces itself, in Python and with AI assistance, which favours web interfaces, although the team's plotting library plopp is not made for the web. *Simon, 2026-09-04*
 - Today users reduce in Jupyter notebooks; reflectometry also has a Jupyter batch-reduction interface, and NMX a command-line reducer. *[reflectometry gui.py](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/gui.py#L323), [essnmx pyproject.toml](https://github.com/scipp/ess/blob/main/packages/essnmx/pyproject.toml#L51)*
 - A user may belong to several proposals. *Simon, 2026-10-02*
 - AI agents and other programs must be able to inspect results through an API. *Simon, 2026-10-05*
 
 ### By hand
 
-- A user configures a reduction workflow, applies it to one run or a few, and may inspect intermediate results interactively. *Simon, scoping.md*
+- A user configures a reduction workflow, applies it to one run or a few, and may inspect intermediate results interactively. *Simon, 2026-09-04*
 - Interactive users work in JupyterLab on VISA machines ([systems](systems.md)) or on laptops. *Simon, 2026-10-02*
-- The result of one reduction feeds others, for example a beam centre feeds the sample reductions, and a person may do the chaining by hand. *Simon, scoping.md*
+- The result of one reduction feeds others, for example a beam centre feeds the sample reductions, and a person may do the chaining by hand. *Simon, 2026-09-04*
 
 ### In batches
 
-- One reduction workflow is applied to many runs, with most parameters shared and some set per run or per sample. *Simon, scoping.md*
+- One reduction workflow is applied to many runs, with most parameters shared and some set per run or per sample. *Simon, 2026-09-04*
 - A batch can hold hundreds of independent samples, each possibly a sum of runs or angles; samples are reduced independently and never merged. *Simon, 2026-10-02*
 - SANS and reflectometry measure hundreds of runs or samples per hour, and serving their batch reduction is essential. *Simon, 2026-10-02*
 - Parameters may differ per run within one sum, and the framework must not require that summed runs be reduced alike. *Simon, 2026-09-28*
@@ -39,13 +39,13 @@ Open: how many people reduce at once, and which way of working the first release
 
 ### Automatically
 
-- A configured reduction workflow is applied to every new run. *Simon, scoping.md*
+- A configured reduction workflow is applied to every new run. *Simon, 2026-09-04*
 - Reducing a growing series again at every new run, such as all angles of one sample so far, must be possible, but not as the only behaviour. *Simon, 2026-09-28*
 - Batch and automatic reduction, and large work spread over the cluster, run as services, so leaks and peak memory must be bounded by how the services work, not by users freeing memory. *Simon, 2026-10-02*
 
 ### Provenance and the catalogue
 
-- The configuration of batch reductions must give a provenance graph. *Simon, scoping.md*
+- The configuration of batch reductions must give a provenance graph. *Simon, 2026-09-04*
 - The framework must not replicate SciCat: the lasting history of what ran belongs in SciCat, and the framework only writes to SciCat what that history needs.
   A published result therefore says what produced it without access to the framework. *Simon, 2026-09-30 and 2026-10-05*
 
@@ -60,7 +60,7 @@ Open: how many people reduce at once, and which way of working the first release
 - Provenance: every result, intermediate ones included, can say which raw runs, parameter values, and software versions produced it. *Design README and story S8; ask Simon whether this holds for every result or only for kept and published ones.*
 - Users read batch results weeks later too, and find them by what they know, such as sample and temperature, not by an identifier. *Stories D1, D2, D6; ask instrument scientists.*
 - Later: a user can rerun a result in its original software environment after upgrades, or learns before running that this is impossible. *Story F2; ask Simon and DMSC.*
-- Live reduction of the event stream stays in esslivedata, and this framework starts from runs written to files. *Inferred from scoping.md; ask Simon.*
+- Live reduction of the event stream stays in esslivedata, and this framework starts from runs written to files. *Inferred from Simon's scoping notes (2026-09-04); ask Simon.*
 
 ## Open
 

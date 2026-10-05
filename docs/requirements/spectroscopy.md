@@ -2,8 +2,8 @@
 
 BIFROST, CSPEC, T-REX, MIRACLES and VESPA at ESS; essspectroscopy reduces BIFROST only.
 The BIFROST code expects one run to hold a whole scan of sample angles; each event is normalised by the monitor and proton charge of its angle setting, then binned into a Q-E cut or written, observation by observation, to an SQW file for Horace.
-Simon expects 4D volumes of hundreds of GB; at ISIS, Horace files reach 10 to 500 GB (136 GB for 276 runs).
-Open: is that volume a fixed grid that each run adds to, or a list of observations that grows with every run, and how many runs does one experiment combine?
+Simon expects fixed 4D grids over the Q vector and the energy transfer ΔE, of up to hundreds of GB, that each run adds to; at ISIS, Horace files, which list every observation, reach 10 to 500 GB.
+Open: how finely users bin the 4D volume, and how many runs one experiment combines.
 
 ## Known
 
@@ -23,7 +23,7 @@ Open: is that volume a fixed grid that each run adds to, or a list of observatio
 
 ### Volumes
 
-- Spectroscopy needs to accumulate into 4D volumes that can be hundreds of GB; BIFROST may need only 2D. *Simon, 2026-10-02 and 2026-10-05*
+- Spectroscopy needs to accumulate into 4D volumes of up to hundreds of GB: fixed grids over the Q vector and ΔE that each run adds to, not lists of observations; BIFROST may need only 2D. *Simon, 2026-10-02 and 2026-10-05*
 - At ISIS, Horace SQW files range from 10 to 500 GB; a 276-run MERLIN data set gave 136 GB, and building a 142 GB file from 231 runs took 150 minutes. *[Ewings et al. 2016](https://arxiv.org/abs/1604.05895)*
 - essspectroscopy writes SQW itself because Horace could not convert BIFROST NXSPE files: it needed a 141 GB array and failed on a 256 GB machine. *[ADR 0001](https://github.com/scipp/ess/blob/main/packages/essspectroscopy/docs/developer/adr/0001-relegate-nxspe-support.md)*
 - The SQW export writes one row of 9 float32 values (36 B) per pixel, angle setting and incident-energy bin, empty ones included: 49 MB per angle setting with 100 energy bins.
@@ -34,14 +34,13 @@ Open: is that volume a fixed grid that each run adds to, or a list of observatio
 
 - One BIFROST file holds a whole a3 scan rather than one angle; the code itself says "we currently do not know enough about how ESS NeXus files will be written for real measurements". *From [nexus.py](https://github.com/scipp/ess/blob/main/packages/essspectroscopy/src/ess/bifrost/io/nexus.py#L224-L229); check with the BIFROST instrument scientist and the first real files.*
 - CSPEC and T-REX write one run per sample angle, so a rotation scan of 100 to 300 angles is 100 to 300 runs. *From ISIS practice (186 to 276 runs per Horace data set); check with the CSPEC and T-REX instrument scientists.*
-- What users take home is the SQW file, which keeps every observation; a summed 4D grid serves as a quick look. *From ADR 0001 and Horace practice; check with the BIFROST instrument scientist.*
+- Besides the 4D grid, users take home an SQW file, which keeps every observation. *From ADR 0001 and Horace practice; check with the BIFROST instrument scientist.*
 - A 4D grid summed over runs must keep the normalisation or the number of observations per bin next to the intensity, because angle settings cover bins unevenly. *From the SQW image (mean and count per bin); check with the BIFROST instrument scientist.*
 
 ## Open
 
-- Is the 4D volume of hundreds of GB a histogram on a fixed grid, or the list of all observations as in an SQW file? *A grid has a fixed size and each run adds to it; an observation list grows with every run and does not fit in memory. Ask: Simon, BIFROST instrument scientist.*
 - How many runs does one BIFROST, CSPEC or T-REX experiment combine, and how long is one run? *Decides the number of inputs to one result and the time over which it grows. Ask: BIFROST, CSPEC and T-REX instrument scientists.*
-- Into what grid do users bin a 4D volume, for a quick look and for keeping? *300 bins per axis with three float64 values per bin takes 194 GB; 100 bins per axis take 2.4 GB. Ask: BIFROST and CSPEC instrument scientists.*
+- Into what grid do users bin the 4D volume? *300 bins per axis with three float64 values per bin takes 194 GB; 100 bins per axis take 2.4 GB. Ask: BIFROST and CSPEC instrument scientists.*
 - Do users look at a combined result while runs are still being added, and how often? *Decides whether a partial result must be readable while combining goes on. Ask: BIFROST instrument scientist.*
 - Which vanadium, empty-can or background runs does a BIFROST result need, and how does a user pick them? *Decides which runs one result needs. Ask: BIFROST instrument scientist.*
 - How many events does one run hold at 2 MW, and how large is its file? *At 1e7 events per second, one hour gives 3.6e10 events. Ask: detector group, CSPEC instrument scientist.*
