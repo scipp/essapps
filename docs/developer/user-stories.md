@@ -18,19 +18,19 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `BEAM_CENTRE` | `run` | `centre` | the mean of the counts | beam-centre finding |
 | `VANADIUM` | `run`, `scale=1.0` | `normalization` | the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `runs`: a table of rows with a field `run`; `scale=1.0` | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
-| `BACKGROUND` | `sample_runs: list`, `background_runs: list` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
+| `BACKGROUND` | `sample_runs`, `background_runs`: tables of rows with a field `run` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
 | `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
 | `ANGLE` | `run` | `counts` | the counts | a reduction of one run into a volume |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
 | `VOLUME` | `runs`: a table of rows with a field `run` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
 | `COPY` | `data` | `data` | a copy of `data` | a record of a state of an accumulator |
-| `STITCH` | `runs: list`, `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
+| `STITCH` | `runs`: a table of rows with a field `run`; `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
 
 The binding of `IOFQ` is the function `iofq`.
-`NORMALIZE` and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so it can be an accumulator.
+`NORMALIZE`, `BACKGROUND`, and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so a push into an accumulator adds to the sums instead of keeping the rows.
 `PARTS_SUM` is bound to `combine(operator.add)`.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
@@ -139,7 +139,8 @@ runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
 rows = [{'run': run} for run in runs]
 total = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
-result = client.compute(BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds})
+result = client.compute(BACKGROUND, {'sample_runs': rows,
+                                     'background_runs': [{'run': r} for r in backgrounds]})
 
 assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]   # [2, 6] / 8 * 2
 assert total.request.datasets() == runs
@@ -147,8 +148,7 @@ assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 
 assert result.request.datasets() == runs + backgrounds
 ```
 
-This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes a table of runs, and `BACKGROUND` two lists of runs.
-B2 sums with an accumulator.
+This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `SANS_IOFQ` does. B2 sums with an accumulator.
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -279,8 +279,7 @@ assert client.records() == [again]
 
 Reading the accumulator makes no record: `first` and `added` are copies, which the next push leaves unchanged.
 The provenance of `total` is that of the plain request over its three rows.
-The user starts over with the plain request over the runs to keep (README.md, "One sum, two ways").
-An accumulator has no `remove` (README.md open question 2).
+An accumulator has no `remove` (README.md open question 2), so the user starts over with the plain request over the runs to keep (README.md, "One sum, two ways").
 That adding 613 costs about one run is system story B2.
 
 ### B4. Explore a 4D volume
@@ -355,14 +354,15 @@ Actor: reflectometry user. Goal: reduce four angles against a reference, stitch 
 reference = measure(10, [2.0, 2.0], role='reference')
 angles = [measure(11, [8.0, 4.0], angle=0.5), measure(12, [2.0, 1.0], angle=1.0),
           measure(13, [4.0, 2.0], angle=2.0), measure(14, [2.0, 0.5], angle=4.0)]
-stitched = client.submit(STITCH, {'runs': angles, 'reference': reference})
+rows = [{'run': angle} for angle in angles]
+stitched = client.submit(STITCH, {'runs': rows, 'reference': reference})
 exported = client.compute(EXPORT, {'data': stitched.ref('stitched')})
 
 assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it is one request over all runs, not an accumulation.
+The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its binding is a function, so the held state keeps the rows and stitches them again (README.md, "One sum, two ways").
 
 ### C5. Vanadium and sample tuned together
 
@@ -504,37 +504,37 @@ The first records keep the default of version 1, so the change of default shows 
 
 The service wrote `before[0]`'s output to a file when the record completed, so it can be read weeks later, until the proposal's history is dropped ([system.md](system.md), The service).
 
-### D7. Rotation scan over a thousand angles
+### D7. Rotation scan over three hundred angles
 
-Actor: spectroscopy user. Goal: reduce a crystal rotation scan of a thousand runs, one run per angle, into one volume, and look at cuts through the volume while the scan continues.
+Actor: spectroscopy user. Goal: reduce a crystal rotation scan of 300 runs, one run per angle, into one volume, and look at cuts through the volume while the scan continues.
 
 ```python
-for n in range(1, 1001):
+for n in range(1, 301):
     measure(n, [1.0, float(n)], scan='17')                     # one run per angle
-    if n == 500:
+    if n == 150:
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
-for run in islice(client.datasets.watch(Selector(scan='17')), 1000):
+for run in islice(client.datasets.watch(Selector(scan='17')), 300):
     volume.push({'runs': {'run': run}})                        # waits until the previous cut has run
     pushed.append(run)
     cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0},
                               label='cut', member='17'))
 total = client.compute(COPY, {'data': volume.ref('counts')})
 
-assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
-assert client.output(total, 'data').values.tolist() == [1000.0, 500500.0]
+assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 301)]
+assert client.output(total, 'data').values.tolist() == [300.0, 45150.0]
 provenance = client.provenance(total)
 assert provenance.accumulated == (                             # the runs, in push order
     Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),)
-assert len(provenance.datasets()) == 1000                      # run 5, measured again, once
+assert len(provenance.datasets()) == 300                       # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
-Each cut binds to the state after its push, and the next push waits until that cut has run.
-`COPY` makes a record of the last state, and its provenance expands that state into the plain request over the thousand rows.
+Each cut pins the state after its push, and the next push waits until that cut has run.
+`COPY` makes a record of the last state, and its provenance expands that state into the plain request over the 300 rows.
 On the service, the volume is a job of its own, and each run is reduced in that job.
 That a cut is ready within seconds of each run, and that history grows by a constant amount per run, is system story D7.
 
@@ -560,11 +560,11 @@ loop.step()
 
 curve = client.latest('reflectivity', member='si')
 assert len(client.records(label='reflectivity')) == 2         # one per step, not one per arrival
-assert curve.request.params['runs'] == [r2, r3, r4]             # run order, not arrival order
+assert curve.request.params['runs'] == [{'run': r} for r in (r2, r3, r4)]   # run order, not arrival order
 assert client.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 ```
 
-Each record stitches every angle so far. A stitch is not an accumulation (C4).
+Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
 The service writes each curve to a file when its record completes, so any client of the proposal reads it later ([system.md](system.md), The service).
 

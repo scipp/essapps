@@ -30,7 +30,7 @@ In the user's process (`local()`), the client is the one lifetime:
 - **A client keeps the output values of the records it makes** until `client.release(...)` or until it ends. A pending request keeps the values it reads until it has run. Nothing else keeps a value: not a record object, not a reference, not a label. Keeping is the default.
 - **Stages and accumulators belong to the client**, and are released the same way. What a stage computed is a cache that the backend may drop; its next call computes it again and makes the same record.
 - **A client ends** at `client.close()` or at the end of `with client:`. Ending and releasing stop no work. A later call of an ended client raises `ClientEnded`. In-process, a client that is never closed ends with its process.
-- **In the backend, a client is one entry.** Like everything that keeps values, it is live state, not history.
+- **In the backend, a client is one entry.** Like everything that keeps values, it is kept in memory, not in history.
 
 ```python
 with local(proposal='p1', datasets=source, bind=bind) as client:
@@ -41,20 +41,20 @@ with local(proposal='p1', datasets=source, bind=bind) as client:
 # the block's end releases everything the client keeps; pending work still runs
 ```
 
-The service keeps no value for a client: it writes every output to a file ([ADR 0005](0005-the-service-writes-every-output.md)).
+The service keeps no value for a client: it writes the outputs of every record to a file ([ADR 0005](0005-the-service-writes-every-output.md)).
 
 ## Alternatives considered
 
-- **Record handles keep values, as dask futures do.** This frees a loop that waits for each result by itself. But the stories hold many equal copies of a record. D2's dict of 1000 records, kept for the morning check, would keep all 1000 values, and so would `Out[n]`.
-- **Keep only on request (`keep=True` at submission).** Nothing leaks by default. But the flag must be given at submission: a value dropped when its request finishes cannot be kept afterwards without a race. Almost every interactive call would need it. Forgetting it shows only after the work is done, when a read or a reference is refused, and the result must be computed again. Forgetting `release` under keep-by-default costs memory instead, which the process or a cap per client bounds. Changing the default later is one flag.
+- **Record handles keep values, as dask futures do.** This frees a loop that waits for each result by itself. But the stories hold many equal copies of a record. D2's dict of records, kept for the morning check, would keep every value, and so would `Out[n]`.
+- **Keep only on request (`keep=True` at submission).** Nothing leaks by default. But the flag must be given at submission: a value dropped when its request finishes cannot be kept afterwards without a race. Almost every interactive call would need it. Forgetting it shows only after the work is done, when a read or a reference is refused, and the result must be computed again. Forgetting `release` under keep-by-default costs memory instead, which the process bounds. Changing the default later is one flag.
 - **Sessions reopened by name from a new kernel.** They are lost at a backend restart and cannot work in-process, so every program still needs a path for "it is gone". They need names, an expiry, a listing, and a rule for two kernels attached at once. dask-gateway clusters left running after kernel restarts, and Ray's detached actors that must be killed by hand, show the leak.
 - **Nested scopes (`with client.scope() as s:`).** At its exit a scope must let pending requests run, so the exit is `release` of everything made in it. A notebook cannot hold a `with` block across cells. Scopes add two errors: reading a value after its block, and submitting through the wrong scope. An implicit current scope does not reach the thread in which `as_completed` consumes a generator. No story needs nesting.
-- **Values as a cache over the log**, dropped under memory pressure and recomputed from their records when read. A read could take as long as the first computation. A value that cannot be recomputed, such as a cut of an earlier state of an accumulator, would fail or not depending on what was evicted.
+- **Values as a cache over the log**, dropped under memory pressure and recomputed from their records when read. A read could take as long as the first computation. A cut of an earlier state of an accumulator could be recomputed only by reducing again every row pushed before it.
 
 ## Consequences
 
 - `Session`, `client.session()`, `where=`, record leases, and the word "holder" are gone. Where a request runs is the system's decision.
 - A loop that keeps every result keeps every value until it releases them. In-process this behaves like a list of arrays that a notebook never clears.
 - A kernel restart ends the process, and with it the backend and everything it keeps. Continuing a reduction after the user's process crashed is a non-goal ([requirements](../../requirements/README.md)).
-- After a backend restart, no client keeps anything. A record that completes then is dropped once nothing pending reads it.
+- A backend restarts only on a log file, which in-process only the tests do ([ADR 0004](0004-history-is-append-only-lists.md)). After a restart, no client keeps anything, and a record that completes then is dropped once nothing pending reads it.
 - A stage whose template references a released record takes no more calls, since each call is checked as the plain request.

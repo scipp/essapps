@@ -34,7 +34,7 @@ Property: a local file reaches the service only when a request that names it is 
 ### B2. Add a run to a sum
 
 Actor: user in a notebook. Goal: after a new run finishes, the sum including it comes back quickly.
-Property: pushing a run into an accumulator reduces only that run, and reading the sum computes the outputs from the held state, without reading any earlier run again.
+Property: with a binding that has a held state of its own, such as `Summing`, pushing a run into an accumulator reduces only that run, and reading the sum computes the outputs from the held state, without reading any earlier run again. With the held state that keeps the rows, each read reduces every run so far again.
 
 ### B4. Explore a 4D volume
 
@@ -72,10 +72,10 @@ Property: a cancel stops the started requests within seconds and frees their wor
 
 Gap: a cancel ends the records, but a workflow that has started runs on and keeps its worker until it returns. Its outputs are then dropped. The resubmitted requests wait for those workers.
 
-### D7. Rotation scan over a thousand angles
+### D7. Rotation scan over three hundred angles
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
-Property: each push reduces its run in the accumulator's job and adds it to the held state in place, reading no earlier run. The volume is held once, in a job whose memory size and deadline the client declares ([ADR 0005](adr/0005-the-service-writes-every-output.md)). Each cut makes one record, which names the state it read by its number of pushes, so history grows by a constant amount per run ([system.md](system.md), An example).
+Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run in the accumulator's job and adds it to the held state, reading no earlier run. The volume is held once, in a job whose memory size and deadline the client declares ([ADR 0005](adr/0005-the-service-writes-every-output.md)). Each cut makes one record, which names the state it read by its number of pushes, so history grows by a constant amount per run ([system.md](system.md), An example).
 
 Gap: reducing the runs of one scan on several nodes needs a merge of two held states (README.md open question 1).
 

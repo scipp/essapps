@@ -9,7 +9,7 @@ A settled tension names the decision that settles it; the decision itself lives 
 
 ## Settled
 
-- **Fast interactive work versus bounded memory.** Interactive work, such as a notebook, runs in the user's own process, which keeps results in memory and frees them when it ends; batch and automatic reduction write each result to a file as soon as it is computed and keep nothing in memory. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-the-client-is-the-lifetime.md)*
+- **Fast interactive work versus bounded memory.** Interactive work, such as a notebook, runs in the user's own process, which keeps results in memory and frees them when it ends; batch and automatic reduction write each result to a file as soon as it is computed and keep nothing in memory, except an accumulator, held in its own job with a declared size and deadline. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-the-client-is-the-lifetime.md), [ADR 0005](../developer/adr/0005-the-service-writes-every-output.md)*
   - A user looks at the results of a reduction while deciding what to do next ([users](users.md)). *Simon, 2026-09-04*
   - Batch and automatic reduction must bound leaks and peak memory by how the services work ([users](users.md)). *Simon, 2026-10-02*
 - **A large volume held once versus looking at it while it grows.** Hold one copy and add each run in place; a cut through the volume can be made at any time without racing the addition, and no earlier state of the volume is kept. *Simon, 2026-10-02 and 2026-10-05; [ADR 0003](../developer/adr/0003-accumulators-add-in-place.md)*
