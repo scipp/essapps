@@ -537,7 +537,7 @@ client.output(normalized, 'normalized')                                    # fro
 
 `client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push.
 A request that reads a snapshot reads the value itself; it is not copied.
-To keep an earlier state, submit a request that reduces or copies the snapshot, such as a cut or FINALIZE above; saving a value is not designed yet.
+The backend keeps no earlier state of an accumulator: what it keeps past the next push are the outputs of the requests that read the snapshot, such as a cut or FINALIZE above.
 
 ## Drivers
 
