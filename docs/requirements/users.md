@@ -1,10 +1,10 @@
 # Users and ways of working
 
-Users are visiting users, instrument scientists, workflow authors (about 12 people write the ess reduction packages), operators, and the team's own application developers.
+Users are visiting users, instrument scientists, workflow authors (about 12 people write the ess reduction packages), the team's own application developers, and programs such as AI agents.
 They reduce data in three ways: by hand (interactively, in JupyterLab on a VISA machine or a laptop), in batches (hundreds of independent samples), and automatically (each new run as it arrives).
-Batch and automatic reduction run as a long-running service for many users, so its memory use must be bounded by how it works, not by users freeing memory.
+Batch and automatic reduction run in long-running services for many users, so their memory use must be bounded by how they work, not by users freeing memory.
 Results go to SciCat and must say what produced them, but the framework must not become a second catalogue.
-Open: whether visiting users write Python, how many people reduce at once, and how long results must be kept.
+Open: how many people reduce at once, and which way of working the first release must serve.
 
 ## Known
 
@@ -12,10 +12,16 @@ Open: whether visiting users write Python, how many people reduce at once, and h
 
 - Workflow authors: about 12 people committed to the reduction packages of the ess monorepo in the year to October 2026, all writing Python. *[scipp/ess history](https://github.com/scipp/ess/commits/main/packages)*
 - Workflow authors: the framework must not depend on how a reduction workflow is implemented (sciline pipeline or plain function), and a workflow must not depend on where it runs. *Simon, scoping.md; Simon, 2026-09-28*
+- A reduction that needs a change its workflow does not offer, such as a replaced geometry, falls back to a Jupyter notebook; a recurring need becomes an optional input that the workflow authors add. *Simon, 2026-10-05*
 - Instrument scientists choose calibration and background runs in different ways, and the framework must not prescribe how they operate their instruments. *Simon, 2026-09-28*
+- Instrument scientists prepare inputs that the users of later proposals reuse; a reduced vanadium or a beam centre is not one of them, as each experiment makes its own. *Simon, 2026-10-05*
+- Users configure batch reduction, with support from instrument scientists; instrument scientists or users configure automatic reduction. A DMSC team keeps the services running but configures no reduction. *Simon, 2026-10-05*
+- Visiting users: many do not write Python and need forms or graphical interfaces, while some work in notebooks; this holds most for SANS and reflectometry and least for spectroscopy. *Simon, 2026-10-05*
+- ESS expects more than 1000 experiments a year, each lasting several days with a couple of users, who reduce data at ESS and after they leave. *Simon, 2026-10-05*
 - Application developers: the team writes the user interfaces itself, in Python and with AI assistance, which favours web interfaces, although the team's plotting library plopp is not made for the web. *Simon, scoping.md*
 - Today users reduce in Jupyter notebooks; reflectometry also has a Jupyter batch-reduction interface, and NMX a command-line reducer. *[reflectometry gui.py](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/gui.py#L323), [essnmx pyproject.toml](https://github.com/scipp/ess/blob/main/packages/essnmx/pyproject.toml#L51)*
 - A user may belong to several proposals. *Simon, 2026-10-02*
+- AI agents and other programs must be able to inspect results through an API. *Simon, 2026-10-05*
 
 ### By hand
 
@@ -29,40 +35,36 @@ Open: whether visiting users write Python, how many people reduce at once, and h
 - A batch can hold hundreds of independent samples, each possibly a sum of runs or angles; samples are reduced independently and never merged. *Simon, 2026-10-02*
 - SANS and reflectometry measure hundreds of runs or samples per hour, and serving their batch reduction is essential. *Simon, 2026-10-02*
 - Parameters may differ per run within one sum, and the framework must not require that summed runs be reduced alike. *Simon, 2026-09-28*
+- Users must find the results of a batch reduction they started the day before. *Simon, 2026-10-05*
 
 ### Automatically
 
 - A configured reduction workflow is applied to every new run. *Simon, scoping.md*
 - Reducing a growing series again at every new run, such as all angles of one sample so far, must be possible, but not as the only behaviour. *Simon, 2026-09-28*
-- Batch and automatic reduction, and large work spread over the cluster, run as a service, so leaks and peak memory must be bounded by how the service works, not by users freeing memory. *Simon, 2026-10-02*
+- Batch and automatic reduction, and large work spread over the cluster, run as services, so leaks and peak memory must be bounded by how the services work, not by users freeing memory. *Simon, 2026-10-02*
 
 ### Provenance and the catalogue
 
 - The configuration of batch reductions must give a provenance graph. *Simon, scoping.md*
 - Input runs and results come from and go to SciCat, or another data catalogue ([systems](systems.md)). *Simon, scoping.md*
-- The framework must not replicate SciCat. *Simon, 2026-09-30*
+- The framework must not replicate SciCat: the lasting history of what ran belongs in SciCat, and the framework only writes to SciCat what that history needs. *Simon, 2026-09-30 and 2026-10-05*
 
 ## Assumed
 
-- Visiting users: many do not write Python and need forms or graphical interfaces, while some work in notebooks. *From the user stories (batch form, web interface); ask instrument scientists of the first instruments.*
-- Instrument scientists prepare shared inputs, such as a reduced vanadium or a beam centre, often in a commissioning proposal, for the users of later proposals. *From user story C2; ask instrument scientists and the user office.*
-- Operators: a DMSC team runs the batch and automatic-reduction service and must see, without reading logs, why automatic reduction reduced nothing. *From story E2; ask DMSC.*
+- Instrument scientists who configure automatic reduction must see, without reading logs, why it reduced nothing. *Story E2; ask instrument scientists.*
 - By hand: changing a binning or a mask shows the new result within about a second. *Design docs say "under a second"; measure on real LoKI files with the LoKI instrument scientist.*
 - By hand: users look at slices of large results, such as cuts through a 4D volume, as fast as a slider moves, without moving the whole result to their screen. *Scoping asks for a data slicer, story B4; ask spectroscopy instrument scientists.*
 - In batches: a night of long runs continues with the user's laptop closed, and the next morning the user reads why some failed and reruns them. *Story D2 (30 NMX runs); ask the NMX instrument scientist.*
 - In batches: a batch of hundreds started with a wrong shared parameter can be stopped and restarted at once, and invalid parameters are refused before anything runs. *Stories D3 and D4; ask instrument scientists how often this happens.*
-- Automatically: no run is reduced twice, also after a restart of the service or when a file arrives again. *Stories E1 and D7; ask instrument scientists whether a duplicate result does harm.*
+- Automatically: no run is reduced twice, also after a restart of the automatic-reduction service or when a file arrives again. *Stories E1 and D7; ask instrument scientists whether a duplicate result does harm.*
 - Provenance: every result, intermediate ones included, can say which raw runs, parameter values, and software versions produced it. *Design README and story S8; ask Simon whether this holds for every result or only for kept and published ones.*
 - Provenance: a published result says what produced it six months later, without access to the framework. *Story F1; check with the SciCat team that derived entries can hold this.*
-- Users read batch results the next morning and weeks later, and find them by what they know, such as sample and temperature, not by an identifier. *Stories D1, D2, D6; ask instrument scientists.*
+- Users read batch results weeks later too, and find them by what they know, such as sample and temperature, not by an identifier. *Stories D1, D2, D6; ask instrument scientists.*
 - Later: a user can rerun a result in its original software environment after upgrades, or learns before running that this is impossible. *Story F2; ask Simon and DMSC.*
 - Live reduction of the event stream stays in esslivedata, and this framework starts from runs written to files. *Inferred from scoping.md; ask Simon.*
 
 ## Open
 
-- How many visiting users does ESS expect per year, and how many people reduce data at once per instrument? *Decides the load the service must handle. Ask: user office, instrument scientists.*
-- Do visiting users write Python? *Decides whether a Python interface or forms and graphical interfaces come first. Ask: instrument scientists of the first instruments.*
+- How many people reduce data at once per instrument, counting users who continue after their experiment? *Decides the load the services must handle. Ask: user office, instrument scientists.*
 - Which way of working must the first release serve, and for which instrument? *Earlier design docs disagree (automatic first, against interactive work deciding adoption). Ask: Simon.*
-- How long must the history of what ran and the result files be kept, and does ESS set an embargo or retention period? *No public ESS policy was found. Ask: ESS data management.*
 - Must a result combined over a day, such as a rotation scan, survive a crash of the user's notebook? *Decides whether it can live in the user's own process. Ask: CSPEC and BIFROST instrument scientists.*
-- Do AI agents or other programs need an interface to inspect results? *Scoping lists it with a question mark. Ask: Simon.*

@@ -15,44 +15,42 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 
 ## In one minute
 
-- ESS plans first neutrons for early 2027, so every ESS size and rate here comes from simulations, test runs, or other facilities.
-- No file says what role a run plays (sample, can, transmission, open beam). Today a person pairs runs by hand for every technique; ISIS pairs them by run-title conventions.
+- ESS plans first neutrons for early 2027, so every ESS size and rate here comes from simulations, old estimates, test files, or other facilities.
+- Today a person pairs runs by hand for every technique (sample with can, transmission, open beam); ISIS pairs them by run-title conventions, and whether ESS files will say what role a run plays is unknown.
 - "Combining runs" means a different operation per technique: a sum of counts and of normalisations, divided once (SANS), a concatenation of events (reflectometry, runs at one angle), a joint fit (reflectometry angles, NMX scaling), or nothing yet (powder, imaging). Several methods need all inputs at once.
-- One run is not always one file or one result: the BIFROST code expects one file to hold a whole angle scan, an ODIN file holds sample, open-beam and dark frames, a simulated FREIA run holds three angles, and fast kinetics may split one run into hundreds of results.
-- Results grow with events and frames, not only with bins: an imaging stack takes 12 GB and a Horace file at ISIS up to 500 GB, while a standard VISA machine has 64 GB.
+- One run is not always one file or one result: the BIFROST code expects one file to hold a whole angle scan, an ODIN file holds sample, open-beam and dark frames, a simulated FREIA run holds three angles, and splitting a run by time or by a sample-environment log adds a dimension to its result.
+- Results grow with events and frames, not only with bins: an imaging stack takes 12 GB and a Horace file at ISIS up to 500 GB.
 - A run number alone does not name a run; the per-run UUID does. SciCat holds metadata and file paths, not file bytes.
 
 ## Numbers
 
 | What | Value | Source | Page |
 |---|---|---|---|
-| Reflectometry batch reduction | more than 1000 runs per hour | Simon; Amor tutorial runs came 11 to 47 min apart | [reflectometry](reflectometry.md) |
+| Reflectometry batch reduction | might reach more than 1000 runs per hour | Simon | [reflectometry](reflectometry.md) |
 | Batch size | hundreds of independent samples | Simon | [users](users.md) |
+| Experiments per year | more than 1000, a couple of users each | Simon | [users](users.md) |
 | Spectroscopy 4D volume | up to hundreds of GB | Simon; grid or list of observations is open | [spectroscopy](spectroscopy.md) |
 | Horace SQW files at ISIS | 10 to 500 GB | publication | [spectroscopy](spectroscopy.md) |
 | Imaging stack, 361 frames of 2048² pixels | 12 GB in float64 | code | [imaging](imaging.md) |
 | ODIN wavelength cube at full resolution | 34 GB | computed | [imaging](imaging.md) |
 | One reduced NMX orientation | 2 GB uncompressed | measured | [diffraction](diffraction.md) |
-| Existing runs (LoKI test at ISIS, Amor) | 0.2 to 13 M detector events, 20 to 180 MB | files | [sans](sans.md), [reflectometry](reflectometry.md) |
-| ESS test runs of about 10 minutes | 0.1 to 5 GB | measured, simulated data | [data](data.md) |
-| Planned event rates | 1e7 (LoKI) to 7.5e7 (DREAM) per second | assumed, origin unknown | [data](data.md) |
-| Standard VISA machine | 64 GB, 6 CPUs | documented | [systems](systems.md) |
+| Amor runs at PSI | 0.2 to 13 M events, 22 to 124 MB | files | [reflectometry](reflectometry.md) |
+| Estimated event rates | 1e7 (LoKI) to 7.5e7 (DREAM) per second | Simon, from instrument scientists years ago | [data](data.md) |
+| VISA machine | 64 GB, 6 CPUs as standard; larger for instruments with large files | documented; Simon | [systems](systems.md) |
 | Workflow authors | about 12 people | git history | [users](users.md) |
 
 ## Questions that block the design
 
 1. Is the 4D volume of hundreds of GB a fixed grid that each run adds to, or a list of observations that grows with every run? *Ask: Simon, BIFROST instrument scientist.*
-2. Where are runs summed: before reduction into merged files, inside one reduction, or across separate reductions, and for which techniques? *Ask: Simon, LoKI instrument scientist.*
-3. What lies behind "more than 1000 runs per hour": short kinetic runs, time slices of one run, or reprocessing? *Ask: Simon.*
-4. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists.*
-5. What must users find again, for how long, and where: in files, in SciCat, or in the framework? *Ask: Simon, ESS data management.*
-6. Which way of working, and which instrument, must the first release serve? *Ask: Simon.*
-7. Do visiting users write Python, and how many people reduce at once? *Ask: instrument scientists, user office.*
+2. What lies behind "more than 1000 runs per hour": short kinetic runs or reprocessing? *Ask: Simon.*
+3. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists.*
+4. What must users find again, for how long, and where: in files, in SciCat, or in the framework? *Ask: Simon, ESS data management.*
+5. Which way of working, and which instrument, must the first release serve? *Ask: Simon.*
 
 ## Non-goals
 
 - A second catalogue of results next to SciCat. *Simon, 2026-09-30*
-- Windows. *Simon, 2026-09-30*
+- Windows for the batch- and automatic-reduction services; GUI applications should probably run on Windows too. *Simon, 2026-09-30 and 2026-10-05*
 - Knowing technique details such as normalisation, or prescribing how instrument scientists choose calibration and background runs. *Simon, 2026-09-28*
 - Knowing whether a reduction workflow is a sciline pipeline or a plain function. *Simon, scoping.md; Simon, 2026-09-28*
 - Splitting one reduction into parts by values found only in the data, such as angles read from a log; a technique that needs this runs a first reduction to find them. *Simon, 2026-09-28*
