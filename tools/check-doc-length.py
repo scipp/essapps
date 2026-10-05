@@ -4,7 +4,7 @@ from pathlib import Path
 MAX_LINES = 100
 
 
-def main():
+def main() -> None:
     errors = False
     for path in map(Path, sys.argv[1:]):
         n = len(path.read_text().splitlines())

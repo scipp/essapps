@@ -13,18 +13,22 @@ Physics terms such as Q, I(Q), or S(Q, E) are not explained.
 - **Sample** and **can**: the sample is what is studied; the can is its empty container, measured alone to subtract its scattering.
 - **Vanadium**: a sample that scatters equally in all directions, measured to correct for detector efficiency (diffraction, spectroscopy).
 - **Rotation scan**: one sample measured at many orientations, combined into one volume (single crystal, spectroscopy).
+- **Sample environment**: equipment around the sample, such as a cryostat or furnace, whose values are logged during a run.
 
 ## Techniques
 
+- **Instruments**: SANS: LoKI, SKADI; reflectometry: ESTIA, FREIA; spectroscopy: BIFROST, CSPEC, T-REX, MIRACLES, VESPA; diffraction: DREAM, HEIMDAL (powder), BEER (engineering), MAGiC, NMX (single crystal); imaging: ODIN, with YMIR and the test beamline (TBL) for tests.
 - **Transmission run** (SANS): measures how much of the beam passes the sample, to correct for absorption.
 - **Empty beam** (SANS): a run without a sample, the reference for transmission runs.
 - **Direct-beam function** (SANS): the detector efficiency per wavelength, computed from a standard sample of known I(Q).
 - **Beam centre** (SANS): where the direct beam hits the detector, found from the data.
 - **Reference** or **supermirror** (reflectometry): a sample of known reflectivity, measured to normalise the sample's curve.
-- **Direct beam** (reflectometry): the beam measured without a sample, used for normalisation at FREIA and Offspec.
+- **Direct beam** (reflectometry): the beam measured without a sample, used for normalisation at FREIA and Offspec; not the SANS direct-beam function.
+- **ORSO** (reflectometry): the community file format for reduced reflectivity curves.
 - **Stitching** (reflectometry): joining the curves measured at several angles into one curve.
 - **Open beam** and **dark** (imaging): images without a sample, and with the shutter closed.
-- **Horace** and **SQW**: Horace is the spectroscopy analysis program from ISIS; an SQW file holds every observation of an experiment in (Q, E).
+- **Horace** and **SQW**: Horace is the spectroscopy analysis program from ISIS; an SQW file holds every observation of an experiment in (Q, E), one row per pixel, angle setting and energy bin.
+- **DIALS** (single crystal): the crystallography program that finds spots in, indexes and integrates the NMX images.
 
 ## Facility and software
 
@@ -35,9 +39,15 @@ Physics terms such as Q, I(Q), or S(Q, E) are not explained.
 - **ECDC**: the ESS group that develops NICOS and the file writer.
 - **CODA**: the ESS staging setup that runs NICOS, the file writer and SciCat on generated data before deployment.
 - **SciCat**: the catalogue of datasets, holding metadata and file paths; **scitacean** is its Python client.
+- **Dataset** (SciCat): the catalogue's unit; each raw file is one raw dataset, and an uploaded result is a derived dataset that lists its inputs.
+- **Provenance**: which input runs, parameter values and software versions produced a result.
+- **FAIR**: findable, accessible, interoperable, reusable; the principles ESS follows for its data.
 - **esslivedata**: live reduction and dashboards while a run is measured.
-- **ess packages**: the reduction workflows in the scipp/ess repository (esssans, essreflectometry, ...), built with sciline on scipp.
+- **ess packages**: the reduction workflows in the scipp/ess repository (esssans, essreflectometry, ...), built with sciline (a workflow library) on scipp (labelled arrays); **plopp** is the team's plotting library.
 - **VISA**: ESS remote desktops (virtual machines) with JupyterLab, created by a user for a proposal.
 - **DMSC**: the ESS Data Management and Scientific Computing division; it runs the cluster and the data services, and the team that builds this framework belongs to it.
-- **Batch-reduction service** and **automatic-reduction service**: long-running programs that reduce data for many users; DMSC keeps them running, and users and instrument scientists configure them ([users](users.md)).
+- **Batch-reduction service** and **automatic-reduction service**: long-running programs on DMSC servers that reduce data for many users; DMSC keeps them running, and users and instrument scientists configure them ([users](users.md)).
 - **ISIS**, **SNS**, **PSI**: neutron sources in the UK, the USA, and Switzerland; Amor (PSI) and Larmor, Sans2d, Zoom, Offspec (ISIS) were used to prototype ess code.
+- **Mantid**: the reduction software used at ISIS and SNS.
+- **Slurm**: the job scheduler of the DMSC cluster.
+- **ADR**: an architecture decision record of the design ([index](../developer/adr/index.md)).

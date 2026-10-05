@@ -2,7 +2,7 @@
 
 LoKI and SKADI at ESS; LoKI has 3.2 M pixels, and SKADI has no reduction code yet.
 One I(Q) needs runs in up to five roles (sample, can, a transmission run for each, empty beam) plus a direct-beam function, a beam centre and masks; today a person names every run by hand.
-The runs of one sample are summed; the 9 LoKI detector banks give 9 separate curves today, and instrument scientists want them merged into one as well.
+The runs of one sample are summed; the 9 LoKI detector banks give 9 separate curves today, and instrument scientists want them combined into one as well.
 Samples are independent of each other, and a batch may hold hundreds of them.
 Automatic reduction is assumed to give one I(Q) per run, with merging of runs a later, manual step.
 
@@ -27,7 +27,7 @@ Automatic reduction is assumed to give one I(Q) per run, with merging of runs a 
 - The runs of one sample are combined inside one reduction: numerators summed (events concatenated), denominators summed, one division at the end, one transmission run for all.
   N copies of a run give the same I(Q) as one. *[workflow.py](https://github.com/scipp/ess/blob/main/packages/esssans/src/ess/sans/workflow.py#L41-L45), [L97-L141](https://github.com/scipp/ess/blob/main/packages/esssans/src/ess/sans/workflow.py#L97-L141), [iofq_test.py](https://github.com/scipp/ess/blob/main/packages/esssans/tests/loki/iofq_test.py#L244-L273)*
 - SANS run merging may happen as a pre-processing step that writes merged "raw" files, as ISIS does with its "add files". *Simon, 2026-10-02; [Mantid Sum Runs](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/isis_sans/Sum%20Runs.rst)*
-- Instrument scientists want the LoKI banks merged into one I(Q), before normalisation, and per-bank results too, as a batch of independent reductions with one result each.
+- Instrument scientists want the LoKI banks combined into one I(Q), before normalisation, and per-bank results too, as a batch of independent reductions with one result each.
   Some runs may need merging and others not. *Simon, 2026-09-28 and 2026-10-05*
 
 ### Batch and automatic

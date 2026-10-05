@@ -2,7 +2,7 @@
 
 At ESS the framework meets the catalogue (SciCat), the file writer and Kafka, live reduction (esslivedata), NICOS, VISA machines, the DMSC cluster, and the ess Python packages.
 SciCat holds metadata and file paths, not file bytes, and lists each raw file once the file writer finishes it; every dataset belongs to one proposal.
-Interactive reduction runs in notebooks on VISA machines (64 GB and 6 CPUs as standard, larger for instruments with large files); batch and automatic reduction, and large work spread over the DMSC cluster, run in hosted services.
+Interactive reduction runs in notebooks on VISA machines (64 GB and 6 CPUs as standard, larger for instruments with large files); batch and automatic reduction, and large work spread over the DMSC cluster, run as services on DMSC servers, not on the user's machine.
 Batch reduction must put its results into SciCat, or at least let users do so.
 Open: whether the batch- and automatic-reduction services may submit cluster jobs and create catalogue entries for a proposal.
 
@@ -43,7 +43,6 @@ Open: whether the batch- and automatic-reduction services may submit cluster job
 - VISA machines reach SciCat with ESS single sign-on, and would reach services built here; only NICOS and esslivedata reach Kafka. *Simon, 2026-10-05*
 - During construction, the DMSC runs a mid-size cluster: 120 compute nodes with 4092 cores, 891 TB of storage and a batch system, hosted near Copenhagen and in Lund. *[ESS, Computing Centre](https://ess.eu/data-management-software/computing-centre)*
 - The DMSC cluster runs Slurm. *Simon, 2026-10-05*
-- Compute should be able to run locally or elsewhere (cluster, cloud), and the catalogue should be SciCat or another one. *Simon, 2026-09-04*
 
 ### Software
 
@@ -56,7 +55,7 @@ Open: whether the batch- and automatic-reduction services may submit cluster job
 
 ## Assumed
 
-- Whoever keeps the services running needs their metrics and logs; that may be the team that develops them, which is part of DMSC, with ECDC tools such as Grafana. *Simon, 2026-09-04 and 2026-10-05; decide with DMSC.*
+- Whoever keeps the services running needs their metrics and logs, for example in Grafana, an ECDC tool; this may be the team that develops the services, which belongs to DMSC. *Simon, 2026-09-04 and 2026-10-05; decide with DMSC.*
 
 ## Open
 

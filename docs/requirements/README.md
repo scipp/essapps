@@ -22,11 +22,11 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 ## In one minute
 
 - ESS plans first neutrons for early 2027, so every ESS size and rate here comes from simulations, old estimates, test files, or other facilities.
-- Today a person pairs runs by hand for every technique (sample with can, transmission, open beam); ISIS pairs them by run-title conventions, and whether ESS files will say what role a run plays is unknown.
-- "Combining runs" means a different operation per technique: a sum of counts and of normalisations, divided once (SANS), a concatenation of events (reflectometry, runs at one angle), a joint fit (reflectometry angles, NMX scaling), or nothing yet (powder, imaging). A sum grows run by run only if numerator and denominator are kept until the division, and a joint fit needs all inputs at once.
-- One run is not always one file or one result: one file may hold a whole BIFROST angle scan, the sample, open-beam and dark frames of ODIN, or FREIA's three angles interleaved in time, and splitting a run by time or by a sample-environment log adds a dimension to its result.
+- Today a person pairs runs by hand (sample with can, transmission, reference); ISIS pairs them by run-title conventions, and whether ESS files will say what role a run plays is unknown.
+- "Combining runs" means a different operation per technique: summing the counts and, separately, the normalisation of all runs, then dividing once (SANS); binning into one fixed 4D grid (spectroscopy); concatenating events (reflectometry, runs at one angle); a joint fit (reflectometry angles, NMX scaling); or nothing yet (powder, imaging). A sum grows run by run only if counts and normalisation are kept apart until the division, and a joint fit needs all inputs at once.
+- A run is one file, but not always one angle, one role, or one result: one file may hold a whole BIFROST angle scan, the sample, open-beam and dark frames of ODIN, or FREIA's up to three angles interleaved in time, and splitting a run by time or by a sample-environment log adds a dimension to its result.
 - Results can be large: a spectroscopy grid up to hundreds of GB, an imaging stack 12 GB, and a Horace file at ISIS, which lists every observation, up to 500 GB.
-- The framework keeps results for days to weeks, while users work with them; SciCat alone keeps them longer, and holds metadata and file paths, not file bytes. Instrument and run number are assumed to name a run.
+- The framework keeps results for days to weeks, while users work with them; only results registered in SciCat are found later, and SciCat holds their metadata and file paths, not the files. Instrument and run number are assumed to name a run.
 
 ## Numbers
 
@@ -40,25 +40,25 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 | Spectroscopy 4D grid over Q and ΔE | up to hundreds of GB | Simon | [spectroscopy](spectroscopy.md) |
 | Horace SQW files at ISIS | 10 to 500 GB | publication | [spectroscopy](spectroscopy.md) |
 | Imaging stack, 361 frames of 2048² pixels | 12 GB in float64 | code | [imaging](imaging.md) |
-| ODIN wavelength cube at full resolution | 34 GB | computed | [imaging](imaging.md) |
+| ODIN wavelength cube at full resolution | 34 GB | computed for 256 bins | [imaging](imaging.md) |
 | One reduced NMX orientation | 2 GB uncompressed | measured | [diffraction](diffraction.md) |
-| Amor runs at PSI | 0.2 to 13 M events, 22 to 124 MB | files | [reflectometry](reflectometry.md) |
-| One LoKI reduction | seconds, little memory | Simon | [sans](sans.md) |
+| Amor runs at PSI | samples 0.2 to 4 M events, 23 to 48 MB; reference 13 M, 124 MB | files | [reflectometry](reflectometry.md) |
+| One LoKI reduction | seconds, little memory | Simon (assumed) | [sans](sans.md) |
 | Estimated event rates | 5e4 (LoKI) to 7.5e7 (DREAM) per second | Simon, from instrument scientists years ago | [data](data.md) |
 | VISA machine | 64 GB, 6 CPUs as standard; larger for instruments with large files | documented; Simon | [systems](systems.md) |
-| Workflow authors | about 12 people | git history | [users](users.md) |
+| Workflow authors | 7 people | git history | [users](users.md) |
 
 ## Questions that block the design
 
-- How will ESS files or the catalogue say what role a run plays, and which runs belong together? Automatic reduction in the first release needs this to find background and normalisation runs. *Ask: NICOS team, instrument scientists ([data](data.md)).*
+- How will ESS files or the catalogue say what role a run plays, and which runs belong together? Automatic reduction in the first release needs this to find background and normalisation runs. *Ask: NICOS team, SciCat team, instrument scientists ([data](data.md)).*
 
 ## Non-goals
 
 - A second catalogue of results next to SciCat. *Simon, 2026-09-30*
 - Windows for the batch- and automatic-reduction services; GUI applications should probably run on Windows too. *Simon, 2026-09-30 and 2026-10-05*
-- The framework knowing technique details such as normalisation, or prescribing how instrument scientists, who each do it differently, choose calibration and background runs; applications built on it, including interfaces that configure batch and automatic reduction, know them. *Simon, 2026-09-28 and 2026-10-05*
+- The framework knowing technique details such as normalisation, or prescribing how instrument scientists choose calibration and background runs, which each does differently. Applications built on the framework know them, including the interfaces that configure batch and automatic reduction. *Simon, 2026-09-28 and 2026-10-05*
 - Knowing whether a reduction workflow is a sciline pipeline or a plain function. *Simon, 2026-09-04 and 2026-09-28*
-- Splitting one reduction into parts by values found only in the data, such as angles read from a log; a technique that needs this runs a first reduction to find them. *Simon, 2026-09-28*
+- Starting a separate reduction for each value found only in the data, such as each angle read from a log; a technique that needs this runs a first reduction to find the values. Splitting events by a log inside one reduction is not excluded ([data](data.md)). *Simon, 2026-09-28*
 - Steps of one technique, such as applying the reflectometry scale factors back to the curve of each angle; an application built on the framework does that. *Simon, 2026-09-28*
 - Tomographic reconstruction, which other software does; the framework might one day drive that software. *Simon, 2026-10-05*
 - Continuing a reduction after the user's process crashed: crashes come from lack of memory or from bugs, which a restart does not fix. *Simon, 2026-10-05*
@@ -80,7 +80,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 - A page has at most 100 lines (checked at commit) and opens with a summary of at most 5 lines.
 - A topic page has three sections, in this order: `Known` (has a primary source), `Assumed` (nobody confirmed it; says how to check), `Open` (a question; says what it decides and whom to ask). The tensions page uses `Settled` and `Open`.
 - Include an item only if the design would change were it false. One item per bullet, at most two sentences, its source in italics.
-- A source is a person and a date, a public document, or code on GitHub. The design docs and user stories are not sources: a claim only they make is Assumed.
+- A source is a person and a date, a public document, or code on GitHub. The design docs and the [user](../developer/user-stories.md) and [system](../developer/system-stories.md) stories (cited by ID, such as D7) are not sources: a claim only they make is Assumed.
 - Write about runs, samples, files, and results, not about the design (no record, request, stage, accumulator, and so on).
 - Each fact has one home page; other pages link to it. A page that outgrows 100 lines becomes a folder with its own README.
 - A tension needs two stated needs that pull against each other; a question with no opposing need belongs on a topic page.

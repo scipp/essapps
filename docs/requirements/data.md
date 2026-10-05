@@ -1,6 +1,6 @@
 # Runs and files
 
-A run is one measurement: NICOS asks the file writer to write the instrument's Kafka streams (neutron events, logs, chopper settings) into one NeXus (HDF5) file, named `<proposal>_<run>.hdf`.
+A run is one measurement: NICOS asks the file writer to write the instrument's Kafka streams (neutron events, logs, chopper settings) into one NeXus (HDF5) file, named after its proposal and run number.
 A file is complete when the file writer reports it finished; the catalogue (SciCat) then lists it as `20.500.12269/<run UUID>`.
 An event takes 8 bytes, so at the highest event rate estimated for DREAM one hour would be about 2 TB.
 No ESS instrument has measured neutrons yet; ESS plans first neutrons for early 2027.
@@ -19,19 +19,19 @@ Open: how large runs will be, and how files or the catalogue will say what role 
 - A neutron event arrives as a 32-bit time offset and a 32-bit pixel ID, so it takes 8 bytes without compression. *[ev44 schema](https://github.com/ess-dmsc/streaming-data-types/blob/master/schemas/ev44_events.fbs)*
 - The best available event-rate estimates, per second, are 1e5 to 1e6 at BIFROST, 5e4 to 1e7 at LoKI (mostly 1e5 to 2e6), 8e5 to 4e6 at ESTIA, 1e6 to 1e7 at CSPEC and MAGiC, 3e5 to 5e7 at BEER, and 1.3e6 to 7.5e7 at DREAM; 1e7 per second is 0.3 TB of events per hour.
   Simon gathered them from instrument scientists years ago; they have likely changed, but nothing better exists. *[esslivedata benchmark targets](https://github.com/scipp/esslivedata/blob/main/docs/about/ess_requirements.py#L48-L90); Simon, 2026-10-05*
-- One file can hold data of several roles: an ODIN camera file holds sample, open-beam and dark frames, told apart by an `image_key` log over time. *[odin/workflows.py](https://github.com/scipp/ess/blob/main/packages/essimaging/src/ess/odin/workflows.py#L116-L140)*
+- One file can hold data of several roles: an ODIN camera file holds sample, open-beam and dark frames, told apart by a log over time. *[imaging](imaging.md)*
 - Splitting a run by time or by a sample-environment log adds a dimension to its result; it does not make many results. *Simon, 2026-10-05*
 - Batch and automatic reduction need a configurable way to decide the role of a file: catalogue metadata, NeXus fields, or frame indices within one HDF5 dataset. *Simon, 2026-09-28*
 
 ### Naming, finding and access
 
 - The run number is a counter that NICOS keeps in a file under its data root and increments for every file; it is written to `entry/entry_identifier` and the proposal to `entry/experiment_identifier`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L333-L343), [nexus_structure.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/nexus_structure.py#L169-L176)*
-- NICOS names the file `<proposal>_<run>.hdf`, with an 8-digit run number, in the folder `<instrument>/<proposal>/raw/`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L541-L552), [experiment.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/experiment.py#L259-L267)*
+- NICOS names the file `<proposal>_<run>.hdf`, with an 8-digit run number and prefixed by the instrument name when a NeXus-structure device is configured, in the folder `<instrument>/<proposal>/raw/`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L541-L552), [experiment.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/experiment.py#L259-L267)*
 - Each file carries a per-run UUID (`entry/entry_identifier_uuid`) built from proposal, run number and a random part.
   The catalogue ingestor's published ESS schemas make it the catalogue identifier `20.500.12269/<uuid>`. *[file_writer.py](https://github.com/ess-dmsc/nicos/blob/main/nicos_ess/devices/datasinks/file_writer.py#L422-L436), [ess-fallback.imsc.yml](https://github.com/SciCatProject/scicat-ingestor/blob/main/src/fallback_metadata_schema/ess-fallback.imsc.yml#L8-L18)*
 - A local file may carry no run number, come from another facility with another numbering, or carry a run number under a name the user changed. *Simon, 2026-09-28 and 2026-10-05*
 - Users name data by file path today: every ess reduction workflow reads a run from a `Filename` parameter. *[essreduce nexus/types.py](https://github.com/scipp/ess/blob/main/packages/essreduce/src/ess/reduce/nexus/types.py#L281)*
-- Mantid finds the file of a run from its run number in configured data search directories, and users will expect the same here. *[Mantid, Manage User Directories](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/framework/ManageUserDirectories.rst#L11-L21); Simon, 2026-10-05*
+- Mantid finds the file of a run from its run number in configured data search directories, and users will expect the same here. *Simon, 2026-10-05; [Mantid, Manage User Directories](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/framework/ManageUserDirectories.rst#L11-L21) for the directories*
 - ESS intends data to become open: after an embargo, anyone may access it.
   This is part of making data FAIR, which requires that each result carry its provenance. *[ESS, 2020-07-06](https://ess.eu/article/2020/07/06/driven-data); Simon, 2026-10-05*
 

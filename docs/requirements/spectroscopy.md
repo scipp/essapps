@@ -34,14 +34,14 @@ Open: how finely users bin the 4D volume, and how many runs one experiment combi
 
 - A rotation scan of 100 to 300 angles may be one file, as the BIFROST code expects, or one file per angle, as at ISIS (186 to 276 runs per Horace data set); either way the workflow reads one angle at a time, from a file or a section of one. *Simon, 2026-10-05; the BIFROST code says "we currently do not know enough about how ESS NeXus files will be written for real measurements" ([nexus.py](https://github.com/scipp/ess/blob/main/packages/essspectroscopy/src/ess/bifrost/io/nexus.py#L224-L229)); check with the first real files.*
 - With repetition-rate multiplication, one run gives one result that merges all incident energies; variants may give one output per energy, for diagnostics, or keep the energies as substructure of the one result. *Simon, 2026-10-05; ask the CSPEC and T-REX instrument scientists.*
-- Besides the 4D grid, users take home an SQW file, which keeps every observation. *From ADR 0001 and Horace practice; check with the BIFROST instrument scientist.*
+- Besides the 4D grid, users take home an SQW file, which keeps every observation. *From essspectroscopy's ADR 0001 and Horace practice; check with the BIFROST instrument scientist.*
 - A 4D grid summed over runs must keep the normalisation or the number of observations per bin next to the intensity, because angle settings cover bins unevenly. *From the SQW image (mean and count per bin); check with the BIFROST instrument scientist.*
 
 ## Open
 
 - How many runs does one BIFROST, CSPEC or T-REX experiment combine, and how long is one run? *Decides the number of inputs to one result and the time over which it grows. Ask: BIFROST, CSPEC and T-REX instrument scientists.*
-- Into what grid do users bin the 4D volume? *ΔE likely has fewer bins than each Q axis (Simon, 2026-10-05); with three float64 values per bin, 300 bins per Q axis and 100 in ΔE take 65 GB, 100 bins on every axis 2.4 GB. Ask: BIFROST and CSPEC instrument scientists.*
-- Do users look at a combined result while runs are still being added, and how often? *Decides whether a partial result must be readable while combining goes on. Ask: BIFROST instrument scientist.*
+- Into what grid do users bin the 4D volume? *Decides the size of the combined result. ΔE likely has fewer bins than each Q axis (Simon, 2026-10-05); with three float64 values per bin, 300 bins per Q axis and 100 in ΔE take 65 GB, 100 bins on every axis 2.4 GB. Ask: BIFROST and CSPEC instrument scientists.*
+- How often do users look at the combined volume while runs are still being added? *Decides how often a cut is taken from a growing volume. Ask: BIFROST instrument scientist.*
 - Which vanadium, empty-can or background runs does a BIFROST result need, and how does a user pick them? *Decides which runs one result needs. Ask: BIFROST instrument scientist.*
-- How many events does one run hold at 2 MW, and how large is its file? *At 1e7 events per second, one hour gives 3.6e10 events. Ask: detector group, CSPEC instrument scientist.*
+- How many events does one run hold at 2 MW, and how large is its file? *Decides memory per reduction: at 1e7 events per second, one hour gives 3.6e10 events. Ask: detector group, CSPEC instrument scientist.*
 - Should each new run be reduced automatically, for example to an SQW file? *Decides whether spectroscopy needs automatic reduction. Ask: BIFROST instrument scientist.*

@@ -1,6 +1,6 @@
 # Users and ways of working
 
-Users are visiting users, instrument scientists, workflow authors (about 12 people write the ess reduction packages), the team's own application developers, and programs such as AI agents.
+Users are visiting users, instrument scientists, workflow authors (7 people write the ess reduction packages), the team's own application developers, and programs such as AI agents.
 They reduce data in three ways: by hand (interactively, in JupyterLab on a VISA machine or a laptop), in batches (hundreds of independent samples), and automatically (each new run as it arrives).
 Batch and automatic reduction run in long-running services for many users, so their memory use must be bounded by how they work, not by users freeing memory.
 One to three people per instrument work in the reduction software at once.
@@ -10,11 +10,11 @@ Results go to SciCat and must say what produced them, but the framework must not
 
 ### Who
 
-- Workflow authors: about 12 people committed to the reduction packages of the ess monorepo in the year to October 2026, all writing Python. *[scipp/ess history](https://github.com/scipp/ess/commits/main/packages)*
+- Workflow authors: 7 people committed to the reduction packages of the ess monorepo in the year to October 2026, all writing Python. *[scipp/ess history](https://github.com/scipp/ess/commits/main/packages)*
 - Workflow authors: the framework must not depend on how a reduction workflow is implemented (sciline pipeline or plain function), and a workflow must not depend on where it runs. *Simon, 2026-09-04 and 2026-09-28*
 - A reduction that needs a change its workflow does not offer, such as a replaced geometry, falls back to a Jupyter notebook; a recurring need becomes an optional input that the workflow authors add. *Simon, 2026-10-05*
 - Instrument scientists prepare inputs that the users of later proposals reuse, such as masks, detector calibration, or a direct-beam function; a reduced vanadium, reflectometry reference, or beam centre is not one of them, as each experiment makes its own. *Simon, 2026-10-05*
-- Users configure batch reduction, with support from instrument scientists; instrument scientists or users configure automatic reduction. DMSC, perhaps the team that develops the services, keeps them running but configures no reduction. *Simon, 2026-10-05*
+- Users configure batch reduction, with support from instrument scientists; instrument scientists or users configure automatic reduction. DMSC keeps the services running, perhaps through the team that develops them, and configures no reduction. *Simon, 2026-10-05*
 - Visiting users: many do not write Python and need forms or graphical interfaces, while some work in notebooks; this holds most for SANS and reflectometry and least for spectroscopy. *Simon, 2026-10-05*
 - ESS expects more than 1000 experiments a year, each lasting several days with a couple of users, who reduce data at ESS and after they leave. *Simon, 2026-10-05*
 - At most one to three people per instrument work in the reduction software at once; on average far fewer start reductions or call the API at the same time. *Simon, 2026-10-05*
@@ -26,7 +26,7 @@ Results go to SciCat and must say what produced them, but the framework must not
 ### By hand
 
 - A user configures a reduction workflow, applies it to one run or a few, and looks at the results. *Simon, 2026-09-04*
-- The framework has no notion of an intermediate result: a user sees the outputs a workflow exposes, and an application may chain several workflows to show the results between them. A value inside a workflow that it does not expose needs a plain notebook. *Simon, 2026-10-05*
+- The framework does not tell intermediate from final results: a user sees the outputs a workflow exposes, and an application may chain several workflows to show the results between them. A value inside a workflow that it does not expose needs a plain notebook. *Simon, 2026-10-05*
 - Interactive users work in JupyterLab on VISA machines ([systems](systems.md)) or on laptops. *Simon, 2026-10-02*
 - The result of one reduction feeds others, for example a beam centre feeds the sample reductions, and a person may do the chaining by hand. *Simon, 2026-09-04*
 
@@ -49,7 +49,7 @@ Results go to SciCat and must say what produced them, but the framework must not
 - The configuration of batch reductions must give a provenance graph; the result of one reduction sometimes feeds later ones, but most reductions are independent, so the graph is mostly many small separate trees. *Simon, 2026-09-04 and 2026-10-05*
 - The framework must not replicate SciCat: the lasting history of what ran belongs in SciCat, and the framework only writes to SciCat what that history needs.
   A published result therefore says what produced it without access to the framework. *Simon, 2026-09-30 and 2026-10-05*
-- Files and provenance are kept in the long term only in SciCat. Provenance inside result files depends on the technique: reflectometry's ORSO format records part of it, and many formats record none. *Simon, 2026-10-05*
+- In the long term, results and their provenance are found only through SciCat. Provenance inside result files depends on the technique: reflectometry's ORSO format records part of it, and many formats record none. *Simon, 2026-10-05*
 
 ## Assumed
 

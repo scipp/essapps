@@ -22,7 +22,7 @@ Open: how many runs one powder sample or one rotation scan has, and whether anyo
 
 ### Single crystal
 
-- The essnmx result is one (x, y, time-of-flight) histogram per detector panel, 3 panels of 1280 × 1280 pixels, written in NXlauetof format for DIALS. *[executables.py](https://github.com/scipp/ess/blob/main/packages/essnmx/src/ess/nmx/executables.py#L276-L298), [workflow.ipynb](https://github.com/scipp/ess/blob/main/packages/essnmx/docs/user-guide/workflow.ipynb) cell 3*
+- The essnmx result is one (x, y, time-of-flight) histogram per detector panel, 3 panels of 1280 × 1280 pixels, written in NXlauetof format for DIALS. *[executables.py](https://github.com/scipp/ess/blob/main/packages/essnmx/src/ess/nmx/executables.py#L276-L298), [workflow_test.py](https://github.com/scipp/ess/blob/main/packages/essnmx/tests/mcstas/workflow_test.py#L67-L68), [workflow.ipynb](https://github.com/scipp/ess/blob/main/packages/essnmx/docs/user-guide/workflow.ipynb) cell 3*
 - One reduced NMX file of the test data is 1966 MB uncompressed and 17 MB with the default compression, measured on a standard VISA machine ([systems](systems.md)). *[workflow.ipynb](https://github.com/scipp/ess/blob/main/packages/essnmx/docs/user-guide/workflow.ipynb) cell 11*
 - DIALS imports the image files of all orientations together, then finds spots, indexes, refines and integrates; scaling and merging follow in other programs. *[data_workflow_overview.md](https://github.com/scipp/ess/blob/main/packages/essnmx/docs/about/data_workflow_overview.md#L26-L43)*
 - essnmx's own scaling concatenates the reflection files of all orientations and fits one wavelength curve to all of them. *[mtz_io.py](https://github.com/scipp/ess/blob/main/packages/essnmx/src/ess/nmx/mtz_io.py#L214-L217), [scaling.py](https://github.com/scipp/ess/blob/main/packages/essnmx/src/ess/nmx/scaling.py#L48-L52)*
@@ -40,7 +40,7 @@ Open: how many runs one powder sample or one rotation scan has, and whether anyo
 - The combined MAGiC 3D map is smaller than a spectroscopy 4D volume, even if its Q axes have finer bins. *Simon, 2026-10-05; check with the MAGiC instrument scientist.*
 - A MAGiC scan has thousands of orientations. *Simon, 2026-10-05, from instrument scientists years ago; check with the MAGiC instrument scientist.*
 - DREAM runs will be split by time or by a sample-environment log: events are sorted by the sample-environment value at their wall-clock time, which adds a dimension to the result ([data](data.md)).
-  Sub-second resolution means one data point, such as one sample-environment value, per sub-second interval, and many such points go into one file. *Simon, 2026-10-05; ask the DREAM instrument scientist what ms resolution refers to.*
+  Sub-second resolution means one data point per sub-second interval, such as one sample-environment value, with many points in one file. *Simon, 2026-10-05; ask the DREAM instrument scientist what ms resolution refers to.*
 - A BEER strain scan is one file, not one run per point. *Simon, 2026-10-05; ask the BEER instrument scientist.*
 
 ## Open

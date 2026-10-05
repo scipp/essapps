@@ -3,14 +3,14 @@
 ESTIA and FREIA at ESS; Amor at PSI and Offspec at ISIS were used to prototype essreflectometry.
 A sample is measured at several angles, and each angle's curve is divided by a normalisation run; runs repeated at one angle are concatenated, and one joint fit scales the curves of all angles, so a new angle changes every factor.
 Batch reduction must handle many hundreds of runs per hour, perhaps more.
-Amor runs hold 0.2 to 4 M events (22 to 48 MB), and ESTIA aims at measurements of a few seconds.
+Amor sample runs hold 0.2 to 4 M events (23 to 48 MB), and ESTIA aims at measurements of a few seconds.
 Open: events per run at ESTIA and FREIA, and whether automatic reduction should stitch angles as they arrive.
 
 ## Known
 
 ### Instruments and pace
 
-- One ESTIA angle covers Q_max = 2.85 Q_min at 14 Hz, and 0.01 to 0.14 Å⁻¹ with the chopper at a third of the source frequency, so ESTIA needs several angles per sample to cover a full curve. *[Andersen et al. 2020, Table 4, §2.3.3](https://doi.org/10.1016/j.nima.2020.163402); Simon, 2026-10-05*
+- One ESTIA angle covers Q_max = 2.85 Q_min at the 14 Hz source frequency and 6.6 Q_min with the chopper at 4.7 Hz (0.01 to 0.14 Å⁻¹ without moving the sample), so ESTIA needs several angles per sample to cover a full curve. *[Andersen et al. 2020, Table 4, §2.3.3](https://doi.org/10.1016/j.nima.2020.163402); Simon, 2026-10-05*
 - ESTIA measures a 1 cm² sample in a few seconds and a 1 mm² sample in a few hours; FREIA measures a full curve in seconds (10 to 15 min at high resolution); both aim at sub-second time resolution for kinetics. *[Andersen et al. 2020, §2.3.1, §2.3.3, §2.4.2, §2.4.3](https://doi.org/10.1016/j.nima.2020.163402)*
 - Amor tutorial runs 608 to 611 hold 4.0, 1.6, 0.56 and 0.21 M events in files of 48, 31, 23 and 23 MB. *[Amor run 608](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000608.hdf) to [611](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000611.hdf)*
 
@@ -39,11 +39,11 @@ Open: events per run at ESTIA and FREIA, and whether automatic reduction should 
 
 ## Assumed
 
-- Users repeat runs at one angle and expect them summed. *Seen at ISIS and in the Amor GUI; the Amor "611+612" example joins runs at 5.05° and 0.65°, so it only demonstrates the code; ask the ESTIA instrument scientist.*
+- Users repeat runs at one angle and expect them summed. *Seen at ISIS and in the Amor GUI; the Amor example that joins runs 611 (5.05°) and 612 (0.65°) only demonstrates the code; ask the ESTIA instrument scientist.*
 - Runs are grouped by sample name and by angle within a tolerance (run 611 logs 5.0 and 4.999; ISIS uses 0.01). *Ask the ESTIA instrument scientist.*
 
 ## Open
 
 - How many events does one ESTIA or FREIA run hold, and how long is it? *Decides memory per reduction and runs per hour. Ask: ESTIA and FREIA instrument scientists.*
 - Should automatic reduction scale and stitch a sample's angles as they arrive, or produce one curve per angle? *Decides whether a new run changes earlier results. Ask: ESTIA instrument scientist.*
-- How long does one reduction take at ESTIA scale? *500 to 1000 runs per hour leave 3.6 to 7 s per run on one core. Measure on ESTIA files once they exist.*
+- How long does one reduction take at ESTIA scale? *Decides whether one core per run keeps up: 500 to 1000 runs per hour leave 3.6 to 7.2 s per run. Measure on ESTIA files once they exist.*
