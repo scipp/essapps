@@ -1,6 +1,6 @@
 # Reflectometry
 
-ESTIA and FREIA at ESS; Amor at PSI and Offspec at ISIS were used to prototype essreflectometry, and FREIA has code for simulated data only.
+ESTIA and FREIA at ESS; Amor at PSI and Offspec at ISIS were used to prototype essreflectometry.
 A sample is measured at several angles, and each angle's curve is divided by a normalisation run; runs repeated at one angle are concatenated, and one joint fit scales the curves of all angles, so a new angle changes every factor.
 Simon expects reflectometry batch reduction might reach more than 1000 runs per hour; what produces that many runs is open.
 Amor runs hold 0.2 to 4 M events (22 to 48 MB), and ESTIA aims at measurements of a few seconds.
@@ -10,10 +10,8 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 
 ### Instruments and pace
 
-- ESTIA is expected to be the first ESS reflectometer in operation, with commissioning with neutrons from 2026. *[ESS Indico, ESTIA early science workshop](https://indico.ess.eu/event/3850/)*
 - One ESTIA angle covers Q_max = 2.85 Q_min at 14 Hz, and 0.01 to 0.14 Å⁻¹ with the chopper at a third of the source frequency. *[Andersen et al. 2020, Table 4, §2.3.3](https://doi.org/10.1016/j.nima.2020.163402)*
 - ESTIA measures a 1 cm² sample in a few seconds and a 1 mm² sample in a few hours; FREIA measures a full curve in seconds (10 to 15 min at high resolution); both aim at sub-second time resolution for kinetics. *[Andersen et al. 2020, §2.3.1, §2.3.3, §2.4.2, §2.4.3](https://doi.org/10.1016/j.nima.2020.163402)*
-- essreflectometry cannot split a run into time slices; ISIS Mantid can, by time or by a log value. *[essreflectometry](https://github.com/scipp/ess/tree/main/packages/essreflectometry/src/ess), [Mantid ISIS Reflectometry](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/reflectometry/ISIS%20Reflectometry.rst)*
 - Amor tutorial runs 608 to 611 hold 4.0, 1.6, 0.56 and 0.21 M events in files of 48, 31, 23 and 23 MB. *[Amor run 608](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000608.hdf) to [611](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000611.hdf)*
 
 ### Runs and normalisation
@@ -38,7 +36,6 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 - Reflectometry is a heavy user of batch reduction, and might reach more than 1000 runs per hour. *Simon, 2026-10-02 and 2026-10-05*
 - The Amor batch GUI groups runs by sample name and angle, both read from the file; the user marks reference runs and exclusions by hand, and the reference run carries the same sample name (SM5) as the sample runs. *[gui.py](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/gui.py#L719-L826), [Amor run 614](https://public.esss.dk/groups/scipp/ess/amor/2/amor2023n000614.hdf)*
 - At ISIS, runs with the same title and angle (`th=` in the title) are summed, and runs with the same title at another angle are stitched; automatic reduction polls for new runs and processes each group again when a run joins it. *[Mantid ISIS Reflectometry](https://github.com/mantidproject/mantid/blob/main/docs/source/interfaces/reflectometry/ISIS%20Reflectometry.rst)*
-- Live reduction at ESTIA gives intensity over wavelength, Q, and angle and wavelength, corrected for footprint and proton current but not divided by a reference; FREIA has detector views only. *[esslivedata estia/specs.py](https://github.com/scipp/esslivedata/blob/main/src/ess/livedata/config/instruments/estia/specs.py#L161-L187), [freia/specs.py](https://github.com/scipp/esslivedata/blob/main/src/ess/livedata/config/instruments/freia/specs.py#L59-L73)*
 
 ## Assumed
 
@@ -51,8 +48,7 @@ Open: events per run at ESTIA and FREIA, whether fast measurements are separate 
 ## Open
 
 - How many events does one ESTIA or FREIA run hold, and how long is it? *Decides memory per reduction and runs per hour. Ask: ESTIA and FREIA instrument scientists.*
-- Are fast and kinetic measurements separate runs or time slices of one run? *Time slices would add a time dimension to the result of one run. Ask: ESTIA and FREIA instrument scientists.*
+- Are fast and kinetic measurements separate runs or time slices of one run? *Decides whether a kinetic result comes from many runs, or from one run with a time dimension ([data](data.md)). Ask: ESTIA and FREIA instrument scientists.*
 - Should automatic reduction scale and stitch a sample's angles as they arrive, or produce one curve per angle? *Decides whether a new run changes earlier results. Ask: ESTIA instrument scientist.*
-- How will a run be marked as sample, reference or direct beam, and its sample and angle group, at ESS? *Decides whether runs can be grouped without a person. Ask: ESTIA instrument scientist, NICOS team.*
 - Does FREIA always split one run into up to three curves, and are those stitched? *Decides whether one run yields several results. Ask: FREIA instrument scientist.*
 - How long does one reduction take at ESTIA scale? *1000 runs per hour leave 3.6 s per run on one core. Measure on ESTIA files once they exist.*

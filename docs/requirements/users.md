@@ -46,8 +46,8 @@ Open: how many people reduce at once, and which way of working the first release
 ### Provenance and the catalogue
 
 - The configuration of batch reductions must give a provenance graph. *Simon, scoping.md*
-- Input runs and results come from and go to SciCat, or another data catalogue ([systems](systems.md)). *Simon, scoping.md*
-- The framework must not replicate SciCat: the lasting history of what ran belongs in SciCat, and the framework only writes to SciCat what that history needs. *Simon, 2026-09-30 and 2026-10-05*
+- The framework must not replicate SciCat: the lasting history of what ran belongs in SciCat, and the framework only writes to SciCat what that history needs.
+  A published result therefore says what produced it without access to the framework. *Simon, 2026-09-30 and 2026-10-05*
 
 ## Assumed
 
@@ -58,7 +58,6 @@ Open: how many people reduce at once, and which way of working the first release
 - In batches: a batch of hundreds started with a wrong shared parameter can be stopped and restarted at once, and invalid parameters are refused before anything runs. *Stories D3 and D4; ask instrument scientists how often this happens.*
 - Automatically: no run is reduced twice, also after a restart of the automatic-reduction service or when a file arrives again. *Stories E1 and D7; ask instrument scientists whether a duplicate result does harm.*
 - Provenance: every result, intermediate ones included, can say which raw runs, parameter values, and software versions produced it. *Design README and story S8; ask Simon whether this holds for every result or only for kept and published ones.*
-- Provenance: a published result says what produced it six months later, without access to the framework. *Story F1; check with the SciCat team that derived entries can hold this.*
 - Users read batch results weeks later too, and find them by what they know, such as sample and temperature, not by an identifier. *Stories D1, D2, D6; ask instrument scientists.*
 - Later: a user can rerun a result in its original software environment after upgrades, or learns before running that this is impossible. *Story F2; ask Simon and DMSC.*
 - Live reduction of the event stream stays in esslivedata, and this framework starts from runs written to files. *Inferred from scoping.md; ask Simon.*

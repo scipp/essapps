@@ -20,7 +20,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 - "Combining runs" means a different operation per technique: a sum of counts and of normalisations, divided once (SANS), a concatenation of events (reflectometry, runs at one angle), a joint fit (reflectometry angles, NMX scaling), or nothing yet (powder, imaging). Several methods need all inputs at once.
 - One run is not always one file or one result: the BIFROST code expects one file to hold a whole angle scan, an ODIN file holds sample, open-beam and dark frames, a simulated FREIA run holds three angles, and splitting a run by time or by a sample-environment log adds a dimension to its result.
 - Results grow with events and frames, not only with bins: an imaging stack takes 12 GB and a Horace file at ISIS up to 500 GB.
-- A run number alone does not name a run; the per-run UUID does. SciCat holds metadata and file paths, not file bytes.
+- A run number alone may not name a run, since in the CODA test setup one NICOS numbers the runs of several instruments; the per-run UUID does. SciCat holds metadata and file paths, not file bytes.
 
 ## Numbers
 
@@ -35,7 +35,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 | ODIN wavelength cube at full resolution | 34 GB | computed | [imaging](imaging.md) |
 | One reduced NMX orientation | 2 GB uncompressed | measured | [diffraction](diffraction.md) |
 | Amor runs at PSI | 0.2 to 13 M events, 22 to 124 MB | files | [reflectometry](reflectometry.md) |
-| Estimated event rates | 1e7 (LoKI) to 7.5e7 (DREAM) per second | Simon, from instrument scientists years ago | [data](data.md) |
+| Estimated event rates | 1e6 (BIFROST) to 7.5e7 (DREAM) per second | Simon, from instrument scientists years ago | [data](data.md) |
 | VISA machine | 64 GB, 6 CPUs as standard; larger for instruments with large files | documented; Simon | [systems](systems.md) |
 | Workflow authors | about 12 people | git history | [users](users.md) |
 
@@ -43,7 +43,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 
 1. Is the 4D volume of hundreds of GB a fixed grid that each run adds to, or a list of observations that grows with every run? *Ask: Simon, BIFROST instrument scientist.*
 2. What lies behind "more than 1000 runs per hour": short kinetic runs or reprocessing? *Ask: Simon.*
-3. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists.*
+3. How will ESS files or the catalogue say what role a run plays, and which runs belong together? *Ask: NICOS team, instrument scientists ([data](data.md)).*
 4. What must users find again, for how long, and where: in files, in SciCat, or in the framework? *Ask: Simon, ESS data management.*
 5. Which way of working, and which instrument, must the first release serve? *Ask: Simon.*
 
@@ -76,4 +76,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 - A source is a person and a date, a public document, or code on GitHub. The design docs and user stories are not sources: a claim only they make is Assumed.
 - Write about runs, samples, files, and results, not about the design (no record, request, stage, accumulator, and so on).
 - Each fact has one home page; other pages link to it. A page that outgrows 100 lines becomes a folder with its own README.
+- Files from CODA hold generated data: do not use them for sizes, or to show that a field is missing.
+- That no code does something today is no evidence that nobody needs it.
+- Sizes measured at other facilities may indicate ESS sizes; their rates do not.
 - The repository is public: name people by role, except Simon.

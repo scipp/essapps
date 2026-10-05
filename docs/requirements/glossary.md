@@ -33,6 +33,7 @@ Physics terms such as Q, I(Q), or S(Q, E) are not explained.
 - **File writer**: the ESS program (kafka-to-nexus) that writes Kafka streams into NeXus files.
 - **NICOS**: the experiment control software; it starts and stops runs.
 - **ECDC**: the ESS group that develops NICOS and the file writer.
+- **CODA**: the ESS staging setup that runs NICOS, the file writer and SciCat on generated data before deployment.
 - **SciCat**: the catalogue of datasets, holding metadata and file paths; **scitacean** is its Python client.
 - **esslivedata**: live reduction and dashboards while a run is measured.
 - **ess packages**: the reduction workflows in the scipp/ess repository (esssans, essreflectometry, ...), built with sciline on scipp.

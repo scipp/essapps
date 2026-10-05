@@ -1,7 +1,7 @@
 # Tensions between needs
 
 Some needs pull against each other, and how each pull is settled shapes the framework more than any single need does.
-Settled: results kept in memory only in interactive work, a large volume held once, the technique deciding where runs are summed, an application pairing runs, and starting over instead of dropping a run from a sum.
+Settled: results kept in memory only in interactive work, a large volume held once, the technique deciding where runs are summed, an application pairing runs, starting over instead of dropping a run from a sum, and only parameters that can be written down.
 Open: how long users find results through the framework rather than in SciCat, whether a result can grow by adding runs when some methods need all inputs at once, and where users look at a result while it grows.
 Most important open question: how long must users find results through the framework, and what goes to SciCat?
 
@@ -24,6 +24,9 @@ A settled tension names the decision that settles it; the decision itself lives 
   - Today a person pairs runs by hand, and ISIS pairs them by run-title conventions; whether ESS files or the catalogue will say what role a run plays is unknown. *[data](data.md), [sans](sans.md)*
 - **Dropping a bad run from a sum, or starting over.** Start over; nothing supports dropping one run from a sum. *Simon, 2026-10-05*
   - A user drops a bad run from a sum without reducing the other runs again. *User story B2 only.*
+- **Describing every reduction versus parameters given as Python functions.** The framework accepts only parameters it can write down; a reduction that needs a Python function, or another change its workflow does not offer, runs in a plain notebook, and a recurring need becomes an optional input of the workflow. *Simon, 2026-10-05; [users](users.md)*
+  - Batch configuration must give a provenance graph, and parameters should be choices from a list rather than Python functions. *Simon, scoping.md; Simon, 2026-09-28*
+  - Powder, imaging, and reflectometry workflows take masks and corrections as Python functions. *[powder](https://github.com/scipp/ess/blob/main/packages/essdiffraction/src/ess/powder/types.py#L208-L216), [reflectometry](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/types.py#L134-L135), [imaging](https://github.com/scipp/ess/blob/main/packages/essimaging/src/ess/imaging/types.py#L76)*
 - **A simple system versus every technique's way of working.** Keep only what a stated need forces, and trace each mechanism to an item on these pages. *Simon, 2026-09-30*
   - The goal is a simple system with predictable behaviour; anything not bound by a strict requirement goes. *Simon, 2026-09-30*
   - The framework must serve all cases: some runs merged and others not, per-run parameters in a sum, a series reduced again at each new run but not only that. *Simon, 2026-09-28*
@@ -37,12 +40,9 @@ A settled tension names the decision that settles it; the decision itself lives 
 - **Can a result grow by adding runs, when some methods need all inputs at once?** *Decides whether a partial result can be updated by adding, or must be computed again from all inputs so far. Ask: Simon, instrument scientists.*
   - Spectroscopy accumulates into 4D volumes (BIFROST perhaps only 2D), and a SANS sum does not depend on the order of its runs. *Simon, 2026-10-02 and 2026-10-05; [sans](sans.md)*
   - Reflectometry scales all angles of a sample by one joint fit, NMX fits one scale curve to all orientations, and YMIR scales by the mean of the whole stack, so a new input changes earlier results. *[reflectometry](reflectometry.md), [diffraction](diffraction.md), [imaging](imaging.md)*
-- **Must a quick reduction in a notebook be fully described, even when it passes masks or corrections as Python functions?** *Decides whether the framework accepts parameters it cannot write down, or leaves such reductions outside. Ask: Simon, authors of the powder, imaging, and reflectometry workflows.*
-  - Batch configuration must give a provenance graph, and parameters should be choices from a list rather than Python functions. *Simon, scoping.md; Simon, 2026-09-28*
-  - Powder, imaging, and reflectometry workflows take masks and corrections as Python functions. *[powder](https://github.com/scipp/ess/blob/main/packages/essdiffraction/src/ess/powder/types.py#L208-L216), [reflectometry](https://github.com/scipp/ess/blob/main/packages/essreflectometry/src/ess/reflectometry/types.py#L134-L135), [imaging](https://github.com/scipp/ess/blob/main/packages/essimaging/src/ess/imaging/types.py#L76)*
 - **Where do users look at a result while it grows: here or in esslivedata?** *Decides whether offline reduction needs partial results at all. Ask: Simon, BIFROST and LoKI instrument scientists.*
   - Users look at cuts through a volume while a scan continues. *User story D7 only.*
-  - esslivedata already accumulates BIFROST Q-E cuts, DREAM I(d), and LoKI I(Q) during a run, without full normalisation. *[spectroscopy](spectroscopy.md), [diffraction](diffraction.md), [sans](sans.md)*
+  - esslivedata already accumulates BIFROST Q-E cuts, DREAM I(d), and LoKI I(Q) during a run, without full normalisation. *[systems](systems.md)*
 - **May one reduction use data of several proposals?** *Deferred to the design of the services (2026-10-02); decides how access is checked. Ask: user office, instrument scientists.*
   - ESS grants access to data per proposal, and a catalogue dataset belongs to one proposal. *[systems](systems.md)*
   - A user may belong to several proposals, and a strict limit of one proposal everywhere was loosened. *Simon, 2026-09-28 and 2026-10-02*
