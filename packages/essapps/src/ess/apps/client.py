@@ -145,8 +145,8 @@ class Accumulator:
 
         A row names datasets or references outputs of records, never an
         accumulator. The push waits for the records to finish, and refuses
-        them unless they have completed. It then waits until the requests
-        that read the accumulator's value, submitted before it, have run.
+        them unless they have completed. It then waits for the requests that
+        read the accumulator; see :mod:`ess.apps.backend`.
         """
         self._push(row)
 
@@ -223,6 +223,11 @@ class Client:
             what = Request(what, params)
         elif isinstance(what, Stage):
             stage, what = what.id, what.template.fill(params or {})
+        elif isinstance(what, Accumulator):
+            raise TypeError(
+                'an accumulator is read by referencing it in a request: '
+                'accumulator.ref(output)'
+            )
         elif params is not None:
             raise TypeError('params go with a spec or a stage')
         if isinstance(what, Mapping):

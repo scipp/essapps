@@ -7,6 +7,7 @@ import statistics
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future
 from typing import Any
 
 import numpy as np
@@ -214,6 +215,25 @@ def append_digit(number: float, digit: float) -> float:
     """An order-sensitive combination, slow enough for pushes to overlap."""
     time.sleep(0.001)
     return number * 10 + digit
+
+
+def _start(call: Callable[[], Any]) -> Future[Any]:
+    """
+    Run ``call`` on a thread of its own; the future returns or raises as it does.
+
+    The thread is a daemon, so that a call that never returns fails its test at
+    the future's timeout instead of holding up the run.
+    """
+    future: Future[Any] = Future()
+
+    def run() -> None:
+        try:
+            future.set_result(call())
+        except Exception as error:
+            future.set_exception(error)
+
+    threading.Thread(target=run, daemon=True).start()
+    return future
 
 
 class Staging:
@@ -427,10 +447,12 @@ def test_the_stages_and_accumulators_of_another_client_are_refused(
 
 
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(
-    client: Client,
+    client: Client, loading: threading.Event
 ) -> None:
+    loading.clear()
     cancelled = client.submit(LOAD, {'run': dataset(run=1)})
     client.cancel(cancelled)
+    loading.set()
     released = client.compute(LOAD, {'run': dataset(run=1)})
     client.release(released)
     refused = {
@@ -668,6 +690,11 @@ def test_a_reference_to_an_accumulator_with_nothing_pushed_binds_to_no_rows(
     assert client.output(zero, 'value') == 0.0
 
 
+def test_an_accumulator_is_read_through_a_reference(client: Client) -> None:
+    with pytest.raises(TypeError, match=r'accumulator\.ref\(output\)'):
+        client.submit(_total(client))
+
+
 def test_an_accumulator_has_one_blank_a_table_and_a_binding_that_accumulates(
     client: Client,
 ) -> None:
@@ -758,7 +785,7 @@ class FilesTable(BaseModel):
 FILES_SUM = _spec('files-sum', FilesTable, Files)
 
 
-def test_an_element_must_fit_the_accumulator(client: Client) -> None:
+def test_a_reference_in_a_row_must_fit_its_field(client: Client) -> None:
     load = client.submit(LOAD, {'run': {'dataset': 'run:1'}})
 
     with pytest.raises(SubmitError, match='does not fit'):
@@ -852,19 +879,63 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     assert client.output(read, 'value') == client.output(plain, 'value')
 
 
+def test_a_push_waits_for_a_request_that_has_not_started(
+    client: Client, loading: threading.Event
+) -> None:
+    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    total = _total(client)
+    total.push(loads[0].refs('value'))
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=2)})
+    parts = [{'value': total.ref('value')}, pending.refs('value')]
+    summed = client.submit(TOTAL, {'parts': parts})  # starts once pending completes
+    pushed = _start(lambda: total.push(loads[1].refs('value')))
+
+    with pytest.raises(TimeoutError):
+        pushed.result(timeout=0.05)
+    loading.set()
+    pushed.result(timeout=5)
+    read = client.submit(SHIFT, {'value': total.ref('value')})
+    assert client.output(summed, 'value') == 3.0  # read 1.0 before the push
+    assert client.output(read, 'value') == 3.0
+
+
+def test_cancelling_a_request_that_has_not_started_frees_the_push(
+    client: Client, loading: threading.Event
+) -> None:
+    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
+    total = _total(client)
+    total.push(loads[0].refs('value'))
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=2)})
+    parts = [{'value': total.ref('value')}, pending.refs('value')]
+    summed = client.submit(TOTAL, {'parts': parts})
+    pushed = _start(lambda: total.push(loads[1].refs('value')))
+
+    with pytest.raises(TimeoutError):
+        pushed.result(timeout=0.05)
+    client.cancel(summed)
+    pushed.result(timeout=5)
+    assert client.status([pending, summed]) == [Status.PENDING, Status.CANCELLED]
+    loading.set()
+
+
 def test_ending_a_client_waits_for_nothing_and_its_accumulator_is_still_read(
     backend: Backend, client: Client, loading: threading.Event
 ) -> None:
+    other = Client(backend, proposal='p1', submitter='bob')
     total = _total(client)
     total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
     loading.clear()
     pending = client.submit(LOAD, {'run': dataset(run=2)})
     parts = [{'value': total.ref('value')}, pending.refs('value')]
     summed = client.submit(TOTAL, {'parts': parts})
+    shifted = other.submit(SHIFT, {'value': summed.ref('value')})
     client.close()
     loading.set()
 
-    assert Client(backend, proposal='p1', submitter='bob').wait(summed) == 'completed'
+    assert other.wait([summed, shifted]) == [Status.COMPLETED] * 2
+    assert other.output(shifted, 'value') == 3.0  # summed read 1.0 from total
 
 
 class Sum:
@@ -958,6 +1029,25 @@ def test_a_push_that_fails_to_add_is_refused_and_stops_the_accumulator(
         client.submit(SHIFT, {'value': total.ref('value')})  # it may be half added
     assert len(log) == logged
     assert client.output(before, 'value') == 1.0
+
+
+def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
+    datasets: FakeDatasets,
+) -> None:
+    bind = {
+        LOAD: lambda run: {'value': run, 'extra': 0.0},
+        SHIFT: lambda value, offset: {'value': value + offset},
+        TOTAL: Averaging(),  # holds 'mean', which TOTAL lacks
+    }
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        total = _total(client)
+        total.push(client.compute(LOAD, {'run': dataset(run=1)}).refs('value'))
+        read = client.compute(SHIFT, {'value': total.ref('value')})
+
+        assert client.failure(read) == (
+            "the accumulator of total/v1 returned ['mean']: "
+            "missing ['value'], not in the spec ['mean']"
+        )
 
 
 # Accumulators that add in place
@@ -1122,6 +1212,58 @@ def test_references_in_one_submission_bind_one_state_while_rows_are_pushed(
         (upto,) = {r.request.params['value'].upto for r in pair}
         expected = float(sum(range(3, 3 + upto)))
         assert [client.output(r, 'value').tolist() for r in pair] == [[expected]] * 2
+
+
+def test_requests_that_read_two_accumulators_in_either_order_wait_for_both_pushes(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    copying.go.clear()
+    first, second = _total(client), _total(client)
+    for total in (first, second):
+        total.push(loads[0].refs('value'))
+        _copy(client, total)  # holds back the next push
+
+    def read(*totals: Accumulator) -> Record:
+        parts = [{'value': total.ref('value')} for total in totals]
+        return client.submit(TOTAL, {'parts': parts})
+
+    row = loads[1].refs('value')
+    pushes = [_start(lambda: first.push(row)), _start(lambda: second.push(row))]
+    for pushed in pushes:
+        with pytest.raises(TimeoutError):
+            pushed.result(timeout=0.05)
+    reads = [_start(lambda: read(first, second)), _start(lambda: read(second, first))]
+    copying.go.set()
+
+    for pushed in pushes:
+        pushed.result(timeout=5)
+    for read in reads:
+        record = read.result(timeout=5)
+        uptos = [part['value'].upto for part in record.request.params['parts']]
+        expected = sum(sum(n for n in (1.0, 2.0)[:upto]) for upto in uptos)
+        assert client.output(record, 'value').tolist() == [expected]
+
+
+def test_a_push_that_waits_is_refused_once_the_accumulator_is_released(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    copying.go.clear()
+    total = _total(client)
+    total.push(loads[0].refs('value'))
+    copied = _copy(client, total)
+    copying.started.wait(timeout=5)
+    pushed = _start(lambda: total.push(loads[1].refs('value')))
+
+    with pytest.raises(TimeoutError):
+        pushed.result(timeout=0.05)
+    client.release(total)
+    copying.go.set()
+    released = 'the accumulator was released or is unknown'
+    with pytest.raises(SubmitError, match=f'^{released}$'):
+        pushed.result(timeout=5)
+    assert client.output(copied, 'value').tolist() == [1.0]
 
 
 def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(

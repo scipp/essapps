@@ -26,8 +26,8 @@ for the values of every other field, so it needs such a binding::
 
 Its value after the rows are pushed in order is the output of the plain
 request over them with the same other values. It may add each row in place,
-and its value may be what it holds, not a copy: requests read the value
-itself, and the backend pushes the next row only once they have run.
+and its value may be what it holds, not a copy; :mod:`ess.apps.backend` says
+why that is safe.
 """
 
 from __future__ import annotations
