@@ -10,7 +10,7 @@ Those belong in [system.md](system.md), and the system may change them without c
 [adr/](adr/index.md) records the decisions behind both.
 
 The first sections cover what most notebooks need: submitting requests, reading their results, and chaining them.
-Later sections add what saves computation in interactive work (stages and accumulators), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
+Later sections add how runs are combined, what saves computation (stages and accumulators), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
 
 ## From a for loop
 
@@ -52,29 +52,31 @@ The table names who writes each thing and who makes one at run time, with these 
 - *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
 - *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
 - *notebook*: a scientist's notebook that uses the client directly.
-- *DMSC*: deploys a hosted backend and its dataset source, and keeps them running.
+- *DMSC*: deploys the service and its dataset source, and keeps them running.
 
 The terms this document defines, in the order they appear:
 
 | Term | What it is | Code from | Made by |
 |---|---|---|---|
-| backend | the process that runs requests and keeps records | framework | DMSC; or a notebook or app with `local()` |
-| client | the object through which a notebook or app talks to one backend; it keeps what it makes until it releases it or ends | framework | notebook, app |
-| spec | the signature of a workflow: name, version, parameters, outputs | workflow author | workflow author |
+| backend | the process that runs requests and keeps records | framework | DMSC, as the service; or a notebook or app with `local()` |
+| client | the object through which a notebook or app talks to one backend; it keeps its stages and accumulators, and in the user's process the values it makes, until it releases them or ends | framework | notebook, app |
+| spec | the signature of a workflow: name, version, parameters, outputs; a parameter may be a table | workflow author | workflow author |
 | binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.apps.pipeline.PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
 | record | a request as the backend accepted it, with the names of its outputs; it never changes | framework | backend, at submission |
-| reference | an input that points to an output of a record, or to a dataset | framework | notebook, app |
+| reference | an input that points to an output of a record, to a dataset, or to the state of an accumulator | framework | notebook, app |
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters; the others (*blanks*) are filled later | framework | notebook, app |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | DMSC; a fake one in tests |
-| spec over a table | a spec whose only parameter is a list of elements of one model, such as a sum over runs | workflow author | workflow author |
+| table, row | a parameter whose value is a list of rows of one flat model; a row is the unit that arrives, such as a run | workflow author | notebook, app |
 | stage | a template the backend keeps for a client; what does not depend on the blanks is computed once | framework | notebook, app |
-| accumulator | a spec over a table the backend keeps for a client, to which elements are pushed one at a time, such as a running sum | framework | notebook, app |
-| snapshot | a record of an accumulator's current value, kept until the next push | framework | backend, when an accumulator is submitted |
+| accumulator | an accumulating workflow the backend keeps for a client: a template whose blanks are tables, into which rows are pushed one at a time, and which is read like a record | framework | notebook, app |
+| held state | what an accumulator's binding holds between pushes, such as a numerator and a denominator; no spec, call, or record names it | workflow author | backend, when the accumulator opens |
+| state | an accumulator after its first n pushes; a read binds to the state at that moment | framework | backend, at each push |
 
-The rows down to template are enough for most work.
-The terms stage and accumulator follow sciline (scipp/sciline ADR 0003).
+The terms down to template are enough for most work.
+The term stage follows sciline (scipp/sciline ADR 0003).
+An accumulator here is a whole accumulating workflow; the `Accumulator` of sciline and of `StreamProcessor`, which holds one key, is part of a binding ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Client and backend
 
@@ -86,10 +88,12 @@ client = local(proposal='p1', datasets=..., bind={IOFQ: iofq, ...})
 ```
 
 `datasets` is the dataset source the backend reads through (see Datasets), and `bind` maps each spec the backend offers to its binding (see Specs and bindings).
-A client of a hosted backend, `connect('https://reduce.example', proposal='p1')`, is planned and not implemented.
+Interactive work, such as a notebook, runs in the user's own process with `local()`.
+Batch and automatic reduction run on *the service*, a backend that DMSC hosts; `connect('https://reduce.example', proposal='p1')` makes a client of it.
+The service is designed and not implemented.
 
 The backend runs requests and keeps records.
-A hosted backend runs only workflows from installed packages.
+The service runs only workflows from installed packages.
 A backend in the notebook's process can also run a workflow defined in the notebook (see Binding).
 
 ## Specs and bindings
@@ -99,6 +103,7 @@ A *workflow* is a computation that a package offers, such as the I(Q) reduction 
 **Spec.** A workflow package declares a spec (`ess.reduce.spec.WorkflowSpec`) for each workflow it offers: a name, a version, a params model, and an outputs model.
 Both models are pydantic models; `ess.reduce.spec` provides the field types.
 A field whose value is data, such as an array or a file, is a *data field*; in a request its value is a reference to that data (see References), not the data itself.
+A field may also be a *table*: a list of rows of one flat model, such as the runs of a sum (see Combining runs).
 Notebooks and apps run specs; how the package implements a spec is invisible to them.
 
 ```python
@@ -152,8 +157,23 @@ call(bins=50)                         # values for the blanks; called once per r
 A request outside a stage is the case with no blanks: `binding.stage(values, ())` and then one call without arguments.
 A function binding computes everything in each call.
 A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
-A binding of a spec over a table, such as `combine(operator.iadd)`, may also provide `accumulator()`.
-An accumulator needs it (see Stages and accumulators); [system.md](system.md) describes that protocol.
+
+A binding of a spec with tables may also provide `accumulator(fixed)`, which an accumulator needs (see Stages and accumulators).
+It returns an object that holds the accumulator's held state ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
+
+```python
+held = binding.accumulator(fixed)      # every value but the tables, data read; computes what depends only on them
+held.push('runs', {'run': run_611})    # adds one row of one table, data read
+held.outputs(['normalized'])           # {'normalized': ...}, computed from the held state
+```
+
+After rows are pushed, `outputs` gives what the plain request over those rows gives, with the same other values.
+The workflow author promises this, as `StreamProcessor` asks its users to promise that a workflow is linear in its dynamic keys.
+`push` may modify the held state in place, but not the row.
+`outputs` may return part of the held state, not a copy.
+The backend calls both from one thread at a time.
+`combine(operation)` is such a binding, for a spec whose only parameter is one table and whose outputs are the rows' fields, each combined with `operation`.
+`PipelineBinding` will accumulate with `StreamProcessor` ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)); this is designed and not implemented.
 
 A backend in the notebook's process can bind a spec to code defined in the notebook, for example to try out a change to a workflow:
 
@@ -203,7 +223,7 @@ Requests submitted together are checked together: if one is invalid, none is sub
 
 ## References
 
-An input is given by *reference*: to an output of a record, or to a dataset (see Datasets).
+An input is given by *reference*: to an output of a record, to a dataset (see Datasets), or to the state of an accumulator (see Stages and accumulators).
 A reference to a record that has not finished yet is a valid input, so a chain is submitted without waiting:
 
 ```python
@@ -263,7 +283,7 @@ A label holds no values; it only names records.
 ## Templates
 
 A *template* is a spec, some parameter values, and the names of the parameters left open, its *blanks*.
-Batches, stages, and rules are built from templates.
+Batches, stages, accumulators, and rules are built from templates.
 A template can be made from any request's values; naming a field as a blank drops the value given for it.
 
 ```python
@@ -281,21 +301,20 @@ The backend keeps two kinds of things with different lifetimes:
 | | What | Kept |
 |---|---|---|
 | record | what ran, with which inputs, and what came of it | until its proposal has been idle for days to weeks |
-| output value | the data an output holds, such as an I(Q) array | while a client keeps it, see below |
+| output value | the data an output holds, such as an I(Q) array | one rule for each deployment, see below |
 
 Records are the proposal's history.
 They are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
 A proposal is idle while none of its clients is open and none of its records is pending; once it has been idle for a retention period of days to weeks, its records are dropped as a whole.
 A result needed for longer is published (see Provenance and publication).
 
-Output values are large, so the backend keeps a value only while something keeps it.
+**In the user's process** (`local()`, [ADR 0002](adr/0002-the-client-is-the-lifetime.md)), output values are kept in memory, and only while something keeps them.
 Two things do:
 
 - **the client that made its record, until the client releases it or ends;**
 - **a pending request that reads it, until the request has run.**
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
-A snapshot's value also ends at the next push into its accumulator, or when the accumulator is released, even while its client keeps it (see Stages and accumulators).
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
 
 | Call | Does |
@@ -317,11 +336,26 @@ A released record that is still pending drops its values once it completes and n
 Any later call of a client that has ended raises `ClientEnded`.
 A client made with `local()` owns its backend: closing the client also closes the backend, which waits until no record is pending.
 A client that is never closed ends with its process.
-
-A value that must outlive its client, such as a beam centre for tomorrow's batch, must be saved.
-How to save is not designed yet.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
-What lasts beyond the proposal is what `publish` puts in a catalogue (see Provenance and publication).
+
+**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), every output is written to a file when its record completes, and the record names the file.
+`client.output` and references read the file.
+The service keeps no value for a client, so there is no release of values.
+The files lie in an area per proposal that the framework owns, and are dropped with the proposal's history.
+The one state the service holds between requests is an accumulator.
+Each accumulator runs as its own job on the cluster, with a memory size and a deadline that its client declares when it opens it.
+Releasing it or ending its client ends it early, and otherwise its deadline ends it.
+The client may extend the deadline.
+This is designed and not implemented.
+
+```python
+client.submit(requests, label='night')         # each output written when its record completes
+morning = connect(url, proposal='p1')          # the next day, any process
+night = morning.records(label='night')
+morning.output(night[0], 'iofq')               # read from the file the record names
+```
+
+What lasts beyond the proposal's history is what `publish` puts in a catalogue (see Provenance and publication).
 
 ## Datasets
 
@@ -352,98 +386,72 @@ for run in datasets.watch(Selector(scan='17')): ...   # existing ones first, the
 datasets.metadata(run)['sample']                        # the source's current values
 ```
 
-## Combining runs: specs over a table
+## Combining runs: tables
 
 Many reductions combine several runs into one result.
-The counts of each angle of a rotation scan are summed into one volume.
-A normalization sums numerators and denominators over runs and divides only at the end.
+SANS sums the sample runs and the can runs, with numerators and denominators summed apart and divided once.
+A rotation scan adds the counts of each angle into one volume.
 
-What one run contributes is an *element*, such as an array of counts; a model declares its fields.
-The combining step is a spec whose only parameter is a list of elements, a *table* in `ess.reduce.spec`: a form shows it with one row per element and one column per field.
-Such a spec is a *spec over a table*.
-
-```python
-class Counts(BaseModel):
-    counts: Array(ArraySpec(dims=('Q', 'energy_transfer'), unit='counts'))
-
-class VolumeParams(BaseModel):
-    angles: list[Counts]                                                      # a table
-
-VOLUME = WorkflowSpec(name='volume', ..., params=VolumeParams, outputs=Counts)   # bound to a sum
-
-angles = [client.submit(ANGLE, {'run': r}) for r in scan]                    # one run per angle
-volume = client.submit(VOLUME, {'angles': [a.refs('counts') for a in angles]})
-client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
-```
-
-Each element of a request is a dict with a reference per field, which `record.refs(...)` gives.
-An element's fields are values or data fields, never another model or table; `ess.reduce.spec` refuses a spec that nests deeper.
-
-The outputs are whatever the combination gives.
-A sum gives the fields of the element, as VOLUME does, so a sum can be summed again.
-A mean gives other fields, and a sum of 32-bit integer counts may give 64-bit integers so that it does not overflow:
+A spec takes the runs to combine as *tables*, next to the parameters that all runs share.
+A table is a list of *rows* of one flat model, declared as `list[Row]` in `ess.reduce.spec`; a form shows it with one row per run and one column per field.
 
 ```python
-MEAN = WorkflowSpec(name='mean', ..., params=VolumeParams, outputs=MeanCounts)
+class SampleRun(BaseModel):                 # one row
+    run: NexusFile
+    transmission: NexusFile | None = None   # the run's own transmission run, if any
+
+class CanRun(BaseModel):
+    run: NexusFile
+
+class SansIofQParams(BaseModel):
+    sample_runs: list[SampleRun]            # a table
+    can_runs: list[CanRun]                  # a table
+    beam_centre: Array()                    # shared by all runs
+    direct_beam: Array()
+
+SANS_IOFQ = WorkflowSpec(..., params=SansIofQParams, outputs=IofQOutputs)
 ```
 
-A spec over a table connects specs whose authors did not plan for each other, as long as their fields match.
+Each row of a request is a dict with a value per field: a plain value, a dataset, or a reference to an output of a record.
+A row's fields are values or data fields, never another model or table; `ess.reduce.spec` refuses a spec that nests deeper.
 
-A reduction with a sum in the middle splits into three specs.
-A package builds CONTRIBUTE and FINALIZE from the parts of one sciline `split`, cut at the keys that PARTS_SUM sums:
+A row is the outermost level of the reduction, the unit that arrives: a run, or the runs that belong together, such as a run and its own transmission run.
+Rows of different tables are independent, and pairing runs into rows is the application's job.
+Any structure below a row, such as detector banks, angle settings read from a log, or sections of a large file, belongs to the binding.
+The binding loops over it inside the work per run, so that this work is done once per row and not once per bank ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 
-```text
-run 611 ── CONTRIBUTE ──┐
-run 612 ── CONTRIBUTE ──┼── PARTS_SUM ── FINALIZE ── I(Q)
-run 613 ── CONTRIBUTE ──┘
-```
+### One sum, two ways
+
+A package offers one spec for a sum, such as I(Q) with tables of sample and can runs.
+A client computes it as a plain request over the tables, or as an accumulator over them:
 
 ```python
-class NormalizationParts(BaseModel):           # one element of PARTS_SUM
-    numerator: Array(ArraySpec(dims=('Q',), unit='counts'))
-    denominator: Array(ArraySpec(dims=('Q',), unit='counts'))
+rows = [{'run': run} for run in (r611, r612)]
 
-class PartsSumParams(BaseModel):
-    parts: list[NormalizationParts]
+# 1. a plain request over the table
+client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 
-CONTRIBUTE = WorkflowSpec(name='sans-contribute', ..., params=ContributeParams, outputs=ContributeOutputs)
-PARTS_SUM = WorkflowSpec(name='sans-parts-sum', ..., params=PartsSumParams, outputs=NormalizationParts)
-FINALIZE = WorkflowSpec(name='sans-finalize', ..., params=FinalizeParams, outputs=IofQOutputs)
+# 2. an accumulator over the table, see Stages and accumulators
+total = client.accumulator(Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',)))
+for row in rows:
+    total.push('runs', row)
+client.output(total, 'normalized')
 ```
 
-`ContributeOutputs` has the fields `numerator` and `denominator`, and may have more, which are not summed.
-`FinalizeParams` has the data fields `numerator` and `denominator`; FINALIZE does not know that they are sums.
-A FINALIZE may read several sums, for example one over sample runs and one over background runs.
-Each element of a PARTS_SUM request holds the numerator and denominator of one run, so the two cannot be paired with different runs.
-
+Both give the same outputs: the workflow author promises that the accumulator over the rows pushed so far gives what the plain request over those rows gives.
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
-The workflow author decides this for the specs the package ships; whoever connects specs from different packages, in a notebook or an app, decides it for that chain.
+The binding decides it, and the quantity must be linear in the runs; for esssans it is the numerator and denominator in Q.
 
-### One sum, three ways
-
-```python
-# 1. one request of a spec that sums its runs internally
-client.compute(NORMALIZE, {'runs': [r611, r612], 'scale': 2.0})   # NORMALIZE: such a spec
-
-# 2. a chain of requests
-parts = [client.submit(CONTRIBUTE, {'run': r}) for r in (r611, r612)]
-total = client.submit(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]})
-client.compute(FINALIZE, {**total.refs(), 'scale': 2.0})     # refs(): every output, by name
-
-# 3. the same chain through an accumulator, see Stages and accumulators
-```
-
-Ways 2 and 3 give the same values. Way 1 makes one record of a different spec.
-NORMALIZE takes a scalar next to its list of runs, so it is not a spec over a table, and it cannot be an accumulator.
-The framework allows all three; a package decides which specs it offers.
+A table may also hold references to outputs of records.
+`combine(operator.add)` binds a spec whose only parameter is such a table and whose outputs are the rows' fields, each summed; story S4 sums the outputs of two records this way.
 
 ## Stages and accumulators
 
 A plain request computes everything from its inputs.
-In interactive work this repeats work: tuning `bins` reloads the same run for each value, and adding one run to a sum of a hundred sums all hundred again.
+In interactive work this repeats work: tuning `bins` reloads the same run for each value, and adding one run to a sum of a hundred reduces all hundred again.
 Stages and accumulators let the backend keep such values in memory between requests.
 A client makes them and keeps them until it releases them or ends (see How long records and values are kept).
-Records made through them are ordinary records.
+Records made through a stage, and records that read an accumulator, are ordinary records.
 
 **Stage.** A *stage* is a template that the backend keeps for a client.
 The backend computes what does not depend on the blanks once, such as loading the run, and each call through the stage computes only the rest:
@@ -461,83 +469,55 @@ A record made through a stage is the record of the plain request with the blanks
 What the stage computed is a cache: the backend may drop it at any time, and the next call computes it again and makes the same record.
 How the backend calls the binding for a stage is in Specs and bindings.
 
-**Accumulator.** An *accumulator* is a spec over a table that the backend keeps for a client.
-A request of a spec over a table needs the whole table at submission; an accumulator takes one element at a time and does not combine the earlier ones again.
-A push takes the same dict that one element of the request takes.
-As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: the combination of the elements so far, such as their sum.
-Any spec over a table can be an accumulator if its binding provides `accumulator()` (see Specs and bindings).
+**Accumulator.** An *accumulator* is an accumulating workflow that the backend keeps for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+It opens from a template whose blanks are tables, and takes one row at a time:
 
 ```python
-total = client.accumulator(PARTS_SUM)
-total.push({'numerator': record.ref('numerator'),    # an element: a reference per field
-            'denominator': record.ref('denominator')})
-total.push(record.refs('numerator', 'denominator'))   # the same, where the names match
-total.push({'numerator': other.ref('counts'), 'denominator': other.ref('monitor')})
+iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': ...},
+                                   blanks=('sample_runs', 'can_runs')))
+iofq.push('sample_runs', {'run': dataset(run=611)})   # the dict one row of the request takes
+iofq.push('can_runs', {'run': dataset(run=614)})
+iofq.push('sample_runs', {'run': dataset(run=612)})   # reduces run 612 only
+client.output(iofq, 'iofq')                            # what the plain request over these rows gives
 ```
 
-A push is refused if a required field of the element is missing or a field is extra.
-A push combines every field or none, so the outputs of a snapshot cover the same runs; one accumulator per field would not guarantee that.
-The referenced outputs may have any name; `record.refs(...)` is short for the case where they are named like the fields.
-Without names, `refs()` references every output.
-The push waits for the records it references to finish and refuses them unless they have completed.
-A push is checked when made, as a request over that one element would be.
-A push that references a snapshot is refused: pushing a snapshot into an accumulator is not supported.
-Accumulators meet in a request instead, such as a FINALIZE that reads two sums.
+As a stage keeps what stays the same between calls, an accumulator keeps what stays the same between pushes: what it computed from the fixed values, and its *held state*, such as the numerators and denominators summed so far.
+The held state is private to the binding: no spec, call, or record names it.
+The outputs are the spec's outputs, computed from the held state when they are read.
 
-**Snapshot.** To use the combined value as the input of another request, submit the accumulator.
-This makes a *snapshot*: a record whose output is the current combined value, completed at once.
-Like any record, its outputs can be referenced.
-A snapshot takes no label or member; the requests that read it do.
+- `client.accumulator` checks the template as `client.stage` does, with the tables left out. Its blanks must be one or more of the spec's tables, and the spec's binding must provide `accumulator(fixed)` (see Specs and bindings). A plain request over the tables works with any binding.
+- Opening waits for the records the template references, refuses them unless they have completed, and reads them once. `iofq.template` holds the values as resolved, as a stage's template does.
+- `push(table, row)` adds one row to one table. It is checked as the request over that one row, with the accumulator's other values, would be. It waits for the records the row references to finish, and refuses them unless they have completed.
+- A row that references an accumulator is refused, and so is a stage or an accumulator whose template references one, since it would hold back every push for as long as it lives. Accumulators meet in a request.
+- If adding a row fails, the push is refused and the accumulator takes no more pushes or reads, since the binding may hold part of the row.
 
-Way 3 of the sum above:
+**Reads.** An accumulator is read as a record is ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
-total = client.accumulator(PARTS_SUM)
-for run in (r611, r612):
-    total.push(client.compute(CONTRIBUTE, {'run': run}).refs('numerator', 'denominator'))
-first = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
-
-c613 = client.compute(CONTRIBUTE, {'run': r613})
-total.push(c613.refs('numerator', 'denominator'))              # c611 and c612 are not summed again
-added = client.compute(FINALIZE, {**client.compute(total).refs(), 'scale': 2.0}, label='sum')
+client.output(iofq, 'iofq')                                 # as client.output(record, 'iofq')
+client.output(iofq)                                         # every output, by name
+client.provenance(iofq)                                     # that of the plain request over the rows so far
+exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # bound when submitted
+iofq.refs()                                                 # a reference to every output, by name
 ```
 
-A snapshot's value is the output of the plain request over the elements pushed so far, in push order.
-For the second snapshot, that request is PARTS_SUM over `{'parts': [c.refs('numerator', 'denominator') for c in (c611, c612, c613)]}`, the request that way 2 makes; `c611` and `c612` are the CONTRIBUTE records of runs `r611` and `r612`.
-A snapshot's record names the accumulator and how many elements it covers, not the elements themselves; provenance lists them:
+Every read binds to the accumulator's *state* at that moment: the state after the pushes so far.
+It gives what the same call gives on the record of the plain request over those rows, in push order.
 
-```python
-snapshot = client.compute(total)
-snapshot.submitted                       # what a record ran: a Request, or here a Snapshot
-                                         # Snapshot(spec=sans-parts-sum/v1, accumulator=total.id, upto=3)
-client.provenance(snapshot).records()    # [c611, c612, c613]: the records it read, in push order
-```
+- A reference binds when its request is submitted. The record holds `{'accumulator': id, 'output': name, 'upto': n}`, the output after the first `n` pushes. All references to one accumulator in one submission bind to the same state, and a reference to an earlier state is refused.
+- `client.output` returns a copy, so that, like a record's output, the value does not change afterwards. A request reads the output itself.
+- A read of an accumulator with nothing pushed is refused. Only the client that opened an accumulator reads it.
+- `client.submit(iofq)` raises `TypeError`. A record of a state is a request of a spec that copies what it reads, such as `COPY` in Drivers.
 
-**Adding in place.** An accumulator may add each element into the value it holds, as `combine(operator.iadd)` does, so that a push needs no memory for a second combined value.
-A snapshot's output is that value itself, not a copy, and several snapshots between two pushes share it.
-So the next push would change it, and the snapshot rule is:
-
-> A snapshot's value is kept until the next push into its accumulator, or until the accumulator is released.
-
-A push first ends the snapshots taken since the previous push: from then on a request that references one is refused at submission, and reading one raises; the records stay.
-The push then waits until the requests that read those snapshots, submitted before the push, have run, and only then adds the element.
-No request waits for a push, so this wait ends; a long request that reads a snapshot holds back the next push.
-Releasing the accumulator or ending the client ends its snapshots in the same way, but waits for nothing: their value is dropped once the requests that read them have run.
-
-```python
-total = client.accumulator(PARTS_SUM)
-total.push(c611.refs('numerator', 'denominator'))
-snapshot = client.submit(total)
-normalized = client.submit(FINALIZE, {**snapshot.refs(), 'scale': 2.0})   # reads the snapshot's value
-numerator = client.output(snapshot, 'numerator')                           # a copy
-total.push(c612.refs('numerator', 'denominator'))                          # waits until FINALIZE has run
-client.output(snapshot, 'numerator')                                       # raises: the value ended at the push
-client.output(normalized, 'normalized')                                    # from the value before the push
-```
-
-`client.output` of a snapshot returns a copy, so a value read in a notebook does not change at the next push.
-A request that reads a snapshot reads the value itself; it is not copied.
-The backend keeps no earlier state of an accumulator: what it keeps past the next push are the outputs of the requests that read the snapshot, such as a cut or FINALIZE above.
+**Pushes wait for readers.** An accumulator holds one state, and its binding may add each row to it in place, so that a push needs no second copy of a large volume.
+A request reads the outputs of that state, not a copy.
+So a push waits until the readers of the current state that came before it have run.
+Readers are the requests that reference the state and were accepted before the push, including those cancelled while they run, and `client.output` calls in progress.
+No reader waits for a push, so the wait ends.
+A read made while a push waits or adds blocks until the push is done, and binds to the state after it.
+A long reader holds back the next push, so the driver decides how often it looks.
+The outputs of a state are computed when the state is first read for them: once, and only those asked for.
+Releasing the accumulator, or ending its client, waits for nothing; its held state is dropped once its readers have run.
 
 ## Drivers
 
@@ -559,25 +539,23 @@ records['250K']
 ```
 
 **A loop over arrivals** waits for new datasets.
-This one reduces each angle of a rotation scan as its run arrives, and keeps a volume of the angles finished so far:
+This one adds each run of a rotation scan to a volume as it arrives, and cuts through the volume after each run (story D7):
 
 ```python
-volume = client.accumulator(VOLUME)
-angles = (client.submit(ANGLE, {'run': run}) for run in datasets.watch(Selector(scan='17')))
-for angle in client.as_completed(angles):                       # in the order they finish
-    volume.push(angle.refs())                                   # ANGLE outputs only counts
-    client.release(angle)                                       # the volume holds the sum
-    snapshot = client.submit(volume)
-    client.submit(CUT, {'data': snapshot.ref('counts'), 'energy_transfer': 2.0},
-                  label='cut', member='17')
+volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+for run in islice(client.datasets.watch(Selector(scan='17')), 1000):   # the scan's 1000 runs
+    volume.push('runs', {'run': run})                    # waits until the previous cut has run
+    client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}, label='cut', member='17')
+total = client.compute(COPY, {'data': volume.ref('counts')})   # a record of the last state
 ```
 
-The generator `angles` submits a request for each run as it arrives.
-`as_completed` consumes it in a thread, so submitting does not wait for the loop body.
-It yields each record once it has finished, so the angles are reduced in parallel while the loop pushes one at a time.
-`VOLUME` adds in place, and each snapshot shares the volume's value, so the loop holds one volume, not one per angle or per pending cut.
-Each push waits until the previous cut has run, since the cut reads the volume the push adds to.
-Releasing each angle once it is pushed keeps the client from keeping a thousand angles.
+Each push reduces the new run and adds it to the volume.
+Each cut binds to the state after its push, and the next push waits until that cut has run, since the push adds to the volume the cut reads.
+So the loop holds one volume, not one per run or per pending cut.
+On the service, the volume is a job of its own, and each run is reduced in that job ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
+
+A loop that reduces each dataset in a request of its own uses `client.as_completed`.
+It consumes a generator of records in a thread, so submitting does not wait for the loop body, and yields each record once it has finished.
 
 ## Batch and automatic reduction
 
@@ -606,7 +584,7 @@ TriggerLoop(client, rules=[rule]).run()
 ```
 
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
-Like any driver, it keeps what it makes through its client, such as an accumulator for a sum that grows with each new dataset under a rule.
+Like any driver, it opens accumulators through its client, such as one for a sum that grows with each new dataset under a rule.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
 Templates and rules are plain data; the core keeps no store of them, and records do not name them.
@@ -615,12 +593,13 @@ Templates and rules are plain data; the core keeps no store of them, and records
 
 This sub-design builds on the core.
 
-`client.provenance(record)` is plain data: what the record ran (its request or snapshot), the records it read through all its inputs, the datasets they read, and the software versions.
+`client.provenance(record)` is plain data: the record's request, the records it read through all its inputs, the states of accumulators it read on the way, the datasets they read, and the software versions.
+Each state of an accumulator is given as the plain request over the rows pushed before it was read: the accumulator's template with its tables filled in push order.
 It stops at datasets: what lies behind a dataset, raw or published, belongs to the dataset's source.
 
 ```python
 provenance = client.provenance(result)
-provenance.datasets(), provenance.records(), provenance.software
+provenance.datasets(), provenance.records(), provenance.accumulated, provenance.software
 pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its provenance
 ```
 
@@ -631,11 +610,11 @@ Recomputing in a record's environment comes later.
 
 ## Guarantees
 
-- A record holds the spec, every parameter value including defaults, and its inputs by reference; a snapshot holds its accumulator and how many elements it covers. A record never changes; its status changes once, from pending to finished.
-- A stage never changes what a record says: a record made through a stage is the record of the plain request. A snapshot's value is the value of the plain request over the elements it covers, in push order.
-- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with a snapshot it reads, such as a slice of it, since the snapshot's value changes at the next push.
-- A record's outputs do not depend on how they were computed: through a stage or an accumulator, on another machine, or as a tree over many processes. Values may differ in rounding where the order of combining differs.
-- The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
+- A record holds the spec, every parameter value including defaults, and its inputs by reference; a reference to an accumulator names the state it read by its number of pushes. A record never changes; its status changes once, from pending to finished.
+- A stage never changes what a record says: a record made through a stage is the record of the plain request. A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order.
+- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an accumulator's output it reads, such as a slice of it, since the next push may change that output in place.
+- A record's outputs do not depend on how they were computed: through a stage, from an accumulator, or on another machine. Values may differ in rounding where the order of adding differs.
+- The provenance of a record reaches every dataset it read, through all its inputs and the states of accumulators it read, with their parameter values and software versions.
 - A proposal's records are kept until the proposal has been idle for the retention period, and then dropped as a whole. A published entry answers what produced it without access to the records.
 - Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
 
@@ -647,13 +626,16 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
-- whether a request of a spec over a table with many elements is computed in parts on many processes, such as a tree of partial sums, and how that is configured. The record is the same. Computing in parts needs the author to declare that grouping does not change the result, as for a sum (open question 1).
-- where a stage or an accumulator is kept and computes; whether a value passed in memory is also written; and how a client whose process is gone is ended
+- where a stage is kept and computes, and on which node the job of an accumulator runs
+- the file format of each output type, and the folder layout within a proposal's area (scipp/essapps#23)
+- how the service notices a client whose process ended without closing it (scipp/essapps#34)
 - how access across proposals is enforced
 
 ## Open questions
 
-1. **Grouping.** How an author declares that grouping does not change the result of a spec over a table, which a tree of partial sums over a plain request needs. Only a spec whose outputs have the fields of its element can declare it, since the result of each part is combined again; a mean cannot.
-2. **Removing an element.** A request of the spec over fewer elements is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each element.
+1. **Grouping.** Spreading one accumulator over several nodes, for example to reduce a finished scan again quickly, needs a merge of two held states. Neither `StreamProcessor` nor the binding protocol offers one, and no requirement needs it yet: runs arrive over hours, and a finished scan can be reduced again in one job ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+2. **Removing a row.** A request over fewer rows is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
+5. **Accumulators on the service.** How a client declares an accumulator's memory size and deadline, and how a request that reads two accumulators gets both states in one job ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
+6. **Stages.** Whether stages stay a concept of their own, since the part of an accumulator computed once from its fixed values is what a stage caches (scipp/essapps#35).

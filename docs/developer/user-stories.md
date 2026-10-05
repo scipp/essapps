@@ -17,29 +17,32 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `IOFQ` | `run`, `bins=2`, `threshold=0.0`, `can=None`, `beam_centre=None`, `normalization=None` | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
 | `BEAM_CENTRE` | `run` | `centre` | the mean of the counts | beam-centre finding |
 | `VANADIUM` | `run`, `scale=1.0` | `normalization` | the sum of the counts times `scale` | vanadium processing |
-| `NORMALIZE` | `runs: list`, `scale=1.0` | `normalized` | the counts summed over runs, divided by their total, times `scale` | a reduction that sums runs internally |
+| `NORMALIZE` | `runs`: a table of rows with a field `run`; `scale=1.0` | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list`, `background_runs: list` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | the counts; their total; the first count divided by the total | the per-run part of `NORMALIZE` |
-| `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed | the accumulation of `NORMALIZE` |
-| `FINALIZE` | `numerator`, `denominator`, `scale=1.0` | `normalized` | `numerator / denominator * scale` | the part of `NORMALIZE` after the sum |
-| `ANGLE` | `run` | `counts` | the counts | one angle of a rotation scan |
+| `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
+| `ANGLE` | `run` | `counts` | the counts | a reduction of one run into a volume |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `VOLUME` | `angles`: a table of `Counts` (`counts`) | `counts` | the sum, added in place | the accumulation of a rotation scan |
+| `VOLUME` | `runs`: a table of rows with a field `run` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
+| `COPY` | `data` | `data` | a copy of `data` | a record of a state of an accumulator |
 | `STITCH` | `runs: list`, `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
 
-`FINALIZE` over `PARTS_SUM` over `CONTRIBUTE` computes what `NORMALIZE` computes.
 The binding of `IOFQ` is the function `iofq`.
+`NORMALIZE` and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so it can be an accumulator.
+`PARTS_SUM` is bound to `combine(operator.add)`.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
 ## Conventions
 
-Fixtures: `client` is `connect(url, proposal='p1')`, a client of a fresh hosted backend at `url`.
-`connect` is the planned client of a hosted backend (README.md, Client and backend); the story tests make a `Client` of one in-process `Backend` instead.
-In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same backend, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
-`other` is a client of a second hosted backend.
-Every backend in the stories, including one that `local(...)` makes, reads the same datasets and publishes to the same `scicat`.
+Fixtures: `client` is a client for proposal `p1`.
+In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
+In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0005](adr/0005-the-service-writes-every-output.md)), which is designed and not implemented.
+The story tests make a `Client` of one in-process `Backend` for both.
+In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
+`other` is a client of a second backend.
+Every backend in the stories reads the same datasets and publishes to the same `scicat`.
 `measure(n, counts, **fields)` makes run `n` appear as a raw dataset with the given counts and metadata, and returns its reference.
 The metadata of such a dataset also holds its run number, as `run`; `measure(..., proposal=...)` makes the dataset belong to another proposal.
 `datasets` is the fake dataset source of every backend; stories query it through `client.datasets` as in README.md.
@@ -133,7 +136,8 @@ Actor: user in a notebook. Goal: reduce three runs of one sample as one measurem
 
 ```python
 runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
-total = client.compute(NORMALIZE, {'runs': runs, 'scale': 2.0})
+rows = [{'run': run} for run in runs]
+total = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
 result = client.compute(BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds})
 
@@ -143,7 +147,8 @@ assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 
 assert result.request.datasets() == runs + backgrounds
 ```
 
-This is way 1 of "One sum, three ways" in the README; `BACKGROUND` sums two lists of runs. B2 uses all three ways.
+This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes a table of runs, and `BACKGROUND` two lists of runs.
+B2 sums with an accumulator.
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -254,32 +259,27 @@ Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and i
 
 ```python
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
-contribute = client.stage(Template(CONTRIBUTE, blanks=('run',)))
-total = client.accumulator(PARTS_SUM)
-parts = {}
+total = client.accumulator(Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',)))
 for run in (r611, r612):
-    parts[run] = client.compute(contribute, {'run': run})
-    total.push(parts[run].refs('numerator', 'denominator'))
-first = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
+    total.push('runs', {'run': run})
+first = client.output(total, 'normalized')                # runs 611 and 612
 
-parts[r613] = client.compute(contribute, {'run': r613})
-total.push(parts[r613].refs('numerator', 'denominator'))
-added = client.compute(FINALIZE, client.compute(total).refs(), label='sum')
+total.push('runs', {'run': r613})                         # 611 and 612 are not reduced again
+added = client.output(total, 'normalized')                # all three
 
-kept = [parts[r611], parts[r613]]                       # the client still keeps their outputs
-summed = client.compute(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in kept]})
-restarted = client.compute(FINALIZE, summed.refs(), label='sum')
-again = client.compute(NORMALIZE, {'runs': [r611, r613]})  # or submit again from the runs
+rows = [{'run': run} for run in (r611, r613)]
+again = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
 
-assert [client.output(r, 'normalized').values.tolist() for r in (first, added, restarted)] == [
-    [0.25, 0.75], [0.375, 0.625], [0.5, 0.5]]
-assert client.output(again, 'normalized').values.tolist() == [0.5, 0.5]
-assert client.provenance(restarted).datasets() == [r611, r613]
-assert client.records(label='sum') == [first, added, restarted]
+assert [value.values.tolist() for value in (first, added, client.output(again, 'normalized'))] == [
+    [0.5, 1.5], [0.75, 1.25], [1.0, 1.0]]      # [3, 9] / 12 * 2; [6, 10] / 16 * 2; [4, 4] / 8 * 2
+assert client.provenance(total).datasets() == [r611, r612, r613]
+assert client.provenance(again).datasets() == [r611, r613]
+assert client.records() == [again]
 ```
 
-Starting over discards nothing: `first` and `added` stay under `sum`.
-The user starts over with a request over the contributions the client still keeps (way 2 of "One sum, three ways" in the README), or submits again from the runs (way 1).
+Reading the accumulator makes no record: `first` and `added` are copies, which the next push leaves unchanged.
+The provenance of `total` is that of the plain request over its three rows.
+The user starts over with the plain request over the runs to keep (README.md, "One sum, two ways").
 An accumulator has no `remove` (README.md open question 2).
 That adding 613 costs about one run is system story B2.
 
@@ -345,7 +345,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, or from a saved output, never through the other proposal's records (G5).
+A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
 
@@ -502,7 +502,7 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
-Gap: reading `before[0]`'s output weeks later needs it to have been saved, since only history is kept that long ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+The service wrote `before[0]`'s output to a file when the record completed, so it can be read weeks later, until the proposal's history is dropped ([system.md](system.md), The service).
 
 ### D7. Rotation scan over a thousand angles
 
@@ -515,31 +515,28 @@ for n in range(1, 1001):
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
 cuts, pushed = [], []
-volume = client.accumulator(VOLUME)
-angles = (client.submit(ANGLE, {'run': run})
-          for run in islice(client.datasets.watch(Selector(scan='17')), 1000))
-for angle in client.as_completed(angles):                      # in the order they finish
-    volume.push(angle.refs())                                  # waits until the previous cut has run
-    client.release(angle)                                      # the volume holds what it needs of it
-    pushed.append(angle)
-    snapshot = client.submit(volume)
-    cuts.append(client.submit(CUT, {'data': snapshot.ref('counts'), 'index': 0},
+volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+for run in islice(client.datasets.watch(Selector(scan='17')), 1000):
+    volume.push('runs', {'run': run})                          # waits until the previous cut has run
+    pushed.append(run)
+    cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0},
                               label='cut', member='17'))
-total = client.compute(volume)
+total = client.compute(COPY, {'data': volume.ref('counts')})
 
 assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 1001)]
-assert client.output(total, 'counts').values.tolist() == [1000.0, 500500.0]
-assert client.provenance(total).records() == pushed            # the angles, in push order
-assert len(client.provenance(total).datasets()) == 1000        # run 5 is reduced once
+assert client.output(total, 'data').values.tolist() == [1000.0, 500500.0]
+provenance = client.provenance(total)
+assert provenance.accumulated == (                             # the runs, in push order
+    Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),)
+assert len(provenance.datasets()) == 1000                      # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
-The angles are reduced in parallel and pushed in the order they finish, so the volume's request lists them in that order.
-`VOLUME` adds each angle in place, and each snapshot shares the volume, so one volume is kept, not one per snapshot.
-A snapshot's value ends at the next push, which waits until the snapshot's cut has run; the cut references the snapshot taken after the push of its angle.
-The notebook releases each angle once it is pushed, since its client would otherwise keep all thousand.
-The client keeps the cuts.
-That each angle runs on its own node as it arrives, and how the thousand records of the volume are stored, is system story D7.
+Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
+Each cut binds to the state after its push, and the next push waits until that cut has run.
+`COPY` makes a record of the last state, and its provenance expands that state into the plain request over the thousand rows.
+On the service, the volume is a job of its own, and each run is reduced in that job.
+That a cut is ready within seconds of each run, and that history grows by a constant amount per run, is system story D7.
 
 ## E. Automatic reduction
 
@@ -569,7 +566,7 @@ assert client.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 
 
 Each record stitches every angle so far. A stitch is not an accumulation (C4).
 
-Gap: no client holds the curve the loop made, so reading its output needs the rule to save what it makes ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+The service writes each curve to a file when its record completes, so any client of the proposal reads it later ([system.md](system.md), The service).
 
 ### E2. Automatic reduction goes quiet
 
@@ -687,7 +684,7 @@ assert dev.provenance(result).software['sans-iofq'] == 'bound in notebook'
 assert scicat.entries[pid].provenance == dev.provenance(result)
 ```
 
-That a hosted backend runs only installed workflows, and that an edited binding takes effect for the next request, is system story G2.
+That the service runs only installed workflows, and that an edited binding takes effect for the next request, is system story G2.
 
 ### G5. Reference across proposals refused
 
@@ -724,8 +721,8 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **Saving** (D6, E1): an output read after no client holds it must have been saved ([system.md](system.md), Values). Saving belongs to the provenance and publication sub-design.
+- **The service** (sections D and E): designed and not implemented; the file format of each output type and the folder layout of its files are open (scipp/essapps#23).
 - **Views** (B4): the form of a read of part of an output waits for the plotting work.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
-- **Grouping** (system story D7): how an author declares that grouping does not change the result of a spec over a table; README.md open question 1.
+- **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two held states; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
