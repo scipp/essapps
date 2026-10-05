@@ -44,7 +44,7 @@ night = client.records(label='night')
 client.output(night[0], 'iofq')                     # read from the file the record names
 
 volume = client.accumulator(Template(VOLUME, params={'grid': grid}, blanks=('runs',)))
-volume.push({'run': dataset(run=611)})              # reduced and added in the volume's job
+volume.push('runs', {'run': dataset(run=611)})      # reduced and added in the volume's job
 cut = client.submit(CUT, {'data': volume.ref('counts'), 'energy_transfer': 2.0})
                                                     # runs in the volume's job; the cut is written
 ```
@@ -68,6 +68,6 @@ How a client declares the size and deadline is designed with the service.
 - Saving is first-release work (scipp/essapps#23): the file format of each output type and the folder layout within a proposal's area.
 - The cluster's scheduler bounds an accumulator. A forgotten one costs at most the memory and time it declared.
 - The runs of one accumulator are reduced in its job, on its cores, not spread over nodes. Runs that arrive over hours do not need more.
-- A request that references two accumulators, such as a FINALIZE that reads a sample sum and a can sum, needs both values in one job. Either accumulators opened together share a job, or a small value is copied; this is designed with the service.
+- A request that references two accumulators needs both states in one job. One accumulator with several tables, such as sample and can runs ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), avoids this; otherwise accumulators opened together share a job, or a small value is copied, which is designed with the service.
 - After a scan, a request that copies the volume writes it once ([ADR 0003](0003-accumulators-add-in-place.md)), and the job can end. Cuts then read that file, more slowly.
 - Reading part of a volume at the pace of a slider, without making a record (README.md, open question "Views"), is served by the accumulator's job.

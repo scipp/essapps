@@ -1,0 +1,134 @@
+# ADR 0006: The unit of combining runs is an accumulating workflow, not an accumulator
+
+- Status: accepted
+- Deciders: Simon
+- Date: 2026-10-05
+
+## Context
+
+Combining runs needs, according to the requirements:
+
+- SANS sums the runs of a sample, with numerators and denominators summed apart and divided once. To grow such a sum without computing it again, both must be kept until the division ([sans](../../requirements/sans.md), [tensions](../../requirements/tensions.md)).
+- One I(Q) reads runs in several roles, and sample and can each take a list of runs ([sans](../../requirements/sans.md)).
+- Parameters may differ per run within one sum ([users](../../requirements/users.md)).
+- The reduction of each run needs values that all runs share, such as a beam centre, a direct-beam function, or the grid of a volume.
+- Spectroscopy adds each run to a fixed grid of up to hundreds of GB, and users look at cuts through it while it grows ([spectroscopy](../../requirements/spectroscopy.md), [tensions](../../requirements/tensions.md)).
+
+From 2026-09-04 to 2026-10-05 the design made a low-level accumulator the unit.
+That was a running combination of values that requests produced, with the reduction split around it into a per-run spec, a sum, and a finalizing spec.
+Over that month the design went through about sixteen forms:
+
+| Date (2026) | Unit | Why it went |
+|---|---|---|
+| 09-07 | `StreamProcessor` as the session's adapter; lists of runs to sum as its dynamic keys (ab677eb) | the parameters people tune sit upstream of where it accumulates, and it histograms (e6d7241) |
+| 09-09 | a declared additive combine: contribute, combine, and finalize, with each partial sum a record chained through disk (362ce45) | one spec stood for three callables, and the two member tables of esssans (sample, can) could not be declared (a9af6a2) |
+| 09-18 | a contribute spec, a combine spec, and a group, with an accumulating mark (a9af6a2) | too complicated: two specs, a mark on the spec, an adapter class |
+| 09-23 | stage records: a member stage per run and a finalize stage (f5a6bff) | the backend checked that the pieces fit without seeing the graph, and refused a SANS member (48e2c17) |
+| 09-24 | sums as list parameters, with a held stage that finds the new runs by comparing lists (48e2c17) | comparing lists, and tracking which tuned parameters the per-run part read, was too complex |
+| 09-28 | `AccumulatorSpec` with policies for holding, flattening, and a tree over processes (b840b1f) | deferred: "the aggregation design changed four times in ten days" |
+| 09-29 | an `AccumulatorSpec` holder in a session, read by a record of the spec over every element pushed so far (89e7e01) | story D7 stored 501,500 references for 1000 angles |
+| 09-30 | snapshot records naming the accumulator and a count, in an event log (4f9edd5, c52e20b) | a snapshot was a record that is not a request, and the one record whose value ends at a push; replaced by reads that bind to a state ([ADR 0003](0003-accumulators-add-in-place.md)) |
+| 10-01 | a spec over a table, whose only parameter is the list of rows | a volume needs fixed parameters, such as its grid, which such a spec cannot have |
+| 10-05 | an accumulator opened from a template, with rows that name runs ([ADR 0005](0005-the-service-writes-every-output.md)) | a sample sum and a can sum still met in a separate FINALIZE request |
+
+Each form made the partial sum visible to the framework, and then had to say what its record means.
+Each split the reduction into pieces whose interfaces the framework checked without seeing the workflow.
+Each fixed a symptom of the one before: quadratic records led to the event log, then to snapshot records, then to adding in place, then to binding at submission.
+The same problems came back in each form: two tables in one sum, values shared by all runs next to values that differ per run, where the finalizing step runs, and which values a record of a partial sum claims.
+
+`ess.reduce.streaming.StreamProcessor` has been in essreduce since 2024.
+esslivedata uses it for LOKI's live I(Q): the detector and monitor data are its dynamic keys; it accumulates the numerator in Q and two monitors, and computes I(Q) and the transmission fraction from them when asked.
+It holds exactly what a sum of runs needs, and computes the outputs from it.
+
+The design reached this shape before and set it aside each time:
+
+- **2026-09-07 to 08.** It was adopted by name, and dropped for tuning and histogramming. The same review called it "the tool for growing lists", which is the combining case.
+- **2026-09-24.** It came back without the name, as sums over list parameters, and was dropped for the complexity of comparing lists.
+- **2026-09-28.** It was rejected in writing as "an accumulating sibling of `Stage`" (proposals/accumulators.md at b840b1f), for three reasons:
+  - where values accumulate is the author's choice, not the caller's;
+  - what it holds depends on the graph, which sciline keeps out of `Stage`;
+  - spectroscopy needs fan-out over processes anyway.
+
+None of these reasons holds now:
+
+- the author declares the accumulated keys inside the binding;
+- the binding is where the graph is known;
+- [ADR 0005](0005-the-service-writes-every-output.md) reduces an accumulator's runs inside its own job, not spread over nodes.
+
+A spike on LoKI@Larmor data checked the shape on the real esssans workflow:
+- `Filename[SampleRun]` and `Filename[BackgroundRun]` were the dynamic keys, and each push loaded and reduced one run. The transmission and empty-beam runs, the bins, and the masks were computed once.
+- The eight accumulated keys were the numerators and denominators in Q and in (Qx, Qy), for sample and can, with 0.34 MB of state in total.
+- Two sample runs and two can runs, pushed one at a time, gave the same background-subtracted I(Q) as esssans's reduction over the same lists, with no difference in the float32 outputs.
+- Peak memory stayed at about 4 GB however many runs were pushed. The plain reduction of two plus two runs took 7.5 to 9.9 GB, and grows with the number of runs.
+
+## Decision
+
+**The unit is an accumulating workflow.**
+A client opens it from a template whose blanks are table fields, such as `sample_runs` and `can_runs`, pushes rows into those tables one at a time, and reads it like a record ([ADR 0003](0003-accumulators-add-in-place.md)).
+In the API it is still called an accumulator.
+
+```python
+iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': ...},
+                                   blanks=('sample_runs', 'can_runs')))
+iofq.push('sample_runs', {'run': dataset(run=611)})
+iofq.push('can_runs', {'run': dataset(run=614)})
+client.output(iofq, 'iofq')          # what the plain request over these rows gives
+```
+
+- **Its outputs are the spec's outputs**, such as I(Q) and the transmission fraction, computed from what it holds when they are read.
+- **What it holds is private to its binding.** No spec, call, or record names the accumulated values, such as a numerator or a summed monitor. The workflow author chooses them, as for `StreamProcessor`.
+- **The plain request of the same spec**, with every row given at once, gives the same outputs. The author promises this, as `StreamProcessor` asks its users to promise that the workflow is linear in its dynamic keys up to the accumulated keys.
+- **A running combination of the pushed values themselves** is the degenerate case of such a workflow (`combine(operation)`), not a concept of its own.
+
+**`PipelineBinding` accumulates with `StreamProcessor`.**
+A package describes its workflow once, and both esslivedata and this framework use that description:
+
+| `StreamProcessor` | accumulating workflow |
+|---|---|
+| base workflow, with its static part computed once | the template's fixed values, computed once when it opens |
+| `dynamic_keys` | the fields of the table rows, such as `Filename[SampleRun]` |
+| `accumulators` | private to the binding |
+| `target_keys`, `finalize()` | the spec's outputs, computed for each state that is read, and only those read |
+| `context_keys`, `set_context` | none: a value that differs per run is a field of its row, and a changed shared value opens a new accumulator |
+| `RollingAccumulator`, `clear()` | none: a state covers every row pushed so far |
+
+Each difference follows from records.
+A record must equal the plain request over its rows, which a context change or a rolling window would break.
+A row names a run, not a chunk of streamed data, because records name datasets.
+Outputs are computed when read, not at every push, so that a driver that looks rarely pays rarely.
+
+## Alternatives considered
+
+- **The low-level accumulator as the unit** (the forms in the table above). The reduction splits into a per-run spec, a sum, and a finalizing spec. The partial sum is a value the framework sees and records. Two tables, shared and per-run values, and the finalizing step each need their own mechanism.
+- **Only list parameters, with the framework finding the new runs by comparing lists.** Comparing lists, and tracking which tuned parameters the per-run part read, was the complexity that ended this form on 09-28. An explicit push names the new row.
+- **A chain of totals**, each a request over the previous total and one new run. A record no longer means the sum of its runs, and a total that grows is copied at every step.
+- **Fan-out over nodes as part of the unit.** This needs merging two held states, which neither `StreamProcessor` nor this binding protocol offers. No requirement needs it now: runs arrive over hours, and a finished scan can be reduced again in one job.
+
+## Consequences
+
+- A package offers one spec for a sum, such as I(Q) with lists of sample and can runs. The split into a per-run spec, a sum, and a finalizing spec is no longer needed for combining runs. A sum can be written in two ways: as a plain request over the tables, or as an accumulator over them.
+- A partial sum is never a record. A read binds to a state, and a record of a state is a request that copies it ([ADR 0003](0003-accumulators-add-in-place.md)).
+- The binding protocol is `accumulator(fixed)`, with `push(table, row)` and `outputs(names)`.
+- `StreamProcessor` needs `finalize(keys)`, which computes only some of its target keys and feeds only the accumulators they read. That is about ten lines in essreduce. What `on_finalize` means for an accumulator a partial finalize did not read is open.
+- The binding chooses where to accumulate, and the point must be linear in the runs. For esssans this is the numerator and denominator in Q, summed over wavelength bands. One step earlier, the numerator is event data that grows with each run.
+- esssans builds its pixel masks from the sample run's detector, so the can accumulators also depend on the sample file, and a can run cannot be pushed alone. Masks per run type, or detector IDs from a fixed run, would fix this in esssans.
+- sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, stops `StreamProcessor` from building.
+- A row holds what the per-run part needs at once. A run and its own transmission run, if it has one, go in one row. Rows of different tables are independent pushes, and pairing runs into rows is the application's job.
+- Each held key depends only on the fixed values and on the fields of one table. Then pushes may come in any order and give the same state, up to rounding, and the framework has no rules on order. A binding in which a held key depends on two tables is refused when it opens; `StreamProcessor` computes these dependencies at construction. The esssans masks above are such a case.
+- A row is the outermost level, the unit that arrives: a run, or the runs that belong together. Levels inside a run, such as detector banks, angle settings read from a log, or sections of a large file, are never rows. They are loops of the binding's own driver over sciline stages, nested inside the per-run work, so that the per-run work runs once per row and not once per bank. A row of (bank, run) would repeat the per-run work for every bank. The framework sees only rows and cannot tell a bank index from a per-run value, so this is a rule for workflow authors.
+- A plain request over a table runs through the same driver, pushing every row and then computing the outputs once. A run that appears in several rows can be memoized by the binding by its dataset identity.
+- Results per bank or per angle are outputs, for example with a bank dimension, and the held state may be keyed by a bank or by a value read from each run.
+- If two levels ever both arrive over time, such as sections of runs that are still being written, rows become (run, section). The binding must then keep the per-run work between the rows of one run, as `StreamProcessor` does with context keys. The result still does not depend on the order of pushes, but the cost does. Nothing needs this yet: offline rows are complete files, and watching a file that is still being written is esslivedata's.
+- Reading a state whose rows fill only some tables computes what those rows allow, such as the can's own I(Q). An output that needs a table with no rows fails when it is read.
+- Reducing the runs of one accumulator in parallel would split a push into a part that can run in parallel and an add under the accumulator's lock. Order would stay free. Nothing needs it yet: a LoKI run takes 1.3 to 1.6 seconds.
+- A beam centre found from the sample runs would be both computed once and per run. It is a fixed value, given by reference to the record that found it.
+- Spreading one accumulation over several nodes needs a merge of two held states (README.md, open question "Grouping"). On 2026-09-28 Simon noted that spectroscopy needs fan-out across processes. If a requirement confirms that, for example to reduce a finished scan again quickly, the binding protocol gains a merge.
+- The static part of an accumulating workflow is what a stage caches. Whether stages stay as a concept of their own is scipp/essapps#35.
+- In this repository, "accumulator" names the accumulating workflow. What its binding holds is its *held state*. sciline's and `StreamProcessor`'s `Accumulator`, which holds one key, is part of a binding.
+
+## What we learned
+
+- The combining design was tried out on toy specs whose only structure was the split being designed. They could not show what a real workflow keeps fixed, reads per run, or computes after the sum. A design for combining is now checked on a real workflow, such as LoKI's I(Q), before anything is built on it.
+- The one production accumulation of SANS data, `StreamProcessor` in esslivedata's LOKI factory, was read for other questions and not as a model for combining.
+- Stories whose numbers and placement had no source drove mechanisms. Story D7's thousand angles, each on its own node, led to the tree policy, to snapshot records, and to the fixes for quadratic cost. The requirements give 100 to 300 angles, possibly in one file.
+- The rejected alternatives recorded the right option twice on 09-28. Their reasons later went away, but nothing went back to check them. When the reason for rejecting an alternative goes away, the alternative is looked at again.
