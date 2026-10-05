@@ -8,8 +8,7 @@
 
 An accumulator combines the elements pushed into it, and a snapshot is a record of its value at one point.
 
-Combining many elements is common: LoKI sums runs, reflectometry combines angles, SXD and spectroscopy combine sample angles.
-Spectroscopy accumulates 4D volumes of up to hundreds of GB ([spectroscopy](../../requirements/spectroscopy.md)).
+Combining many elements is common: SANS sums the runs of a sample ([sans](../../requirements/sans.md)), and spectroscopy adds each run to a fixed 4D grid of up to hundreds of GB ([spectroscopy](../../requirements/spectroscopy.md)).
 A machine that holds such a volume once may not hold it twice.
 
 While the volume grows, users look at 1D or 2D cuts through it, at any time ([tensions](../../requirements/tensions.md)).

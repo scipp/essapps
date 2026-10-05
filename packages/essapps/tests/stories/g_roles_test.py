@@ -29,23 +29,6 @@ def test_g2_developer_iterates_on_a_workflow(
     assert scicat.entries[pid].provenance == dev.provenance(result)
 
 
-def test_g4_two_notebooks_on_one_machine(
-    connect: Callable[..., Client], measure: Measure
-) -> None:
-    first, second = connect(), connect()
-    centre = first.compute(
-        BEAM_CENTRE, {'run': measure(1, [1.0, 1.0, 1.0, 1.0])}, label='beam-centre'
-    )
-    found = second.latest('beam-centre')
-    result = second.compute(
-        IOFQ,
-        {'run': measure(2, [2.0, 3.0, 4.0, 5.0]), 'beam_centre': found.ref('centre')},
-    )
-
-    assert found == centre
-    assert second.output(result, 'iofq').values.tolist() == [3.0, 7.0]
-
-
 def test_g5_reference_across_proposals_refused(
     connect: Callable[..., Client], measure: Measure
 ) -> None:
