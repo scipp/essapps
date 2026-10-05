@@ -19,6 +19,8 @@ Known quadratic paths: `TriggerLoop` reads every record under a rule's label on 
 
 - What a record says about software. An implementation detail that holds up nothing else. Proposed shape: a `software` mapping from name to string, filled by a pluggable recorder on the backend; the backend, not the binding, records where a binding came from (in-process or installed); a flat mapping may not be enough to recompute in a recorded environment later.
 
+- Prior art: look at AiiDA or similar for inspiration (Simon's scoping notes, 2026-09-04).
+
 ## User stories
 
 - `user-stories.md` (API tier) and `system-stories.md` (system tier) are written against `README.md`.

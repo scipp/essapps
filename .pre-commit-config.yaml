@@ -18,6 +18,11 @@ repos:
         entry: python tools/check-test-file-name.py
         language: python
         files: '(tests/.*\.py)$'
+      - id: check-doc-length
+        name: check that requirements pages stay short
+        entry: python tools/check-doc-length.py
+        language: python
+        files: '^docs/requirements/.*\.md$'
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.0
     hooks:
