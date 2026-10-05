@@ -118,7 +118,7 @@ Property: stored outputs can be dropped by proposal, label, or age. Every record
 ### H2. Backend upgrade with runs in flight
 
 Actor: operator. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on a log that another backend still holds is refused, so the old and the new version never write the same log.
+Property: every record pending at the upgrade finishes after it, including requests that wait on a pending input. Records written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
 
 ### H3. Records end with the proposal
 

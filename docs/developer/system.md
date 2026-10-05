@@ -8,18 +8,16 @@ It never drops history.**
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records and values.
 Other parts of the system, such as the store of values, a hosted backend, and where stages and accumulators run, get sections here when they are designed.
-[ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart.
+[ADR 0001](adr/0001-history-as-an-event-log.md) records why history and values are kept apart, and [ADR 0004](adr/0004-history-is-append-only-lists.md) why history is three lists that a backend stores as it chooses.
 
 This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, stage, accumulator, and snapshot.
 Story IDs such as D7 refer to [user-stories.md](user-stories.md) and [system-stories.md](system-stories.md).
-It adds four terms of its own:
+It adds two terms of its own:
 
 | Term | What it is |
 |---|---|
 | client entry | what the backend keeps for one client: its proposal, the records whose values it keeps, its stages, and its accumulators |
-| event | one entry in the log, such as "record #2 finished" |
-| index | a lookup the backend builds from the events, such as record IDs by label; queries read indexes. The code calls them views (`views.py`) |
-| log | the backend's history: an append-only list of events |
+| finish | how a record ended: its status (completed, failed, or cancelled) and, if it failed, why |
 
 ## History and values
 
@@ -31,124 +29,152 @@ The backend keeps two things with different lifetimes:
 A record is history; its output values are not.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record stays.
 
-## The log
+## History
 
-The backend's history is an append-only log with three kinds of event:
+History is three lists, each only appended to:
 
-| Event | Holds | Appended when |
-|---|---|---|
-| `submitted` | time, proposal, submitter, and for each record: its ID, its request or snapshot, its output names, label, member | a submission is accepted |
-| `finished` | record ID, status, failure message | a record completes, fails, or is cancelled |
-| `pushed` | accumulator ID, the element as a request over it holds it | an element is pushed into an accumulator |
+| List | One item per | Holds | Appended when |
+|---|---|---|---|
+| records | record | ID, time, proposal, submitter, request or snapshot, output names, label, member | a submission is accepted |
+| finishes | finished record | record ID, status, failure message | a record completes, fails, or is cancelled |
+| pushes | push into an accumulator | accumulator ID, the element as a request over it holds it | an element is pushed into an accumulator |
 
-Client entries are not history: opening or ending a client, making a stage or an accumulator, and releasing anything write nothing, and no client entry survives a restart.
+Client entries are not history: opening or ending a client, making a stage or an accumulator, and releasing anything append nothing, and no client entry survives a restart.
 A record does not say which stage it went through.
 A snapshot names its accumulator, so that the pushes it covers can be found.
 
 ### An example
 
 Story D7 is the loop over arrivals in README.md: each angle of a rotation scan is reduced, pushed into an accumulator `volume` once it has finished, and a snapshot of the volume feeds a cut.
-With two angles, where the angle of run 2 finishes first and so is pushed first, the log reads (`#n` is a record, `a` the accumulator, JSON abbreviated):
+With two angles, where the angle of run 2 finishes first and so is pushed first, these items are appended, in this order (`#n` is a record, `a` the accumulator, JSON abbreviated):
 
 ```text
-submitted  #1  angle/v1  {run: uuid:run-1}
-submitted  #2  angle/v1  {run: uuid:run-2}
-finished   #2  completed
-pushed     a   {counts: #2.counts}
-submitted  #3  volume/v1  snapshot of a, upto=1
-finished   #3  completed
-submitted  #4  cut/v1  {data: #3.counts, energy_transfer: 2.0}  label=cut member=17
-finished   #1  completed
-finished   #4  completed
-pushed     a   {counts: #1.counts}
-submitted  #5  volume/v1  snapshot of a, upto=2
-finished   #5  completed
-submitted  #6  cut/v1  {data: #5.counts, energy_transfer: 2.0}  label=cut member=17
-finished   #6  completed
+records   #1  angle/v1  {run: uuid:run-1}
+records   #2  angle/v1  {run: uuid:run-2}
+finishes  #2  completed
+pushes    a   {counts: #2.counts}
+records   #3  volume/v1  snapshot of a, upto=1
+finishes  #3  completed
+records   #4  cut/v1  {data: #3.counts, energy_transfer: 2.0}  label=cut member=17
+finishes  #1  completed
+finishes  #4  completed
+pushes    a   {counts: #1.counts}
+records   #5  volume/v1  snapshot of a, upto=2
+finishes  #5  completed
+records   #6  cut/v1  {data: #5.counts, energy_transfer: 2.0}  label=cut member=17
+finishes  #6  completed
 ```
 
 `uuid:run-1` is the dataset identity the backend resolved `dataset(run=1)` to.
 `upto=2` says that the snapshot covers the first two pushes into `a`.
 The second push waits until cut `#4` has finished, since `#4` reads the value that the push adds to (see Accumulators).
-Each angle adds seven events of constant size, however many angles came before.
+Each angle appends seven items of constant size, however many angles came before.
 
-### What the log records
+### What history records
 
-- **What the backend accepted, not what the client called.** Dataset names are resolved and defaults filled in. Resolving `dataset(run=4711)` again later could give another dataset; the logged identity cannot change.
-- **Only accepted changes.** A change is checked before its event is appended. A refused call writes nothing, so every event in the log can be applied when the log is read again.
-- **One event per submission.** A submission of 500 requests is one `submitted` event, so a backend that stops half-way has logged all of it or none of it.
+- **What the backend accepted, not what the client called.** Dataset names are resolved and defaults filled in. Resolving `dataset(run=4711)` again later could give another dataset; the recorded identity cannot change.
+- **Only accepted changes.** A change is checked before anything is appended. A refused call appends nothing.
+- **A submission whole or not at all.** A submission of 500 requests appends its 500 records together, so a backend that stops half-way has stored all of them or none.
 - **No values.** Output values, what a stage computed, and an accumulator's combined value are not history.
-- **JSON only.** Events are JSON. Request values already are, since references in `ess.reduce.spec` are plain dicts.
-- **The same values, live or read back.** The backend converts each event to JSON and back before applying it. A record therefore holds the same values whether it was just made or read from a file. For example, a tuple given as a parameter is a list in the record. A binding gets the values after the spec's params model has validated them again, so it receives the types the model declares.
+- **JSON only.** Everything in history is JSON. Request values already are, since references in `ess.reduce.spec` are plain dicts.
+- **The same values, live or read back.** The backend converts what it appends to JSON and back before it uses it. A record therefore holds the same values whether it was just made or read from storage. For example, a tuple given as a parameter is a list in the record. A binding gets the values after the spec's params model has validated them again, so it receives the types the model declares.
 
-## Indexes
+### Queries
 
-The backend applies each event to its indexes (`Views.apply` in `views.py`).
-It does this the same way when it appends a new event and when it reads an existing log, so a backend that reads its log again has the same indexes.
+The backend keeps history in memory as maps (`Views` in `views.py`), and adds to them each item it appends:
 
-| Index | Used by |
+| Map | Used by |
 |---|---|
 | records by ID | `client.records`, `client.provenance`, checks of references |
-| the `finished` event by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
+| finishes by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, the trigger loop |
-| each accumulator's elements | what its snapshots read (see Records) |
+| pushes by accumulator | what its snapshots read (see Records) |
 
-An index changes only when an event is applied, and how it changes depends only on the events.
-Queries read the indexes, never the log.
+Queries read the maps, never the storage (see Storage).
 
-Live state that is not history is not in the indexes either: client entries, output values, which pending records hold which values, which snapshots have ended, which records wait for which, and the queue of work ready to run.
-The backend keeps it apart from the indexes, and it is lost when the backend stops.
+Live state that is not history is not in the maps either: client entries, output values, which pending records hold which values, which snapshots have ended, which records wait for which, and the queue of work ready to run.
+The backend keeps it apart from the maps, and it is lost when the backend stops.
 
-The indexes depend on three orders in the log:
+The maps depend on two orders:
 
-- a record's `submitted` before its `finished`;
-- the submissions under one label, since `client.latest` returns the newest;
-- the pushes into one accumulator, since a snapshot covers the first `upto`.
+- the records under one label are in the order they were submitted, since `client.latest` returns the newest;
+- the pushes into one accumulator are in the order they were combined, since a snapshot covers the first `upto`.
+
+A finish always names a record appended before it.
 
 ### Records
 
-A record stores what its `submitted` event holds: a request, or for a snapshot `Snapshot(spec, accumulator, upto)`.
-Its status is in its `finished` event, so a record never changes and a client's copy of it is never out of date.
-A snapshot does not list what it read; that is the first `upto` elements in the index of its accumulator's elements.
+A record holds a request, or for a snapshot `Snapshot(spec, accumulator, upto)`.
+Its status is its finish, so a record never changes and a client's copy of it is never out of date.
+A snapshot does not list what it read; that is the first `upto` pushes into its accumulator.
 Provenance asks the backend what each record read (`Backend.inputs`), so it works for a snapshot as for a request:
 
 ```python
 total = client.submit(volume)          # a snapshot of volume, upto=1000
 total.submitted                        # Snapshot(spec=volume/v1, accumulator=volume.id, upto=1000)
-client.provenance(total).records()     # the 1000 angles, from the index of the accumulator's elements
+client.provenance(total).records()     # the 1000 angles, from the pushes into the accumulator
 total.request                          # TypeError: a snapshot is not a request
 ```
 
-### Restart
+## Storage
 
-A backend given a log that already has events applies them, then runs the records that are still pending:
+The design needs three things from how a backend stores history, and nothing more:
 
-```python
-backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the events in the file
-```
+- the lists only grow, keep the orders above, and last as long as the proposal;
+- a submission is stored whole or not at all;
+- one backend writes them.
 
-- A pending record runs from scratch, without its stage, since client entries do not survive a restart.
-- A snapshot is pending only if the backend stopped between its `submitted` and `finished` events. It fails, since its accumulator did not survive the restart.
-- A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
-- No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once the pending records that read them have run.
+[ADR 0004](adr/0004-history-is-append-only-lists.md) leaves the rest to the backend.
 
-This is what system story H2 (backend upgrade with runs in flight) needs from history.
-H2 also needs every event format to stay readable across versions.
+### The in-process backend: an event log
 
-## Where the log lives
+The in-process backend stores history as one log of events, each appended once and never changed (`log.py`).
+Each event appends to history:
 
-The design needs the log to be append-only and ordered; it does not depend on where the log is stored.
+| Event | Appends |
+|---|---|
+| `submitted` | the records of one submission, with the time, proposal, and submitter they share |
+| `finished` | one finish |
+| `pushed` | one push |
 
-- In-process backend: in memory, or a file of JSON lines. A write that fails, as on a full disk (system story H1), leaves the file as it was. If a crash cuts the last line short while it is being written, that line is dropped when the file is read; any other line that is not an event is an error.
-- A hosted backend: a file, a database table that is only appended to, or Kafka.
+The backend appends an event to the log, then applies it to its maps (`Views.apply`).
+A refused call appends nothing, so every event in the log can be applied when the log is read again.
+A submission is one event, so it is stored whole or not at all.
+
+The log lives in memory, or in a file of JSON lines.
+A write that fails, as on a full disk (system story H1), leaves the file as it was.
+If a crash cuts the last line short while it is being written, that line is dropped when the file is read; any other line that is not an event is an error.
 
 Each log has exactly one backend, and each backend one log.
 A backend holds an exclusive lock (`flock`) on its log file from start to close, and a second backend on the same file, in any process, is refused at start.
 The operating system releases the lock when the process ends, so a backend started after a crash or for an upgrade (system story H2) takes the file over.
 Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
 
-A hosted backend may split its log by proposal.
-This keeps the three orders the indexes depend on (see Indexes), since each lies within one proposal.
+Event formats must stay readable for as long as the log is kept, which is as long as the proposal.
+The maps may change between versions.
+
+### Restart
+
+A backend given a log that already has events applies them as it applies new ones, so it has the maps of the backend that wrote the log.
+It then runs the records that are still pending:
+
+```python
+backend = Backend(datasets, bind, log=Log(Path('log.jsonl')))   # applies the events in the file
+```
+
+- A pending record runs from scratch, without its stage, since client entries do not survive a restart.
+- A snapshot is pending only if the backend stopped between appending its record and its finish. It fails, since its accumulator did not survive the restart.
+- A pending record fails if the value of one of its inputs is not kept. The in-process backend keeps values only in memory, so after a restart this happens to every pending record with an input that had already completed.
+- No client keeps the outputs of a record that completes after a restart, since the client that made it is gone. Its values are dropped once the pending records that read them have run.
+
+This is what system story H2 (backend upgrade with runs in flight) needs from history.
+H2 also needs every event format to stay readable across versions, and a store of saved values, so that a pending record whose input had completed still runs.
+
+### A hosted backend
+
+A hosted backend may store history as the same log in a file, in Kafka, or as one database table per list.
+It may split history by proposal.
+This keeps the orders the maps depend on (see Queries), since each lies within one proposal.
 
 ## Accumulators
 
@@ -167,18 +193,18 @@ def push(element):                       # element: a row of the table, as a req
         end(snapshots)                   # refuse new requests that reference them
         wait(snapshots)                  # until the requests that read them have run; drops their values
         held.push(read(element))         # combine the values, in place if the binding does
-        append(Pushed(accumulator, element))
+        append_push(accumulator, element)
 
 def snapshot():
     with lock:
-        upto = len(elements)             # the elements pushed so far
-        append(Submitted(Snapshot(spec, accumulator, upto)))
-        complete(record, held.value)     # nothing runs; the outputs are held.value itself, not a copy
+        upto = len(pushes[accumulator])  # the elements pushed so far
+        record = append_record(Snapshot(spec, accumulator, upto))
+        complete(record, held.value)     # appends its finish at once; the outputs are held.value itself, not a copy
         snapshots.append(record)
 ```
 
 **Push.** A push gets the check a request over that one element gets: the element is a valid row of the table's model, with no field the model lacks, and its references name completed records of the same proposal whose outputs fit the fields and are still kept.
-The log holds the element as that request would hold it, with names resolved and defaults filled in.
+History holds the element as that request would hold it, with names resolved and defaults filled in.
 An element that references a snapshot, of any accumulator, is refused, whichever outputs it names: pushing a snapshot into an accumulator is not supported, and accumulators meet in a request instead.
 Such a push would read the other accumulator's value while combining, without holding back that accumulator's next push.
 A push that does not fit, or whose combining fails, appends nothing.
@@ -191,14 +217,14 @@ A driver that pushes records as they finish, as `client.as_completed` yields the
 
 Combining can take long.
 It runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long combine holds up only the pushes and snapshots of the same accumulator.
-The pushes are logged in the order they were combined.
+The pushes are appended in the order they were combined.
 A snapshot takes the accumulator's lock too, then the backend's, as a push does, so it never reads a value in the middle of a combine.
 
-**Snapshot.** The `finished` event of a snapshot follows its `submitted` event at once.
+**Snapshot.** A snapshot's finish is appended right after its record.
 A snapshot takes no label or member; the requests that read it do.
 Its value is the value of the plain request over the same list of elements, since both combine the elements in list order.
 The list is in push order, which in D7 is the order in which the angles finished, so two runs over the same scan may list the angles in different orders.
-The `submitted` event names the accumulator and a count instead of the list, since the elements are already in the log as the accumulator's `pushed` events (ADR 0001).
+Its record names the accumulator and a count instead of the list, since the elements are already in history as the accumulator's pushes (ADR 0001).
 The section Records above describes how provenance reads the elements.
 
 A snapshot's outputs are `held.value` itself, not a copy, and the snapshots between two pushes share it.
@@ -280,16 +306,17 @@ How the stories fare:
 ## How long history is kept
 
 Records are the proposal's history.
-The events of a proposal are kept as long as the proposal, and dropped with it as a whole; no event is dropped earlier.
+A proposal's history is kept as long as the proposal, and dropped with it as a whole; nothing is dropped earlier.
 The trigger loop knows that it has handled a dataset only from the records under its rule's label ([automatic-reduction.md](automatic-reduction.md)).
 A backend that dropped old records would make a restarted loop reduce those datasets again.
-History is small enough to keep: in story D7, each angle adds seven events of constant size (see An example).
-A hosted backend that splits its log by proposal (see Where the log lives) drops a proposal's history by dropping its part of the log.
+History is small enough to keep: in story D7, each angle appends seven items of constant size (see An example).
+A hosted backend that splits history by proposal (see Storage) drops a proposal's history by dropping its part.
 
-Publishing writes the provenance, flattened from the log, into the catalogue entry, so what is published outlives the proposal's history.
+Publishing writes the provenance, flattened from history, into the catalogue entry, so what is published outlives the proposal's history.
 
 ## Open
 
 - Leases of the clients of a hosted backend: how long one lasts and how a client renews it.
 - The store of saved values, and where a batch or rule says to save to (with the provenance and publication sub-design).
+- How a hosted backend stores history: the in-process backend's log, Kafka, or database tables ([ADR 0004](adr/0004-history-is-append-only-lists.md) lists what the in-process backend shows).
 - A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.
