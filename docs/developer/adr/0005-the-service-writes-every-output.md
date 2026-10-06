@@ -28,7 +28,7 @@ A standard VISA machine has 64 GB ([systems](../../requirements/systems.md)), so
 - **In the user's process**, [ADR 0002](0002-the-client-is-the-lifetime.md) holds.
 - **On the service, the outputs of every record are written to a file when the record completes.** The store finds a record's file by the record's ID and the output's name; history names no file, so a record never changes. The service keeps no value for a client: there is no `save=` option and no release of values. `client.output` of a record, and a reference to an output of a record, read its file.
 - **The one value the service holds between requests is the held state of an accumulator.** A state is not a record ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)): it changes at every push, and nothing writes it. A request that reads a state makes a record, whose outputs are written like any other's; a request of a copying spec writes the state itself ([ADR 0003](0003-accumulators-add-in-place.md)). `client.output` of an accumulator returns the value and writes nothing, like any read.
-- **Each accumulator runs as its own job on the cluster**, with a memory size and a deadline that its client declares when it opens it. The job runs every push and every request that references the accumulator. A request reads at most one accumulator ([ADR 0003](0003-accumulators-add-in-place.md)), so it runs in that accumulator's job, or anywhere if it reads none. Releasing the accumulator or ending its client ends the job once its readers have run; the deadline ends it otherwise. The client may extend the deadline.
+- **Each accumulator runs as its own job on the cluster**, with a memory size and a deadline that its client declares when it opens it. A push returns once the service has logged it, and the job adds the pushes in the order logged. The job also runs every request that references the accumulator. A request reads at most one accumulator ([ADR 0003](0003-accumulators-add-in-place.md)), so it runs in that accumulator's job, or anywhere if it reads none. Releasing the accumulator or ending its client ends the job once the pushes logged are added and its readers have run; the deadline ends it otherwise. The client may extend the deadline.
 - **The reduction of one run is never an output, and never written** ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)). A binding with a held state of its own adds each run to it at the push. The held state that keeps the rows reduces all of them at each read.
 
 ```python
@@ -47,7 +47,7 @@ cut = client.submit(CUT, {'data': volume.ref('counts'), 'index': 0})
 Open, to be designed with the service (scipp/essapps#27):
 
 - how a client declares an accumulator's size and deadline;
-- what the deadline does to readers that still run, and how it relates to release, which ends the job only once the readers have run;
+- what the deadline does to readers that still run, and how it relates to release, which ends the job only once the pushes logged are added and the readers have run;
 - how the declared size covers a held state that keeps the rows: each read computes the plain request over every row so far, which needs more memory than the rows (7.5 to 9.9 GB for two plus two LoKI runs, against about 4 GB with a held state of its own; [ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Alternatives considered

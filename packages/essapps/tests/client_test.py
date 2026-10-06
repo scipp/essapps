@@ -811,9 +811,9 @@ def test_a_field_validator_gives_the_held_state_the_plain_request_s_values(
     positive.push({'runs': {'run': dataset(run=1)}})
     plain = client.compute(POSITIVE, {'runs': [{'run': dataset(run=1)}], 'scale': -2.0})
 
+    assert client.output(positive, 'value') == client.output(plain, 'value') == 2.0
     assert plain.request.params['scale'] == 2.0  # the validator makes it positive
     assert scaled_sum.opened == [{'scale': 2.0, 'offset': None}]
-    assert client.output(positive, 'value') == client.output(plain, 'value') == 2.0
 
 
 def test_field_validators_apply_at_the_opening_and_model_validators_at_reads(
@@ -828,8 +828,8 @@ def test_field_validators_apply_at_the_opening_and_model_validators_at_reads(
         client.output(mean)
     mean.push({'runs': {'run': dataset(run=1)}})
 
+    assert client.output(mean, 'value') == 2.0  # once the held state has opened
     assert scaled_sum.opened == [{'scale': 2.0, 'offset': None}]
-    assert client.output(mean, 'value') == 2.0
 
 
 def test_an_accumulator_s_values_are_typed_as_the_log_holds_them(
@@ -840,9 +840,9 @@ def test_an_accumulator_s_values_are_typed_as_the_log_holds_them(
     )
     tagged.push({'runs': {'run': dataset(run=1)}})
 
+    assert client.output(tagged, 'value') == 1.0
     assert tagged.template.params == {'tags': ['a', 'b']}  # JSON has no tuple
     assert scaled_sum.opened == [{'scale': 1.0, 'offset': None, 'tags': ['a', 'b']}]
-    assert client.output(tagged, 'value') == 1.0
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
@@ -1089,7 +1089,7 @@ def test_only_a_request_may_reference_an_accumulator(client: Client) -> None:
     assert pinned == AccumulatorRef(accumulator=total.id, output='value', upto=1)
 
 
-def test_a_push_waits_for_its_records_and_takes_only_completed_ones(
+def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -1098,12 +1098,30 @@ def test_a_push_waits_for_its_records_and_takes_only_completed_ones(
     total = _total(client)
     with pytest.raises(SubmitError, match=f'{cancelled.id} cancelled'):
         total.push({'parts': cancelled.refs('value')})
-    threading.Timer(0.05, loading.set).start()
-    total.push({'parts': pending.refs('value')})  # pending: the push waits for it
-    read = client.compute(SHIFT, {'value': total.ref('value')})
+    total.push({'parts': pending.refs('value')})  # added once pending completes
+    read = client.submit(SHIFT, {'value': total.ref('value')})
+    loading.set()
 
     assert [r.id for r in client.provenance(read).records()] == [pending.id]
     assert client.output(read, 'value') == 1.0
+
+
+def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=1)})
+    total = _total(client)
+    total.push({'parts': pending.refs('value')})
+    read = client.submit(SHIFT, {'value': total.ref('value')})
+    client.cancel(pending)
+    loading.set()
+
+    stopped = f'the accumulator stopped: push 0: input {pending.id} cancelled'
+    assert client.wait(read) is Status.FAILED
+    assert client.failure(read) == stopped
+    with pytest.raises(SubmitError, match=f'^{stopped}$'):
+        total.push({'parts': pending.refs('value')})
 
 
 def test_concurrent_pushes_add_in_the_order_they_are_logged(
@@ -1128,7 +1146,7 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     assert client.output(read, 'value') == client.output(plain, 'value')
 
 
-def test_a_push_waits_for_a_request_that_has_not_started(
+def test_a_push_is_added_after_a_request_that_has_not_started(
     client: Client, loading: threading.Event
 ) -> None:
     loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
@@ -1138,18 +1156,17 @@ def test_a_push_waits_for_a_request_that_has_not_started(
     pending = client.submit(LOAD, {'run': dataset(run=2)})
     parts = [{'value': total.ref('value')}, pending.refs('value')]
     summed = client.submit(TOTAL, {'parts': parts})  # starts once pending completes
-    pushed = _start(lambda: total.push({'parts': loads[1].refs('value')}))
+    total.push({'parts': loads[1].refs('value')})  # returns at once
+    read = _start(lambda: client.output(total, 'value'))
 
     with pytest.raises(TimeoutError):
-        pushed.result(timeout=0.05)
+        read.result(timeout=0.05)  # the push waits for summed
     loading.set()
-    pushed.result(timeout=5)
-    read = client.submit(SHIFT, {'value': total.ref('value')})
+    assert read.result(timeout=5) == 3.0
     assert client.output(summed, 'value') == 3.0  # read 1.0 before the push
-    assert client.output(read, 'value') == 3.0
 
 
-def test_cancelling_a_request_that_has_not_started_frees_the_push(
+def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
     client: Client, loading: threading.Event
 ) -> None:
     loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2)]
@@ -1159,12 +1176,13 @@ def test_cancelling_a_request_that_has_not_started_frees_the_push(
     pending = client.submit(LOAD, {'run': dataset(run=2)})
     parts = [{'value': total.ref('value')}, pending.refs('value')]
     summed = client.submit(TOTAL, {'parts': parts})
-    pushed = _start(lambda: total.push({'parts': loads[1].refs('value')}))
+    total.push({'parts': loads[1].refs('value')})
+    read = _start(lambda: client.output(total, 'value'))
 
     with pytest.raises(TimeoutError):
-        pushed.result(timeout=0.05)
+        read.result(timeout=0.05)
     client.cancel(summed)
-    pushed.result(timeout=5)
+    assert read.result(timeout=5) == 3.0
     assert client.status([pending, summed]) == [Status.PENDING, Status.CANCELLED]
     loading.set()
 
@@ -1191,12 +1209,15 @@ class Sum:
     """
     ``combine(operator.add)`` that counts the rows its held states add.
 
-    With ``failing`` set, the next row fails to add.
+    A row is added while ``go`` is set. With ``failing`` set, the next row
+    fails to add.
     """
 
     def __init__(self) -> None:
         self.pushed = 0
         self.failing = False
+        self.go = threading.Event()
+        self.go.set()
         self._sum = combine(operator.add)
         self.stage = self._sum.stage
 
@@ -1210,6 +1231,7 @@ class _Summing:
         self._held = held
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        self._owner.go.wait(timeout=5)
         if self._owner.failing:
             self._owner.failing = False
             raise ValueError('cannot add')
@@ -1261,8 +1283,8 @@ def test_an_accumulator_adds_each_row_once(summed: Client, summing: Sum) -> None
     assert summing.pushed == 4
 
 
-def test_a_push_that_fails_to_add_is_refused_and_stops_the_accumulator(
-    summed: Client, summing: Sum, log: Log
+def test_a_push_that_fails_to_add_stops_the_accumulator(
+    summed: Client, summing: Sum
 ) -> None:
     client = summed
     loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
@@ -1270,18 +1292,62 @@ def test_a_push_that_fails_to_add_is_refused_and_stops_the_accumulator(
     total.push({'parts': loads[0].refs('value')})
     before = client.compute(SHIFT, {'value': total.ref('value')})
     summing.failing = True
-    logged = len(log)
-    with pytest.raises(SubmitError, match=r'^push 1 failed to add: cannot add$'):
-        total.push({'parts': loads[1].refs('value')})
-    with pytest.raises(SubmitError, match='stopped: push 1 failed to add'):
+    summing.go.clear()
+    total.push({'parts': loads[1].refs('value')})  # logged, and fails once it adds
+    after = client.submit(SHIFT, {'value': total.ref('value')})
+    summing.go.set()
+
+    stopped = 'the accumulator stopped: push 1 failed: cannot add'
+    assert client.wait(after) is Status.FAILED
+    assert client.failure(after) == stopped
+    (state,) = client.provenance(after).accumulated  # the push is in the log
+    assert len(state.params['parts']) == 2
+    with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push({'parts': loads[2].refs('value')})
-    with pytest.raises(SubmitError, match=r'^value: the accumulator stopped: push 1'):
+    with pytest.raises(SubmitError, match=f'^value: {stopped}$'):
         client.submit(SHIFT, {'value': total.ref('value')})  # it may be half added
     for read in (lambda: client.output(total), lambda: client.provenance(total)):
-        with pytest.raises(LookupError, match=r'^the accumulator stopped: push 1'):
+        with pytest.raises(LookupError, match=f'^{stopped}$'):
             read()
-    assert len(log) == logged
     assert client.output(before, 'value') == 1.0
+
+
+class _Refusing:
+    """TOTAL, whose held state fails to open."""
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        return lambda **values: {'value': 0.0}
+
+    def held_state(self, fixed: Mapping[str, Any]) -> Any:
+        raise ValueError('cannot open')
+
+
+def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
+    datasets: FakeDatasets,
+) -> None:
+    with local(proposal='p1', datasets=datasets, bind={TOTAL: _Refusing()}) as client:
+        total = _total(client)  # returns before the held state opens
+
+        stopped = 'the accumulator stopped: opening failed: cannot open'
+        with pytest.raises(LookupError, match=f'^{stopped}$'):
+            client.output(total)
+        with pytest.raises(SubmitError, match=f'^{stopped}$'):
+            total.push({'parts': {'value': 1.0}})
+
+
+def test_closing_a_backend_adds_the_pushes_logged_first(
+    datasets: FakeDatasets, summing: Sum
+) -> None:
+    bind = {LOAD: lambda run: {'value': run, 'extra': 0.0}, TOTAL: summing}
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        loads = client.compute([Request(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
+        summing.go.clear()
+        total = _total(client)
+        for load in loads:
+            total.push({'parts': load.refs('value')})
+        threading.Timer(0.05, summing.go.set).start()
+
+    assert summing.pushed == 2
 
 
 def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
@@ -1502,7 +1568,7 @@ def test_a_reference_pinned_to_an_earlier_state_is_refused(
     assert client.output(current, 'value').tolist() == [3.0]
 
 
-def test_a_push_waits_until_the_requests_that_read_the_accumulator_have_run(
+def test_a_push_is_added_once_the_requests_that_read_the_state_before_it_have_run(
     in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
@@ -1511,20 +1577,17 @@ def test_a_push_waits_until_the_requests_that_read_the_accumulator_have_run(
     total.push({'parts': loads[0].refs('value')})
     copied = _copy(client, total)
     copying.started.wait(timeout=5)  # the copy runs, and reads the value
-    push = threading.Thread(
-        target=total.push, args=({'parts': loads[1].refs('value')},)
-    )
-    push.start()
-    push.join(timeout=0.05)
+    total.push({'parts': loads[1].refs('value')})  # returns at once
+    read = _start(lambda: client.output(total, 'value'))
 
-    assert push.is_alive()
+    with pytest.raises(TimeoutError):
+        read.result(timeout=0.05)
     copying.go.set()
-    push.join()
+    assert read.result(timeout=5).tolist() == [3.0]
     assert client.output(copied, 'value').tolist() == [1.0]
-    assert client.output(_copy(client, total), 'value').tolist() == [3.0]
 
 
-def test_a_push_waits_for_a_cancelled_request_that_still_runs(
+def test_a_push_is_added_once_a_cancelled_request_that_still_runs_returns(
     in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
@@ -1534,15 +1597,13 @@ def test_a_push_waits_for_a_cancelled_request_that_still_runs(
     copied = _copy(client, total)
     copying.started.wait(timeout=5)
     client.cancel(copied)
-    push = threading.Thread(
-        target=total.push, args=({'parts': loads[1].refs('value')},)
-    )
-    push.start()
-    push.join(timeout=0.05)
+    total.push({'parts': loads[1].refs('value')})
+    read = _start(lambda: client.output(total, 'value'))
 
-    assert push.is_alive()
+    with pytest.raises(TimeoutError):
+        read.result(timeout=0.05)
     copying.go.set()
-    push.join()
+    assert read.result(timeout=5).tolist() == [3.0]
     assert client.status(copied) is Status.CANCELLED
 
 
@@ -1584,7 +1645,7 @@ def test_a_request_that_reads_two_accumulators_is_refused(
     assert client.output(twice, 'value').tolist() == [2.0]
 
 
-def test_submissions_that_read_two_accumulators_in_either_order_wait_for_both_pushes(
+def test_a_submission_pins_states_whose_pushes_wait_and_returns_at_once(
     in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
@@ -1593,58 +1654,36 @@ def test_submissions_that_read_two_accumulators_in_either_order_wait_for_both_pu
     for total in (first, second):
         total.push({'parts': loads[0].refs('value')})
         _copy(client, total)  # holds back the next push
+    for total in (first, second):
+        total.push({'parts': loads[1].refs('value')})
+    reads = client.submit(
+        [Request(COPY, {'value': t.ref('value')}) for t in (first, second)]
+    )
 
-    def read(*totals: Accumulator) -> list[Record]:
-        return client.submit([Request(COPY, {'value': t.ref('value')}) for t in totals])
-
-    row = loads[1].refs('value')
-    pushes = [
-        _start(lambda: first.push({'parts': row})),
-        _start(lambda: second.push({'parts': row})),
-    ]
-    for pushed in pushes:
-        with pytest.raises(TimeoutError):
-            pushed.result(timeout=0.05)
-    reads = [_start(lambda: read(first, second)), _start(lambda: read(second, first))]
+    assert [r.request.params['value'].upto for r in reads] == [2, 2]
+    assert client.status(reads) == [Status.PENDING] * 2
     copying.go.set()
-
-    for pushed in pushes:
-        pushed.result(timeout=5)
-    for submitted in reads:
-        for record in submitted.result(timeout=5):
-            upto = record.request.params['value'].upto
-            expected = sum((1.0, 2.0)[:upto])
-            assert client.output(record, 'value').tolist() == [expected]
+    assert [client.output(r, 'value').tolist() for r in reads] == [[3.0]] * 2
 
 
-@pytest.mark.parametrize(
-    ('end', 'refused'),
-    [
-        (lambda client, total: client.release(total), 'the accumulator was released'),
-        (lambda client, total: client.close(), 'has ended'),
-    ],
-)
-def test_a_push_that_waits_is_refused_once_the_accumulator_is_released(
-    in_place: Client,
-    loads: list[Record],
-    copying: Copying,
-    end: Callable[[Client, Accumulator], None],
-    refused: str,
+def test_a_released_accumulator_still_adds_the_pushes_logged(
+    in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
     copying.go.clear()
     total = _total(client)
     total.push({'parts': loads[0].refs('value')})
-    _copy(client, total)
+    first = _copy(client, total)
     copying.started.wait(timeout=5)
-    pushed = _start(lambda: total.push({'parts': loads[1].refs('value')}))
+    total.push({'parts': loads[1].refs('value')})  # waits for the first copy
+    second = _copy(client, total)
+    client.release(total)  # stops no work
+    copying.go.set()
 
-    with pytest.raises(TimeoutError):
-        pushed.result(timeout=0.05)
-    end(client, total)  # ending the client releases the accumulator
-    with pytest.raises((SubmitError, ClientEnded), match=refused):
-        pushed.result(timeout=5)
-    assert not copying.finished.is_set()  # refused while the copy runs
+    assert [client.output(r, 'value').tolist() for r in (first, second)] == [
+        [1.0],
+        [3.0],
+    ]
 
 
 def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
@@ -1762,20 +1801,21 @@ def test_a_read_while_a_push_adds_pins_the_state_after_it(
     client = in_place
     sides = _sides_of(client)
     sides.push({'samples': loads[0].refs('value')})
+    client.output(sides)  # the first push is added
     subtracting.adding.clear()
     subtracting.go.clear()
-    pushed = _start(lambda: sides.push({'backgrounds': loads[1].refs('value')}))
-    subtracting.adding.wait(timeout=5)  # the push holds the accumulator
+    sides.push({'backgrounds': loads[1].refs('value')})
+    subtracting.adding.wait(timeout=5)  # the push adds
     read = _start(lambda: client.output(sides, 'difference'))
-    provenance = _start(lambda: client.provenance(sides))
+    copied = _copy(client, sides, 'difference')
 
-    for waiting in (read, provenance):
-        with pytest.raises(TimeoutError):
-            waiting.result(timeout=0.05)
+    assert copied.request.params['value'].upto == 2
+    assert len(client.provenance(sides).request.params['backgrounds']) == 1
+    with pytest.raises(TimeoutError):
+        read.result(timeout=0.05)  # waits for the state, as for a record
     subtracting.go.set()
-    pushed.result(timeout=5)
     assert read.result(timeout=5).tolist() == [-1.0]
-    assert len(provenance.result(timeout=5).request.params['backgrounds']) == 1
+    assert client.output(copied, 'value').tolist() == [-1.0]
 
 
 def test_a_push_names_only_tables_the_accumulator_fills(
@@ -1835,7 +1875,7 @@ def test_a_state_is_read_once_its_plain_request_would_be_accepted(
     assert client.provenance(both).request == plain.request
 
 
-def test_a_push_waits_for_a_read_of_the_outputs_in_progress(
+def test_a_push_is_added_once_a_read_of_the_outputs_in_progress_is_done(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -1844,13 +1884,12 @@ def test_a_push_waits_for_a_read_of_the_outputs_in_progress(
     subtracting.compute.clear()
     read = _start(lambda: client.output(sides, 'difference'))
     subtracting.computing.wait(timeout=5)  # the read computes the output
-    pushed = _start(lambda: sides.push({'backgrounds': loads[1].refs('value')}))
+    subtracting.adding.clear()
+    sides.push({'backgrounds': loads[1].refs('value')})  # returns at once
 
-    with pytest.raises(TimeoutError):
-        pushed.result(timeout=0.05)
+    assert not subtracting.adding.wait(timeout=0.05)
     subtracting.compute.set()
     assert read.result(timeout=5).tolist() == [1.0]
-    pushed.result(timeout=5)
     assert client.output(sides, 'difference').tolist() == [-1.0]
 
 

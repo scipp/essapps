@@ -9,6 +9,15 @@ requests accept one, a list, or a dict, and return the same shape.
 A record never changes; its status changes once, from pending to finished,
 and is asked with :meth:`Client.status` or :meth:`Client.wait`.
 
+A call that starts work returns once the backend has checked and logged it:
+:meth:`Client.submit`, :meth:`Client.accumulator`, and
+:meth:`Accumulator.push`. It checks models and the references it names
+against what the backend knows now, and leaves reading data and computing to
+the backend's workers. Only the calls that read results wait for that work:
+:meth:`Client.wait`, :meth:`Client.compute`, :meth:`Client.output`, and
+:meth:`Client.as_completed`; and :meth:`Datasets.watch` waits for new
+datasets. So a GUI application can make every other call from its UI thread.
+
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
 ends. Releasing and ending stop no work: a pending request still runs, and
@@ -156,10 +165,14 @@ class Accumulator:
 
         A row names datasets or references outputs of records, never an
         accumulator. It is checked by its table's row model; rules on a whole
-        table, such as its length, are checked when a state is read. The push
-        waits for the records to finish, and refuses them unless they have
-        completed. It then waits for the readers of the accumulator (see
-        :mod:`ess.apps.backend`), and returns once the rows are added.
+        table, such as its length, are checked when a state is read. A record
+        that has failed or was cancelled is refused, and one that is pending
+        is not waited for. The push returns once it is logged; the backend
+        adds the rows once these records have completed and the readers of
+        the state before the push are done (see :mod:`ess.apps.backend`). If
+        adding fails, or a record has not completed, the accumulator stops:
+        later pushes are refused, and so are reads of a state it did not
+        reach.
         """
         self._push(rows)
 
@@ -215,7 +228,7 @@ class Client:
         End the client: release everything it keeps, and stop no work.
 
         A client that owns its backend then closes it, which waits until no
-        record is pending.
+        record is pending and every push is added.
         """
         self._backend.close_client(self._id)
         if self._owns_backend:
@@ -350,8 +363,10 @@ class Client:
 
         The template's blanks are table fields. A template a request would
         refuse is refused here, with the blanks left out, and its values are
-        held as the backend resolved them. Opening waits for the records they
-        reference to finish, and reads them once.
+        held as the backend resolved them. Opening returns once the template
+        is checked; the backend reads its values once, after the records they
+        reference have completed, and the accumulator stops if the binding
+        then fails to open.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
@@ -366,9 +381,9 @@ class Client:
 
         A released record's outputs are dropped once the pending requests that
         read them have run; the record stays. A released stage takes no more
-        calls. A released accumulator takes no more pushes or readers, a push
-        that waits for its readers is refused, and its state is dropped once
-        its readers are done. Releasing stops no work.
+        calls. A released accumulator takes no more pushes or readers; the
+        pushes made before are still added, and its state is dropped once its
+        readers are done. Releasing stops no work.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -380,8 +395,8 @@ class Client:
         is None; an optional output that was not returned is left out.
 
         A record's, once it has completed. An accumulator's are those of its
-        state after the pushes so far, copied, so that like a record's they do
-        not change; a read waits while a push waits or adds.
+        state after the pushes so far, once they are added, copied, so that
+        like a record's they do not change.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):

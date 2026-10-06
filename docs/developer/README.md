@@ -286,10 +286,11 @@ A proposal is idle while none of its clients is open and none of its records is 
 A result needed for longer is published (see Provenance and publication).
 
 **In the user's process** (`local()`, [ADR 0002](adr/0002-the-client-is-the-lifetime.md)), output values are kept in memory, and only while something keeps them.
-Three things do:
+Four things do:
 
 - **the client that made its record, until the client releases it or ends;**
 - **a pending request that reads it, until the request has run;**
+- **a push whose rows reference it, until the push is added, and an accumulator whose template references it, until its held state has opened;**
 - **an accumulator whose held state keeps the rows pushed into it, for the outputs those rows reference, until the client releases the accumulator or ends** (see What a binding provides).
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
@@ -309,10 +310,10 @@ client.output(result, 'iofq')       # kept: this client made the record
 client.output(centre, 'centre')     # raises: the value is not kept
 ```
 
-Releasing and ending stop no work: pending requests still run.
-A released record that is still pending drops its values once it completes and no pending request reads them.
+Releasing and ending stop no work: pending requests still run, and pushes are still added.
+A released record that is still pending drops its values once it completes and no pending request or push reads them.
 Any later call of a client that has ended raises `ClientEnded`.
-A client made with `local()` owns its backend: closing the client also closes the backend, which waits until no record is pending.
+A client made with `local()` owns its backend: closing the client also closes the backend, which waits until no record is pending and every push is added.
 A client that is never closed ends with its process.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
 
@@ -450,12 +451,12 @@ Between pushes, an accumulator keeps what it computed once from the fixed values
 If the binding has no `held_state(fixed)`, the held state is the list of rows pushed so far (see What a binding provides).
 No spec, call, or record names the held state.
 
-- `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
-- Opening waits for the records the template references, and is refused if any of them failed or was cancelled. It reads them once. `iofq.template` holds the values as resolved, as a stage's template does.
-- `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push waits for the records the rows reference to finish, and is refused if any of them failed or was cancelled.
+- `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops.
+- Opening returns once the backend has checked and logged it, as `client.submit` does. It is refused if a record the template references has failed or was cancelled, and does not wait for one that is pending. The backend reads these records once, when it opens the held state after they have completed. `iofq.template` holds the values as resolved, as a stage's template does.
+- `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push is refused if a record the rows reference has failed or was cancelled, and does not wait for one that is pending. It returns once logged, and the backend adds it later (see Adding waits for readers).
 - Checks on a whole table, such as its length, and the params model's own validators apply when a state is read, not at a push. A table that needs two rows takes them one push at a time, and a state whose plain request would be refused cannot be read (see Reads).
 - Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The spec author promises this; it is not checked.
-- If adding the rows of a push fails, the push is refused and the accumulator takes no more pushes or reads, since the binding may hold part of them.
+- If adding the rows of a push fails, the accumulator stops, since the binding may hold part of them. It stops too if a record the rows reference fails or is cancelled, or if the held state fails to open. Later pushes and reads are then refused with the reason, and requests pinned to a state it did not reach fail with it.
 
 **One sum, two ways.** Every spec with a table can be given its rows both ways: all in one plain request, or over time through an accumulator.
 The caller chooses how rows arrive.
@@ -484,7 +485,7 @@ iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=
 The sample runs and the can runs are two tables, each a blank, pushed as their runs arrive, as in the first example of this section.
 One push may add a row to each table, and the rows enter one state.
 A state with no can run is refused if the spec requires one, as its plain request would be.
-A binding with `held_state(fixed)` keeps what it holds for the sample apart from what it holds for the can, so that the order of pushes does not change a state; a binding that cannot do this refuses to open.
+A binding with `held_state(fixed)` keeps what it holds for the sample apart from what it holds for the can, so that the order of pushes does not change a state; a binding that cannot do this refuses to open, and the accumulator stops.
 
 **Reads.** An accumulator is read as a record is ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
@@ -497,8 +498,11 @@ iofq.refs()                                                 # a reference to eve
 ```
 
 A *read* is a call that pins the accumulator's state: submitting a request that references the accumulator, `client.output`, or `client.provenance`.
-Every read pins the state at that moment: the state after the pushes so far.
+Every read pins the state at that moment: the state after the pushes logged so far.
 It gives what the same call gives on the record of the plain request over those rows, in push order.
+Pinning never waits for a push to be added.
+A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
+`client.output` waits for it as for a pending record, and `client.provenance` returns at once.
 
 - A reference is pinned to the state when its request is submitted. The record holds `{'accumulator': id, 'output': name, 'upto': n}`, the output after the first `n` pushes. All references to one accumulator in one submission are pinned to the same state, and a reference to an earlier state is refused.
 - `n` counts pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, `upto` 2 is the plain request with sample run 611 and can run 614, and `upto` 3 adds sample run 612 and can run 615.
@@ -508,33 +512,34 @@ It gives what the same call gives on the record of the plain request over those 
 - `client.submit(iofq)` raises `TypeError`. A record of a state is a request of a spec that copies what it reads, such as `COPY` in Drivers.
 - A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references a record of its state, such as `COPY`. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
-**Pushes wait for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
-Since a request reads the outputs of the state itself, a push waits until the readers of the current state that came before it have run.
-Readers are the requests that reference the state and were accepted before the push, including those cancelled while they run, and `client.output` calls in progress.
-No reader waits for a push, so the wait ends.
-A read made while a push waits or adds blocks until the push is done, and pins the state after it.
-A long reader holds back the next push, so the driver decides how often it looks.
-The outputs of a state are computed all at once, the first time the state is read, and kept until the next push; no output is computed for a state that no one reads.
+**Adding waits for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
+Since a request reads the outputs of the state itself, a push is added only once the readers of the state before it have run.
+Adding it also waits for the records its rows reference to complete.
+Readers are the requests that pinned that state, including those cancelled while they run, and `client.output` calls in progress.
+A reader waits only for the pushes up to its state and for records submitted before it, so no wait goes round in a circle.
+The backend adds the pushes of one accumulator on its workers, one at a time, in the order they were logged.
+A long reader holds back the next addition, but not the driver.
+The outputs of a state are computed all at once, the first time the state is read, and kept until the next push is added; no output is computed for a state that no one reads.
 
-**Releasing.** `push` returns once its rows are added, and releasing stops no work, so a driver may release an accumulator right after its last read:
+**Releasing.** Releasing stops no work, so a driver may release an accumulator right after its last read:
 
 ```python
-iofq.push({'sample_runs': {'run': dataset(run=613)}})         # returns once the row is added
+iofq.push({'sample_runs': {'run': dataset(run=613)}})         # returns once logged
 exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pins the state after this push
-client.release(iofq)                                           # the export still runs
+client.release(iofq)                                           # the push is added, and the export runs
 client.output(exported, 'text')
 ```
 
-Releasing the accumulator, or ending its client, waits for nothing, and the held state is dropped once its readers have run.
+Releasing the accumulator, or ending its client, waits for nothing.
+The pushes logged are still added, and the held state is dropped once its readers have run.
 A released accumulator takes no more pushes or reads.
-A push from another thread that still waits for readers is refused at once, since no read could follow it.
 To stop the readers too, the driver cancels them with `client.cancel`.
 
 **On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), each accumulator runs as its own job on the cluster, with a memory size and a deadline that its client declares when it opens it.
 The job runs the pushes and every request that references the accumulator.
 A state is not a record, so nothing writes it; a request that reads a state makes a record, whose outputs are written like any other's.
 `client.output` of an accumulator returns the value and writes nothing.
-Releasing the accumulator or ending its client ends the job once its readers have run; otherwise the deadline ends it, and the client may extend the deadline.
+Releasing the accumulator or ending its client ends the job once the pushes logged are added and its readers have run; otherwise the deadline ends it, and the client may extend the deadline.
 This is designed and not implemented (open question 5).
 
 ### What a binding provides
@@ -606,15 +611,16 @@ This one adds each run of a rotation scan to a volume as it arrives, and cuts th
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):    # the scan's 300 runs
-    volume.push({'runs': {'run': run}})                  # waits until the previous cut has run
+    volume.push({'runs': {'run': run}})                  # added once the previous cut has run
     client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}, label='cut', member='17')
 total = client.compute(COPY, {'data': volume.ref('counts')})   # a record of the last state
 ```
 
 `VOLUME`, `CUT`, and `COPY` are toy specs of the stories ([user-stories.md](user-stories.md), Toy specs); `VOLUME`'s binding has a held state of its own.
 Each push reduces the new run and adds it to the volume.
-Each cut pins the state after its push, and the next push waits until that cut has run, since the push adds to the volume the cut reads.
+Each cut pins the state after its push, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
 So the loop holds one volume, not one per run or per pending cut.
+`volume.push` returns once the push is logged, so a slow cut holds back the next addition, not the loop.
 On the service, the volume is a job of its own, and each run is reduced in that job ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
 
 A loop that reduces each dataset in a request of its own uses `client.as_completed`.

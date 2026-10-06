@@ -92,7 +92,7 @@ def combine(operation: Callable[[Any, Any], Any]) -> HeldStateBinding:
     row, so neither way changes the output a row came from. With no rows it
     returns no outputs, so a read of a state with nothing pushed fails, as the
     plain request over no rows does. Since the table is the spec's only param,
-    an accumulator that opens with other values is refused, and so is a push
-    into a second table.
+    an accumulator that opens with other values stops, and so does one that a
+    push adds a second table to.
     """
     return _Combine(operation)

@@ -517,7 +517,7 @@ for n in range(1, 301):
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-    volume.push({'runs': {'run': run}})                        # waits until the previous cut has run
+    volume.push({'runs': {'run': run}})                        # added once the previous cut has run
     pushed.append(run)
     cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0},
                               label='cut', member='17'))
@@ -533,7 +533,7 @@ assert len(provenance.datasets()) == 300                       # run 5, measured
 
 `watch` yields run 5 once, although its file arrives twice.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
-Each cut pins the state after its push, and the next push waits until that cut has run.
+Each cut pins the state after its push, and the next push is added once that cut has run.
 `COPY` makes a record of the last state, and its provenance expands that state into the plain request over the 300 rows.
 On the service, the volume is a job of its own, and each run is reduced in that job.
 That a cut is ready within seconds of each run, and that history grows by a constant amount per run, is system story D7.
