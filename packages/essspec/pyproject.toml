@@ -35,7 +35,7 @@ sciline = [
     "sciline @ git+https://github.com/scipp/sciline.git@map-reduce-outside-the-graph",
 ]
 test = [
-    "essspec[scipp]",
+    "essspec[scipp,sciline]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]

@@ -25,7 +25,13 @@ from __future__ import annotations
 from abc import ABC
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 class Scale(StrEnum):
@@ -111,7 +117,7 @@ class RangeModel(BaseModel, ABC):
 
     @field_validator('stop')
     @classmethod
-    def stop_must_be_greater_than_start(cls, v: float, info) -> float:
+    def stop_must_be_greater_than_start(cls, v: float, info: ValidationInfo) -> float:
         start = info.data.get('start')
         if start is not None and v <= start:
             raise ValueError('stop must be greater than start')
@@ -132,7 +138,7 @@ class EdgesModel(BaseModel, ABC):
 
     @field_validator('stop')
     @classmethod
-    def stop_must_be_greater_than_start(cls, v: float, info) -> float:
+    def stop_must_be_greater_than_start(cls, v: float, info: ValidationInfo) -> float:
         start = info.data.get('start')
         if start is not None and v <= start:
             raise ValueError('stop must be greater than start')

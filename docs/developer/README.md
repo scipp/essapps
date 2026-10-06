@@ -49,7 +49,7 @@ What the framework adds to the plain loop:
 
 The table names who writes each thing and who makes one at run time, with these roles:
 
-- *framework*: essdispatch and essspec (`ess.spec`), in this repository.
+- *framework*: essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this repository.
 - *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
 - *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
 - *notebook*: a scientist's notebook that uses the client directly.

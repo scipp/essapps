@@ -12,9 +12,9 @@ stage is staged with no blanks and called once::
     call = binding.stage(fixed, ('bins',))           # a stage
     call(bins=100)
 
-A plain function is a binding that computes nothing ahead. How a binding
-computes is invisible in the records: a call through a stage returns what the
-plain request returns.
+How a binding computes is invisible in the records: a call through a stage
+returns what the plain request returns. A framework accepts a plain
+:data:`Function` too, as a binding that computes nothing ahead.
 
 An accumulator keeps a held state, made for the values of every field but the
 tables it fills. A binding of a spec with table fields may make held states,
@@ -26,8 +26,11 @@ like ``ess.reduce.streaming.StreamProcessor``::
 
 Its outputs after rows are pushed in order are those of the plain request
 whose tables hold these rows, with the same other values. It may add each push
-in place, and its outputs may be what it holds, not a copy;
-:mod:`ess.dispatch.backend` says why that is safe.
+in place, and its outputs may be what it holds, not a copy: the caller is done
+with the outputs of a state before it pushes the next rows (see
+:meth:`HeldState.outputs`). A binding without ``held_state`` works in an
+accumulator too: the framework keeps the rows and computes the plain request
+over them when a state is read.
 """
 
 from __future__ import annotations
@@ -76,8 +79,9 @@ class HeldState(Protocol):
         Every output of the spec over the rows pushed so far.
 
         They may be what the held state holds, not a copy. An output the spec
-        declares optional may be left out. The backend calls this once per
-        state that is read, and keeps what it returns until the next push.
+        declares optional may be left out. The caller calls this once per
+        state that is read, keeps what it returns until the next push, and
+        pushes only once every reader of these outputs is done.
         """
         ...
 

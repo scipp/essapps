@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Implementation-independent workflow specifications for UI generation.
+The specs of workflows, which UIs and backends read, and the protocol of the
+code behind a spec (bindings), with ``combine``.
 
 See :mod:`ess.spec._workflow_spec` for the design, :mod:`~.data` for
 data fields, :mod:`~.binding` for the protocol of the code behind a spec, and
-ADR 0001 (docs/adr in the package) for the rationale.
+ADR 0001 (docs/developer/adr in the package) for the rationale.
+
+The package does not import :mod:`~.conversions` (needs scipp) and
+:mod:`~.pipeline` (``PipelineBinding``, needs sciline). Import them directly.
 """
 
 from ._workflow_spec import NoParams, SerializedWorkflowSpec, WorkflowSpec

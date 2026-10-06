@@ -975,15 +975,6 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
             client.accumulator(Template(SUM, params=params, blanks=('runs',)))
 
 
-def test_combine_takes_only_one_table() -> None:
-    with pytest.raises(TypeError, match=r"not also \['scale'\]"):
-        combine(operator.add).held_state({'scale': 2.0})
-    held = combine(operator.add).held_state({})
-    held.push({'parts': {'value': 1.0}})
-    with pytest.raises(ValueError, match='one table, not parts and others'):
-        held.push({'others': {'value': 1.0}})
-
-
 def test_a_push_of_more_fields_than_the_row_is_refused(client: Client) -> None:
     load = client.submit(LOAD, {'run': dataset(run=1)})
     total = _total(client)

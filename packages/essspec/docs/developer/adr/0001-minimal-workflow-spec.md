@@ -39,8 +39,11 @@ the design: nothing implementation-bound may appear in the spec.
 A new package `essspec`, imported as `ess.spec`, defines the spec layer. It
 is developed in scipp/essapps while it changes with the framework (see
 ADR 0007 of scipp/essapps, `docs/developer/adr/0007-packages-split-by-dependencies.md`).
-Its only dependency beyond the standard library is pydantic; the scipp-facing
-pieces are quarantined in one submodule.
+Its only dependency beyond the standard library is pydantic. The pieces that
+need scipp or sciline are kept in two submodules, `conversions` and
+`pipeline`, which the package does not import. The package also holds the
+binding protocol (`ess.spec.binding`), the other half of the contract with
+workflow packages; the spec itself does not refer to it.
 
 ### The spec is pure interface: no factory, no keys, no registry
 
@@ -48,11 +51,11 @@ pieces are quarantined in one submodule.
 `description`, both mandatory), a params model, an outputs model, and an
 optional `code_revision`. Nothing else. In particular it holds *no* workflow
 factory and *no* sciline keys: a spec describes *what a user can configure and
-what they get back*, not how it is computed. Binding a spec to an executor —
-conceptually a mapping from spec identity to
-`Callable[[BaseModel], BaseModel]`, or a remote service holding the same
-spec — is a parallel mechanism, intentionally undefined here. This is what
-keeps the spec valid across local, service, and cluster execution.
+what they get back*, not how it is computed. Binding a spec to the code
+that computes it is a parallel mechanism: `ess.spec.binding` defines its
+protocol, and a caller of a remote service that holds the same spec needs no
+binding at all. This is what keeps the spec valid across local, service, and
+cluster execution.
 
 One requirement follows for workflow packages: the module that defines a spec
 must be importable without importing the workflow code. A service then loads
@@ -152,8 +155,7 @@ frameworks needs an agreed encoding, which this ADR does not fix.
 
 The spec says nothing about how a workflow gets at the bytes. Whether a
 reference becomes a local path or an in-memory object is decided where the
-workflow is called, by the executor binding that the ADR leaves out of scope,
-and the workflow asks there for the form it wants: a path for a NeXus file it
+workflow is called, by the framework that calls the binding, and the workflow asks there for the form it wants: a path for a NeXus file it
 loads by component, an object for a curve it fits. A framework that adds an
 in-memory fast path for chained runs therefore changes no spec and no workflow
 interface. An earlier form of this decision typed a data field as a union of the
@@ -283,9 +285,10 @@ used for plotter selection; here they are data fields constrained by
 `ArraySpec`, which serializes. The migration (already planned independently in
 scipp/esslivedata#889) changes field types only; esslivedata's `Temporality`
 annotation coexists with the data-field annotation in the same `Annotated`.
-The import edge is free — the esslivedata backend already depends on
-essreduce, and its dashboard is decoupled via the serialized-spec announcement,
-not via imports.
+The import edge is small: essspec depends only on pydantic, and the
+esslivedata dashboard is decoupled via the serialized-spec announcement, not
+via imports. esslivedata adopts it once essspec has moved to scipp/ess (ADR
+0007 of scipp/essapps).
 
 ## Consequences
 
@@ -297,20 +300,19 @@ not via imports.
   consumer's; how strict that comparison is (format only, or full `ArraySpec`
   compatibility) is the framework's rule.
 - A workflow receives references and resolves them through whatever runs it;
-  the contract for that resolution belongs to the executor binding, not to the
-  spec. A runner calls `check_array` on array outputs at completion.
+  the contract for that resolution belongs to the framework that calls the
+  binding, not to the spec. A runner calls `check_array` on array outputs at completion.
 - essspec depends on pydantic; installing it pulls in no science stack.
 - `ess.reduce.parameter`, `ess.reduce.workflow`, and the widgets built on them
-  are superseded and will be removed in a later hard break; they are untouched
-  for now. The graph-derived parameter discovery they provide is dropped, not
-  ported.
+  are meant to be superseded by this vocabulary; removing them, in a later hard
+  break, is essreduce's decision, and they are untouched for now. The
+  graph-derived parameter discovery they provide would be dropped, not ported.
 - `ess.nmx.configurations` and esslivedata migrate to the shared vocabulary
   and spec incrementally, per package, with no coordination requirement — a
   package that never migrates costs the others nothing.
-- The executor binding and spec enumeration remain to be designed when a
-  concrete consumer needs them; the spec layer does not constrain either
-  beyond being addressable by `(name, version)` and importable without
-  workflow code.
+- Spec enumeration remains to be designed when a concrete consumer needs
+  it; the spec layer does not constrain it beyond being addressable by
+  `(name, version)` and importable without workflow code.
 
 Foreseen extensions, each one optional spec field or one field-level
 annotation, deliberately not added until a consumer exists: declared failure

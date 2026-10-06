@@ -27,16 +27,18 @@ The heavy dependencies are elsewhere:
 Workflow packages write specs and bindings.
 If they had to import `ess.apps` for the binding protocol or for `PipelineBinding`, every workflow package would depend on the framework.
 
-The spec vocabulary still changes with the framework's design: it was amended in step with essapps for weeks, on a branch of scipp/ess (scipp/ess#653).
+The spec vocabulary still changes with the framework's design: it was amended in step with essapps for weeks, on the branch `653-minimal-workflow-spec` of scipp/ess (scipp/ess#690).
 Nothing else imports it yet.
 
 esslivedata keeps one module per instrument (`ess.livedata.config.instruments`) with the instrument's params models and the glue to its sciline workflow: facility defaults, adapters, and which settings users may change.
-The glue is a product decision, not the workflow package's, so the specs and bindings of offline reduction may never move into the instrument packages.
+The glue is a product decision, not the workflow package's, so the specs and bindings of offline reduction might never move into the instrument packages.
 
 ## Decision
 
-**A package is split off when its dependencies or where it runs differ, not for each concept.**
-The other packages depend on `essdispatch`, which depends on `essspec`; none of the others depends on another.
+**A package is split off when its dependencies, where it runs, or who must depend on it differ, not for each concept.**
+`essspec` runs wherever `essdispatch` runs, but workflow packages must depend on it without depending on the framework, and it moves to scipp/ess later.
+`essdispatchinstruments` and the workflow packages depend on `essspec` only.
+The service and the GUI packages depend on `essdispatch`, and an instrument app also on `essdispatchinstruments` for its specs.
 
 ```text
 packages/
@@ -53,16 +55,17 @@ frontends/
 Each of the others is created with its first module, so none is an empty scaffold.
 
 ```text
-essspec  <-  essdispatch  <-  essdispatchinstruments, essdispatchservice, essdispatchjupyter
-                  ^
-                  +--------  frontends (over HTTP)
+essspec  <-  essdispatch  <-  essdispatchservice, essdispatchjupyter
+   ^             ^
+   |             +----------  frontends (over HTTP)
+   +----------  essdispatchinstruments, workflow packages
 ```
 
-- **`essspec` (`ess.spec`) is everything a workflow author writes against.** The vocabulary (`WorkflowSpec`, data fields, tables, references, parameter models) and the binding protocol (`Binding`, `HeldState`, `HeldStateBinding`, `Function`) need only pydantic. `combine` needs nothing more. `ess.spec.conversions` needs scipp (extra `[scipp]`), and `ess.spec.pipeline` with `PipelineBinding` needs sciline (extra `[sciline]`). It is developed in this repository while it changes. It moves to scipp/ess as a package of its own once a second consumer, such as esslivedata or essnmx, adopts it; it is not published before that.
+- **`essspec` (`ess.spec`) is everything a workflow author writes against.** The vocabulary (`WorkflowSpec`, data fields, tables, references, parameter models) and the binding protocol (`Binding`, `HeldState`, `HeldStateBinding`, `Function`) need only pydantic. `combine` needs nothing more. `ess.spec.conversions` needs scipp (extra `[scipp]`), and `ess.spec.pipeline` with `PipelineBinding` needs sciline (extra `[sciline]`). It is developed in this repository while it changes, and is not published, so nothing outside this repository depends on a version of it. Once a second consumer, such as esslivedata or essnmx, is to adopt it, it moves to scipp/ess as a package of its own and is published from there.
 - **`essdispatch` (`ess.dispatch`) is what notebooks and apps use**: records, the client, the in-process backend and its log, datasets, the drivers (batches, rules, the trigger loop), and fakes for tests. It depends on essspec and pydantic, not on essreduce or sciline. The HTTP layer goes here too, when it is written: `ess.dispatch.http` holds the server and `connect()`, the two halves of one protocol, behind the extras `[server]` and `[remote]`. A local backend serves a web frontend on VISA or a laptop as the service does.
-- **`essdispatchinstruments` holds one subpackage per instrument**, in two halves: `specs.py` needs only essspec, so GUIs and remote clients import it; `bindings.py` needs the instrument's workflow package, behind an extra such as `[loki]`. A spec moves into its instrument package once its binding is a plain `PipelineBinding`, with no facility defaults or adapters. Deployment configuration, such as automatic-reduction rules and data paths, is not here; it belongs to the service's configuration.
+- **`essdispatchinstruments` holds one subpackage per instrument**, in two halves: `specs.py` needs only essspec, so GUIs and remote clients import it; `bindings.py` needs the instrument's workflow package, behind an extra such as `[loki]`. A spec can move into its instrument package only after essspec has moved to scipp/ess, and only once its binding is a plain `PipelineBinding`, with no facility defaults or adapters. Deployment configuration, such as automatic-reduction rules and data paths, is not here; it belongs to the service's configuration.
 - **`essdispatchservice` holds what only the hosted backend needs.** The rules of the trigger loop stay in `essdispatch`; the service runs the loop as a daemon from a configuration file.
-- **GUI code has one package per toolkit, and no toolkit-independent GUI package.** A form is built from `SerializedWorkflowSpec`, the JSON Schema of a spec that `ess.spec` provides, so ipywidgets, Panel, and a web frontend share one description of a form. An app keeps its own logic, such as grouping runs by sample and angle, in plain classes apart from its widgets. A package of shared app logic is made once two apps share some. Instrument apps move to their instrument package's `gui` extra when they can, as `essreflectometry[gui]` does today.
+- **GUI code has one package per toolkit, and no toolkit-independent GUI package.** A form is built from `SerializedWorkflowSpec`, the JSON Schema of a spec that `ess.spec` provides, so ipywidgets, Panel, and a web frontend share one description of a form. An app keeps its own logic, such as grouping runs by sample and angle, in plain classes apart from its widgets. A package of shared app logic is made once two apps share some. An instrument app moves to its instrument package's `gui` extra, as `essreflectometry[gui]` does today, only after the app's specs have moved there; until then the extra would depend on `essdispatchinstruments`, whose extra depends on the instrument package. That extra is the one way a workflow package depends on the framework; its plain install depends on `essspec` only.
 - **Names follow the ess monorepo**: distribution `essX`, import `ess.X`, one level under `ess`. A second distribution cannot install into a regular package such as `ess.dispatch`, and a namespace package `ess.dispatch` could not export `local` and the rest.
 
 ```python
@@ -84,7 +87,7 @@ from ess.spec.pipeline import PipelineBinding       # workflow author with a sci
 
 - Workflow packages, remote clients, and GUIs install no scipp through the framework. scipp stays a test dependency of essdispatch.
 - A change to the spec, the core, and the instrument specs is one pull request. The ess branch with `ess.reduce.spec` (scipp/ess#690) is replaced by essspec and is to be closed.
-- essspec has its own tags (`essspec/*`) and its own ADRs (`packages/essspec/docs/adr`), so moving it to scipp/ess is the move that scipp/ess's `ADDING_PACKAGES.md` describes.
-- The packages are installed together from the checkout: `pip install -e packages/essspec[scipp,sciline] -e packages/essdispatch[test]`. Neither is on PyPI.
+- essspec has its own tags (`essspec/*`) and its own ADRs (`packages/essspec/docs/developer/adr`, where scipp/ess keeps them), so moving it to scipp/ess is a variant of the move that scipp/ess's `ADDING_PACKAGES.md` describes: the history filtered to `packages/essspec`, and no tag rename, since its tags already carry the prefix.
+- The packages are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essdispatch[test]'`, where the test extra brings `essspec[scipp,sciline]`. Neither is on PyPI.
 - The HTTP API is a public interface once a web frontend uses it, with its own versioning.
 - The repository keeps its name, scipp/essapps.
