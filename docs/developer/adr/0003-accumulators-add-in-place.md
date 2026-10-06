@@ -122,7 +122,7 @@ Ending the client releases the accumulator in the same way.
 **What may read an accumulator.** A request reads at most one accumulator, and a row or a template reads none.
 
 - A request reads a state in place, only while it runs, and the next push is added after it. A row or a template's value lives as long as the accumulator or stage that holds it: the held state that keeps the rows stores each row's value, and the framework cannot tell whether a binding's own held state does. Read in place, that value would change at the other accumulator's next push; holding back that push instead would last as long as the holder.
-- On the service, each accumulator is a job of its own, and values reach a job only as files of records ([ADR 0005](0005-the-service-writes-every-output.md)). Two held states are never in one process, so a request that read two would have no job to run in.
+- A request reads a held state in place, so it runs in the process that holds it. A request that read two accumulators would need both held states in one process, or one moved to the other. In the user's process both are in one process; where the service holds held states is open ([ADR 0005](0005-the-service-writes-every-output.md), Open), and this rule keeps that choice free. Lifting it later breaks no code.
 
 The cases that use an accumulator's outputs together with other values:
 
@@ -130,7 +130,7 @@ The cases that use an accumulator's outputs together with other values:
 |---|---|---|
 | sample and background runs, both still arriving, cut together | one accumulator with two tables ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) | nothing |
 | the output of a finished accumulator as a fixed value or a row of another, such as a direct beam or the curve of one angle | a record of its last state, referenced by the template or the row | that record's outputs, once |
-| a large finished value next to a growing one, such as a background volume | a record of it, referenced by the growing accumulator's template, read once when it opens and held in its job | that record's outputs, once |
+| a large finished value next to a growing one, such as a background volume | a record of it, referenced by the growing accumulator's template, read once when it opens and held next to its held state | that record's outputs, once |
 
 ```python
 beam = client.compute(COPY, {'data': direct.ref('function')})   # direct: an accumulator whose runs are all pushed
@@ -158,8 +158,8 @@ A request that combines them reads a record of one, which copies it once per rec
 - **Every spec that is accumulated accepts an empty table.** A spec could then not require at least one run of a plain request, and a reference to an empty state means nothing.
 - **Checking the plain request at each push.** Each push then costs time in proportion to the rows before it, whether or not anyone reads the state, and the accumulator must keep whether each state may be read. Refusing such a push would be worse: a table that needs two rows, or two tables that each need one, could not be filled one push at a time.
 - **Typing the fixed values by the params model with the tables empty.** A model validator that needs rows would refuse the opening, so every spec that is accumulated would need validators that accept empty tables. Typing each field alone needs no such rule, and the model's validators still run at each read.
-- **Rows and templates that read a copy of an accumulator's state when pushed or opened.** This saves the record, not the copy. On the service the value still crosses from one job to the other, through a file or through a transfer between jobs that ADR 0005 does not have.
-- **A request that reads two accumulators.** Their held states would have to be in one job ([ADR 0005](0005-the-service-writes-every-output.md), "Several accumulators of a client in one job").
+- **Rows and templates that read a copy of an accumulator's state when pushed or opened.** This saves the record, not the copy. On the service the value would still have to reach the other accumulator, through a file or a transfer.
+- **A request that reads two accumulators.** Their held states would have to be in one process, which the service may not offer (see What may read an accumulator).
 
 ## Consequences
 

@@ -566,8 +566,8 @@ class Backend:
         """
         The request with names resolved and defaults filled; needs no lock.
 
-        A request reads at most one accumulator: on the service each
-        accumulator is a job of its own, and the request runs in it.
+        A request reads at most one accumulator: it reads a held state in
+        place, so it runs where that held state is (ADR 0003).
         """
         request = entry.request
         try:

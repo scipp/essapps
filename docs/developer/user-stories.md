@@ -535,7 +535,7 @@ assert len(provenance.datasets()) == 300                       # run 5, measured
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
 Each cut pins the state after its push, and the next push is added once that cut has run.
 `COPY` makes a record of the last state, and its provenance expands that state into the plain request over the 300 rows.
-On the service, the volume is a job of its own, and each run is reduced in that job.
+On the service, each cut is written to a file; where the volume is held is open (README.md open question 5).
 That a cut is ready within seconds of each run, and that history grows by a constant amount per run, is system story D7.
 
 ## E. Automatic reduction
