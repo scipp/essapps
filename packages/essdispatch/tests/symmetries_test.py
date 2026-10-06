@@ -3,39 +3,34 @@
 """
 The symmetries of docs/developer/README.md on a toy package that offers a
 single-run and a multi-run spec of one reduction, as
-docs/developer/three-ways-to-run-a-spec.html shows them.
+docs/developer/three-ways-to-run-a-spec.html shows them: two bindings of one
+sciline pipeline of one sample run and one can run.
 
 A run holds counts per pixel. A run's I(Q) is its counts summed into ``bins``
 bins over the pixels (the numerator) divided by its total counts (the
 denominator); the can's I(Q) is subtracted. Over several runs of a kind, the
-numerators and the denominators are summed before dividing, so a held state
-keeps the sums and not an I(Q).
+numerators and the denominators are summed before dividing.
 """
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping
+from typing import Any, NewType
 
 import numpy as np
 import pytest
+import sciline
 import scipp as sc
 import scipp.testing
 from pydantic import BaseModel
 
 from ess.dispatch import Client, SubmitError, Template, dataset, local
 from ess.dispatch.testing import FakeDatasets
-from ess.spec import (
-    Array,
-    Function,
-    HeldState,
-    NexusFile,
-    WorkflowSpec,
-)
-from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
+from ess.spec import Array, NexusFile, WorkflowSpec
+from ess.spec.pipeline import AccumulatingPipelineBinding, PipelineBinding
 
 
 class IofQParams(BaseModel):
     run: NexusFile
-    can: NexusFile | None = None
+    can: NexusFile
     bins: int = 2
 
 
@@ -49,7 +44,7 @@ class CanRow(BaseModel):
 
 class MultiIofQParams(BaseModel):
     sample_runs: list[SampleRow]
-    can_runs: list[CanRow] = []
+    can_runs: list[CanRow]
     bins: int = 2
 
 
@@ -71,82 +66,67 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
 IOFQ = _spec('iofq', IofQParams)
 IOFQ_MULTI = _spec('iofq-multi', MultiIofQParams)
 
-
-def _parts(run: Any, bins: int) -> np.ndarray:
-    """A run's numerator per bin, followed by its denominator."""
-    counts = np.asarray(run, dtype=float)
-    return np.append(counts.reshape(bins, -1).sum(axis=1), counts.sum())
-
-
-def _iofq(sample: np.ndarray, can: np.ndarray | None) -> dict[str, sc.Variable]:
-    result = sample[:-1] / sample[-1]
-    if can is not None:
-        result = result - can[:-1] / can[-1]
-    return {'iofq': sc.array(dims=['q'], values=result)}
+SampleFile = NewType('SampleFile', list)
+CanFile = NewType('CanFile', list)
+Bins = NewType('Bins', int)
+SampleNumerator = NewType('SampleNumerator', np.ndarray)
+SampleDenominator = NewType('SampleDenominator', float)
+CanNumerator = NewType('CanNumerator', np.ndarray)
+CanDenominator = NewType('CanDenominator', float)
+IofQ = NewType('IofQ', sc.Variable)
 
 
-def iofq(run: Any, can: Any, bins: int) -> dict[str, sc.Variable]:
-    return _iofq(_parts(run, bins), None if can is None else _parts(can, bins))
+def sample_numerator(run: SampleFile, bins: Bins) -> SampleNumerator:
+    return SampleNumerator(np.asarray(run, dtype=float).reshape(bins, -1).sum(axis=1))
 
 
-class Sums:
-    def __init__(self, bins: int) -> None:
-        self._bins = bins
-        self._sums: dict[str, np.ndarray] = {}
-
-    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
-        for table, row in rows.items():
-            parts = _parts(row['run'], self._bins)
-            if table in self._sums:
-                self._sums[table] += parts
-            else:
-                self._sums[table] = parts
-
-    def outputs(self) -> Mapping[str, Any]:
-        return _iofq(self._sums['sample_runs'], self._sums.get('can_runs'))
+def sample_denominator(run: SampleFile) -> SampleDenominator:
+    return SampleDenominator(float(np.sum(run)))
 
 
-class MultiIofQ:
-    """The multi-run binding: a held state of sums, and a plain request over them."""
-
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        def call(**values: Any) -> Mapping[str, Any]:
-            params = {**fixed, **values}
-            held = self.held_state({'bins': params['bins']})
-            for table in ('sample_runs', 'can_runs'):
-                for row in params[table]:
-                    held.push({table: row})
-            return held.outputs()
-
-        return call
-
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-        return Sums(**fixed)
+def can_numerator(run: CanFile, bins: Bins) -> CanNumerator:
+    return CanNumerator(np.asarray(run, dtype=float).reshape(bins, -1).sum(axis=1))
 
 
-def test_the_multi_run_binding_keeps_the_symmetries_its_author_promises() -> None:
-    sample, can = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]], [[1.0, 1.0, 1.0, 1.0]]
-    tables = {
-        'sample_runs': [{'run': run} for run in sample],
-        'can_runs': [{'run': run} for run in can],
-    }
-    check_one_row(
-        iofq,
-        MultiIofQ(),
-        {'run': sample[0], 'can': can[0], 'bins': 2},
-        {
-            'sample_runs': tables['sample_runs'][:1],
-            'can_runs': tables['can_runs'],
-            'bins': 2,
-        },
+def can_denominator(run: CanFile) -> CanDenominator:
+    return CanDenominator(float(np.sum(run)))
+
+
+def iofq(
+    sample_num: SampleNumerator,
+    sample_den: SampleDenominator,
+    can_num: CanNumerator,
+    can_den: CanDenominator,
+) -> IofQ:
+    return IofQ(
+        sc.array(dims=['q'], values=sample_num / sample_den - can_num / can_den)
     )
-    check_caching(MultiIofQ(), tables, [{'bins': 2}, {'bins': 1}, {'bins': 2}])
-    check_arrival_and_order(MultiIofQ(), {'bins': 2}, tables)
+
+
+SANS = sciline.Pipeline(
+    [sample_numerator, sample_denominator, can_numerator, can_denominator, iofq]
+)
+SINGLE = PipelineBinding(
+    SANS,
+    params={'run': SampleFile, 'can': CanFile, 'bins': Bins},
+    outputs={'iofq': IofQ},
+)
+MULTI = AccumulatingPipelineBinding(
+    SANS,
+    params={'bins': Bins},
+    tables={'sample_runs': {'run': SampleFile}, 'can_runs': {'run': CanFile}},
+    outputs={'iofq': IofQ},
+    accumulate=(SampleNumerator, SampleDenominator, CanNumerator, CanDenominator),
+)
+
+
+def _rows_kept_by_the_framework(**values: Any) -> Mapping[str, Any]:
+    return MULTI.stage(values, ())()
 
 
 @pytest.fixture(
-    params=[MultiIofQ(), MultiIofQ().stage({}, ())],
-    ids=['held state', 'plain function'],
+    params=[MULTI, _rows_kept_by_the_framework],
+    ids=['accumulating binding', 'plain function'],
 )
 def client(request: pytest.FixtureRequest) -> Iterator[Client]:
     """
@@ -157,7 +137,7 @@ def client(request: pytest.FixtureRequest) -> Iterator[Client]:
     datasets.measure(611, [1.0, 3.0, 2.0, 6.0])
     datasets.measure(614, [1.0, 1.0, 1.0, 1.0])
     with local(
-        proposal='p1', datasets=datasets, bind={IOFQ: iofq, IOFQ_MULTI: request.param}
+        proposal='p1', datasets=datasets, bind={IOFQ: SINGLE, IOFQ_MULTI: request.param}
     ) as client:
         yield client
 

@@ -338,7 +338,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
       <tr class="group"><th colspan="4">Workflow package writes</th></tr>
       <tr><th>Spec</th><td class="pkg" colspan="2">single-run or multi-run</td><td class="pkg">multi-run only: the blanks are tables</td></tr>
       <tr><th>Binding</th><td class="pkg" colspan="2"><code>stage(fixed, blanks) → call</code> (required)</td><td class="pkg"><code>held_state(fixed) → push(rows), outputs()</code> (optional)<br><span class="note">without it: <code>stage(fixed, tables)</code>, called with every row so far at each read</span></td></tr>
-      <tr><th>Under <code>PipelineBinding</code></th><td class="pkg" colspan="2"><code>sciline.Stage</code> cut at the blanks (none for a plain request)</td><td class="pkg"><code>StreamProcessor</code>: row fields = dynamic keys <span class="tag">#40</span><br><span class="note">today: the fallback above, through <code>sciline.Stage</code></span></td></tr>
+      <tr><th>Under <code>PipelineBinding</code></th><td class="pkg" colspan="2"><code>sciline.Stage</code> cut at the blanks (none for a plain request)</td><td class="pkg"><code>AccumulatingPipelineBinding</code>: row fields set keys of a per-run graph; the accumulated keys are summed, through <code>sciline.Stage</code></td></tr>
 
       <tr class="group"><th colspan="4">Notebook or app writes</th></tr>
       <tr><th>Template</th><td class="plain">none: every value given</td><td class="stage"><code>Template(SPEC, fixed, blanks=('bins',))</code><br><span class="note">blanks: any params</span></td><td class="acc"><code>Template(IOFQ_MULTI, fixed, blanks=('sample_runs', 'can_runs'))</code><br><span class="note">blanks: tables only</span></td></tr>
@@ -518,9 +518,12 @@ IOFQ_MULTI = WorkflowSpec(..., params=MultiIofQParams, outputs=IofQOutputs)
 PipelineBinding(sans, params={<span class="k-stage">'run'</span>: Filename[SampleRun],
                               <span class="k-stage">'can'</span>: Filename[BackgroundRun], ...},
                 outputs={<span class="k-stage">'iofq'</span>: BackgroundSubtractedIofQ})   <span class="c"># single-run: works today</span>
-<span class="c"># multi-run: row field 'run' of each table → the same keys, as StreamProcessor</span>
-<span class="c">#    dynamic keys, plus the keys to accumulate         #40, API not designed</span></code></pre>
-      <p class="note">Today a table maps to one sciline key whose value is the list of rows. #40 would run a plain multi-run request through the same <code>StreamProcessor</code>: push every row, compute the outputs once. With one row, that is the single-run computation, which is the one-row symmetry.</p>
+AccumulatingPipelineBinding(sans, params={<span class="k-stage">'bins'</span>: QBins, ...},
+    tables={<span class="k-acc">'sample_runs'</span>: {<span class="k-acc">'run'</span>: Filename[SampleRun]},
+            <span class="k-acc">'can_runs'</span>:    {<span class="k-acc">'run'</span>: Filename[BackgroundRun]}},
+    outputs={<span class="k-stage">'iofq'</span>: BackgroundSubtractedIofQ},
+    accumulate=(Numerator[SampleRun], Denominator[SampleRun], ...))  <span class="c"># multi-run</span></code></pre>
+      <p class="note">A plain multi-run request runs the same way as an accumulator: each row's accumulated keys are computed and summed, and the outputs computed once. With one row, that is the single-run computation, which is the one-row symmetry.</p>
     </div>
     <div style="display:flex; flex-direction:column; gap:14px; min-width:0">
       <div class="fig">
