@@ -169,7 +169,7 @@ class Accumulator:
         that has failed or was cancelled is refused, and one that is pending
         is not waited for. The push returns once it is logged; the backend
         adds the rows once these records have completed and the readers of
-        the state before the push are done (see :mod:`ess.apps.backend`). If
+        the state before the push are done (see :mod:`ess.dispatch.backend`). If
         adding fails, or a record has not completed, the accumulator stops:
         later pushes are refused, and so are reads of a state it did not
         reach.

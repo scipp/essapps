@@ -13,9 +13,9 @@ import sciline
 from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, Status, Template, dataset
-from ess.apps.pipeline import PipelineBinding
-from ess.apps.testing import FakeDatasets
+from ess.dispatch import Backend, Client, Status, Template, dataset
+from ess.dispatch.pipeline import PipelineBinding
+from ess.dispatch.testing import FakeDatasets
 
 Run = NewType('Run', float)
 Loaded = NewType('Loaded', float)

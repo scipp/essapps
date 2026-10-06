@@ -8,7 +8,7 @@ from itertools import islice
 
 import pytest
 
-from ess.apps import Client, Request, Selector, SubmitError, Template, apply
+from ess.dispatch import Client, Request, Selector, SubmitError, Template, apply
 
 from .conftest import COPY, CUT, IOFQ, IOFQ_V2, VOLUME, Measure
 

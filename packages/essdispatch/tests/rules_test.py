@@ -8,7 +8,7 @@ import pytest
 from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import (
+from ess.dispatch import (
     Backend,
     Client,
     LastBefore,
@@ -19,7 +19,7 @@ from ess.apps import (
     TriggerLoop,
     apply,
 )
-from ess.apps.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets
 
 
 class RunParams(BaseModel):

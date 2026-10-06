@@ -27,7 +27,7 @@ like ``ess.reduce.streaming.StreamProcessor``::
 Its outputs after rows are pushed in order are those of the plain request
 whose tables hold these rows, with the same other values. It may add each push
 in place, and its outputs may be what it holds, not a copy;
-:mod:`ess.apps.backend` says why that is safe.
+:mod:`ess.dispatch.backend` says why that is safe.
 
 For any other binding, :func:`open_held_state` makes a held state that keeps
 the rows and computes the plain request over them when a state is read.

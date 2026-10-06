@@ -20,9 +20,9 @@ import scipp as sc
 from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import Backend, Client, combine
-from ess.apps.bindings import Function, HeldState
-from ess.apps.testing import FakeDatasets
+from ess.dispatch import Backend, Client, combine
+from ess.dispatch.bindings import Function, HeldState
+from ess.dispatch.testing import FakeDatasets
 
 
 def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> WorkflowSpec:

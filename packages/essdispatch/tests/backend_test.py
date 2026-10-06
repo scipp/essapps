@@ -11,7 +11,7 @@ import pytest
 from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import (
+from ess.dispatch import (
     Backend,
     Client,
     Record,
@@ -21,7 +21,7 @@ from ess.apps import (
     SubmitError,
     dataset,
 )
-from ess.apps.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets
 
 
 class RunParams(BaseModel):

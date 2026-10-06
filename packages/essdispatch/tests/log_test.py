@@ -15,7 +15,7 @@ import pytest
 from ess.reduce.spec import AccumulatorRef, Array, NexusFile, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
-from ess.apps import (
+from ess.dispatch import (
     Accumulator,
     Backend,
     Client,
@@ -27,8 +27,8 @@ from ess.apps import (
     combine,
     dataset,
 )
-from ess.apps.log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
-from ess.apps.testing import FakeDatasets
+from ess.dispatch.log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
+from ess.dispatch.testing import FakeDatasets
 
 
 class LoadParams(BaseModel):

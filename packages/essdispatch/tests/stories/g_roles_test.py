@@ -8,8 +8,8 @@ from collections.abc import Callable
 
 import pytest
 
-from ess.apps import Client, SubmitError, local
-from ess.apps.testing import FakeDatasets
+from ess.dispatch import Client, SubmitError, local
+from ess.dispatch.testing import FakeDatasets
 
 from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
 

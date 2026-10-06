@@ -16,7 +16,7 @@ import pytest
 from ess.reduce.spec import AccumulatorRef, Array, NexusFile, OpaqueFile, WorkflowSpec
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ess.apps import (
+from ess.dispatch import (
     Accumulator,
     Backend,
     Client,
@@ -31,10 +31,10 @@ from ess.apps import (
     dataset,
     local,
 )
-from ess.apps.backend import Entry
-from ess.apps.bindings import Function
-from ess.apps.log import Log
-from ess.apps.testing import FakeDatasets
+from ess.dispatch.backend import Entry
+from ess.dispatch.bindings import Function
+from ess.dispatch.log import Log
+from ess.dispatch.testing import FakeDatasets
 
 
 class RunParams(BaseModel):

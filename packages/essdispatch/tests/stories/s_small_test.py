@@ -4,7 +4,7 @@
 
 import scipp as sc
 
-from ess.apps import (
+from ess.dispatch import (
     Client,
     LastBefore,
     Lookup,

@@ -6,7 +6,7 @@
 
 import pytest
 
-from ess.apps import Client, SubmitError, dataset
+from ess.dispatch import Client, SubmitError, dataset
 
 from .conftest import IOFQ, Measure
 

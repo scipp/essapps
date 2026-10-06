@@ -7,8 +7,8 @@
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Template, apply, dataset
-from ess.apps.testing import FakeDatasets
+from ess.dispatch import Client, Template, apply, dataset
+from ess.dispatch.testing import FakeDatasets
 
 from .conftest import BEAM_CENTRE, EXPORT, IOFQ, STITCH, VANADIUM, Measure
 

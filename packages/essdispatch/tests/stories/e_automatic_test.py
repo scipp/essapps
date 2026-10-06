@@ -9,8 +9,8 @@ from dataclasses import replace
 
 import pytest
 
-from ess.apps import Client, Rule, Selector, Template, TriggerLoop
-from ess.apps.testing import FakeDatasets
+from ess.dispatch import Client, Rule, Selector, Template, TriggerLoop
+from ess.dispatch.testing import FakeDatasets
 
 from .conftest import IOFQ, IOFQ_V2, STITCH, Measure
 

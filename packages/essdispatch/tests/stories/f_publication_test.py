@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import pytest
 
-from ess.apps import Client, SubmitError, Template
+from ess.dispatch import Client, SubmitError, Template
 
 from .conftest import BEAM_CENTRE, IOFQ, Measure
 
@@ -36,7 +36,7 @@ def test_f1_publish_then_trace_six_months_later(
     assert provenance == client.provenance(result) == client.provenance(plain)
     assert set(provenance.datasets()) == {centre_run, run}
     assert [r.request.params for r in provenance.records()] == [centre.request.params]
-    assert {'essapps', 'scipp'} <= provenance.software.keys()
+    assert {'essdispatch', 'scipp'} <= provenance.software.keys()
 
 
 @pytest.mark.xfail(

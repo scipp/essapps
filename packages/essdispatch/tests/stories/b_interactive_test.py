@@ -4,7 +4,7 @@
 
 import pytest
 
-from ess.apps import Client, Template, apply
+from ess.dispatch import Client, Template, apply
 
 from .conftest import ANGLE, CUT, IOFQ, NORMALIZE, Measure
 
