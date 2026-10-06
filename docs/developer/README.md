@@ -49,7 +49,7 @@ What the framework adds to the plain loop:
 
 The table names who writes each thing and who makes one at run time, with these roles:
 
-- *framework*: this package, and `ess.reduce.spec`.
+- *framework*: essdispatch and essspec (`ess.spec`), in this repository.
 - *workflow author*: writes specs and bindings in a workflow package, such as an ess instrument package.
 - *app author*: writes an application on top of the client, such as a batch form, a desktop or web UI, or a driving server.
 - *notebook*: a scientist's notebook that uses the client directly.
@@ -62,7 +62,7 @@ The terms this document defines, in the order they appear:
 | backend | the process that runs requests and keeps records | framework | DMSC, as the service; or a notebook or app with `local()` |
 | client | the object through which a notebook or app talks to one backend; it keeps its stages and accumulators, and in the user's process the values it makes, until it releases them or ends | framework | notebook, app |
 | spec | the signature of a workflow: name, version, parameters, outputs; a parameter may be a table | workflow author | workflow author |
-| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.apps.pipeline.PipelineBinding`) | workflow author |
+| binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.spec.pipeline.PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
 | record | a request as the backend accepted it, with the names of its outputs; it never changes | framework | backend, at submission |
 | reference | an input that points to an output of a record, to a dataset, or to a state of an accumulator | framework | notebook, app |
@@ -106,8 +106,8 @@ A backend in the notebook's process can also run a workflow defined in the noteb
 
 A *workflow* is a computation that a package offers, such as the I(Q) reduction of SANS.
 
-**Spec.** A workflow package declares a spec (`ess.reduce.spec.WorkflowSpec`) for each workflow it offers: a name, a version, a params model, and an outputs model.
-Both models are pydantic models; `ess.reduce.spec` provides the field types.
+**Spec.** A workflow package declares a spec (`ess.spec.WorkflowSpec`) for each workflow it offers: a name, a version, a params model, and an outputs model.
+Both models are pydantic models; `ess.spec` provides the field types.
 A field whose value is data, such as an array or a file, is a *data field*; in a request its value is a reference to that data (see References), not the data itself.
 A field may also be a *table*: a list of rows of one flat model, such as the runs of a sum (see Combining runs).
 Notebooks and apps run specs; how the package implements a spec is invisible to them.
@@ -146,7 +146,7 @@ Defaults belong in the params model only; a default in the binding would never b
 A sciline pipeline becomes a binding by naming the sciline key that each parameter sets and the key that computes each output:
 
 ```python
-from ess.apps.pipeline import PipelineBinding
+from ess.spec.pipeline import PipelineBinding
 
 PipelineBinding(pipeline,
                 params={'run': Filename[SampleRun], 'bins': QBins,
@@ -374,7 +374,7 @@ SANS sums the sample runs and the can runs, with numerators and denominators sum
 A rotation scan adds the counts of each angle into one volume.
 
 A spec takes the runs to combine as *tables*, next to the parameters that all runs share.
-A table is a list of *rows* of one flat model, declared as `list[Row]` in `ess.reduce.spec`; a form shows it with one row per run and one column per field.
+A table is a list of *rows* of one flat model, declared as `list[Row]` in `ess.spec`; a form shows it with one row per run and one column per field.
 
 ```python
 class SampleRow(BaseModel):                 # one row
@@ -398,7 +398,7 @@ The `transmission` column is hypothetical: esssans uses one transmission run for
 It shows a row with two columns.
 
 Each row of a request is a dict with a value per field: a plain value or a reference, as for any parameter.
-A row's fields are values or data fields, never another model or table; `ess.reduce.spec` refuses a spec that nests deeper.
+A row's fields are values or data fields, never another model or table; `ess.spec` refuses a spec that nests deeper.
 A request that gives every row is a plain request over the tables:
 
 ```python

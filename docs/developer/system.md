@@ -73,7 +73,7 @@ Each run appends three items of constant size, however many runs came before.
 - **Only accepted changes.** A change is checked before anything is appended. A refused call appends nothing.
 - **A submission whole or not at all.** A submission of 500 requests appends its 500 records together, so a backend that stops half-way has stored all of them or none.
 - **No values.** Output values, what a stage computed, and an accumulator's held state are not history.
-- **JSON only.** Everything in history is JSON. Request values already are: references in `ess.reduce.spec` are frozen pydantic models that convert to JSON and back.
+- **JSON only.** Everything in history is JSON. Request values already are: references in `ess.spec` are frozen pydantic models that convert to JSON and back.
 - **The same values, live or read back.** The backend converts what it appends to JSON and back before it uses it. A record therefore holds the same values whether it was just made or read from storage. For example, a tuple given as a parameter is a list in the record. The templates of stages and accumulators are held in the same way. A binding gets the values after the spec's params model has validated them again, so it receives the types the model declares.
 
 ### Queries
@@ -253,7 +253,7 @@ How the stories fare, in the user's process and on the service:
 ### Accumulators
 
 An accumulator lives in its client's entry; the `Accumulator` that `client.accumulator` returns is a handle to it.
-`open_held_state(binding, fixed, tables)` in `ess.apps.bindings` makes its held state: the binding's own if the binding provides `held_state(fixed)`, otherwise one that keeps the rows (see below).
+`open_held_state(binding, fixed, tables)` in `ess.dispatch.bindings` makes its held state: the binding's own if the binding provides `held_state(fixed)`, otherwise one that keeps the rows (see below).
 README.md (Accumulator, Reads, Adding waits for readers, What a binding provides) states the rules; the backend keeps them like this:
 
 ```python

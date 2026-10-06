@@ -107,7 +107,7 @@ A binding may also refuse to open: `combine` refuses fixed values, and a `Pipeli
 It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops ([ADR 0003](0003-accumulators-add-in-place.md), Failures).
 
 **What the framework sees is flat.**
-A spec's parameters are values, data fields, and tables, and the rows of a table are flat models; `ess.reduce.spec` refuses a row that holds another model or table.
+A spec's parameters are values, data fields, and tables, and the rows of a table are flat models; `ess.spec` refuses a row that holds another model or table.
 A table has one level of rows, and a row is the outermost level of the reduction: a run, or the runs that belong together.
 Any structure below a row, such as detector banks, angle settings read from a log, sections of a large file, or groups by a value found in the data, belongs to the binding.
 This is deliberate.

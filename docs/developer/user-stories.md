@@ -643,7 +643,7 @@ provenance = scicat.entries[pid].provenance                    # read without th
 assert provenance == client.provenance(result) == client.provenance(plain)
 assert set(provenance.datasets()) == {centre_run, run}
 assert [r.request.params for r in provenance.records()] == [centre.request.params]
-assert {'essapps', 'scipp'} <= provenance.software.keys()
+assert {'essdispatch', 'scipp'} <= provenance.software.keys()
 ```
 
 The entry carries what lasts. The history behind it is dropped once the proposal has been idle for the retention period (system story H3).

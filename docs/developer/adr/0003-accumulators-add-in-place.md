@@ -172,7 +172,7 @@ A request that combines them reads a record of one, which copies it once per rec
 - A workflow must not return an output that shares memory with a value it reads, such as a slice that is a view of it. This is documented, not enforced.
 - Validators that read more than one value must not change a value (Opening). This is documented, not enforced.
 - The binding decides whether a push needs a second volume-sized array. Binning a run's events into the held grid does not. Binning them with `sc.hist` and adding the result does.
-- `ess.reduce.spec` has a third reference form, to a state of an accumulator, next to outputs of records and datasets. A request holds such references to at most one accumulator.
+- `ess.spec` has a third reference form, to a state of an accumulator, next to outputs of records and datasets. A request holds such references to at most one accumulator.
 - History keeps each accumulator's template, so that provenance expands `(accumulator, upto)` into the plain request over the rows of the first `upto` pushes ([ADR 0004](0004-history-is-append-only-lists.md)).
 - The first read of each state validates its plain request, at a cost that grows with the number of rows: in the in-process backend, about 1.3 ms at 300 rows and 4 ms at a thousand. A driver that reads after every push, as story D7 does, pays it at every push, so the total grows with the square of the number of pushes: about 0.2 s for D7's 300 pushes, and 2 s for a thousand. A driver that reads rarely pays rarely.
 - A table with a maximum length becomes unreadable for good once a push exceeds it, since no row can be removed.

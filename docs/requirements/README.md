@@ -1,6 +1,6 @@
 # Requirements and context
 
-What we know about the problem that essapps, the data-reduction framework built in this repository, must solve; what we only assume; and what we do not know yet.
+What we know about the problem that essdispatch and essspec, the data-reduction framework built in this repository, must solve; what we only assume; and what we do not know yet.
 These pages describe the world, not our design, and use no design terms.
 Each mechanism of the design ([../developer/](../developer/README.md)) should trace to an item here; a mechanism that traces to nothing is a candidate for removal.
 
