@@ -48,7 +48,7 @@ Its binding may add each push to it in place ([ADR 0006](0006-the-unit-is-an-acc
 It pins the state at that moment, the state after the pushes logged so far, and gives what the same call gives on the record of the plain request over those rows:
 
 ```python
-acc = client.accumulator(Template(SANS_IOFQ, params=shared, blanks=('sample_runs', 'can_runs')))
+acc = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
 acc.push({'sample_runs': {'run': dataset(run=611)}})
 acc.push({'can_runs': {'run': dataset(run=614)}})
 
@@ -134,7 +134,7 @@ The cases that use an accumulator's outputs together with other values:
 
 ```python
 beam = client.compute(COPY, {'data': direct.ref('function')})   # direct: an accumulator whose runs are all pushed
-iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': beam.ref('data')},
+iofq = client.accumulator(Template(IOFQ_MULTI, params={'beam_centre': ..., 'direct_beam': beam.ref('data')},
                                    blanks=('sample_runs', 'can_runs')))
 ```
 

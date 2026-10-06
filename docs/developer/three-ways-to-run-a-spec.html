@@ -1,0 +1,616 @@
+<!-- artifact: https://claude.ai/artifact/7D6AYfBbbNjEX5vRveVNbX -->
+<meta charset="utf-8">
+<title>Three Ways to Run a Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: two main slide panels (the board, the symmetries), then backup panels; one claim and one picture per panel. */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --ink: #18222d;
+  --muted: #566372;
+  --rule: #cfd6de;
+  --code-bg: #f3f5f8;
+  --plain: #4b5d73;      /* plain request */
+  --plain-soft: #e3e8ee;
+  --stage: #0f7a74;      /* stage */
+  --stage-soft: #d9efed;
+  --acc: #b4610b;        /* accumulator */
+  --acc-soft: #f7e7d4;
+  --pkg: #5a4a9c;        /* workflow package, symmetries */
+  --pkg-soft: #e7e3f5;
+  --warn: #9b2c2c;
+  --display: 'IBM Plex Sans Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161c; --panel: #19212a; --ink: #e4e9ef; --muted: #9aa7b5; --rule: #2e3a47; --code-bg: #121921;
+    --plain: #9fb2c8; --plain-soft: #253140; --stage: #4cc2b9; --stage-soft: #15322f;
+    --acc: #f0a04b; --acc-soft: #3a2a16; --pkg: #ab9cf0; --pkg-soft: #2a2545; --warn: #f08b8b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161c; --panel: #19212a; --ink: #e4e9ef; --muted: #9aa7b5; --rule: #2e3a47; --code-bg: #121921;
+  --plain: #9fb2c8; --plain-soft: #253140; --stage: #4cc2b9; --stage-soft: #15322f;
+  --acc: #f0a04b; --acc-soft: #3a2a16; --pkg: #ab9cf0; --pkg-soft: #2a2545; --warn: #f08b8b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 56px; display: flex; flex-direction: column; gap: 28px; }
+header h1 { font-family: var(--display); font-weight: 600; font-size: 2rem; margin: 0 0 4px; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 76ch; }
+.divider { font-family: var(--display); letter-spacing: .1em; text-transform: uppercase; font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: 12px; }
+.divider::after { content: ''; flex: 1; border-top: 1px solid var(--rule); }
+.slide { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 24px clamp(16px, 3vw, 32px) 28px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.eyebrow { font-family: var(--display); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.slide h2 { font-family: var(--display); font-weight: 600; font-size: 1.5rem; margin: 0; text-wrap: balance; }
+.lede { margin: 0; max-width: 80ch; }
+code, pre { font-family: var(--mono); font-size: .82em; }
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+pre { background: var(--code-bg); border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; margin: 0; overflow-x: auto; line-height: 1.45; }
+pre code { background: none; padding: 0; }
+.c { color: var(--muted); }
+.k-plain { color: var(--plain); font-weight: 600; } .k-stage { color: var(--stage); font-weight: 600; } .k-acc { color: var(--acc); font-weight: 600; } .k-pkg { color: var(--pkg); font-weight: 600; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.cols > * { min-width: 0; }
+ul.tight { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.scroll { overflow-x: auto; }
+/* detail grid */
+table.grid { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 860px; font-size: .9rem; }
+.grid th, .grid td { padding: 8px 10px; vertical-align: top; border-bottom: 1px solid var(--rule); text-align: left; }
+.grid thead th { font-family: var(--display); font-size: 1.05rem; font-weight: 600; border-bottom: 3px solid; }
+.grid thead th.plain { color: var(--plain); border-color: var(--plain); }
+.grid thead th.stage { color: var(--stage); border-color: var(--stage); }
+.grid thead th.acc { color: var(--acc); border-color: var(--acc); }
+.grid tbody th { font-weight: 600; color: var(--muted); width: 128px; font-size: .82rem; }
+.grid td.pkg { background: var(--pkg-soft); }
+.grid td.plain { background: var(--plain-soft); }
+.grid td.stage { background: var(--stage-soft); }
+.grid td.acc { background: var(--acc-soft); }
+.grid tr.group th { padding-top: 14px; color: var(--ink); font-family: var(--display); letter-spacing: .06em; text-transform: uppercase; font-size: .72rem; border-bottom: none; }
+.grid td code { background: none; padding: 0; font-size: .8rem; }
+/* symmetry table */
+table.sym { border-collapse: collapse; width: 100%; min-width: 820px; font-size: .9rem; }
+.sym th, .sym td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+.sym thead th { font-family: var(--display); font-weight: 600; font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid var(--ink); }
+.sym td:first-child { white-space: nowrap; font-weight: 600; }
+.who { font-size: .82rem; }
+.who b { font-weight: 600; }
+.note { font-size: .82rem; color: var(--muted); }
+.tag { display: inline-block; font-size: .7rem; font-family: var(--display); letter-spacing: .05em; text-transform: uppercase; padding: 0 6px; border-radius: 3px; border: 1px solid currentColor; color: var(--warn); vertical-align: 1px; }
+.broken { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.broken > div { border-left: 3px solid var(--warn); padding: 2px 0 2px 12px; min-width: 0; }
+.broken h3 { font-family: var(--display); font-weight: 600; font-size: 1rem; margin: 0 0 4px; }
+.broken p { margin: 0; font-size: .88rem; }
+/* svg */
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; min-width: 860px; height: auto; }
+svg text { font-family: var(--body); fill: var(--ink); }
+svg .mono { font-family: var(--mono); white-space: pre; }
+svg .muted { fill: var(--muted); }
+svg .lane { fill: var(--muted); font-family: var(--display); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+/* slide 1 board */
+.board { overflow-x: auto; }
+.bgrid { display: grid; grid-template-columns: 210px minmax(0,1fr) 84px minmax(0,1fr); min-width: 900px; }
+.colhead { text-align: center; font-family: var(--display); font-weight: 600; font-size: 1.1rem; padding-bottom: 10px; }
+.colhead small { display: block; font-family: var(--body); font-weight: 400; font-size: .75rem; color: var(--muted); }
+.rowlab { padding-right: 10px; display: flex; flex-direction: column; gap: 2px; }
+.rowlab .name { font-family: var(--display); font-size: 1.15rem; font-weight: 600; }
+.rowlab .desc, .rowlab .role { font-size: .78rem; color: var(--muted); }
+.rowlab .role { font-style: italic; margin-top: 6px; }
+.rowlab pre { background: none; border: none; padding: 0; margin-top: 6px; font-size: 10px; overflow: visible; }
+.cell { border: 1px solid; border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; min-width: 0; }
+.cell pre { background: none; border: none; padding: 0; font-size: 11px; line-height: 1.5; }
+.cell .out { font-size: .8rem; font-weight: 600; }
+.cell.plain { background: var(--plain-soft); border-color: var(--plain); } .cell.plain .out { color: var(--plain); }
+.cell.stage { background: var(--stage-soft); border-color: var(--stage); } .cell.stage .out { color: var(--stage); }
+.cell.acc { background: var(--acc-soft); border-color: var(--acc); border-width: 2px; } .cell.acc .out { color: var(--acc); }
+.cell.none { background: repeating-linear-gradient(45deg, var(--panel) 0 6px, var(--rule) 6px 8px); border: 1px dashed var(--rule); align-items: center; justify-content: center; }
+.cell.none span { background: var(--panel); padding: 8px 12px; text-align: center; font-size: .85rem; border-radius: 3px; }
+.s4 { font-size: .78rem; color: var(--pkg); }
+.ctitle { font-family: var(--display); font-weight: 600; font-size: 1rem; }
+.cell.stage .ctitle { color: var(--stage); } .cell.acc .ctitle { color: var(--acc); }
+.ctitle span { font-family: var(--body); font-weight: 400; font-size: .75rem; color: var(--muted); margin-left: 6px; }
+.cell { justify-content: flex-start; } .cell .out { margin-top: auto; }
+.badge { position: relative; z-index: 1; width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--pkg); background: var(--panel); color: var(--pkg); display: grid; place-items: center; font-weight: 600; font-size: 15px; line-height: 1; flex: none; }
+.hconn { position: relative; display: flex; align-items: center; justify-content: center; }
+.hconn::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1.5px solid var(--pkg); }
+.hconn .lbl { position: absolute; top: calc(50% + 18px); left: 0; right: 0; text-align: center; font-size: .7rem; line-height: 1.3; color: var(--pkg); }
+.vconn { position: relative; height: 64px; display: flex; align-items: center; justify-content: center; }
+.vconn::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1.5px solid var(--pkg); }
+.vconn .lbl { position: absolute; left: calc(50% + 22px); font-size: .75rem; line-height: 1.3; color: var(--pkg); white-space: nowrap; }
+.words { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px 24px; margin: 0; padding: 14px 18px; border: 1px solid var(--rule); border-radius: 6px; background: var(--panel); }
+.words dt { font-family: var(--mono); font-weight: 600; font-size: .85rem; }
+.words dd { margin: 0; font-size: .85rem; color: var(--muted); }
+.sym td:first-child { color: var(--pkg); font-family: var(--mono); font-size: .85rem; }
+footer { color: var(--muted); font-size: .8rem; }
+a { color: var(--stage); }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">essapps · design as of PR #39 · summary of docs/developer/README.md and ADR 0006</div>
+  <h1>Three ways to run a spec</h1>
+  <p>A workflow package offers up to two specs of one reduction: a single-run spec, which takes one run of each kind (sample, can), and a multi-run spec, which takes a table of runs of each kind. A notebook runs a spec as a plain request, or through a template the backend keeps: a stage that tunes a parameter, or an accumulator that grows the tables. Symmetries say which of these choices cannot change the outputs. Slides 1 and 2 are the summary. The panels after them are backup.</p>
+</header>
+
+<dl class="words" aria-label="Terms used on these slides">
+  <div><dt>spec</dt><dd>The signature of a workflow: name, version, params, outputs.</dd></div>
+  <div><dt>binding</dt><dd>The code behind a spec, e.g. a sciline pipeline wrapped by <code>PipelineBinding</code>.</dd></div>
+  <div><dt>record</dt><dd>A request as the backend accepted it. It never changes; its outputs are read by name.</dd></div>
+  <div><dt>template</dt><dd>A spec with some values fixed and the others left open as <em>blanks</em>.</dd></div>
+  <div><dt>table, row</dt><dd>A param that is a list of flat rows. A row is one run, or runs that belong together.</dd></div>
+  <div><dt>push</dt><dd>Appends one row to one or more tables of an accumulator.</dd></div>
+  <div><dt>plain request</dt><dd>A spec with every value given. The backend keeps nothing between plain requests.</dd></div>
+  <div><dt>stage, accumulator</dt><dd>Templates the backend keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
+  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record; a request that reads it makes one.</dd></div>
+  <div><dt>accumulating binding</dt><dd>A binding that adds each push to a held state of its own. For any other binding, the backend keeps the rows.</dd></div>
+  <div><dt>held state</dt><dd>What an accumulator keeps between pushes, e.g. a numerator and a denominator. Private to the binding.</dd></div>
+</dl>
+
+<!-- ───────────── slide 1: the board ───────────── -->
+<section class="slide" id="board">
+  <div class="eyebrow">Slide 1 · The picture</div>
+  <h2>Two specs of one reduction, each run plainly or through a template the backend keeps</h2>
+  <p class="lede">Rows: what the spec takes. Columns: whether the backend keeps anything between calls. Each ≡ links two cells that give the same outputs. <code>611</code> stands for <code>dataset(run=611)</code>; <code>shared</code> holds the values of the shared fields.</p>
+  <div class="board">
+  <div class="bgrid" role="img" aria-label="A two by two grid. Rows: single-run spec and multi-run spec. Columns: plain request, and a template the backend keeps, shown as a stage for the single-run spec and an accumulator for the multi-run spec; a stage works on either spec. Caching links plain request and stage, arrival links plain request and accumulator, and one-row links the two plain requests.">
+    <div></div>
+    <div class="colhead" style="color: var(--plain)">plain request<small>every value given, nothing kept</small></div>
+    <div></div>
+    <div class="colhead">template kept by the backend<small>fixed part computed once; blanks filled step by step.<br>A stage works on either spec; an accumulator needs tables.</small></div>
+
+    <div class="rowlab">
+      <div class="name">single-run spec</div>
+      <div class="desc">one run of each kind</div>
+<pre>run: NexusFile
+can: NexusFile | None = None
++ shared fields</pre>
+      <div class="role">optional; what the first release needs</div>
+    </div>
+    <div class="cell plain">
+<pre>client.submit(IOFQ, {
+    **shared,
+    'run': 611,
+    'can': 614,
+})</pre>
+      <div class="out">→ record</div>
+    </div>
+    <div class="hconn"><div class="badge">≡</div><div class="lbl"><b>caching</b><br>same record</div></div>
+    <div class="cell stage">
+      <div class="ctitle">stage <span>blanks: params, <b>replaced</b> per call</span></div>
+<pre>s = client.stage(Template(
+    IOFQ,
+    {**shared, 'run': 611, 'can': 614},
+    blanks=('bins',),
+))
+client.submit(s, {'bins': 50})
+client.submit(s, {'bins': 100})</pre>
+      <div class="out">→ a record per call; run loaded once</div>
+    </div>
+
+    <div></div>
+    <div class="vconn"><div class="badge">≡</div><div class="lbl"><b>one-row</b>: same outputs when every table has one row</div></div>
+    <div></div>
+    <div></div>
+
+    <div class="rowlab">
+      <div class="name">multi-run spec</div>
+      <div class="desc">a table of runs of each kind</div>
+<pre>sample_runs: list[SampleRow]
+can_runs: list[CanRow] = []
++ shared fields</pre>
+      <div class="role">required to combine runs</div>
+    </div>
+    <div class="cell plain">
+<pre>client.submit(IOFQ_MULTI, {
+    **shared,
+    'sample_runs': [{'run': 611}],
+    'can_runs': [{'run': 614}],
+})</pre>
+      <div class="out">→ record</div>
+    </div>
+    <div class="hconn"><div class="badge">≡</div><div class="lbl"><b>arrival</b><br>state n =<br>plain request<br>over the rows<br>of pushes 1…n</div></div>
+    <div class="cell acc">
+      <div class="ctitle">accumulator <span>blanks: tables, <b>appended</b> per push</span></div>
+<pre>acc = client.accumulator(Template(
+    IOFQ_MULTI,
+    shared,
+    blanks=('sample_runs', 'can_runs'),
+))
+acc.push({'sample_runs': {'run': 611}})
+acc.push({'can_runs': {'run': 614}})
+client.output(acc, 'iofq')</pre>
+      <div class="out">→ state n; a record only when a request reads it</div>
+      <div class="s4"><b>order</b>: pushes into different tables commute</div>
+    </div>
+  </div>
+  </div>
+  <div class="cols">
+    <ul class="tight">
+      <li><b>Multi-run spec: required</b> to combine runs, and the only spec an accumulator can open. Shared fields: <code>bins</code>, <code>beam_centre</code>, <code>direct_beam</code>, the same in both specs (Backup C). <b>Single-run spec: optional.</b> It matches the per-run sciline graph and the first release, which combines no runs.</li>
+    </ul>
+    <ul class="tight">
+      <li><b>A stage also works on a multi-run spec</b>: tune <code>bins</code> on a fixed sum of runs. It keeps each run's data, as it is before binning, in memory.</li>
+      <li><b>Stage and accumulator do not combine.</b> <code>bins</code> is a fixed value of an accumulator's template, so changing it means a new accumulator and pushing every run again.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────── slide 2: symmetries ───────────── -->
+<section class="slide" id="symmetries">
+  <div class="eyebrow">Slide 2 · Symmetries</div>
+  <h2>What a caller may change without changing the result</h2>
+  <p class="lede">As in physics, each symmetry pairs a change with what it leaves unchanged. A symmetry the framework keeps by construction is free. One the workflow author promises needs a test.</p>
+  <div class="scroll">
+  <table class="sym">
+    <thead><tr><th>Symmetry</th><th>The caller may change</th><th>Unchanged</th><th>Kept by</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>one-row</td>
+        <td>single-run spec ↔ multi-run spec with one row per table:<br><code>'run': v</code> ↔ <code>'sample_runs': [{'run': v}]</code><br><code>'can': None</code> ↔ <code>'can_runs': []</code></td>
+        <td>outputs</td>
+        <td class="who"><b>workflow author</b>, if the package offers both specs</td>
+      </tr>
+      <tr>
+        <td>caching</td>
+        <td>a call through a stage ↔ the plain request of the filled template</td>
+        <td>the record and its outputs</td>
+        <td class="who"><b>framework</b> makes the same record; the <b>workflow author</b> promises the same outputs (<code>PipelineBinding</code> keeps it through <code>sciline.Stage</code>)</td>
+      </tr>
+      <tr>
+        <td>arrival</td>
+        <td>rows pushed one at a time ↔ all rows in one plain request</td>
+        <td>outputs of state n</td>
+        <td class="who"><b>workflow author</b>, if the binding accumulates (as <code>StreamProcessor</code> asks for linearity); <b>framework</b>, if it does not</td>
+      </tr>
+      <tr>
+        <td>order</td>
+        <td>interleave, split, or merge pushes into <em>different</em> tables</td>
+        <td>outputs once the same rows are in</td>
+        <td class="who"><b>workflow author</b>, if the binding accumulates: it keeps what it holds for each table apart; <b>framework</b>, if it does not</td>
+      </tr>
+      <tr>
+        <td>placement</td>
+        <td>notebook process ↔ service; one worker ↔ another</td>
+        <td>the record and its outputs</td>
+        <td class="who"><b>framework</b></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">Arrival, order, and placement hold up to rounding where the order of adding differs. Nothing checks one-row, arrival, or order today. Each compares two calls with the same inputs, so one shared test helper could check them for every workflow package.</p>
+
+  <div class="cols">
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">Composed: five calls, one I(Q)</div>
+<pre><code><span class="c"># client.output(…, 'iofq') is the same for each:</span>
+
+<span class="c"># each group of pushes on a new accumulator</span>
+
+submit(IOFQ, {**shared, 'run': 611, 'can': 614})
+
+submit(IOFQ_MULTI, {**shared,                       <span class="c"># one-row</span>
+                    'sample_runs': [{'run': 611}],
+                    'can_runs': [{'run': 614}]})
+
+acc.push({'sample_runs': {'run': 611},              <span class="c"># arrival:</span>
+          'can_runs': {'run': 614}})                <span class="c"># state 1</span>
+
+acc.push({'sample_runs': {'run': 611}})             <span class="c"># order:</span>
+acc.push({'can_runs': {'run': 614}})                <span class="c"># state 2</span>
+
+acc.push({'can_runs': {'run': 614}})                <span class="c"># order:</span>
+acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</span></code></pre>
+    </div>
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">Not symmetric, on purpose</div>
+      <div class="broken">
+        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes a state, which shows up only in the record of a request that reads it. A partial sum is not a record, because no request says which values it holds.</p></div>
+        <div><h3>Single-run spec × accumulator</h3><p>An accumulator appends rows, and a single-run spec has no table to append to.</p></div>
+        <div><h3>Cost</h3><p>Arrival keeps outputs, not cost. If the binding does not accumulate, each read repeats the per-run work for every row so far.</p></div>
+        <div><h3>Rows within one table</h3><p>A state's plain request lists them in push order. Whether order matters is the binding's business; for a sum, only through rounding.</p></div>
+      </div>
+    </div>
+  </div>
+  <p class="note">A consequence of arrival: <code>StreamProcessor</code>'s context keys, rolling windows, and <code>clear()</code> have no counterpart in an accumulator, because each would break it.</p>
+</section>
+
+<div class="divider">Backup</div>
+
+<!-- ───────────── backup A: detail grid ───────────── -->
+<section class="slide" id="grid">
+  <div class="eyebrow">Backup A · Each column in detail</div>
+  <h2>What each side writes and what the backend does</h2>
+  <div class="scroll">
+  <table class="grid">
+    <thead>
+      <tr><th></th><th class="plain">Plain request</th><th class="stage">Stage</th><th class="acc">Accumulator</th></tr>
+    </thead>
+    <tbody>
+      <tr class="group"><th colspan="4">Workflow package writes</th></tr>
+      <tr><th>Spec</th><td class="pkg" colspan="2">single-run or multi-run</td><td class="pkg">multi-run only: the blanks are tables</td></tr>
+      <tr><th>Binding</th><td class="pkg" colspan="2"><code>stage(fixed, blanks) → call</code> (required)</td><td class="pkg"><code>held_state(fixed) → push(rows), outputs()</code> (optional)<br><span class="note">without it: <code>stage(fixed, tables)</code>, called with every row so far at each read</span></td></tr>
+      <tr><th>Under <code>PipelineBinding</code></th><td class="pkg" colspan="2"><code>sciline.Stage</code> cut at the blanks (none for a plain request)</td><td class="pkg"><code>StreamProcessor</code>: row fields = dynamic keys <span class="tag">#40</span><br><span class="note">today: the fallback above, through <code>sciline.Stage</code></span></td></tr>
+
+      <tr class="group"><th colspan="4">Notebook or app writes</th></tr>
+      <tr><th>Template</th><td class="plain">none: every value given</td><td class="stage"><code>Template(SPEC, fixed, blanks=('bins',))</code><br><span class="note">blanks: any params</span></td><td class="acc"><code>Template(IOFQ_MULTI, fixed, blanks=('sample_runs', 'can_runs'))</code><br><span class="note">blanks: tables only</span></td></tr>
+      <tr><th>Open</th><td class="plain">—</td><td class="stage"><code>s = client.stage(t)</code></td><td class="acc"><code>acc = client.accumulator(t)</code></td></tr>
+      <tr><th>Each step</th><td class="plain"><code>client.submit(SPEC, values)</code></td><td class="stage"><code>client.submit(s, {'bins': 50})</code><br><span class="note">blanks <b>replaced</b></span></td><td class="acc"><code>acc.push({'sample_runs': row})</code><br><span class="note">rows <b>appended</b></span></td></tr>
+      <tr><th>Read</th><td class="plain" colspan="2"><code>client.output(record, 'iofq')</code>, <code>record.ref('iofq')</code></td><td class="acc"><code>client.output(acc, 'iofq')</code>, <code>acc.ref('iofq')</code><br><span class="note">pins the current state</span></td></tr>
+
+      <tr class="group"><th colspan="4">Backend</th></tr>
+      <tr><th>Calls the binding</th><td class="plain"><code>stage(values, ())()</code></td><td class="stage"><code>stage(fixed, blanks)</code> once,<br><code>call(bins=50)</code> per request</td><td class="acc"><code>held_state(fixed)</code> once,<br><code>push(rows)</code> per push,<br><code>outputs()</code> once per state read</td></tr>
+      <tr><th>Keeps between steps</th><td class="plain">nothing</td><td class="stage">the fixed part, as a cache it may drop</td><td class="acc">the fixed part and the held state<br><span class="note">e.g. numerator and denominator in Q, 0.34 MB for LoKI</span></td></tr>
+      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). A request that reads it makes a record holding <code>{'accumulator': id, 'upto': n}</code></td></tr>
+      <tr><th>Symmetry</th><td class="plain">one-row: between the two specs</td><td class="stage">caching: with the plain request</td><td class="acc">arrival: with the plain request; order: between pushes</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">In the first release, which combines no runs and tunes nothing, only the plain request is used.</p>
+</section>
+<section class="slide" id="timeline">
+  <div class="eyebrow">Backup B · An accumulator over time</div>
+  <h2>Pushes advance a state; reads pin one; the held state is added to in place</h2>
+  <div class="fig">
+  <svg viewBox="0 0 980 430" role="img" aria-label="Timeline of an accumulator: the driver opens it, pushes three times, and reads twice; the held state grows from H0 to H3; each read state equals a plain request over its rows.">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+      <marker id="arrAcc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--acc)"/></marker>
+    </defs>
+
+    <!-- lane labels -->
+    <text class="lane" x="10" y="44">Driver</text>
+    <text class="lane" x="10" y="64" style="font-size:10px">notebook, app</text>
+    <text class="lane" x="10" y="184">Backend</text>
+    <text class="lane" x="10" y="204" style="font-size:10px">held state</text>
+    <text class="lane" x="10" y="334">Same as</text>
+    <text class="lane" x="10" y="354" style="font-size:10px">plain request</text>
+    <line x1="10" y1="100" x2="970" y2="100" style="stroke: var(--rule)"/>
+    <line x1="10" y1="268" x2="970" y2="268" style="stroke: var(--rule)"/>
+
+    <!-- time axis inside driver lane -->
+    <line x1="120" y1="80" x2="960" y2="80" style="stroke: var(--muted)" marker-end="url(#arr)"/>
+
+    <!-- driver events -->
+    <g>
+      <circle cx="150" cy="80" r="5" style="fill: var(--acc)"/>
+      <text x="150" y="30" text-anchor="middle" class="mono" style="font-size:11px">accumulator(t)</text>
+      <text x="150" y="46" text-anchor="middle" class="muted" style="font-size:11px">blanks: sample, can</text>
+
+      <circle cx="290" cy="80" r="5" style="fill: var(--acc)"/>
+      <text x="290" y="30" text-anchor="middle" class="mono" style="font-size:11px">push 1</text>
+      <text x="290" y="46" text-anchor="middle" class="muted" style="font-size:11px">sample 611</text>
+
+      <circle cx="420" cy="80" r="5" style="fill: var(--acc)"/>
+      <text x="420" y="30" text-anchor="middle" class="mono" style="font-size:11px">push 2</text>
+      <text x="420" y="46" text-anchor="middle" class="muted" style="font-size:11px">can 614</text>
+
+      <rect x="502" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
+      <text x="510" y="30" text-anchor="middle" class="mono" style="font-size:11px">submit(EXPORT,</text>
+      <text x="510" y="46" text-anchor="middle" class="mono" style="font-size:11px">acc.ref('iofq'))</text>
+      <text x="510" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins upto=2</text>
+
+      <circle cx="660" cy="80" r="5" style="fill: var(--acc)"/>
+      <text x="660" y="30" text-anchor="middle" class="mono" style="font-size:11px">push 3</text>
+      <text x="660" y="46" text-anchor="middle" class="muted" style="font-size:11px">sample 612 + can 615</text>
+      <text x="660" y="62" text-anchor="middle" class="muted" style="font-size:10px">returns once logged</text>
+
+      <rect x="822" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
+      <text x="830" y="30" text-anchor="middle" class="mono" style="font-size:11px">output(acc, 'iofq')</text>
+      <text x="830" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins upto=3</text>
+    </g>
+
+    <!-- held states -->
+    <g>
+      <rect x="110" y="150" width="80" height="70" rx="4" style="fill: var(--acc-soft); stroke: var(--acc)"/>
+      <text x="150" y="176" text-anchor="middle" style="font-size:13px; font-weight:600">H0</text>
+      <text x="150" y="194" text-anchor="middle" class="muted" style="font-size:10px">fixed part</text>
+      <text x="150" y="207" text-anchor="middle" class="muted" style="font-size:10px">computed once</text>
+
+      <rect x="250" y="150" width="80" height="70" rx="4" style="fill: var(--acc-soft); stroke: var(--acc)"/>
+      <text x="290" y="176" text-anchor="middle" style="font-size:13px; font-weight:600">H1</text>
+      <text x="290" y="194" text-anchor="middle" class="mono muted" style="font-size:10px">num_s, den_s</text>
+
+      <rect x="380" y="150" width="80" height="70" rx="4" style="fill: var(--acc-soft); stroke: var(--acc)"/>
+      <text x="420" y="176" text-anchor="middle" style="font-size:13px; font-weight:600">H2</text>
+      <text x="420" y="194" text-anchor="middle" class="mono muted" style="font-size:10px">+ num_c, den_c</text>
+
+      <rect x="620" y="150" width="80" height="70" rx="4" style="fill: var(--acc-soft); stroke: var(--acc)"/>
+      <text x="660" y="176" text-anchor="middle" style="font-size:13px; font-weight:600">H3</text>
+      <text x="660" y="194" text-anchor="middle" class="muted" style="font-size:10px">added in place</text>
+
+      <line x1="190" y1="185" x2="248" y2="185" style="stroke: var(--acc); stroke-width:1.5" marker-end="url(#arrAcc)"/>
+      <line x1="330" y1="185" x2="378" y2="185" style="stroke: var(--acc); stroke-width:1.5" marker-end="url(#arrAcc)"/>
+      <line x1="460" y1="185" x2="618" y2="185" style="stroke: var(--acc); stroke-width:1.5; stroke-dasharray:5 4" marker-end="url(#arrAcc)"/>
+
+      <!-- outputs of state 2 read by EXPORT -->
+      <rect x="470" y="226" width="80" height="30" rx="4" style="fill: var(--stage-soft); stroke: var(--stage)"/>
+      <text x="510" y="245" text-anchor="middle" style="font-size:11px">EXPORT runs</text>
+      <text x="522" y="124" style="font-size:10.5px; fill: var(--warn)">push 3 is added only</text>
+      <text x="522" y="139" style="font-size:10.5px; fill: var(--warn)">after EXPORT has run</text>
+      <text x="556" y="245" class="muted" style="font-size:10px">reads H2</text>
+
+      <rect x="790" y="150" width="80" height="70" rx="4" style="fill: var(--stage-soft); stroke: var(--stage)"/>
+      <text x="830" y="172" text-anchor="middle" class="mono" style="font-size:11px">outputs()</text>
+      <text x="830" y="190" text-anchor="middle" class="muted" style="font-size:10px">computed once</text>
+      <text x="830" y="203" text-anchor="middle" class="muted" style="font-size:10px">per state read;</text>
+      <text x="830" y="216" text-anchor="middle" class="muted" style="font-size:10px">a copy returned</text>
+      <line x1="700" y1="185" x2="788" y2="185" style="stroke: var(--muted)" marker-end="url(#arr)"/>
+    </g>
+
+    <!-- pins down -->
+    <line x1="510" y1="90" x2="510" y2="224" style="stroke: var(--stage); stroke-dasharray:3 3"/>
+    <line x1="420" y1="222" x2="470" y2="240" style="stroke: var(--stage); stroke-dasharray:3 3"/>
+    <line x1="830" y1="90" x2="830" y2="148" style="stroke: var(--stage); stroke-dasharray:3 3"/>
+
+    <!-- meanings -->
+    <g>
+      <rect x="290" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
+      <text x="304" y="312" style="font-size:12px; font-weight:600">state 2 ≡ plain request (arrival)</text>
+      <text x="304" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
+      <text x="304" y="352" class="mono" style="font-size:11px">  'sample_runs': [{'run': 611}],</text>
+      <text x="304" y="370" class="mono" style="font-size:11px">  'can_runs':    [{'run': 614}]})</text>
+      <text x="304" y="396" style="font-size:11px; fill: var(--stage)">EXPORT's record holds {'accumulator': id, 'upto': 2}</text>
+
+      <rect x="640" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
+      <text x="654" y="312" style="font-size:12px; font-weight:600">state 3 ≡ plain request (arrival)</text>
+      <text x="654" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
+      <text x="654" y="352" class="mono" style="font-size:11px">  'sample_runs': [{'run': 611}, {'run': 612}],</text>
+      <text x="654" y="370" class="mono" style="font-size:11px">  'can_runs':    [{'run': 614}, {'run': 615}]})</text>
+      <text x="654" y="396" class="muted" style="font-size:11px">client.provenance(acc) reports this request</text>
+
+      <text x="120" y="320" class="muted" style="font-size:11px">States 0 and 1 are</text>
+      <text x="120" y="336" class="muted" style="font-size:11px">never read: their</text>
+      <text x="120" y="352" class="muted" style="font-size:11px">outputs are never</text>
+      <text x="120" y="368" class="muted" style="font-size:11px">computed. State 1</text>
+      <text x="120" y="384" class="muted" style="font-size:11px">has no can run, which</text>
+      <text x="120" y="400" class="muted" style="font-size:11px">IOFQ_MULTI allows.</text>
+    </g>
+  </svg>
+  </div>
+  <div class="cols">
+    <ul class="tight">
+      <li>Push and open return once logged. The backend adds pushes one at a time, in log order, on its workers.</li>
+      <li>A read pins the state after the pushes logged so far. A request that references a state not yet reached waits for it, as for a pending record.</li>
+    </ul>
+    <ul class="tight">
+      <li>A state is read only if its plain request would be accepted. Whole-table checks run at the read, not at the push.</li>
+      <li>A partial sum is never a record. To keep one, submit a request that copies the state (<code>COPY</code>).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────── backup C: the package side ───────────── -->
+<section class="slide" id="package">
+  <div class="eyebrow">Backup C · What a workflow author writes</div>
+  <h2>A single-run and a multi-run spec over one per-run sciline graph</h2>
+  <div class="cols">
+    <div style="display:flex; flex-direction:column; gap:10px; min-width:0">
+<pre><code><span class="k-pkg">class</span> IofQParams(BaseModel):         <span class="c"># single-run: one run of each kind</span>
+    run: NexusFile
+    can: NexusFile | None = None
+    bins: int = 100
+    beam_centre: Array() | None = None
+    direct_beam: Array() | None = None
+
+<span class="k-pkg">class</span> SampleRow(BaseModel): run: NexusFile
+<span class="k-pkg">class</span> CanRow(BaseModel):    run: NexusFile
+<span class="k-pkg">class</span> MultiIofQParams(BaseModel):    <span class="c"># multi-run: tables of runs</span>
+    sample_runs: list[SampleRow]
+    can_runs: list[CanRow] = []        <span class="c"># [] where can is None</span>
+    bins: int = 100                    <span class="c"># the shared fields, as above</span>
+    beam_centre: Array() | None = None
+    direct_beam: Array() | None = None
+
+IOFQ       = WorkflowSpec(..., params=IofQParams,      outputs=IofQOutputs)
+IOFQ_MULTI = WorkflowSpec(..., params=MultiIofQParams, outputs=IofQOutputs)
+<span class="c">#                                       the same outputs model ──┘</span>
+
+<span class="c"># bindings: one sciline graph of ONE run of each kind</span>
+PipelineBinding(sans, params={<span class="k-stage">'run'</span>: Filename[SampleRun],
+                              <span class="k-stage">'can'</span>: Filename[BackgroundRun], ...},
+                outputs={<span class="k-stage">'iofq'</span>: BackgroundSubtractedIofQ})   <span class="c"># single-run: works today</span>
+<span class="c"># multi-run: row field 'run' of each table → the same keys, as StreamProcessor</span>
+<span class="c">#    dynamic keys, plus the keys to accumulate         #40, API not designed</span></code></pre>
+      <p class="note">Today a table maps to one sciline key whose value is the list of rows. #40 would run a plain multi-run request through the same <code>StreamProcessor</code>: push every row, compute the outputs once. With one row, that is the single-run computation, which is the one-row symmetry.</p>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:14px; min-width:0">
+      <div class="fig">
+      <svg viewBox="0 0 470 400" style="min-width:420px" role="img" aria-label="The per-run sciline graph split into the part computed once from fixed values, the per-run part fed by row fields, the accumulated keys, and the outputs.">
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+        </defs>
+        <rect x="10" y="10" width="200" height="88" rx="4" style="fill: var(--stage-soft); stroke: var(--stage)"/>
+        <text x="22" y="32" style="font-size:12px; font-weight:600">computed once</text>
+        <text x="22" y="50" class="muted" style="font-size:11px">from the fixed values:</text>
+        <text x="22" y="68" class="mono" style="font-size:10.5px">BeamCenter, DirectBeam,</text>
+        <text x="22" y="84" class="mono" style="font-size:10.5px">QBins, masks</text>
+        <rect x="250" y="10" width="210" height="88" rx="4" style="fill: var(--acc-soft); stroke: var(--acc)"/>
+        <text x="262" y="32" style="font-size:12px; font-weight:600">one row per push</text>
+        <text x="262" y="50" class="muted" style="font-size:11px">row fields = dynamic keys:</text>
+        <text x="262" y="68" class="mono" style="font-size:10.5px">Filename[SampleRun]</text>
+        <text x="262" y="84" class="mono" style="font-size:10.5px">Filename[BackgroundRun]</text>
+        <rect x="90" y="130" width="290" height="62" rx="4" style="fill: var(--panel); stroke: var(--muted)"/>
+        <text x="235" y="155" text-anchor="middle" style="font-size:12px; font-weight:600">per-run part</text>
+        <text x="235" y="174" text-anchor="middle" class="muted" style="font-size:11px">load, reduce one run; loops over banks inside</text>
+        <line x1="110" y1="98" x2="160" y2="128" style="stroke: var(--muted)" marker-end="url(#arr2)"/>
+        <line x1="355" y1="98" x2="310" y2="128" style="stroke: var(--muted)" marker-end="url(#arr2)"/>
+        <rect x="90" y="224" width="290" height="70" rx="4" style="fill: var(--acc-soft); stroke: var(--acc); stroke-width:2"/>
+        <text x="235" y="248" text-anchor="middle" style="font-size:12px; font-weight:600">accumulated keys = held state</text>
+        <text x="235" y="266" text-anchor="middle" class="mono" style="font-size:10.5px">numerator, denominator in Q</text>
+        <text x="235" y="283" text-anchor="middle" class="muted" style="font-size:10.5px">each reads one table only (order)</text>
+        <line x1="235" y1="192" x2="235" y2="222" style="stroke: var(--muted)" marker-end="url(#arr2)"/>
+        <text x="245" y="212" class="mono muted" style="font-size:10px">push(rows): +=</text>
+        <rect x="90" y="326" width="290" height="62" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
+        <text x="235" y="350" text-anchor="middle" style="font-size:12px; font-weight:600">spec outputs</text>
+        <text x="235" y="369" text-anchor="middle" class="mono" style="font-size:10.5px">iofq = num / den, minus can</text>
+        <line x1="235" y1="294" x2="235" y2="324" style="stroke: var(--muted)" marker-end="url(#arr2)"/>
+        <text x="245" y="314" class="mono muted" style="font-size:10px">outputs(): at a read</text>
+      </svg>
+      </div>
+      <div class="broken">
+        <div><h3>The single-run spec returns what the multi-run spec returns</h3><p>Never partial results of each run, such as a numerator and a denominator, for a later request to sum. That is the per-run spec + sum + finalize split that ADR 0006 rejects. Combining stays inside the multi-run binding.</p></div>
+        <div><h3>Two specs give one result two names</h3><p>A single-run I(Q) from either spec is a record of a different spec, so labels and provenance split by how it was submitted. Declaring the shared fields the same way in both, as on the left, keeps the two from drifting. A helper that derives the multi-run spec from the single-run one can wait until two packages do this.</p></div>
+      </div>
+    </div>
+  </div>
+  <div class="cols">
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">StreamProcessor ↔ accumulator</div>
+      <ul class="tight" style="font-size:.88rem">
+        <li>base workflow, static part → fixed values, computed once at open</li>
+        <li><code>dynamic_keys</code> → fields of the table rows</li>
+        <li><code>accumulate(chunks)</code> → <code>push(rows)</code></li>
+        <li><code>accumulators</code> → held state, private to the binding</li>
+        <li><code>finalize()</code> → <code>outputs()</code>, once per state read</li>
+        <li><code>context_keys</code>, rolling windows, <code>clear()</code> → none, since each breaks arrival</li>
+      </ul>
+    </div>
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">The smallest held-state binding</div>
+<pre><code><span class="c"># spec: one table, outputs = the row's fields</span>
+client.accumulator(Template(PARTS_SUM, blanks=(<span class="k-stage">'parts'</span>,)))
+<span class="c"># bound to combine(operator.iadd): a running sum of the</span>
+<span class="c"># pushed values themselves, not a concept of its own</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────── backup D: around the grid ───────────── -->
+<section class="slide" id="around">
+  <div class="eyebrow">Backup D · Around the grid</div>
+  <h2>What else a full picture needs, and what it can leave out</h2>
+  <div class="cols">
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
+      <ul class="tight">
+        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>dataset(run=611)</code>, or <code>acc.ref('iofq')</code>. A reference to a pending record is valid. The backend waits for it.</li>
+        <li><b>Template</b> is the shared building block: stage, accumulator, batch (<code>apply</code>), and rules all start from one.</li>
+        <li><b>Drivers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
+        <li><b>Where it runs.</b> <code>local()</code>: values in memory while the client keeps them. The service (designed, not built): every record's outputs written to a file, each accumulator its own job with a declared memory size and deadline. Placement says the results do not differ.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="eyebrow" style="margin-bottom:6px">Orthogonal, safe to leave off the slides</div>
+      <ul class="tight">
+        <li>Datasets and the dataset source (<code>client.datasets</code>, selectors, <code>watch</code>)</li>
+        <li>Labels and members (tentative)</li>
+        <li>Status, failure, cancel, <code>as_completed</code></li>
+        <li>Lookups, series, rules</li>
+        <li>Provenance and publication</li>
+        <li>Release and lifetimes of values</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>Sources: docs/developer/README.md (Combining runs, Stages and accumulators, Symmetries), ADR 0003 and 0006, <code>ess.apps.bindings</code>, <code>ess.apps.pipeline</code>, <code>ess.apps.accumulators</code>, and issue #40.</footer>
+</div>

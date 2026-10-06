@@ -8,9 +8,10 @@ This document describes the API we want: what workflow authors, app authors, and
 It leaves out how the system provides it: how results are stored, how run numbers become dataset identities, how data is moved, and where and in which order things run.
 Those belong in [system.md](system.md), and the system may change them without changing any code shown here.
 [adr/](adr/index.md) records the decisions behind both.
+[three-ways-to-run-a-spec.html](three-ways-to-run-a-spec.html) summarizes specs, stages, accumulators, and the symmetries between them on two slides.
 
 The first sections cover what most notebooks need: submitting requests, reading their results, and chaining them.
-Later sections add how runs are combined, what saves computation (stages and accumulators), what loops over many datasets look like (drivers), and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
+Later sections add how runs are combined, what saves computation (stages and accumulators), what loops over many datasets look like (drivers), the symmetries that the framework and workflow authors keep, and two sub-designs that build on the core: batch and automatic reduction, and provenance and publication.
 
 ## From a for loop
 
@@ -69,12 +70,14 @@ The terms this document defines, in the order they appear:
 | template | a spec with values for some parameters, its *fixed values*; the others (*blanks*) are filled later | framework | notebook, app |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | DMSC; a fake one in tests |
 | table, row | a parameter whose value is a list of rows of one flat model; a row is one run, or the runs that belong together | workflow author | notebook, app |
+| single-run spec, multi-run spec | two specs of one reduction: one takes one run of each kind (sample, can), the other a table of runs of each kind; with one row per table, the multi-run spec gives the outputs of the single-run spec | workflow author | workflow author |
 | plain request | a request with every value given, computed without a stage or an accumulator | framework | notebook, app |
 | stage | a template the backend keeps for a client; what depends only on its fixed values is computed once | framework | notebook, app |
 | accumulator | a template whose blanks are tables, which the backend keeps for a client | framework | notebook, app |
 | push | one step that adds one row to each of one or more tables of an accumulator | framework | notebook, app |
 | state | an accumulator after its first n pushes; its outputs are those of its plain request, the template with each table filled by the rows of these pushes | framework | backend, at each push |
-| held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding's `held_state(fixed)` makes, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
+| held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding accumulates, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
+| accumulating binding | a binding that adds each push to a held state of its own, such as a numerator and a denominator; for any other binding, the backend keeps the rows | workflow author | workflow author |
 | read | a request that references a state, from its submission until it has run, or a `client.output` call on an accumulator; a read *pins* the state at that moment | framework | notebook, app |
 
 The terms down to template are enough for most work.
@@ -115,6 +118,7 @@ class IofQParams(BaseModel):
     bins: int = 100                         # a plain value
     can: NexusFile | None = None            # the empty-can run, if any
     beam_centre: Array() | None = None      # a data field: a scipp array
+    direct_beam: Array() | None = None
 
 class IofQOutputs(BaseModel):
     iofq: Array(ArraySpec(dims=('Q',), unit='dimensionless'))
@@ -131,7 +135,7 @@ To inspect any other intermediate result, a scientist runs the package's sciline
 The simplest binding is a function that takes the parameters by name and returns the outputs by name:
 
 ```python
-def iofq(run, bins, can, beam_centre) -> dict:
+def iofq(run, bins, can, beam_centre, direct_beam) -> dict:
     ...
     return {'iofq': result}
 ```
@@ -146,7 +150,8 @@ from ess.apps.pipeline import PipelineBinding
 
 PipelineBinding(pipeline,
                 params={'run': Filename[SampleRun], 'bins': QBins,
-                        'can': Filename[BackgroundRun], 'beam_centre': BeamCenter},
+                        'can': Filename[BackgroundRun], 'beam_centre': BeamCenter,
+                        'direct_beam': DirectBeam},
                 outputs={'iofq': BackgroundSubtractedIofQ})
 ```
 
@@ -379,13 +384,14 @@ class SampleRow(BaseModel):                 # one row
 class CanRow(BaseModel):
     run: NexusFile
 
-class SansIofQParams(BaseModel):
-    sample_runs: list[SampleRow]            # a table
-    can_runs: list[CanRow]                  # a table
-    beam_centre: Array()                    # shared by all runs
-    direct_beam: Array()
+class MultiIofQParams(BaseModel):
+    sample_runs: list[SampleRow] = Field(min_length=1)   # a table, with at least one row
+    can_runs: list[CanRow] = []             # a table; empty if there is no can run
+    bins: int = 100                         # shared by all runs
+    beam_centre: Array() | None = None
+    direct_beam: Array() | None = None
 
-SANS_IOFQ = WorkflowSpec(..., params=SansIofQParams, outputs=IofQOutputs)
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, ..., params=MultiIofQParams, outputs=IofQOutputs)
 ```
 
 The `transmission` column is hypothetical: esssans uses one transmission run for all runs of a sample ([sans](../requirements/sans.md)).
@@ -397,8 +403,8 @@ A request that gives every row is a plain request over the tables:
 
 ```python
 shared = {'beam_centre': ..., 'direct_beam': ...}
-result = client.compute(SANS_IOFQ, {**shared, 'can_runs': [{'run': dataset(run=614)}],
-                                    'sample_runs': [{'run': dataset(run=611)}, {'run': dataset(run=612)}]})
+result = client.compute(IOFQ_MULTI, {**shared, 'can_runs': [{'run': dataset(run=614)}],
+                                     'sample_runs': [{'run': dataset(run=611)}, {'run': dataset(run=612)}]})
 ```
 
 A row is the outermost level of the reduction: one run, or the runs that belong together, such as a run and its own transmission run.
@@ -409,6 +415,24 @@ The binding loops over it inside the work per run, so that each run is loaded an
 Which quantity is summed changes the result: summing counts and normalizing once is not the same as averaging normalized curves.
 The binding decides it.
 The same rows can also be given one push at a time, through an accumulator (see Stages and accumulators).
+
+**Single-run and multi-run specs.** `IOFQ_MULTI` is a *multi-run spec*: it takes a table of runs of each kind, sample and can.
+`IOFQ` (see Specs and bindings) is the *single-run spec* of the same reduction: it takes one run of each kind.
+Combining runs needs the multi-run spec, and only a spec with a table can take rows through an accumulator.
+A package may offer the single-run spec as well.
+It is the simpler form for one run, and it matches the package's sciline workflow, which reduces one run of each kind.
+The two must agree: with one row in each table, the multi-run spec gives the outputs of the single-run spec.
+An empty table stands for an optional run left out: `'can_runs': []` matches `'can': None`.
+
+```python
+client.compute(IOFQ, {'run': dataset(run=611), 'can': dataset(run=614)})
+client.compute(IOFQ_MULTI, {'sample_runs': [{'run': dataset(run=611)}],
+                            'can_runs': [{'run': dataset(run=614)}]})      # the same outputs
+```
+
+- Both declare the same outputs model. The single-run spec does not output partial results of each run, such as a numerator and a denominator, for a later request to sum. Summing belongs to the binding of the multi-run spec ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+- The workflow author promises that the two agree; nothing checks it (see Symmetries).
+- Records of the two specs are separate: the same run reduced with `IOFQ` and with `IOFQ_MULTI` makes two records of two specs.
 
 ## Stages and accumulators
 
@@ -433,11 +457,17 @@ A call through the stage fills only the blanks.
 A record made through a stage is the record of the plain request with the blanks filled; it does not mention the stage.
 What the stage computed is a cache: the backend may drop it at any time, and the next call computes it again and makes the same record.
 
+A stage works on a multi-run spec too: with the rows fixed and `bins` a blank, each call rebins the runs it loaded once.
+An accumulator cannot do this.
+It has no blanks besides its tables: every other value, such as `bins`, is fixed when it opens.
+An accumulating binding uses `bins` before it sums the runs, so a new `bins` needs a new accumulator, with every row pushed again.
+Tuning a value over a fixed set of runs is what a stage is for.
+
 **Accumulator.** An *accumulator* is a template whose blanks are tables, which the backend keeps for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 Each *push* adds one row to one or more of its tables:
 
 ```python
-iofq = client.accumulator(Template(SANS_IOFQ, params=shared, blanks=('sample_runs', 'can_runs')))
+iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
 iofq.push({'sample_runs': {'run': dataset(run=611)}})   # the dict one row of the request takes
 iofq.push({'can_runs': {'run': dataset(run=614)}})
 iofq.push({'sample_runs': {'run': dataset(run=612)},    # one row in each of two tables
@@ -448,14 +478,14 @@ client.output(iofq, 'iofq')                              # what the plain reques
 The accumulator after its first n pushes is a *state*.
 The plain request of a state is the template with each table filled by the rows of these pushes, in push order.
 Between pushes, an accumulator keeps what it computed once from the fixed values, and its *held state*, such as the numerators and denominators summed so far.
-If the binding has no `held_state(fixed)`, the held state is the list of rows pushed so far (see What a binding provides).
+If the binding does not accumulate, the held state is the list of rows pushed so far (see What a binding provides).
 No spec, call, or record names the held state.
 
 - `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops.
 - Opening returns once the backend has checked and logged it, as `client.submit` does. It is refused if a record the template references has failed or was cancelled, and does not wait for one that is pending. The backend reads these records once, when it opens the held state after they have completed. `iofq.template` holds the values as resolved, as a stage's template does.
 - `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push is refused if a record the rows reference has failed or was cancelled, and does not wait for one that is pending. It returns once logged, and the backend adds it later (see Adding waits for readers).
 - Checks on a whole table, such as its length, and the params model's own validators apply when a state is read, not at a push. A table that needs two rows takes them one push at a time, and a state whose plain request would be refused cannot be read (see Reads).
-- Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The spec author promises this; it is not checked.
+- Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The workflow author promises this; it is not checked.
 - If adding the rows of a push fails, the accumulator stops, since the binding may hold part of them. It stops too if a record the rows reference fails or is cancelled, or if the held state fails to open. Later pushes and reads are then refused with the reason, and requests pinned to a state it did not reach fail with it.
 
 **One sum, two ways.** Every spec with a table can be given its rows both ways: all in one plain request, or over time through an accumulator.
@@ -463,7 +493,7 @@ The caller chooses how rows arrive.
 Both give the same outputs: a state gives what its plain request gives.
 The binding chooses how a state is computed, which the caller sees only in cost:
 
-- A binding with `held_state(fixed)` adds each push to its held state, so a read computes the outputs without reducing earlier runs again. For a sum, its held state must hold quantities whose sums over runs give what one request over all runs computes from, such as a numerator and a denominator, not a normalized curve. For esssans these are the numerator and denominator in Q.
+- A binding that accumulates adds each push to its held state, so a read computes the outputs without reducing earlier runs again. For a sum, its held state must hold quantities whose sums over runs give what one request over all runs computes from, such as a numerator and a denominator, not a normalized curve. For esssans these are the numerator and denominator in Q.
 - For any other binding, the held state keeps the rows, and a read computes the plain request over all of them. A joint fit, such as the scale factors of reflectometry angles, cannot add one run at a time; an accumulator over it fits again over the rows so far at each read.
 
 **Rows and tables: two examples.** [ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) ("Two examples") works through both in full.
@@ -475,7 +505,7 @@ One push hands both to the binding, which needs them at once to reduce the run.
 Two tables, one of runs and one of transmission runs, could be paired wrongly.
 
 ```python
-iofq = client.accumulator(Template(SANS_IOFQ, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
+iofq = client.accumulator(Template(IOFQ_MULTI, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
                                    blanks=('sample_runs',)))
 iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
 iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)}})
@@ -484,8 +514,9 @@ iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=
 *Two independent tables.*
 The sample runs and the can runs are two tables, each a blank, pushed as their runs arrive, as in the first example of this section.
 One push may add a row to each table, and the rows enter one state.
-A state with no can run is refused if the spec requires one, as its plain request would be.
-A binding with `held_state(fixed)` keeps what it holds for the sample apart from what it holds for the can, so that the order of pushes does not change a state; a binding that cannot do this refuses to open, and the accumulator stops.
+A state with no can run is refused if the spec requires one, as its plain request would be; `IOFQ_MULTI` does not.
+A binding that accumulates keeps what it holds for the sample apart from what it holds for the can, so that the order of pushes does not change a state.
+A binding that cannot do this refuses to open, and the accumulator stops.
 
 **Reads.** An accumulator is read as a record is ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
@@ -555,7 +586,7 @@ A plain request is the case with no blanks: `binding.stage(values, ())` and then
 A function binding computes everything in each call.
 A `PipelineBinding` computes what does not depend on the blanks once, through `sciline.Stage`, and reuses it in later calls.
 
-A binding of a spec with tables may also provide `held_state(fixed)`, which makes the held state of an accumulator:
+A binding of a spec with tables may also provide `held_state(fixed)`, which makes the held state of an accumulator; such a binding *accumulates*:
 
 ```python
 held = binding.held_state(fixed)         # fixed: every value but the tables, with data fields loaded
@@ -677,10 +708,29 @@ Records say what ran, including a workflow bound in a notebook's own backend; pu
 Superseding a published entry with a correction is the catalogue's job.
 Recomputing in a record's environment comes later.
 
+## Symmetries
+
+Each symmetry names a change that a caller may make without changing a result.
+The framework keeps some by construction; the others are promises of the workflow author.
+
+| Symmetry | The caller may change | Unchanged | Kept by |
+|---|---|---|---|
+| one-row | the single-run spec ↔ the multi-run spec with one row per table | the outputs | the workflow author, if the package offers both specs |
+| caching | a call through a stage ↔ the plain request with the blanks filled | the record and its outputs | the framework makes the same record; the workflow author promises that a call through a stage computes the same outputs (`PipelineBinding` does through `sciline.Stage`) |
+| arrival | rows pushed into an accumulator one at a time ↔ the same rows in one plain request | the outputs of state n | the workflow author, if the binding accumulates; the framework, if it does not |
+| order | the order of pushes into different tables, and whether rows of different tables come in one push | the outputs once the same rows are in | the workflow author, if the binding accumulates: it keeps what it holds for each table apart (see Two independent tables); the framework, if it does not |
+| placement | where a request runs: the user's process, the service, which worker | the record and its outputs | the framework |
+
+Arrival, order, and placement hold up to rounding where the order of adding differs.
+Each promise of the workflow author compares two calls with the same inputs, so a package can test it.
+Caching and arrival differ in two ways that the symmetries leave open.
+A call through a stage makes a record, while a push makes a state, which is recorded only by a request that reads it.
+Arrival keeps the outputs, not the cost: if the binding does not accumulate, each read computes the per-run part of every row again.
+
 ## Guarantees
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference; a reference to an accumulator names the state it read by its number of pushes. A record never changes; its status changes once, from pending to finished.
-- A stage never changes what a record says: a record made through a stage is the record of the plain request. A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order. This rests on two promises of the package: a held state gives what the plain request gives (What a binding provides), and validators that read more than one value change none (Stages and accumulators).
+- A stage never changes what a record says: a record made through a stage is the record of the plain request (caching). A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order (arrival). This rests on two promises of the workflow author: a held state gives what the plain request gives (What a binding provides), and validators that read more than one value change none (Stages and accumulators).
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an accumulator's output it reads, such as a slice of it, since the next push may change that output in place.
 - A record's outputs do not depend on how they were computed: through a stage, from an accumulator, or on another machine. Values may differ in rounding where the order of adding differs.
 - The provenance of a record reaches every dataset it read, through all its inputs and the states of accumulators it read, with their parameter values and software versions.

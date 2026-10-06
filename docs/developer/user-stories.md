@@ -148,7 +148,7 @@ assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 
 assert result.request.datasets() == runs + backgrounds
 ```
 
-This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `SANS_IOFQ` does. B2 sums with an accumulator.
+This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
 
 ### S7. Reduce each sample with the can measured before it
 

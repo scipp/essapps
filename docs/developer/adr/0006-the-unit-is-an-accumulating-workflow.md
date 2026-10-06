@@ -69,7 +69,7 @@ Each push adds at most one row to each table.
 The `Accumulator` class of sciline and of `StreamProcessor`, which holds one key, is part of a binding; these documents call what it holds an accumulated key.
 
 ```python
-iofq = client.accumulator(Template(SANS_IOFQ, params={'beam_centre': ..., 'direct_beam': ...},
+iofq = client.accumulator(Template(IOFQ_MULTI, params={'beam_centre': ..., 'direct_beam': ...},
                                    blanks=('sample_runs', 'can_runs')))
 iofq.push({'sample_runs': {'run': dataset(run=611)}})
 iofq.push({'can_runs': {'run': dataset(run=614)}})
@@ -88,7 +88,7 @@ A caller whose rows arrive over time, such as the runs of a scan or of a growing
 Both give the same outputs for the same rows.
 How an accumulator computes a state is its binding's choice, which the caller sees only in cost:
 
-- A binding with `held_state(fixed)` makes its own held state and adds each push to it. A read computes the outputs from the held state.
+- A binding with `held_state(fixed)`, an *accumulating binding*, makes its own held state and adds each push to it. A read computes the outputs from the held state.
 - For any other binding, the held state keeps the pushed rows, and a read computes the plain request over all of them. The part that depends only on the fixed values is computed once if the binding's stage keeps it, as a stage of `PipelineBinding` does. A read then repeats the per-run part of every row so far.
 
 The held state that keeps the rows is Simon's decision (2026-10-05): every spec with a table takes rows through the same push, whatever its binding.
@@ -128,13 +128,14 @@ class SampleRow(BaseModel):
 class CanRow(BaseModel):
     run: NexusFile
 
-class SansIofQParams(BaseModel):
+class MultiIofQParams(BaseModel):
     sample_runs: list[SampleRow]            # one table, two columns
-    can_runs: list[CanRow]
-    beam_centre: Array()
-    direct_beam: Array()
+    can_runs: list[CanRow] = []
+    bins: int = 100
+    beam_centre: Array() | None = None
+    direct_beam: Array() | None = None
 
-iofq = client.accumulator(Template(SANS_IOFQ, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
+iofq = client.accumulator(Template(IOFQ_MULTI, params={**shared, 'can_runs': [{'run': dataset(run=614)}]},
                                    blanks=('sample_runs',)))
 iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
 iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)}})
@@ -148,9 +149,9 @@ The second has two independent tables: the sample runs and the can runs of SANS,
 If the accumulated keys of the sample depend only on sample rows, and those of the can only on can rows, the order of pushes does not change any state, and a push may add a row to each table at once.
 
 ```python
-iofq = client.accumulator(Template(SANS_IOFQ, params=shared, blanks=('sample_runs', 'can_runs')))
+iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
 iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
-client.output(iofq, 'iofq')          # refused while there is no can run, if the spec requires one
+client.output(iofq, 'iofq')          # sample 611 alone: can_runs may be empty
 iofq.push({'can_runs': {'run': dataset(run=614)}})
 client.output(iofq, 'iofq')          # sample 611 minus can 614
 iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)},
@@ -192,9 +193,10 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 
 ## Consequences
 
-- A package offers one spec for a sum, such as I(Q) with tables of sample and can runs. Combining runs needs no split into a per-run spec, a sum, and a finalizing spec. A sum can be written in two ways: as a plain request over the tables, or as an accumulator over them.
+- A package offers a multi-run spec for a sum, such as I(Q) with tables of sample and can runs. Combining runs needs no split into a per-run spec, a sum, and a finalizing spec. A sum can be written in two ways: as a plain request over the tables, or as an accumulator over them.
+- A package may also offer a single-run spec of the same reduction, with one run of each kind and the same outputs. With one row per table, the multi-run spec gives what the single-run spec gives ([README](../README.md), Symmetries). The single-run spec does not output partial results of each run, such as a numerator and a denominator, for a later request to sum. That would bring back the split into a per-run spec, a sum, and a finalizing spec.
 - A partial sum is never a record. A read pins a state, and a record of a state is a request that copies it ([ADR 0003](0003-accumulators-add-in-place.md)).
-- An accumulator whose binding has no `held_state(fixed)` keeps the values of every pushed row. In the user's process, a row that references a record output keeps that value alive while the accumulator lives, even after the client releases the record. A driver that reads such an accumulator after every push repeats the per-run part of every row so far at each read. A held state of the binding's own avoids both.
+- An accumulator whose binding does not accumulate keeps the values of every pushed row. In the user's process, a row that references a record output keeps that value alive while the accumulator lives, even after the client releases the record. A driver that reads such an accumulator after every push repeats the per-run part of every row so far at each read. An accumulating binding avoids both.
 - The binding chooses where to accumulate. Its accumulated keys must add over runs to what the plain request over all runs computes from, such as a numerator and a denominator, not a normalized curve. For esssans these are the numerator and denominator in Q, summed over wavelength bands. One step earlier, the numerator is event data that grows with each run.
 - esssans builds its pixel masks from the sample run's detector, so the can's accumulated keys also depend on the sample file, and a can run cannot be pushed alone. Masks per run type, or detector IDs from a fixed run, would fix this in esssans.
 - sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, stops `StreamProcessor` from building.
@@ -208,7 +210,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - Reducing the runs of one accumulator in parallel would split a push into a part that can run in parallel and an add, which the backend does one push at a time. Order would stay free. Nothing needs it yet: a LoKI run takes 1.3 to 1.6 seconds.
 - A beam centre found from the sample runs would be both computed once and per run. It is a fixed value, given by reference to the record that found it.
 - Spreading one accumulator over several nodes needs a merge of two held states (README.md, open question "Grouping"). On 2026-09-28 Simon noted that spectroscopy needs fan-out across processes. If a requirement confirms that, for example to reduce a finished scan again quickly, the binding protocol gains a merge.
-- The part of an accumulator computed once from its fixed values is what a stage caches.
+- An accumulator computes its fixed part once, as a stage does, but the two do not combine. A fixed value used before the runs are summed, such as the binning in Q, cannot be tuned in an accumulator: changing it opens a new accumulator, and every row is pushed again. The form of 2026-09-07 was dropped partly for this limit (see the table in Context). The limit still holds. This design meets it with a stage of the multi-run spec over a fixed set of rows, not with tuning inside an accumulator.
 
 ## What we learned
 
