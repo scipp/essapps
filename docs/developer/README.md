@@ -707,4 +707,3 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
 5. **Accumulators on the service.** How a client declares an accumulator's memory size and deadline; what the deadline does to readers that still run; and how the declared size covers a held state that keeps the rows, whose reads compute the plain request over every row ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
-6. **Stages.** Whether stages stay a concept of their own, since the part of an accumulator computed once from its fixed values is what a stage caches (scipp/essapps#35).

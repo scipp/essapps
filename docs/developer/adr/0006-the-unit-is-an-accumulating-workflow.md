@@ -208,7 +208,7 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - Reducing the runs of one accumulator in parallel would split a push into a part that can run in parallel and an add, which the backend does one push at a time. Order would stay free. Nothing needs it yet: a LoKI run takes 1.3 to 1.6 seconds.
 - A beam centre found from the sample runs would be both computed once and per run. It is a fixed value, given by reference to the record that found it.
 - Spreading one accumulator over several nodes needs a merge of two held states (README.md, open question "Grouping"). On 2026-09-28 Simon noted that spectroscopy needs fan-out across processes. If a requirement confirms that, for example to reduce a finished scan again quickly, the binding protocol gains a merge.
-- The part of an accumulator computed once from its fixed values is what a stage caches. Whether stages stay as a concept of their own is scipp/essapps#35.
+- The part of an accumulator computed once from its fixed values is what a stage caches.
 
 ## What we learned
 
