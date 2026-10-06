@@ -75,10 +75,11 @@ Gap: a cancel ends the records, but a workflow that has started runs on and keep
 ### D7. Rotation scan over three hundred angles
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
-Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run and adds it to the held state, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open). Each cut makes one record, which names the state it read by its number of pushes, so history grows by a constant amount per run ([system.md](system.md), An example).
+Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run and adds it to the held state, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open). Each cut makes two records: the record of its state, which lists every run so far, and its own ([system.md](system.md), An example). History therefore grows with the square of the number of runs, about 45,000 rows of about a hundred bytes each for 300 runs, unless a store holds the record of a state as the accumulator and its number of pushes ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 Each cut checks the plain request of its state, which takes time in proportion to the rows so far: about 1.3 ms at 300 rows, so its total over the scan grows with the square of the number of runs ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
 
 Gap: reducing the runs of one scan on several nodes needs a merge of two held states (README.md open question 1).
+Gap: the in-process backend stores the record of each state with all its rows.
 
 ## F. Publication and provenance
 

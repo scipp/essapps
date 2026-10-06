@@ -18,7 +18,12 @@ import pytest
 import scipp as sc
 
 from ess.spec import Function, HeldState, combine
-from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
+from ess.spec.testing import (
+    assert_close,
+    check_arrival_and_order,
+    check_caching,
+    check_one_row,
+)
 
 Rows = Mapping[str, Mapping[str, Any]]
 
@@ -229,3 +234,18 @@ def test_arrays_are_compared_up_to_rtol(make: Any) -> None:
     check_one_row(
         returning([1.0, 2.0]), returning([1.0, 2.0 + 1e-6]), {}, {}, rtol=1e-5
     )
+
+
+def test_assert_close_compares_up_to_rtol_and_names_where_values_differ() -> None:
+    assert_close({'a': [1.0, np.array([2.0])]}, {'a': [1.0 + 1e-13, np.array([2.0])]})
+    refusals = {
+        r"^out: \['b'\], expected \['a'\]$": ({'b': 1.0}, {'a': 1.0}),
+        r"^out, 'a': \[1.0\], expected": ({'a': [1.0]}, {'a': [1.0, 2.0]}),
+        r"^out\[1\]: 2.1, expected 2.0$": ([1.0, 2.1], [1.0, 2.0]),
+    }
+    for message, (actual, expected) in refusals.items():
+        with pytest.raises(AssertionError, match=message):
+            assert_close(actual, expected, where='out')
+    with pytest.raises(AssertionError, match=r'^out: 1.1, expected 1.0$'):
+        assert_close(1.1, 1.0, rtol=0.01, where='out')
+    assert_close(1.1, 1.0, rtol=0.2)

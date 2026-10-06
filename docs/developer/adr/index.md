@@ -14,3 +14,4 @@ Read ADR 0006 before ADR 0003: 0006 decides what an accumulator is, and 0003, wh
 - [ADR 0005: The service writes the outputs of every record to a file, and keeps no value for a client](0005-the-service-writes-every-output.md)
 - [ADR 0006: The unit of combining runs is an accumulating workflow, not a running combination of request outputs](0006-the-unit-is-an-accumulating-workflow.md)
 - [ADR 0007: Packages are split by what they depend on and where they run](0007-packages-split-by-dependencies.md)
+- [ADR 0008: A request that reads an accumulator reads a record of the state's plain request](0008-a-read-of-a-state-is-a-record.md)

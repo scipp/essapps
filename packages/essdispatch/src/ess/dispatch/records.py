@@ -85,7 +85,11 @@ class Request(BaseModel, frozen=True):
         return [ref for _, ref in walk_refs(self.params) if isinstance(ref, OutputRef)]
 
     def accumulators(self) -> list[AccumulatorRef]:
-        """The states of accumulators this request reads."""
+        """
+        The outputs of accumulators this request reads; a record's request
+        reads none, since submitting replaces each by an output of the record
+        of the state it reads.
+        """
         return [
             ref for _, ref in walk_refs(self.params) if isinstance(ref, AccumulatorRef)
         ]
@@ -137,7 +141,9 @@ class Record(BaseModel, frozen=True):
     A request as the backend accepted it.
 
     ``request`` has every value filled in: dataset names resolved, defaults
-    filled, and references to accumulators pinned to the state they read.
+    filled, and each reference to an accumulator replaced by a reference to
+    the record of the state it reads, a record of the plain request of that
+    state.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 

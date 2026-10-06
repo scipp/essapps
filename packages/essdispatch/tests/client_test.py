@@ -713,7 +713,14 @@ def _total(client: Client) -> Accumulator:
     return client.accumulator(Template(TOTAL, blanks=('parts',)))
 
 
-def test_a_reference_is_pinned_at_submission_to_the_rows_pushed_before_it(
+def _state(client: Client, reader: Record, field: str = 'value') -> Record:
+    """The record of the state of an accumulator that ``reader`` reads in ``field``."""
+    ref = reader.request.params[field]
+    (state,) = [r for r in client.records() if r.id == ref.record]
+    return state
+
+
+def test_a_reference_names_the_record_of_the_state_pinned_at_submission(
     client: Client,
 ) -> None:
     loads = [client.submit(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)]
@@ -725,12 +732,39 @@ def test_a_reference_is_pinned_at_submission_to_the_rows_pushed_before_it(
     total.push({'parts': loads[2].refs('value')})
     second = client.compute(SHIFT, {'value': total.ref('value')})
 
+    states = [_state(client, r) for r in (first, second)]
     assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
     assert [r.request.params['value'] for r in (first, second)] == [
-        AccumulatorRef(accumulator=total.id, output='value', upto=n) for n in (2, 3)
+        state.ref('value') for state in states
     ]
-    assert client.provenance(first).records() == loads[:2]
-    assert client.provenance(second).records() == loads
+    assert [state.request for state in states] == [
+        Request(TOTAL, {'parts': [x.refs('value') for x in loads[:n]]}) for n in (2, 3)
+    ]
+    assert client.provenance(first).records() == [states[0], *loads[:2]]
+    assert client.provenance(second).records() == [states[1], *loads]
+
+
+def test_a_submission_makes_one_record_of_each_state_its_requests_read(
+    client: Client,
+) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    total = _total(client)
+    total.push({'parts': load.refs('value')})
+    reads = client.compute(
+        {
+            'a': Request(SHIFT, {'value': total.ref('value')}),
+            'b': Request(SHIFT, {'value': total.ref('value'), 'offset': 1.0}),
+        },
+        label='shifted',
+    )
+    state = _state(client, reads['a'])
+
+    assert client.records() == [load, state, *reads.values()]
+    assert {r.request.params['value'] for r in reads.values()} == {state.ref('value')}
+    assert state.request == Request(TOTAL, {'parts': [load.refs('value')]})
+    assert (state.label, state.member, state.submitter) == (None, None, 'anna')
+    assert client.records(label='shifted') == list(reads.values())
+    assert [client.output(r, 'value') for r in reads.values()] == [1.0, 2.0]
 
 
 def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
@@ -753,7 +787,12 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     assert client.output(read, 'value') == client.output(plain, 'value') == 5.0
     assert scaled_sum.opened == [{'scale': 1.0, 'offset': 2.0}]
     assert total.template == Template(SUM, params=fixed, blanks=('runs',))
-    assert client.provenance(read).accumulated == (plain.request,)
+    state = _state(client, read)
+    assert state.request == plain.request
+    assert client.provenance(read).records() == [state, offset]
+    assert set(client.provenance(read).datasets()) == {
+        datasets.resolve(r['run']) for r in runs
+    } | {datasets.resolve(dataset(run=2))}  # the runs, and offset's run
     provenance = client.provenance(total)  # of the state after the pushes so far
     assert provenance == client.provenance(plain)
     assert provenance.records() == [offset]
@@ -871,8 +910,9 @@ def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
     left_out = f'record {record.id} output spread: the workflow did not return it'
     with pytest.raises(SubmitError, match=f'^value: {left_out}$'):
         client.submit(SHIFT, {'value': record.ref('spread')})
+    state = _state(client, reading)
     assert client.failure(reading) == (
-        f'{spread.id}[:2].spread: the workflow did not return it'
+        f'record {state.id} output spread: the workflow did not return it'
     )
 
 
@@ -906,9 +946,7 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     assert client.output(load) == {'value': 1.0, 'extra': -1.0}
     assert client.output(total) == {'value': 1.0}
     assert total.refs() == {'value': total.ref('value')}
-    assert shifted.request.params['value'] == AccumulatorRef(
-        accumulator=total.id, output='value', upto=1
-    )
+    assert shifted.request.params['value'] == _state(client, shifted).ref('value')
 
 
 def test_an_accumulator_is_read_through_a_reference(client: Client) -> None:
@@ -995,8 +1033,9 @@ def test_a_push_takes_values_and_defaults_as_the_request_does(client: Client) ->
     plain = client.compute(WEIGHTED, {'rows': rows})
 
     assert client.output(read, 'value') == client.output(plain, 'value') == 5.0
-    assert client.provenance(read).accumulated == (plain.request,)
-    assert client.provenance(read).records() == loads
+    state = _state(client, read)
+    assert state.request == plain.request
+    assert client.provenance(read).records() == [state, *loads]
 
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
@@ -1066,15 +1105,24 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         elsewhere.submit(SHIFT, {'value': total.ref('value')})
 
 
-def test_only_a_request_may_reference_an_accumulator(client: Client) -> None:
+def test_only_a_request_reads_an_accumulator_and_only_its_submission_its_state(
+    client: Client, loading: threading.Event
+) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
     total, other = _total(client), _total(client)
     total.push({'parts': load.refs('value')})
-    read = client.compute(TOTAL, {'parts': [{'value': total.ref('value')}]})
-    pinned = read.request.params['parts'][0]['value']
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=2)})
+    parts = [{'value': total.ref('value')}, pending.refs('value')]
+    read = client.submit(TOTAL, {'parts': parts})  # holds the state until it runs
+    state = read.request.params['parts'][0]['value']
 
-    refused = 'only a request may reference an accumulator'
-    for ref in (total.ref('value'), pinned):
+    refusals = {
+        total.ref('value'): 'only a request may reference an accumulator',
+        state: f'the record of a state {state.record} is read only by the '
+        'submission that made it',
+    }
+    for ref, refused in refusals.items():
         for accumulator in (total, other):
             with pytest.raises(SubmitError, match=rf'^parts\[0\]\.value: {refused}'):
                 accumulator.push({'parts': {'value': ref}})
@@ -1082,8 +1130,11 @@ def test_only_a_request_may_reference_an_accumulator(client: Client) -> None:
             client.stage(Template(SHIFT, params={'value': ref}, blanks=('offset',)))
         with pytest.raises(SubmitError, match=f'^offset: {refused}'):
             client.accumulator(Template(SUM, params={'offset': ref}, blanks=('runs',)))
-    assert client.output(read, 'value') == 1.0
-    assert pinned == AccumulatorRef(accumulator=total.id, output='value', upto=1)
+    later = rf'^value: {refusals[state]}'
+    with pytest.raises(SubmitError, match=later):  # it would hold back the push
+        client.submit(SHIFT, {'value': state})
+    loading.set()
+    assert client.output(read, 'value') == 3.0
 
 
 def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
@@ -1099,7 +1150,8 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     read = client.submit(SHIFT, {'value': total.ref('value')})
     loading.set()
 
-    assert [r.id for r in client.provenance(read).records()] == [pending.id]
+    state = _state(client, read)
+    assert [r.id for r in client.provenance(read).records()] == [state.id, pending.id]
     assert client.output(read, 'value') == 1.0
 
 
@@ -1115,8 +1167,9 @@ def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
     loading.set()
 
     stopped = f'the accumulator stopped: push 0: input {pending.id} cancelled'
+    state = _state(client, read)
     assert client.wait(read) is Status.FAILED
-    assert client.failure(read) == stopped
+    assert client.failure([state, read]) == [stopped, f'input {state.id} failed']
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push({'parts': pending.refs('value')})
 
@@ -1137,8 +1190,8 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     for push in pushes:
         push.join()
     read = client.compute(SHIFT, {'value': digits.ref('value')})
-    pushed = client.provenance(read).records()  # in the order they were logged
-    plain = client.compute(DIGITS, {'parts': [x.refs('value') for x in pushed]})
+    pushed = _state(client, read).request.params  # in the order they were logged
+    plain = client.compute(DIGITS, pushed)
 
     assert client.output(read, 'value') == client.output(plain, 'value')
 
@@ -1295,10 +1348,10 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     summing.go.set()
 
     stopped = 'the accumulator stopped: push 1 failed: cannot add'
+    state = _state(client, after)
     assert client.wait(after) is Status.FAILED
-    assert client.failure(after) == stopped
-    (state,) = client.provenance(after).accumulated  # the push is in the log
-    assert len(state.params['parts']) == 2
+    assert client.failure([state, after]) == [stopped, f'input {state.id} failed']
+    assert len(state.request.params['parts']) == 2  # the push is in the log
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push({'parts': loads[2].refs('value')})
     with pytest.raises(SubmitError, match=f'^value: {stopped}$'):
@@ -1361,10 +1414,12 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
             {'parts': client.compute(LOAD, {'run': dataset(run=1)}).refs('value')}
         )
         read = client.compute(SHIFT, {'value': total.ref('value')})
+        state = _state(client, read)
 
-        assert client.failure(read) == (
-            "the held state of total/v1 returned ['mean']: missing ['value']"
-        )
+        assert client.failure([state, read]) == [
+            "the held state of total/v1 returned ['mean']: missing ['value']",
+            f'input {state.id} failed',
+        ]
 
 
 # Accumulators that add in place
@@ -1547,22 +1602,71 @@ def test_adding_in_place_leaves_the_outputs_pushed_unchanged(
     assert [client.output(x, 'value').tolist() for x in loads] == [[1.0], [2.0]]
 
 
-def test_a_reference_pinned_to_an_earlier_state_is_refused(
-    in_place: Client, loads: list[Record]
+def test_the_record_of_a_state_is_read_as_a_copy_until_its_readers_have_run(
+    in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
+    copying.go.clear()
     total = _total(client)
     total.push({'parts': loads[0].refs('value')})
-    first = _copy(client, total)
-    stale = first.request.params['value']
-    total.push({'parts': loads[1].refs('value')})
+    copied = _copy(client, total)  # holds the state until it has run
+    state = _state(client, copied)
+    value = client.output(state, 'value')
+    copying.go.set()
+    client.wait(copied)
 
-    gone = 'the accumulator holds only its state after 2 pushes'
-    with pytest.raises(SubmitError, match=rf'^value: {total.id}\[:1\]\.value: {gone}$'):
-        client.submit(COPY, {'value': stale})
-    current = client.submit(COPY, {'value': stale.model_copy(update={'upto': 2})})
-    assert client.output(first, 'value').tolist() == [1.0]  # read before the push
-    assert client.output(current, 'value').tolist() == [3.0]
+    gone = f'record {state.id} output value: the value is not kept'
+    with pytest.raises(LookupError, match=f'^{gone}$'):
+        client.output(state, 'value')
+    for refuse in (
+        lambda: client.submit(COPY, {'value': state.ref('value')}),
+        lambda: client.stage(Template(COPY, params={'value': state.ref('value')})),
+        lambda: total.push({'parts': {'value': state.ref('value')}}),
+    ):
+        with pytest.raises(SubmitError, match=f'value: {gone}$'):
+            refuse()
+    total.push({'parts': loads[1].refs('value')})
+    assert client.output(total, 'value').tolist() == [3.0]
+    assert value.tolist() == [1.0]  # a copy, which the push leaves unchanged
+    assert client.output(copied, 'value').tolist() == [1.0]
+
+
+def test_cancelling_the_record_of_a_state_fails_its_readers_and_frees_the_push(
+    in_place: Client,
+    loads: list[Record],
+    copying: Copying,
+    subtracting: Subtracting,
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    subtracting.go.clear()
+    sides.push({'backgrounds': loads[1].refs('value')})  # adds once go is set
+    copying.go.clear()
+    copied = _copy(client, sides, 'difference')  # its state waits for that push
+    sides.push({'samples': loads[0].refs('value')})  # waits for the readers
+    state = _state(client, copied)
+    assert state in client.records()
+    client.cancel(state)
+    subtracting.go.set()
+
+    read = _start(lambda: client.output(sides, 'difference'))
+    assert read.result(timeout=2).tolist() == [0.0]  # copying.go is still clear
+    assert client.failure(copied) == f'input {state.id} cancelled'
+
+
+def test_two_submissions_that_read_one_state_make_two_records_computed_once(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    first = client.compute(COPY, {'value': sides.ref('difference')})
+    second = client.compute(COPY, {'value': sides.ref('difference')})
+
+    assert _state(client, first).id != _state(client, second).id
+    assert _state(client, first).request == _state(client, second).request
+    assert subtracting.computed == 1
 
 
 def test_a_push_is_added_once_the_requests_that_read_the_state_before_it_have_run(
@@ -1623,7 +1727,8 @@ def test_references_in_one_submission_pin_one_state_while_rows_are_pushed(
     pushing.join()
 
     for pair in pairs:
-        (upto,) = {r.request.params['value'].upto for r in pair}
+        assert len({r.request.params['value'] for r in pair}) == 1  # one state record
+        upto = len(_state(client, pair[0]).request.params['parts'])
         expected = float(sum(range(3, 3 + upto)))
         assert [client.output(r, 'value').tolist() for r in pair] == [[expected]] * 2
 
@@ -1657,7 +1762,7 @@ def test_a_submission_pins_states_whose_pushes_wait_and_returns_at_once(
         [Request(COPY, {'value': t.ref('value')}) for t in (first, second)]
     )
 
-    assert [r.request.params['value'].upto for r in reads] == [2, 2]
+    assert [len(_state(client, r).request.params['parts']) for r in reads] == [2, 2]
     assert client.status(reads) == [Status.PENDING] * 2
     copying.go.set()
     assert [client.output(r, 'value').tolist() for r in reads] == [[3.0]] * 2
@@ -1806,7 +1911,7 @@ def test_a_read_while_a_push_adds_pins_the_state_after_it(
     read = _start(lambda: client.output(sides, 'difference'))
     copied = _copy(client, sides, 'difference')
 
-    assert copied.request.params['value'].upto == 2
+    assert _state(client, copied).request == client.provenance(sides).request
     assert len(client.provenance(sides).request.params['backgrounds']) == 1
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)  # waits for the state, as for a record
@@ -1842,10 +1947,9 @@ def test_a_push_into_two_tables_gives_one_state(
     copied = _copy(client, sides, 'difference')
     plain = client.compute(SIDES, {table: [row] for table, row in rows.items()})
 
-    assert copied.request.params['value'].upto == 1
+    assert _state(client, copied).request == plain.request
     assert client.output(copied, 'value').tolist() == [1.0]
     assert _listed(client.output(sides)) == _listed(client.output(plain))
-    assert client.provenance(copied).accumulated == (plain.request,)
 
 
 def test_a_state_is_read_once_its_plain_request_would_be_accepted(
@@ -1903,7 +2007,11 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
         client.output(sides, 'difference')
 
     _start(lambda: sides.push({'backgrounds': loads[1].refs('value')})).result(5)
-    assert client.failure(copied) == 'cannot compute'
+    state = _state(client, copied)
+    assert client.failure([state, copied]) == [
+        'cannot compute',
+        f'input {state.id} failed',
+    ]
     assert client.output(sides, 'difference').tolist() == [-1.0]
 
 

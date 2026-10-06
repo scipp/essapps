@@ -19,7 +19,7 @@ The fourth framed the whole system: system.md described every part in terms of e
 
 A reading of the in-process backend found what depends on the log:
 
-- Every query reads the views: status, records under a label, provenance, the checks of references, and the number of pushes to which a reference to an accumulator is pinned.
+- Every query reads the views: status, records under a label, provenance, the checks of references, and the pushes that give the plain request of a state that a submission reads.
 - Only a backend that starts on an existing log reads the events, to rebuild its views and run the records left pending. `local()` keeps its log in memory, so this never happens there; only the tests start a backend on a log file.
 - No query asks for the state at an earlier time. Provenance follows records and pushes as they are.
 - A restart cannot finish a pending record whose input had already completed, since values are not history. System story H2 needs stored values for that, not only history.
@@ -50,7 +50,7 @@ History is four lists, each only appended to:
 | pushes | push into an accumulator | accumulator ID, one row per table |
 
 - A record never changes. Its status is its finish; a record without one is pending.
-- A reference to an accumulator names it and how many pushes it covers. The accumulator's template and those pushes say what that state is ([ADR 0003](0003-accumulators-add-in-place.md)).
+- A request that reads an accumulator reads a record of the plain request of the state, which the accumulator's template and its pushes give ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). That record lists every row of the state; history may store it as the accumulator and its number of pushes, and expand it when read.
 - Output values are not history. [ADR 0002](0002-the-client-is-the-lifetime.md) says what keeps them.
 - A proposal is idle while none of its clients is open and none of its records is pending. Once it has been idle for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. A result needed for longer is published.
 - How a backend stores the lists is its choice. The in-process backend stores them as one event log, in memory or in a file of JSON lines.

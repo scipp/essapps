@@ -42,7 +42,7 @@ History is four lists, each only appended to:
 
 Client entries are not history: opening or ending a client, making a stage, and releasing anything append nothing, and no client entry survives a restart.
 A record does not say which stage it went through.
-A reference to an accumulator in a record names the accumulator and how many pushes it covers, so that the rows it read can be found.
+A record never names an accumulator: a submission that reads one appends a record of the state's plain request before the records that read it ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 
 ### An example
 
@@ -52,20 +52,28 @@ With two runs, these items are appended, in this order (`#n` is a record, `a` th
 ```text
 accumulators  a   volume/v1  {}  blanks=(runs)
 pushes        a   {runs: {run: uuid:run-1}}
-records       #1  cut/v1  {data: a[:1].counts, index: 0}  label=cut member=17
+records       #1  volume/v1  {runs: [{run: uuid:run-1}]}
+records       #2  cut/v1  {data: #1.counts, index: 0}  label=cut member=17
 finishes      #1  completed
-pushes        a   {runs: {run: uuid:run-2}}
-records       #2  cut/v1  {data: a[:2].counts, index: 0}  label=cut member=17
 finishes      #2  completed
-records       #3  copy/v1  {data: a[:2].counts}
+pushes        a   {runs: {run: uuid:run-2}}
+records       #3  volume/v1  {runs: [{run: uuid:run-1}, {run: uuid:run-2}]}
+records       #4  cut/v1  {data: #3.counts, index: 0}  label=cut member=17
 finishes      #3  completed
+finishes      #4  completed
+records       #5  volume/v1  {runs: [{run: uuid:run-1}, {run: uuid:run-2}]}
+records       #6  copy/v1  {data: #5.counts}
+finishes      #5  completed
+finishes      #6  completed
 ```
 
 `uuid:run-1` is the dataset identity the backend resolved `dataset(run=1)` to.
-`a[:2].counts` is the reference `{accumulator: a, output: counts, upto: 2}`: the output `counts` of `a` after its first two pushes.
-The second push is added once cut `#1` has run, since `#1` reads the volume that the push adds to (see Accumulators).
-It is appended when the driver makes it, which may be before `#1` finishes.
-Each run appends three items of constant size, however many runs came before.
+`#1` is the record of the state after the first push, the plain request over the rows pushed so far, appended in one submission with the cut `#2` that reads it.
+`#1.counts` is the reference `{record: #1, output: counts}`.
+The second push is added once cut `#2` has run, since `#2` reads the volume that the push adds to (see Accumulators).
+It is appended when the driver makes it, which may be before `#2` finishes.
+Each run appends five items, and the record of its state lists every run so far, so history grows with the square of the number of runs.
+A store may hold such a record as the accumulator and its number of pushes, and expand it when read ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 
 ### What history records
 
@@ -85,8 +93,8 @@ The backend keeps history in memory as maps (`Views` in `views.py`), and adds to
 | records by ID | `client.records`, `client.provenance`, checks of references |
 | finishes by record ID; a record without one is pending | `client.status`, `client.wait`, `client.failure`, `client.output`, checks of references |
 | record IDs by proposal and label | `client.records(label=)`, `latest`, the trigger loop |
-| accumulators by ID | provenance of a state (see Records) |
-| pushes by accumulator | pinning a reference to a state, provenance of a state |
+| accumulators by ID | the template of an accumulator, as history holds it |
+| pushes by accumulator | pinning a state, the plain request of a state (see Records) |
 
 Queries read the maps, never the storage (see Storage).
 
@@ -96,7 +104,7 @@ The in-process backend keeps it in memory, apart from the maps, and it is lost w
 The maps depend on two orders:
 
 - the records under one label are in the order they were submitted, since `client.latest` returns the newest;
-- the pushes into one accumulator are in the order they were accepted, which is the order they are added, since a reference to a state covers the first `upto`.
+- the pushes into one accumulator are in the order they were accepted, which is the order they are added, since the state after `n` pushes is the plain request over the first `n`.
 
 A finish always names a record appended before it.
 
@@ -104,14 +112,15 @@ A finish always names a record appended before it.
 
 Every record is a request.
 Its status is its finish, so a record never changes and a client's copy of it is never out of date.
-A reference to a state of an accumulator holds the accumulator's ID and a count, `upto`, not the rows.
-Provenance expands it into the plain request over the rows of the first `upto` pushes (`Backend.accumulated`): the accumulator's template with each table filled by the rows pushed into it, in push order, and defaults filled in.
+A record holds references to outputs of records and to datasets, and to nothing else.
+A request that reads an accumulator reads the record of the state it pinned, made at its submission: the accumulator's template with each table filled by the rows pushed into it, in push order, and defaults filled in ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
+Provenance is a walk over records and datasets.
 
 ```python
 total = client.compute(COPY, {'data': volume.ref('counts')})
-total.request.params['data']             # AccumulatorRef(accumulator=volume.id, output='counts', upto=300)
-client.provenance(total).accumulated     # (Request(VOLUME, {'runs': [{'run': ...}, ...]}),): 300 rows
-client.provenance(total).datasets()      # the 300 runs
+total.request.params['data']                 # OutputRef(record=..., output='counts'): the record of the state
+client.provenance(total).records()[0].request   # Request(VOLUME, {'runs': [{'run': ...}, ...]}): 300 rows
+client.provenance(total).datasets()          # the 300 runs
 ```
 
 ## Storage
@@ -284,11 +293,11 @@ def add():                               # outside the backend's lock
 def pin(accumulator):                    # a submission, client.output, client.provenance
     with lock:                           # the backend's
         upto = len(pushes[accumulator])  # the pushes logged, added or not
-        readers[upto] += 1               # until the request has run, or the copy is made
+        readers[upto] += 1               # until the submission is appended, or the copy is made
     if checked is None or checked.upto != upto:   # the first read of this state
         checked = (upto, validate(template, pushes[accumulator][:upto]))   # the plain request
     refuse(checked.reason)               # if not None
-    return reference with upto           # read once added == upto
+    return checked.request               # a submission appends a record of it, read once added == upto
 
 def read_outputs():                      # by a reader, once the state is reached
     if outputs is None:
@@ -318,10 +327,13 @@ A push that does not fit appends nothing.
 `client.provenance` reads no output, so it is not a reader.
 Pinning never waits for a push to be added.
 Under the backend's lock, a submission pins the state of each accumulator its requests read, and counts as a reader of these states, so the next push into each is not added while the submission is checked.
-It validates their plain requests outside the lock, then, under the lock, checks the requests, appends the records, and stops counting as a reader.
-Each record is then a reader of its state until it has run.
-The record holds the count.
-A record whose state the accumulator has yet to reach waits for it as for an input record.
+It validates their plain requests outside the lock, then, under the lock, checks the requests, appends one record of each state's plain request and then the records of the requests, and stops counting as a reader.
+The records of the requests reference the outputs of the records of the states.
+A record of a state is computed from the held state: its outputs are what the held state returns, as a call through a stage is computed from what the stage holds.
+No client keeps them, so they are dropped once the requests that read them have run, and the record is a reader of its state until then.
+Only the submission that made the record of a state reads it; a later request, a stage, or a row or template that references it is refused, so that every reader of a state is logged before the next push.
+A record of a state the accumulator has yet to reach waits for it as for an input record.
+After a restart, a pending record of a state has no accumulator to compute from, and runs as its plain request.
 `client.output` waits for it as `client.wait` waits for a pending record.
 
 The first read of a state validates its plain request outside the backend's lock, and the accumulator keeps the verdict for that state.
@@ -330,13 +342,13 @@ The validation takes time in proportion to the rows, so a driver that reads afte
 
 The outputs of a state are computed outside the backend's lock, under a lock of their own, all at once, the first time a reader reads them.
 The accumulator keeps them until the next push is added.
-A request reads them as the binding returns them; `client.output` copies them.
+The record of the state holds them as the binding returns them, and the requests that read it read them in place; `client.output` of the accumulator or of that record copies them.
 
 **Adding.** Each accumulator has a queue of steps, in the order they were appended: opening its held state, then adding each push.
 The backend runs one step of an accumulator at a time, on a worker, outside its lock.
 A step starts once the records it references have completed.
 Adding a push also waits until the readers of the state before it are done.
-A request is done once it has run, not only started, since a running workflow holds the value; this includes a cancelled request whose workflow still runs.
+A record of a state is done once the requests that read it have run, not only started, since a running workflow holds the value; this includes a cancelled request whose workflow still runs.
 Before a push is added, the outputs computed for the state before it are dropped.
 Once it is added, the records that wait for the state after it start.
 A long step holds up only the later steps of the same accumulator and the reads of its later states.
@@ -377,7 +389,7 @@ Batch and automatic reduction run on the service, and a client connects with `co
 - **The files** lie in an area per proposal that the framework owns, and are dropped with the proposal's history at the latest. A file dropped earlier, for example to free disk space (system story H1), is read as a value that is not kept. `publish` copies a file into the proposal's upload folder and registers it in SciCat.
 - **The store of the files** is given to the backend, not built into it: each deployment configures its own, and tests use a fake. The file format of each output type and the folder layout within a proposal's area are first-release work (scipp/essapps#23).
 - **Besides history and the files**, the service holds caches, which it may drop at any time, such as what a stage computed or a copy of a file it has read, and the held states of accumulators. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open).
-- **A state is not a record**, so nothing writes it; a request that reads it makes a record, whose outputs are written as any other's. `client.output` of an accumulator returns the value and writes nothing. A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
+- **Nothing writes the outputs of the record of a state**: the service holds them as it holds the held state, since a driver that reads after every push would otherwise write one volume per read. The outputs of a request that reads it are written as any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). If the outputs of the record of a state are lost, the record is computed again as its plain request. `client.output` of an accumulator returns the value and writes nothing. A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
 - **After a scan**, a request that copies the volume writes it once. Cuts then read that file, more slowly.
 
 ## Open

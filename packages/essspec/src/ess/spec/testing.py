@@ -22,8 +22,9 @@ binding ``multi`` of one reduction::
 
 Values are those the binding receives: data read and defaults filled in.
 Outputs are compared up to ``rtol``, since adding in another order rounds
-differently. A failed check raises ``AssertionError`` naming the symmetry and
-the call. The symmetries are those of docs/developer/README.md (Symmetries).
+differently, with :func:`assert_close`. A failed check raises
+``AssertionError`` naming the symmetry and the call. The symmetries are those
+of docs/developer/README.md (Symmetries).
 """
 
 from __future__ import annotations
@@ -53,8 +54,11 @@ def check_one_row(
     ``multi_values`` are ``single_values`` with each run in a table of one row,
     and a run left out (``None``) as an empty table.
     """
-    _assert_close(
-        _plain(multi, multi_values), _plain(single, single_values), rtol, 'one-row'
+    assert_close(
+        _plain(multi, multi_values),
+        _plain(single, single_values),
+        rtol=rtol,
+        where='one-row',
     )
 
 
@@ -77,7 +81,8 @@ def check_caching(
     call = binding.stage(fixed, tuple(calls[0]))
     for n, values in enumerate(calls, start=1):
         expected = binding.stage({**fixed, **values}, ())()
-        _assert_close(call(**values), expected, rtol, f'caching, call {n} {values}')
+        where = f'caching, call {n} {values}'
+        assert_close(call(**values), expected, rtol=rtol, where=where)
 
 
 def check_arrival_and_order(
@@ -118,8 +123,10 @@ def check_arrival_and_order(
                     raise
                 continue
             where = f'arrival, {name}, state {n} of pushes {schedule[:n]}'
-            _assert_close(held.outputs(), expected, rtol, where)
-        _assert_close(tables, pristine, 0.0, f'rows after pushing them, {name}')
+            assert_close(held.outputs(), expected, rtol=rtol, where=where)
+        assert_close(
+            tables, pristine, rtol=0.0, where=f'rows after pushing them, {name}'
+        )
 
 
 def _schedules(
@@ -158,19 +165,30 @@ def _plain(code: Binding | Function, values: Mapping[str, Any]) -> Mapping[str, 
     return code(**values)
 
 
-def _assert_close(actual: Any, expected: Any, rtol: float, where: str) -> None:
-    """Raise ``AssertionError`` unless the values agree to ``rtol``, recursively."""
+def assert_close(
+    actual: Any, expected: Any, *, rtol: float = 1e-12, where: str = ''
+) -> None:
+    """
+    Raise ``AssertionError`` unless the values agree to ``rtol``, recursively.
+
+    Mappings, lists, and tuples are compared element by element, scipp objects
+    and arrays up to ``rtol``, floats too, and other values by equality. The
+    message starts with ``where``, followed by the keys and indices of the
+    value that differs.
+    """
     if isinstance(expected, Mapping):
         if not isinstance(actual, Mapping) or actual.keys() != expected.keys():
             got = sorted(actual) if isinstance(actual, Mapping) else actual
             raise AssertionError(f'{where}: {got!r}, expected {sorted(expected)!r}')
         for key in expected:
-            _assert_close(actual[key], expected[key], rtol, f'{where}, {key!r}')
+            assert_close(
+                actual[key], expected[key], rtol=rtol, where=f'{where}, {key!r}'
+            )
     elif isinstance(expected, list | tuple):
         if not isinstance(actual, list | tuple) or len(actual) != len(expected):
             raise AssertionError(f'{where}: {actual!r}, expected {expected!r}')
         for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
-            _assert_close(a, e, rtol, f'{where}[{i}]')
+            assert_close(a, e, rtol=rtol, where=f'{where}[{i}]')
     elif type(expected).__module__.partition('.')[0] == 'scipp':
         import scipp as sc
         import scipp.testing

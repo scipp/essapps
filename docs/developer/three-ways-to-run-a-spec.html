@@ -150,7 +150,7 @@ a { color: var(--stage); }
   <div><dt>push</dt><dd>Appends one row to one or more tables of an accumulator.</dd></div>
   <div><dt>plain request</dt><dd>A spec with every value given. The backend keeps nothing between plain requests.</dd></div>
   <div><dt>stage, accumulator</dt><dd>Templates the backend keeps. A stage's blanks are replaced on each call; an accumulator's tables grow with each push.</dd></div>
-  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record; a request that reads it makes one.</dd></div>
+  <div><dt>state n</dt><dd>An accumulator after its first n pushes. Not a record; a request that reads it reads a record of its plain request, made at submission.</dd></div>
   <div><dt>accumulating binding</dt><dd>A binding that adds each push to a held state of its own. For any other binding, the backend keeps the rows.</dd></div>
   <div><dt>held state</dt><dd>What an accumulator keeps between pushes, e.g. a numerator and a denominator. Private to the binding.</dd></div>
 </dl>
@@ -228,7 +228,7 @@ can_runs: list[CanRow] = []
 acc.push({'sample_runs': {'run': 611}})
 acc.push({'can_runs': {'run': 614}})
 client.output(acc, 'iofq')</pre>
-      <div class="out">→ state n; a record only when a request reads it</div>
+      <div class="out">→ state n; a request reads it through a record of its plain request</div>
       <div class="s4"><b>order</b>: pushes into different tables commute</div>
     </div>
   </div>
@@ -313,7 +313,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Not symmetric, on purpose</div>
       <div class="broken">
-        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes a state, which shows up only in the record of a request that reads it. A partial sum is not a record, because no request says which values it holds.</p></div>
+        <div><h3>Stage call vs. push</h3><p>A stage call makes a record. A push makes none, so a state that no request reads costs no record. A request that reads a state reads a record of the state's plain request, made when the request is submitted.</p></div>
         <div><h3>Single-run spec × accumulator</h3><p>An accumulator appends rows, and a single-run spec has no table to append to.</p></div>
         <div><h3>Cost</h3><p>Arrival keeps outputs, not cost. If the binding does not accumulate, each read repeats the per-run work for every row so far.</p></div>
         <div><h3>Rows within one table</h3><p>A state's plain request lists them in push order. Whether order matters is the binding's business; for a sum, only through rounding.</p></div>
@@ -349,7 +349,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
       <tr class="group"><th colspan="4">Backend</th></tr>
       <tr><th>Calls the binding</th><td class="plain"><code>stage(values, ())()</code></td><td class="stage"><code>stage(fixed, blanks)</code> once,<br><code>call(bins=50)</code> per request</td><td class="acc"><code>held_state(fixed)</code> once,<br><code>push(rows)</code> per push,<br><code>outputs()</code> once per state read</td></tr>
       <tr><th>Keeps between steps</th><td class="plain">nothing</td><td class="stage">the fixed part, as a cache it may drop</td><td class="acc">the fixed part and the held state<br><span class="note">e.g. numerator and denominator in Q, 0.34 MB for LoKI</span></td></tr>
-      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). A request that reads it makes a record holding <code>{'accumulator': id, 'upto': n}</code></td></tr>
+      <tr><th>Each step makes</th><td class="plain">a record</td><td class="stage">a record, identical to the plain request's; it does not name the stage</td><td class="acc">state n (no record). A request that reads it makes a record of the plain request of state n, which the request's record references; neither names the accumulator</td></tr>
       <tr><th>Symmetry</th><td class="plain">one-row: between the two specs</td><td class="stage">caching: with the plain request</td><td class="acc">arrival: with the plain request; order: between pushes</td></tr>
     </tbody>
   </table>
@@ -396,7 +396,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
       <rect x="502" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
       <text x="510" y="30" text-anchor="middle" class="mono" style="font-size:11px">submit(EXPORT,</text>
       <text x="510" y="46" text-anchor="middle" class="mono" style="font-size:11px">acc.ref('iofq'))</text>
-      <text x="510" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins upto=2</text>
+      <text x="510" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins state 2</text>
 
       <circle cx="660" cy="80" r="5" style="fill: var(--acc)"/>
       <text x="660" y="30" text-anchor="middle" class="mono" style="font-size:11px">push 3</text>
@@ -405,7 +405,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
 
       <rect x="822" y="72" width="16" height="16" style="fill: var(--panel); stroke: var(--stage); stroke-width:2"/>
       <text x="830" y="30" text-anchor="middle" class="mono" style="font-size:11px">output(acc, 'iofq')</text>
-      <text x="830" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins upto=3</text>
+      <text x="830" y="62" text-anchor="middle" style="font-size:11px; fill: var(--stage)">pins state 3</text>
     </g>
 
     <!-- held states -->
@@ -458,7 +458,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
       <text x="304" y="334" class="mono" style="font-size:11px">submit(IOFQ_MULTI, {**shared,</text>
       <text x="304" y="352" class="mono" style="font-size:11px">  'sample_runs': [{'run': 611}],</text>
       <text x="304" y="370" class="mono" style="font-size:11px">  'can_runs':    [{'run': 614}]})</text>
-      <text x="304" y="396" style="font-size:11px; fill: var(--stage)">EXPORT's record holds {'accumulator': id, 'upto': 2}</text>
+      <text x="304" y="396" style="font-size:11px; fill: var(--stage)">a record of this request; EXPORT reads it</text>
 
       <rect x="640" y="290" width="330" height="118" rx="4" style="fill: var(--plain-soft); stroke: var(--plain)"/>
       <text x="654" y="312" style="font-size:12px; font-weight:600">state 3 ≡ plain request (arrival)</text>
@@ -483,7 +483,7 @@ acc.push({'sample_runs': {'run': 611}})             <span class="c"># state 2</s
     </ul>
     <ul class="tight">
       <li>A state is read only if its plain request would be accepted. Whole-table checks run at the read, not at the push.</li>
-      <li>A partial sum is never a record. To keep one, submit a request that copies the state (<code>COPY</code>).</li>
+      <li>A held state is never a record. A request that reads a state reads a record of its plain request, whose outputs are dropped once the request has run. To keep a copy, submit <code>COPY</code>.</li>
     </ul>
   </div>
 </section>
@@ -592,7 +592,7 @@ client.accumulator(Template(PARTS_SUM, blanks=(<span class="k-stage">'parts'</sp
     <div>
       <div class="eyebrow" style="margin-bottom:6px">Needed to read the grid</div>
       <ul class="tight">
-        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>dataset(run=611)</code>, or <code>acc.ref('iofq')</code>. A reference to a pending record is valid. The backend waits for it.</li>
+        <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>dataset(run=611)</code>, or <code>acc.ref('iofq')</code>, which the backend replaces at submission by an output of a record of the state's plain request. A reference to a pending record is valid. The backend waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch (<code>apply</code>), and rules all start from one.</li>
         <li><b>Drivers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
         <li><b>Where it runs.</b> <code>local()</code>: values in memory while the client keeps them. The service (designed, not built): every record's outputs written to a file; where it holds an accumulator's held state is open. Placement says the results do not differ.</li>

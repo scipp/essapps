@@ -24,7 +24,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `ANGLE` | `run` | `counts` | the counts | a reduction of one run into a volume |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
 | `VOLUME` | `runs`: a table of rows with a field `run` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
-| `COPY` | `data` | `data` | a copy of `data` | a record of a state of an accumulator |
+| `COPY` | `data` | `data` | a copy of `data` | a copy of a state of an accumulator that a client keeps |
 | `STITCH` | `runs`: a table of rows with a field `run`; `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
@@ -526,17 +526,19 @@ total = client.compute(COPY, {'data': volume.ref('counts')})
 assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'data').values.tolist() == [300.0, 45150.0]
 provenance = client.provenance(total)
-assert provenance.accumulated == (                             # the runs, in push order
-    Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),)
+assert [r.request for r in provenance.records()] == [          # the runs, in push order
+    Request(VOLUME, {'runs': [{'run': run} for run in pushed]})]
+states = [r for r in client.records() if r.spec.name == VOLUME.name]  # one per read
+assert [len(r.request.params['runs']) for r in states] == [*range(1, 301), 300]
 assert len(provenance.datasets()) == 300                       # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
-Each cut pins the state after its push, and the next push is added once that cut has run.
-`COPY` makes a record of the last state, and its provenance expands that state into the plain request over the 300 rows.
+Each cut pins the state after its push and reads a record of that state, and the next push is added once that cut has run.
+`COPY` reads the record of the last state, the plain request over the 300 rows, and copies its volume.
 On the service, each cut is written to a file; where the volume is held is open (README.md open question 5).
-That a cut is ready within seconds of each run, and that history grows by a constant amount per run, is system story D7.
+That a cut is ready within seconds of each run, and how history grows with the runs, is system story D7.
 
 ## E. Automatic reduction
 

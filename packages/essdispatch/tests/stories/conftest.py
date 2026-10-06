@@ -6,6 +6,9 @@ Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 A dataset made by ``measure`` holds a list of counts. The toy specs compute
 what the table in user-stories.md says, so that every number can be checked by
 hand.
+
+After each story, every record of proposal p1 whose outputs are still kept is
+run again as its request, and must give the same outputs (``replay``).
 """
 
 from __future__ import annotations
@@ -19,7 +22,8 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel
 
-from ess.dispatch import Backend, Client
+from ess.dispatch import Backend, Client, Record, Status
+from ess.dispatch.records import map_refs
 from ess.dispatch.testing import FakeDatasets
 from ess.spec import (
     Array,
@@ -28,9 +32,12 @@ from ess.spec import (
     HeldState,
     NexusFile,
     OpaqueFile,
+    OutputRef,
+    Ref,
     WorkflowSpec,
     combine,
 )
+from ess.spec.testing import assert_close
 
 
 def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> WorkflowSpec:
@@ -412,3 +419,50 @@ def corrupt(datasets: FakeDatasets) -> Callable[..., None]:
 @pytest.fixture
 def repair(datasets: FakeDatasets) -> Callable[..., None]:
     return datasets.repair
+
+
+@pytest.fixture(autouse=True)
+def replay(connect: Callable[..., Client]) -> Iterator[None]:
+    """
+    After the story, run every completed record whose outputs are still kept
+    again as its request, and compare the outputs.
+
+    This is a safety net over every story: a record says all that its outputs
+    depend on. A reference to an output that is no longer kept, such as one of
+    the record of an accumulator's state, is replaced by the same output of
+    that record run again. No record holds a reference to an accumulator.
+    """
+    yield
+    client = connect()
+    records = {r.id: r for r in client.records()}
+    client.wait(list(records.values()))
+    assert not [r for r in records.values() if r.request.accumulators()]
+    replays: dict[str, Record] = {}
+
+    def kept(ref: OutputRef) -> bool:
+        try:
+            client.output(records[ref.record], ref.output)
+        except LookupError:
+            return False
+        return True
+
+    def again(record: Record) -> Record:
+        def source(ref: Ref) -> Ref:
+            if isinstance(ref, OutputRef) and not kept(ref):
+                return again(records[ref.record]).ref(ref.output)
+            return ref
+
+        if record.id not in replays:
+            params = map_refs(record.request.params, source)
+            replays[record.id] = client.compute(record.spec, params)
+        return replays[record.id]
+
+    for record in records.values():
+        if client.status(record) is not Status.COMPLETED:
+            continue
+        try:
+            expected = client.output(record)
+        except LookupError:  # no longer kept
+            continue
+        where = f'{record.id} {record.spec} {record.label} {record.member}'
+        assert_close(client.output(again(record)), expected, where=where)

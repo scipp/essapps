@@ -76,21 +76,18 @@ class Provenance(BaseModel, frozen=True):
 
     ``request`` is the record's request, or for the state of an accumulator,
     the plain request over the rows pushed so far. ``records`` lists every
-    record read through all inputs, nearest first; it stops at datasets.
-    ``accumulated`` lists every state of an accumulator read on the way as the
-    plain request whose outputs it is: the accumulator's template with its
-    tables filled by the rows pushed before the state was read.
+    record read through all inputs, nearest first, the records of the states
+    of accumulators among them; it stops at datasets.
     """
 
     request: Request
     upstream: tuple[Record, ...]
-    accumulated: tuple[Request, ...]
 
     def records(self) -> list[Record]:
         return list(self.upstream)
 
     def datasets(self) -> list[DatasetRef]:
-        ran = (self.request, *(r.request for r in self.upstream), *self.accumulated)
+        ran = (self.request, *(r.request for r in self.upstream))
         return list(dict.fromkeys(d for r in ran for d in r.datasets()))
 
 
@@ -178,11 +175,12 @@ class Accumulator:
 
     def ref(self, output: str) -> AccumulatorRef:
         """
-        A reference to an output of the accumulator.
+        A reference to an output of the accumulator, for a request.
 
-        A request that holds it is pinned at submission to the rows pushed so
-        far, and reads the output of that state. A request references at most
-        one accumulator; a row or a template references none.
+        Submitting the request pins the state after the rows pushed so far,
+        makes a record of that state's plain request, and replaces the
+        reference by the same output of that record. A request references at
+        most one accumulator; a row or a template references none.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
@@ -396,7 +394,8 @@ class Client:
 
         A record's, once it has completed. An accumulator's are those of its
         state after the pushes so far, once they are added, copied, so that
-        like a record's they do not change.
+        like a record's they do not change. So are those of the record of a
+        state, which are kept only until the requests that read them have run.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
@@ -430,28 +429,17 @@ class Client:
         far, so its provenance is that of the record of this request.
         """
         if isinstance(what, Accumulator):
-            request = self._backend.accumulated(what.id, None, self._id)
+            request = self._backend.plain_request(what.id, self._id)
         else:
             request = what.request
         upstream: dict[str, Record] = {}
-        accumulated: dict[tuple[str, int | None], Request] = {}
         todo = deque([request])
         while todo:
-            ran = todo.popleft()
-            for ref in ran.inputs():
+            for ref in todo.popleft().inputs():
                 if ref.record not in upstream:
                     upstream[ref.record] = self._backend.record(ref.record, self._id)
                     todo.append(upstream[ref.record].request)
-            for state in ran.accumulators():
-                key = (state.accumulator, state.upto)
-                if key not in accumulated:
-                    accumulated[key] = self._backend.accumulated(*key, self._id)
-                    todo.append(accumulated[key])
-        return Provenance(
-            request=request,
-            upstream=tuple(upstream.values()),
-            accumulated=tuple(accumulated.values()),
-        )
+        return Provenance(request=request, upstream=tuple(upstream.values()))
 
 
 def local(

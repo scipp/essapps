@@ -60,6 +60,7 @@ addopts = """
 -ra
 """
 testpaths = "tests"
+faulthandler_timeout = 120
 xfail_strict = true
 filterwarnings = [
   "error",

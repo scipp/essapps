@@ -5,9 +5,9 @@ The backend's history: an append-only log of what ran, with which inputs,
 and what came of it.
 
 There are four events: a submission, a record that finished, an accumulator
-that opened, and a push into one. A record that read an accumulator names how
-many pushes it read, and the accumulator's template and those pushes say what
-that state is. The backend's views, such as the records by ID, are built by
+that opened, and a push into one. A submission that read an accumulator holds
+a record of the plain request of the state it read, before the records that
+read it. The backend's views, such as the records by ID, are built by
 applying the events in order, when they are appended and again when a backend
 starts from an existing log.
 

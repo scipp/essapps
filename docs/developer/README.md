@@ -78,7 +78,7 @@ The terms this document defines, in the order they appear:
 | state | an accumulator after its first n pushes; its outputs are those of its plain request, the template with each table filled by the rows of these pushes | framework | backend, at each push |
 | held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding accumulates, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
 | accumulating binding | a binding that adds each push to a held state of its own, such as a numerator and a denominator; for any other binding, the backend keeps the rows | workflow author | workflow author |
-| read | a request that references a state, from its submission until it has run, or a `client.output` call on an accumulator; a read *pins* the state at that moment | framework | notebook, app |
+| read | submitting a request that references an accumulator, or `client.output` on one; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
 
 The terms down to template are enough for most work.
 The term stage follows sciline (scipp/sciline ADR 0003).
@@ -299,6 +299,7 @@ Four things do:
 - **an accumulator whose held state keeps the rows pushed into it, for the outputs those rows reference, until the client releases the accumulator or ends** (see What a binding provides).
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
+The record of an accumulator's state is the exception to the first: no client keeps its outputs, and only the requests of the submission that made it read them (see Stages and accumulators, Reads).
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
 
 | Call | Does |
@@ -486,7 +487,7 @@ No spec, call, or record names the held state.
 - `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push is refused if a record the rows reference has failed or was cancelled, and does not wait for one that is pending. It returns once logged, and the backend adds it later (see Adding waits for readers).
 - Checks on a whole table, such as its length, and the params model's own validators apply when a state is read, not at a push. A table that needs two rows takes them one push at a time, and a state whose plain request would be refused cannot be read (see Reads).
 - Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The workflow author promises this; it is not checked.
-- If adding the rows of a push fails, the accumulator stops, since the binding may hold part of them. It stops too if a record the rows reference fails or is cancelled, or if the held state fails to open. Later pushes and reads are then refused with the reason, and requests pinned to a state it did not reach fail with it.
+- If adding the rows of a push fails, the accumulator stops, since the binding may hold part of them. It stops too if a record the rows reference fails or is cancelled, or if the held state fails to open. Later pushes and reads are then refused with the reason, and the records of states it did not reach fail with it, and so do the requests that read them.
 
 **One sum, two ways.** Every spec with a table can be given its rows both ways: all in one plain request, or over time through an accumulator.
 The caller chooses how rows arrive.
@@ -535,19 +536,20 @@ Pinning never waits for a push to be added.
 A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
 `client.output` waits for it as for a pending record, and `client.provenance` returns at once.
 
-- A reference is pinned to the state when its request is submitted. The record holds `{'accumulator': id, 'output': name, 'upto': n}`, the output after the first `n` pushes. All references to one accumulator in one submission are pinned to the same state, and a reference to an earlier state is refused.
-- `n` counts pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, `upto` 2 is the plain request with sample run 611 and can run 614, and `upto` 3 adds sample run 612 and can run 615.
-- `client.output` returns a copy, so that, like a record's output, the value does not change afterwards. A request reads the output itself, so a read costs no second copy of the held state.
+- A submission pins the state of each accumulator its requests reference, and makes one record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
+- A state is counted in pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, the state after 2 pushes is the plain request with sample run 611 and can run 614, and the state after 3 adds sample run 612 and can run 615.
+- The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state returns, and a request reads them in place, so a read costs no second copy of the held state. No client keeps them: they are dropped once the requests that read them have run, and a later request that references them is refused.
+- `client.output` of the accumulator, or of the record of a state, returns a copy, so that, like a record's output, the value does not change afterwards.
 - A read is refused if the plain request of the state would be refused, with that request's reason, such as no row in a table that needs one; a state with nothing pushed is no exception. The first read of a state validates its plain request, at a cost that grows with the number of rows, so a driver that reads after every push pays it at every push. Only the client that opened an accumulator reads it.
 - `client.provenance` reads no output, so it holds back no push.
-- `client.submit(iofq)` raises `TypeError`. A record of a state is a request of a spec that copies what it reads, such as `COPY` in Drivers.
-- A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references a record of its state, such as `COPY`. Sample and background runs that arrive at the same time are two tables of one accumulator.
+- `client.submit(iofq)` raises `TypeError`. A copy of a state that a client keeps is the record of a request of a spec that copies what it reads, such as `COPY` in Drivers.
+- A request reads at most one accumulator, and a row or a template reads none. Only the submission that made the record of a state reads it ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references a copy of its state, such as `COPY`. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
 **Adding waits for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
 Since a request reads the outputs of the state itself, a push is added only once the readers of the state before it have run.
 Adding it also waits for the records its rows reference to complete.
-Readers are the requests that pinned that state, including those cancelled while they run, and `client.output` calls in progress.
-A reader waits only for the pushes up to its state and for records submitted before it, so no wait goes round in a circle.
+Readers are the records of that state, until the requests that read them have run, including those cancelled while they run, and `client.output` calls in progress.
+Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the records of the state before it and the requests of their submissions, all logged before the push, since only the submission that made the record of a state reads it. So no wait goes round in a circle.
 The backend adds the pushes of one accumulator on its workers, one at a time, in the order they were logged.
 A long reader holds back the next addition, but not the driver.
 The outputs of a state are computed all at once, the first time the state is read, and kept until the next push is added; no output is computed for a state that no one reads.
@@ -564,9 +566,9 @@ client.output(exported, 'text')
 Releasing the accumulator, or ending its client, waits for nothing.
 The pushes logged are still added, and the held state is dropped once its readers have run.
 A released accumulator takes no more pushes or reads.
-To stop the readers too, the driver cancels them with `client.cancel`.
+To stop the readers too, the driver cancels them with `client.cancel`. The record of the state they read still computes the outputs once before the next push is added, unless the driver cancels it too.
 
-**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), a state is not a record, so nothing writes it; a request that reads a state makes a record, whose outputs are written like any other's.
+**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), nothing writes the outputs of the record of a state: the service holds them as it holds the held state. The outputs of a request that reads it are written like any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 `client.output` of an accumulator returns the value and writes nothing.
 How the service holds an accumulator's held state, bounds its memory, and ends it is open (open question 5).
 
@@ -641,12 +643,12 @@ volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):    # the scan's 300 runs
     volume.push({'runs': {'run': run}})                  # added once the previous cut has run
     client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}, label='cut', member='17')
-total = client.compute(COPY, {'data': volume.ref('counts')})   # a record of the last state
+total = client.compute(COPY, {'data': volume.ref('counts')})   # a copy of the last state
 ```
 
 `VOLUME`, `CUT`, and `COPY` are toy specs of the stories ([user-stories.md](user-stories.md), Toy specs); `VOLUME`'s binding has a held state of its own.
 Each push reduces the new run and adds it to the volume.
-Each cut pins the state after its push, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
+Each cut pins the state after its push and reads a record of that state, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
 So the loop holds one volume, not one per run or per pending cut.
 `volume.push` returns once the push is logged, so a slow cut holds back the next addition, not the loop.
 On the service, each cut is written to a file like the output of any record ([ADR 0005](adr/0005-the-service-writes-every-output.md)); where the volume is held is open (open question 5).
@@ -690,13 +692,13 @@ Whether a rule pushes into an accumulator is open ([automatic-reduction.md](auto
 
 This sub-design builds on the core.
 
-`client.provenance(record)` is plain data: the record's request, the records it read through all its inputs, the states of accumulators it read on the way, the datasets they read, and the software versions.
-Each state of an accumulator is given as the plain request over the rows pushed before it was read: the accumulator's template with its tables filled in push order.
+`client.provenance(record)` is plain data: the record's request, the records it read through all its inputs, the datasets they read, and the software versions.
+A state of an accumulator read on the way is one of these records: the plain request over the rows pushed before it was read, the accumulator's template with its tables filled in push order ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 It stops at datasets: what lies behind a dataset, raw or published, belongs to the dataset's source.
 
 ```python
 provenance = client.provenance(result)
-provenance.datasets(), provenance.records(), provenance.accumulated, provenance.software
+provenance.datasets(), provenance.records(), provenance.software
 pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its provenance
 ```
 
@@ -722,16 +724,16 @@ Arrival, order, and placement hold up to rounding where the order of adding diff
 Each promise of the workflow author compares two calls with the same inputs, so a package can test it without knowing the correct outputs.
 `ess.spec.testing` has a check for each: `check_one_row`, `check_caching`, and `check_arrival_and_order`, which pushes the same rows in several orders.
 Caching and arrival differ in two ways that the symmetries leave open.
-A call through a stage makes a record, while a push makes a state, which is recorded only by a request that reads it.
+A call through a stage makes a record, while a push makes no record; a submission that reads a state makes a record of the state's plain request.
 Arrival keeps the outputs, not the cost: if the binding does not accumulate, each read computes the per-run part of every row again.
 
 ## Guarantees
 
-- A record holds the spec, every parameter value including defaults, and its inputs by reference; a reference to an accumulator names the state it read by its number of pushes. A record never changes; its status changes once, from pending to finished.
+- A record holds the spec, every parameter value including defaults, and its inputs by reference. A record references only outputs of records and datasets; a request that reads an accumulator references the record of the state its submission pinned ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request (caching). A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order (arrival). This rests on two promises of the workflow author: a held state gives what the plain request gives (What a binding provides), and validators that read more than one value change none (Stages and accumulators).
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an accumulator's output it reads, such as a slice of it, since the next push may change that output in place.
 - A record's outputs do not depend on how they were computed: through a stage, from an accumulator, or on another machine. Values may differ in rounding where the order of adding differs.
-- The provenance of a record reaches every dataset it read, through all its inputs and the states of accumulators it read, with their parameter values and software versions.
+- The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - A proposal's records are kept until the proposal has been idle for the retention period, and then dropped as a whole. A published entry answers what produced it without access to the records.
 - Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
 
