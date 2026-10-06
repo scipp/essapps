@@ -11,7 +11,7 @@ hand.
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -21,6 +21,7 @@ from ess.reduce.spec import Array, DatasetRef, NexusFile, OpaqueFile, WorkflowSp
 from pydantic import BaseModel
 
 from ess.apps import Backend, Client, combine
+from ess.apps.bindings import Function, HeldState
 from ess.apps.testing import FakeDatasets
 
 
@@ -132,8 +133,12 @@ def vanadium(run: Any, scale: float) -> dict[str, sc.Variable]:
     return {'normalization': sc.scalar(float(_counts(run).sum()) * scale)}
 
 
+class RunsParams(BaseModel):
+    runs: list[RunParams]
+
+
 class NormalizeParams(BaseModel):
-    runs: list[NexusFile]
+    runs: list[RunParams]
     scale: float = 1.0
 
 
@@ -144,14 +149,13 @@ class NormalizedOutputs(BaseModel):
 NORMALIZE = _spec('normalize', NormalizeParams, NormalizedOutputs)
 
 
-def normalize(runs: list[Any], scale: float) -> dict[str, sc.Variable]:
-    total = sum(_counts(r) for r in runs)
-    return {'normalized': _array(total / total.sum() * scale)}
+def normalize(runs: np.ndarray, scale: float) -> dict[str, sc.Variable]:
+    return {'normalized': _array(runs / runs.sum() * scale)}
 
 
 class BackgroundParams(BaseModel):
-    sample_runs: list[NexusFile]
-    background_runs: list[NexusFile]
+    sample_runs: list[RunParams]
+    background_runs: list[RunParams]
 
 
 class BackgroundOutputs(BaseModel):
@@ -161,10 +165,10 @@ class BackgroundOutputs(BaseModel):
 BACKGROUND = _spec('background', BackgroundParams, BackgroundOutputs)
 
 
-def background(sample_runs: list[Any], background_runs: list[Any]) -> dict[str, Any]:
-    samples = sum(_counts(r) for r in sample_runs)
-    backgrounds = sum(_counts(r) for r in background_runs)
-    return {'subtracted': _array(samples - backgrounds)}
+def background(
+    sample_runs: np.ndarray, background_runs: np.ndarray
+) -> dict[str, sc.Variable]:
+    return {'subtracted': _array(sample_runs - background_runs)}
 
 
 class ContributeOutputs(BaseModel):
@@ -185,21 +189,6 @@ def contribute(run: Any) -> dict[str, sc.Variable]:
     }
 
 
-class FinalizeParams(BaseModel):
-    numerator: Array()  # type: ignore[valid-type]
-    denominator: Array()  # type: ignore[valid-type]
-    scale: float = 1.0
-
-
-FINALIZE = _spec('sans-finalize', FinalizeParams, NormalizedOutputs)
-
-
-def finalize(
-    numerator: sc.Variable, denominator: sc.Variable, scale: float
-) -> dict[str, sc.Variable]:
-    return {'normalized': numerator / denominator * scale}
-
-
 class NormalizationParts(BaseModel):
     numerator: Array()  # type: ignore[valid-type]
     denominator: Array()  # type: ignore[valid-type]
@@ -212,22 +201,76 @@ class PartsSumParams(BaseModel):
 PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
 
 
+class _Sums:
+    def __init__(
+        self,
+        finalize: Callable[..., dict[str, Any]],
+        tables: Sequence[str],
+        **fixed: Any,
+    ) -> None:
+        self._finalize = finalize
+        self._fixed = fixed
+        self._sums: dict[str, Any] = dict.fromkeys(tables, 0.0)
+
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            self._sums[table] += _counts(row['run'])  # in place from the second row
+
+    def outputs(self) -> Mapping[str, Any]:
+        return self._finalize(**self._sums, **self._fixed)
+
+
+class Summing:
+    """
+    The binding of a spec over tables of runs, a toy ``StreamProcessor``: the
+    counts of each table's runs are summed, and ``finalize`` computes the
+    outputs from the sums, by table name, and the other values.
+    """
+
+    def __init__(self, finalize: Callable[..., dict[str, Any]], *tables: str) -> None:
+        self._finalize = finalize
+        self._tables = tables
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        def compute(**values: Any) -> Mapping[str, Any]:
+            params = {**fixed, **values}
+            sums = {
+                t: sum((_counts(row['run']) for row in params.pop(t)), 0.0)
+                for t in self._tables
+            }
+            return self._finalize(**sums, **params)
+
+        return compute
+
+    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
+        return _Sums(self._finalize, self._tables, **fixed)
+
+
 class Counts(BaseModel):
     counts: Array()  # type: ignore[valid-type]
 
 
 ANGLE = _spec('angle', RunParams, Counts)
-
-
-class VolumeParams(BaseModel):
-    angles: list[Counts]
-
-
-VOLUME = _spec('volume', VolumeParams, Counts)
+VOLUME = _spec('volume', RunsParams, Counts)
 
 
 def angle(run: Any) -> dict[str, sc.Variable]:
     return {'counts': _array(run)}
+
+
+def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
+    return {'counts': _array(runs)}
+
+
+class Data(BaseModel):
+    data: Array()  # type: ignore[valid-type]
+
+
+COPY = _spec('copy', Data, Data)
+
+
+def copy(data: sc.Variable) -> dict[str, sc.Variable]:
+    return {'data': data.copy()}
 
 
 class CutParams(BaseModel):
@@ -247,7 +290,7 @@ def cut(data: sc.Variable, index: int) -> dict[str, sc.Variable]:
 
 
 class StitchParams(BaseModel):
-    runs: list[NexusFile]
+    runs: list[RunParams]
     reference: NexusFile
 
 
@@ -258,8 +301,8 @@ class StitchOutputs(BaseModel):
 STITCH = _spec('stitch', StitchParams, StitchOutputs)
 
 
-def stitch(runs: list[Any], reference: Any) -> dict[str, sc.Variable]:
-    curves = [_counts(run) / _counts(reference) for run in runs]
+def stitch(runs: list[dict[str, Any]], reference: Any) -> dict[str, sc.Variable]:
+    curves = [_counts(row['run']) / _counts(reference) for row in runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
@@ -286,16 +329,16 @@ TOYS = {
     IOFQ_V2: iofq_v2,
     BEAM_CENTRE: beam_centre,
     VANADIUM: vanadium,
-    NORMALIZE: normalize,
-    BACKGROUND: background,
+    NORMALIZE: Summing(normalize, 'runs'),
+    BACKGROUND: Summing(background, 'sample_runs', 'background_runs'),
     CONTRIBUTE: contribute,
-    FINALIZE: finalize,
     ANGLE: angle,
     CUT: cut,
     STITCH: stitch,
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
-    VOLUME: combine(operator.iadd),
+    VOLUME: Summing(volume, 'runs'),
+    COPY: copy,
 }
 
 

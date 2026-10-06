@@ -12,24 +12,26 @@ backend keeps elsewhere.
 
 from __future__ import annotations
 
-from .log import Event, Finished, Pushed, Submitted
-from .records import Element, Record, Status
+from .log import Event, Finished, Opened, Pushed, Submitted
+from .records import Record, Status
 
 
 class Views:
     """
-    The records, labels, and accumulator elements that the events describe.
+    The records, labels, accumulators, and pushes that the events describe.
 
     ``finished`` holds the event that finished a record; a record without one
-    is pending. ``elements`` holds each accumulator's elements in push order;
-    a snapshot of it covers the first ``upto``.
+    is pending. ``accumulators`` holds the event that opened each accumulator,
+    and ``pushes`` its pushes in order, each a row per table; a record that
+    read it after ``upto`` pushes read the first ``upto``.
     """
 
     def __init__(self) -> None:
         self.records: dict[str, Record] = {}
         self.finished: dict[str, Finished] = {}
         self.labels: dict[tuple[str, str], list[str]] = {}  # (proposal, label)
-        self.elements: dict[str, list[Element]] = {}  # accumulator ID to elements
+        self.accumulators: dict[str, Opened] = {}
+        self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
 
     def apply(self, event: Event) -> None:
         match event:
@@ -37,7 +39,7 @@ class Views:
                 for new in event.records:
                     self.records[new.id] = Record(
                         id=new.id,
-                        submitted=new.submitted,
+                        request=new.request,
                         proposal=event.proposal,
                         submitter=event.submitter,
                         created=event.time,
@@ -50,8 +52,10 @@ class Views:
                         self.labels.setdefault(key, []).append(new.id)
             case Finished():
                 self.finished[event.record] = event
+            case Opened():
+                self.accumulators[event.accumulator] = event
             case Pushed():
-                self.elements.setdefault(event.accumulator, []).append(event.element)
+                self.pushes.setdefault(event.accumulator, []).append(event)
 
     def status(self, record_id: str) -> Status:
         finished = self.finished.get(record_id)

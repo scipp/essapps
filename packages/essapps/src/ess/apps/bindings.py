@@ -16,18 +16,21 @@ A plain function is a binding that computes nothing ahead. How a binding
 computes is invisible in the records: a call through a stage returns what the
 plain request returns.
 
-A binding of a spec over a table may also make element accumulators, like
-``sciline.Accumulator`` for a whole element. An accumulator holds one, so it
-needs such a binding::
+An accumulator keeps a held state, made for the values of every field but the
+tables it fills. A binding of a spec with table fields may make held states,
+like ``ess.reduce.streaming.StreamProcessor``::
 
-    held = binding.accumulator()
-    held.push({'numerator': n1, 'denominator': d1})
-    held.value                       # {'numerator': ..., 'denominator': ...}
+    held = binding.held_state({'scale': 2.0})    # what depends on them, once
+    held.push({'runs': {'run': run_611}})        # a row per named table, data read
+    held.outputs()                               # {'normalized': ...}, every output
 
-Its value after the elements are pushed in order is the output of the plain
-request over them. It may add each element in place, and its value may be
-what it holds, not a copy: the backend reads the value only between pushes,
-and lets go of it before the next push.
+Its outputs after rows are pushed in order are those of the plain request
+whose tables hold these rows, with the same other values. It may add each push
+in place, and its outputs may be what it holds, not a copy;
+:mod:`ess.apps.backend` says why that is safe.
+
+For any other binding, :func:`open_held_state` makes a held state that keeps
+the rows and computes the plain request over them when a state is read.
 """
 
 from __future__ import annotations
@@ -60,35 +63,41 @@ class Binding(Protocol):
         ...
 
 
-class ElementAccumulator(Protocol):
-    def push(self, element: Mapping[str, Any]) -> None:
+class HeldState(Protocol):
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         """
-        Add an element: a row of the spec's table, with data read.
+        Add one row to each named table field, with data read.
 
-        It may modify what the accumulator holds in place, and so change a
-        value read before it, but not the element. An accumulator that starts
-        from the first element copies it, so that adding in place never
-        changes the output the element came from.
+        The rows of one push enter one state, so a binding may add them at
+        once. It may modify what it holds in place, and so change an output
+        returned before it, but not the rows. A held state that starts from
+        the first row's values copies them, so that adding in place never
+        changes the output they came from.
         """
         ...
 
-    @property
-    def value(self) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         """
-        The outputs of the spec over the elements pushed so far.
+        Every output of the spec over the rows pushed so far.
 
-        They may be what the accumulator holds, not a copy.
+        They may be what the held state holds, not a copy. An output the spec
+        declares optional may be left out. The backend calls this once per
+        state that is read, and keeps what it returns until the next push.
         """
         ...
 
 
 @runtime_checkable
-class AccumulatorBinding(Binding, Protocol):
-    def accumulator(self) -> ElementAccumulator:
+class HeldStateBinding(Binding, Protocol):
+    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
         """
-        A new element accumulator with nothing pushed.
+        A new held state with nothing pushed.
 
-        Its ``push`` and ``value`` are called from one thread at a time.
+        ``fixed`` holds every parameter but the tables it fills, with data
+        read and defaults filled in. Each value is typed by its own field and
+        that field's validators; the params model's own validators run on
+        the plain request of a state when it is read. Its ``push`` and
+        ``outputs`` are called from one thread at a time.
         """
         ...
 
@@ -106,3 +115,42 @@ class FunctionBinding:
 def as_binding(code: Binding | Function) -> Binding:
     """``code`` as a binding; a plain function is wrapped."""
     return code if isinstance(code, Binding) else FunctionBinding(code)
+
+
+class _KeptRows:
+    """
+    The held state of a binding that makes none: the rows pushed so far.
+
+    ``call`` is the binding staged with the fixed values and the tables as
+    blanks. A read calls it with every row so far, so it computes the plain
+    request over them, once per state that is read. What depends only on the
+    fixed values is computed once if the stage holds it, as a stage of
+    ``PipelineBinding`` does; the part that depends on the rows is computed
+    again, over every row, for each state that is read.
+    """
+
+    def __init__(self, call: Function, tables: Sequence[str]) -> None:
+        self._call = call
+        self._rows: dict[str, list[Mapping[str, Any]]] = {t: [] for t in tables}
+
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            self._rows[table].append(row)
+
+    def outputs(self) -> Mapping[str, Any]:
+        return self._call(**{t: list(rows) for t, rows in self._rows.items()})
+
+
+def open_held_state(
+    binding: Binding, fixed: Mapping[str, Any], tables: Sequence[str]
+) -> HeldState:
+    """
+    A held state with nothing pushed, of an accumulator that fills ``tables``.
+
+    It is the binding's own if the binding makes held states, and one that
+    keeps the rows otherwise. ``fixed`` is as for
+    :meth:`HeldStateBinding.held_state`.
+    """
+    if isinstance(binding, HeldStateBinding):
+        return binding.held_state(fixed)
+    return _KeptRows(binding.stage(fixed, tables), tables)

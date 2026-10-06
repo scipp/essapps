@@ -34,6 +34,8 @@ class Rule:
 
     With ``series``, a request instead takes every dataset with the same value
     of that metadata field so far, in run order, and that value is its member.
+    The blank is then a table, and each dataset is a row of it, in the row's
+    field ``row_field``.
     """
 
     name: str
@@ -43,6 +45,7 @@ class Rule:
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
+    row_field: str = 'run'
 
 
 @dataclass
@@ -125,13 +128,11 @@ class TriggerLoop:
         self, rule: Rule, matching: list[DatasetRef], new: list[DatasetRef]
     ) -> dict[str, Request]:
         series: dict[str, list[DatasetRef]] = defaultdict(list)
-        for ref in matching:
+        for ref in sorted(matching, key=lambda r: run_number(r, self._source)):
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         blank = dataset_blank(rule.template, None)
         return {
-            value: rule.template.fill(
-                {blank: sorted(refs, key=lambda r: run_number(r, self._source))}
-            )
+            value: rule.template.fill({blank: [{rule.row_field: r} for r in refs]})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }

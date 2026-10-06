@@ -1,21 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Specs over a table: specs that combine a list of elements into one value.
+``combine``: a binding that combines the rows of a table, field by field.
 
-The only param of such a spec is a table field (``ess.reduce.spec``): a list
-of a flat model, one row per element. A request gives the whole table; an
-accumulator takes one row at a time::
+A request gives the whole table, and an accumulator takes one row at a time;
+both combine the rows in the same order::
 
     class SumParams(BaseModel):
         parts: list[NormalizationParts]
 
     rows = [c.refs('numerator', 'denominator') for c in contributions]
     client.submit(PARTS_SUM, {'parts': rows})
-    accumulator.push(rows[0])                        # one row, the same shape
-
-The outputs are any model; a sum outputs the row's fields, a mean or a sum
-into a wider type does not.
+    total = client.accumulator(Template(PARTS_SUM, blanks=('parts',)))
+    total.push({'parts': rows[0]})                   # one row, the same shape
 
 ``combine`` belongs in ess.reduce next to ``PipelineBinding``; it lives here
 until that is proposed there.
@@ -29,44 +26,36 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ess.reduce.spec import WorkflowSpec, table_fields
-from pydantic import BaseModel
-
-from .bindings import AccumulatorBinding, ElementAccumulator, Function
-
-
-def element_table(spec: WorkflowSpec) -> tuple[str, type[BaseModel]] | None:
-    """The name and row model of the table that is the only param of ``spec``."""
-    tables = table_fields(spec.params)
-    if len(spec.params.model_fields) != 1 or len(tables) != 1:
-        return None
-    return next(iter(tables.items()))
+from .bindings import Function, HeldState, HeldStateBinding
 
 
 class _Fold:
     """
-    Each field combined with ``operation``, in push order.
+    Each field of one table's rows combined with ``operation``, in push order.
 
-    The first element is copied, so that combining in place never changes the
+    The first row is copied, so that combining in place never changes the
     output it came from.
     """
 
     def __init__(self, operation: Callable[[Any, Any], Any]) -> None:
         self._operation = operation
-        self._value: dict[str, Any] | None = None
+        self._table: str | None = None
+        self.total: dict[str, Any] = {}
 
-    def push(self, element: Mapping[str, Any]) -> None:
-        if self._value is None:
-            self._value = copy.deepcopy(dict(element))
-        else:
-            for field, value in element.items():
-                self._value[field] = self._operation(self._value[field], value)
+    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        for table, row in rows.items():
+            if self._table is None:
+                self._table, self.total = table, copy.deepcopy(dict(row))
+            elif table != self._table:
+                raise ValueError(
+                    f'combine takes one table, not {self._table} and {table}'
+                )
+            else:
+                for field, value in row.items():
+                    self.total[field] = self._operation(self.total[field], value)
 
-    @property
-    def value(self) -> Mapping[str, Any]:
-        if self._value is None:
-            raise ValueError('nothing has been pushed')
-        return self._value
+    def outputs(self) -> Mapping[str, Any]:
+        return self.total
 
 
 @dataclass(frozen=True)
@@ -77,27 +66,33 @@ class _Combine:
         return functools.partial(self._compute, **fixed)
 
     def _compute(self, **table: list[Mapping[str, Any]]) -> Mapping[str, Any]:
-        (rows,) = table.values()
-        fold = self.accumulator()
+        ((name, rows),) = table.items()
+        fold = _Fold(self.operation)
         for row in rows:
-            fold.push(row)
-        return fold.value
+            fold.push({name: row})
+        return fold.total
 
-    def accumulator(self) -> ElementAccumulator:
+    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
+        if fixed:
+            raise TypeError(f'combine takes only a table, not also {sorted(fixed)}')
         return _Fold(self.operation)
 
 
-def combine(operation: Callable[[Any, Any], Any]) -> AccumulatorBinding:
+def combine(operation: Callable[[Any, Any], Any]) -> HeldStateBinding:
     """
-    The binding of a spec over a table that outputs the row's fields: each
-    field combined with ``operation``, as in ``operation(operation(a, b), c)``.
+    The binding of a spec whose only param is one table, and whose outputs
+    are the row's fields: each field combined with ``operation``, as in
+    ``operation(operation(a, b), c)``.
 
-    A plain request and an accumulator combine the elements in the same
-    order, so they give the same value. ``operation(total, element)`` may
-    modify ``total`` in place, and returns the combined value: with
-    ``operator.iadd`` an accumulator adds in place, and with ``operator.add``
-    each push makes a new value. It must not modify ``element``. ``total``
-    starts as a copy of the first element, so neither way changes the output
-    an element came from.
+    A plain request and an accumulator combine the rows in the same order, so
+    they give the same value. ``operation(total, row)`` may modify ``total``
+    in place, and returns the combined value: with ``operator.iadd`` the
+    held state adds in place, and with ``operator.add`` each push makes a new
+    value. It must not modify ``row``. ``total`` starts as a copy of the first
+    row, so neither way changes the output a row came from. With no rows it
+    returns no outputs, so a read of a state with nothing pushed fails, as the
+    plain request over no rows does. Since the table is the spec's only param,
+    an accumulator that opens with other values stops, and so does one that a
+    push adds a second table to.
     """
     return _Combine(operation)

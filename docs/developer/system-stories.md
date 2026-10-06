@@ -34,7 +34,7 @@ Property: a local file reaches the service only when a request that names it is 
 ### B2. Add a run to a sum
 
 Actor: user in a notebook. Goal: after a new run finishes, the sum including it comes back quickly.
-Property: pushing a contribution into an accumulator and computing it reduces only the new run and reads no earlier contribution again.
+Property: with a binding that has a held state of its own, such as `Summing`, pushing a run into an accumulator reduces only that run, and reading the sum computes the outputs from the held state, without reading any earlier run again. With the held state that keeps the rows, each read reduces every run so far again.
 
 ### B4. Explore a 4D volume
 
@@ -43,15 +43,15 @@ Property: a view of an output returns in a fraction of a second, and only the sl
 
 ### B6. Find last week's result
 
-Actor: user after a week. Goal: last week's records are still there, and the outputs that were saved.
-Property: records survive restarts of the client and of the backend, until the proposal has been idle for the retention period (H3). Saved outputs survive as long as their store keeps them.
+Actor: user after a week. Goal: last week's records are still there, with their outputs.
+Property: records survive restarts of the client and of the backend, until the proposal has been idle for the retention period (H3). On the service, their outputs are files, which are dropped with the proposal's history.
 
 ## C. Chaining
 
 ### C2. Vanadium from the catalogue
 
 Actor: user. Goal: use a vanadium result that another backend published.
-Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage. A result of another proposal on the same backend is read the same way, or from a saved output: no proposal reads another's records.
+Property: the backend reads the published output through the catalogue. It needs no access to the other backend's records or storage. A result of another proposal on the same backend is read the same way: no proposal reads another's records.
 
 ### C5. Vanadium and sample tuned together
 
@@ -63,7 +63,7 @@ Property: the vanadium output passes to the sample's stage in memory, within one
 ### D2. Overnight cluster batch
 
 Actor: NMX user. Goal: thirty long runs finish overnight while the laptop is closed.
-Property: requests run to completion with no client connected, in parallel as far as the cluster allows.
+Property: requests run to completion with no client connected, in parallel as far as the cluster allows. Each output is written to a file when its record completes, so the next day's client reads it ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
 
 ### D3. Cancel and resubmit
 
@@ -72,12 +72,13 @@ Property: a cancel stops the started requests within seconds and frees their wor
 
 Gap: a cancel ends the records, but a workflow that has started runs on and keeps its worker until it returns. Its outputs are then dropped. The resubmitted requests wait for those workers.
 
-### D7. Rotation scan over a thousand angles
+### D7. Rotation scan over three hundred angles
 
-Actor: spectroscopy user. Goal: each run is reduced on its own node as it arrives, and the volume so far is ready within seconds of each angle.
-Property: each `ANGLE` request starts when its run arrives, on any free node. Pushing a finished angle into the accumulator combines one contribution and reads no earlier one.
-Each snapshot of the volume makes a record over every angle pushed so far. The storage these records take does not grow quadratically with the number of snapshots.
-A plain request of `VOLUME` over a thousand elements, not through an accumulator, runs as a tree of partial sums, since its author declares that grouping does not change the sum. No process reads more than a configured number of contributions.
+Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
+Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run in the accumulator's job and adds it to the held state, reading no earlier run. The volume is held once, in a job whose memory size and deadline the client declares ([ADR 0005](adr/0005-the-service-writes-every-output.md)). Each cut makes one record, which names the state it read by its number of pushes, so history grows by a constant amount per run ([system.md](system.md), An example).
+Each cut checks the plain request of its state, which takes time in proportion to the rows so far: about 1.3 ms at 300 rows, so its total over the scan grows with the square of the number of runs ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
+
+Gap: reducing the runs of one scan on several nodes needs a merge of two held states (README.md open question 1).
 
 ## F. Publication and provenance
 
@@ -91,7 +92,7 @@ Property: the software environment recorded with a record is enough to install i
 ### G2. Developer iterates on a workflow
 
 Actor: workflow developer. Goal: edit a workflow in a notebook and see the result within seconds.
-Property: a backend in the notebook's process runs a workflow bound there, and uses an edited binding for the next request without a restart. A hosted backend runs only installed workflows.
+Property: a backend in the notebook's process runs a workflow bound there, and uses an edited binding for the next request without a restart. The service runs only installed workflows.
 
 ### G5. Reference across proposals refused
 

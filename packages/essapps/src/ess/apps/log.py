@@ -4,10 +4,12 @@
 The backend's history: an append-only log of what ran, with which inputs,
 and what came of it.
 
-There are three events: a submission, a record that finished, and a push into
-an accumulator, whose elements a snapshot covers. The backend's views, such as
-the records by ID, are built by applying the events in order, when they are
-appended and again when a backend starts from an existing log.
+There are four events: a submission, a record that finished, an accumulator
+that opened, and a push into one. A record that read an accumulator names how
+many pushes it read, and the accumulator's template and those pushes say what
+that state is. The backend's views, such as the records by ID, are built by
+applying the events in order, when they are appended and again when a backend
+starts from an existing log.
 
 Clients and their stages and accumulators are not history, and neither are
 output values or anything a binding computed; those have their own lifetime.
@@ -17,6 +19,7 @@ all of it or none of it.
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import os
 from collections.abc import Iterator
@@ -27,14 +30,14 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from .records import Element, Request, Status, Submission, map_refs
+from .records import Request, Row, Status, Template, as_refs
 
 
 class NewRecord(BaseModel, frozen=True):
     """One record of a submission, as the backend accepted it."""
 
     id: str
-    submitted: Submission
+    request: Request
     outputs: tuple[str, ...]
     label: str | None = None
     member: str | None = None
@@ -55,36 +58,51 @@ class Finished(BaseModel, frozen=True):
     failure: str | None = None
 
 
+class Opened(BaseModel, frozen=True):
+    """
+    An accumulator that opened, with its template as the backend accepted it.
+
+    The template's blanks are the tables that the pushes fill.
+    """
+
+    kind: Literal['opened'] = 'opened'
+    accumulator: str
+    proposal: str
+    template: Template
+
+
 class Pushed(BaseModel, frozen=True):
+    """A push into an accumulator: one row for each table it names."""
+
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
-    element: Element
+    rows: dict[str, Row]
 
 
-Event = Annotated[Submitted | Finished | Pushed, Field(discriminator='kind')]
+Event = Annotated[Submitted | Finished | Opened | Pushed, Field(discriminator='kind')]
 _event = TypeAdapter(Event)
 
 
 def _with_refs(event: Event) -> Event:
     """The event with references in values read as references, not dicts."""
-    if isinstance(event, Pushed):
-        element = map_refs(event.element, lambda ref: ref)
-        return event.model_copy(update={'element': element})
-    if not isinstance(event, Submitted):
-        return event
-    records = tuple(
-        r.model_copy(
-            update={
-                'submitted': Request(
-                    r.submitted.spec, map_refs(r.submitted.params, lambda ref: ref)
+    match event:
+        case Submitted():
+            records = tuple(
+                r.model_copy(
+                    update={
+                        'request': Request(r.request.spec, as_refs(r.request.params))
+                    }
                 )
-            }
-        )
-        if isinstance(r.submitted, Request)
-        else r
-        for r in event.records
-    )
-    return event.model_copy(update={'records': records})
+                for r in event.records
+            )
+            return event.model_copy(update={'records': records})
+        case Opened():
+            params = as_refs(event.template.params)
+            template = dataclasses.replace(event.template, params=params)
+            return event.model_copy(update={'template': template})
+        case Pushed():
+            return event.model_copy(update={'rows': as_refs(event.rows)})
+    return event
 
 
 def _parse(line: bytes) -> Event:

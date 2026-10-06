@@ -38,7 +38,7 @@ def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> 
 
     curve = client.latest('reflectivity', member='si')
     assert len(client.records(label='reflectivity')) == 2
-    assert curve.request.params['runs'] == [r2, r3, r4]
+    assert curve.request.params['runs'] == [{'run': r} for r in (r2, r3, r4)]
     assert client.output(curve, 'stitched').values.tolist() == [
         1.0,
         2.0,

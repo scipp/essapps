@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A sciline pipeline behind a spec, in plain requests and through stages."""
+"""
+A sciline pipeline behind a spec, in plain requests, through stages, and in
+accumulators.
+"""
 
 from collections.abc import Iterator
 from typing import NewType
@@ -19,10 +22,16 @@ Loaded = NewType('Loaded', float)
 Offset = NewType('Offset', float)
 Note = NewType('Note', str)
 Shifted = NewType('Shifted', float)
+Offsets = NewType('Offsets', list)
+Total = NewType('Total', float)
 
 
 def shift(loaded: Loaded, offset: Offset) -> Shifted:
     return Shifted(loaded + offset)
+
+
+def total(loaded: Loaded, offsets: Offsets) -> Total:
+    return Total(sum(loaded + row['offset'] for row in offsets))
 
 
 class ShiftParams(BaseModel):
@@ -45,6 +54,29 @@ SHIFT = WorkflowSpec(
 )
 
 
+class OffsetRow(BaseModel):
+    offset: float
+
+
+class TotalParams(BaseModel):
+    run: NexusFile
+    offsets: list[OffsetRow]
+
+
+class TotalOutputs(BaseModel):
+    total: Array()  # type: ignore[valid-type]
+
+
+TOTAL = WorkflowSpec(
+    name='total',
+    version=1,
+    title='total',
+    description='total',
+    params=TotalParams,
+    outputs=TotalOutputs,
+)
+
+
 @pytest.fixture
 def loaded() -> list[float]:
     """The runs the pipeline has loaded."""
@@ -57,7 +89,7 @@ def pipeline(loaded: list[float]) -> sciline.Pipeline:
         loaded.append(run)
         return Loaded(10 * run)
 
-    return sciline.Pipeline([load, shift])
+    return sciline.Pipeline([load, shift, total])
 
 
 @pytest.fixture
@@ -69,7 +101,10 @@ def client(pipeline: sciline.Pipeline) -> Iterator[Client]:
         params={'run': Run, 'offset': Offset, 'note': Note},
         outputs={'value': Shifted},
     )
-    backend = Backend(datasets, {SHIFT: binding})
+    summing = PipelineBinding(
+        pipeline, params={'run': Run, 'offsets': Offsets}, outputs={'total': Total}
+    )
+    backend = Backend(datasets, {SHIFT: binding, TOTAL: summing})
     yield Client(backend, proposal='p1', submitter='anna')
     backend.close()
 
@@ -85,6 +120,24 @@ def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None
     assert client.output(plain, 'value') == 11.5
     assert tuned[1].request == plain.request
     assert loaded == [1.0, 1.0]  # once for the stage, once for the plain request
+
+
+def test_an_accumulator_loads_its_run_once_across_reads(
+    client: Client, loaded: list[float]
+) -> None:
+    summed = client.accumulator(
+        Template(TOTAL, params={'run': dataset(run=1)}, blanks=('offsets',))
+    )
+    reads = []
+    for offset in (0.5, 1.5, 2.5):
+        summed.push({'offsets': {'offset': offset}})
+        reads.append(client.output(summed, 'total'))
+    offsets = [{'offset': x} for x in (0.5, 1.5, 2.5)]
+    plain = client.compute(TOTAL, {'run': dataset(run=1), 'offsets': offsets})
+
+    assert reads == [10.5, 22.0, 34.5]
+    assert client.output(plain, 'total') == 34.5
+    assert loaded == [1.0, 1.0]  # once for the accumulator, once for the plain request
 
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:

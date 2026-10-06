@@ -68,10 +68,12 @@ def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> 
 
 def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
-    total = client.compute(NORMALIZE, {'runs': runs, 'scale': 2.0})
+    rows = [{'run': run} for run in runs]
+    total = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
-        BACKGROUND, {'sample_runs': runs, 'background_runs': backgrounds}
+        BACKGROUND,
+        {'sample_runs': rows, 'background_runs': [{'run': r} for r in backgrounds]},
     )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
