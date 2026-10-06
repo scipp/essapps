@@ -13,9 +13,6 @@ both combine the rows in the same order::
     client.submit(PARTS_SUM, {'parts': rows})
     total = client.accumulator(Template(PARTS_SUM, blanks=('parts',)))
     total.push({'parts': rows[0]})                   # one row, the same shape
-
-``combine`` belongs in ess.reduce next to ``PipelineBinding``; it lives here
-until that is proposed there.
 """
 
 from __future__ import annotations
@@ -26,7 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .bindings import Function, HeldState, HeldStateBinding
+from .binding import Function, HeldState, HeldStateBinding
 
 
 class _Fold:

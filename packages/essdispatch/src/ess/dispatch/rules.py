@@ -19,7 +19,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ess.reduce.spec import DatasetRef
+from ess.spec import DatasetRef
 
 from .batch import Lookup, dataset_blank, run_number, try_apply
 from .client import Client

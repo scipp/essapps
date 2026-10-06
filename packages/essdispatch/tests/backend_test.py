@@ -8,7 +8,6 @@ from itertools import islice
 from typing import Any
 
 import pytest
-from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.dispatch import (
@@ -22,6 +21,7 @@ from ess.dispatch import (
     dataset,
 )
 from ess.dispatch.testing import FakeDatasets
+from ess.spec import Array, NexusFile, WorkflowSpec
 
 
 class RunParams(BaseModel):

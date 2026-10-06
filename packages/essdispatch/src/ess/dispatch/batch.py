@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from ess.reduce.spec import DatasetRef
+from ess.spec import DatasetRef
 
 from .client import Datasets
 from .datasets import Selector

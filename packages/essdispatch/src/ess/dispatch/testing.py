@@ -8,7 +8,7 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-from ess.reduce.spec import DatasetRef
+from ess.spec import DatasetRef
 
 from .datasets import Selector
 

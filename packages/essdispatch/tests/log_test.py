@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ess.reduce.spec import AccumulatorRef, Array, NexusFile, OutputRef, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.dispatch import (
@@ -24,11 +23,18 @@ from ess.dispatch import (
     Status,
     SubmitError,
     Template,
-    combine,
     dataset,
 )
 from ess.dispatch.log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
 from ess.dispatch.testing import FakeDatasets
+from ess.spec import (
+    AccumulatorRef,
+    Array,
+    NexusFile,
+    OutputRef,
+    WorkflowSpec,
+    combine,
+)
 
 
 class LoadParams(BaseModel):

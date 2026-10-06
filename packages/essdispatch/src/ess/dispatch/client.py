@@ -34,11 +34,11 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Self
 
-from ess.reduce.spec import AccumulatorRef, DatasetRef, WorkflowSpec
 from pydantic import BaseModel
 
+from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
+
 from .backend import Backend, Entry
-from .bindings import Binding, Function
 from .datasets import DatasetSource, Selector
 from .records import Record, Request, Row, SpecId, Status, Template
 

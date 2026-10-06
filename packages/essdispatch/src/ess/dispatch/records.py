@@ -17,7 +17,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from ess.reduce.spec import (
+from pydantic import BaseModel, ConfigDict, Field
+
+from ess.spec import (
     AccumulatorRef,
     DatasetRef,
     OutputRef,
@@ -25,7 +27,6 @@ from ess.reduce.spec import (
     as_ref,
     walk_refs,
 )
-from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubmitError(ValueError):

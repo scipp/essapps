@@ -3,9 +3,8 @@
 """
 A sciline pipeline as a binding.
 
-This is the only module that imports sciline. It belongs in ``ess.reduce``,
-where specs meet sciline workflows, and lives here while the binding protocol
-settles.
+This is the only module of ``ess.spec`` that imports sciline (extra
+``[sciline]``).
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Any
 
 import sciline
 
-from .bindings import Function
+from .binding import Function
 
 Key = Any
 

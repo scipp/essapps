@@ -95,17 +95,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ess.reduce.spec import (
-    AccumulatorRef,
-    DataField,
-    DatasetRef,
-    OutputRef,
-    Ref,
-    WorkflowSpec,
-    data_fields,
-    table_fields,
-    walk_refs,
-)
 from pydantic import BaseModel, ValidationError, create_model, field_validator
 from pydantic_core import (
     PydanticSerializationError,
@@ -114,7 +103,22 @@ from pydantic_core import (
     to_jsonable_python,
 )
 
-from .bindings import Binding, Function, HeldState, as_binding, open_held_state
+from ess.spec import (
+    AccumulatorRef,
+    Binding,
+    DataField,
+    DatasetRef,
+    Function,
+    HeldState,
+    OutputRef,
+    Ref,
+    WorkflowSpec,
+    data_fields,
+    table_fields,
+    walk_refs,
+)
+
+from .bindings import as_binding, open_held_state
 from .datasets import DatasetSource, Selector, readable
 from .log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
 from .records import (

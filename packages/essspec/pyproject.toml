@@ -6,8 +6,8 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "essdispatch"
-description = "Framework for ESS data-reduction applications"
+name = "essspec"
+description = "Specs of ESS data-reduction workflows and the protocol of the code behind them"
 authors = [{ name = "Scipp contributors" }]
 license = "BSD-3-Clause"
 readme = "README.md"
@@ -26,26 +26,28 @@ requires-python = ">=3.12"
 
 dynamic = ["version"]
 
-dependencies = [
-    "essspec",
-    "pydantic>=2.10",
-]
+dependencies = ["pydantic>=2.10"]
 
 [project.optional-dependencies]
+scipp = ["scipp>=26.3.1"]
+sciline = [
+    # sciline.Stage (ADR 0003 of scipp/essapps) is not released yet; only ess.spec.pipeline imports it.
+    "sciline @ git+https://github.com/scipp/sciline.git@map-reduce-outside-the-graph",
+]
 test = [
-    "essspec[scipp,sciline]",
+    "essspec[scipp]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
 ]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/scipp/essapps/issues"
-"Source" = "https://github.com/scipp/essapps/tree/main/packages/essdispatch"
+"Source" = "https://github.com/scipp/essapps/tree/main/packages/essspec"
 
 [tool.setuptools_scm]
 root = "../.."
-tag_regex = "^essdispatch/(?P<version>.*)$"
-git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "essdispatch/*[0-9]*"]
+tag_regex = "^essspec/(?P<version>.*)$"
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "essspec/*[0-9]*"]
 fallback_version = "0.0.0"
 
 [tool.pytest.ini_options]

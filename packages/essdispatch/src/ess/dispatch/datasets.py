@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
-from ess.reduce.spec import DatasetRef
+from ess.spec import DatasetRef
 
 
 def dataset(

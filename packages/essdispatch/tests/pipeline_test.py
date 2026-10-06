@@ -10,12 +10,12 @@ from typing import NewType
 
 import pytest
 import sciline
-from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.dispatch import Backend, Client, Status, Template, dataset
-from ess.dispatch.pipeline import PipelineBinding
 from ess.dispatch.testing import FakeDatasets
+from ess.spec import Array, NexusFile, WorkflowSpec
+from ess.spec.pipeline import PipelineBinding
 
 Run = NewType('Run', float)
 Loaded = NewType('Loaded', float)

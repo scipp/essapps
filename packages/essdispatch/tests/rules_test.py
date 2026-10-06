@@ -5,7 +5,6 @@
 from collections.abc import Iterator
 
 import pytest
-from ess.reduce.spec import Array, NexusFile, WorkflowSpec
 from pydantic import BaseModel
 
 from ess.dispatch import (
@@ -20,6 +19,7 @@ from ess.dispatch import (
     apply,
 )
 from ess.dispatch.testing import FakeDatasets
+from ess.spec import Array, NexusFile, WorkflowSpec
 
 
 class RunParams(BaseModel):
