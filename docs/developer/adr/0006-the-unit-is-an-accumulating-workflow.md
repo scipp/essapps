@@ -53,7 +53,7 @@ None of these reasons holds now:
 
 - the author declares the accumulated keys inside the binding;
 - the binding is where the graph is known;
-- [ADR 0005](0005-the-service-writes-every-output.md) reduces an accumulator's runs inside its own job, not spread over nodes.
+- no requirement needs the runs of one accumulator spread over processes: runs arrive over hours, and an accumulator reduces them one push at a time where its held state is ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 A spike on LoKI@Larmor data checked the shape on the real esssans workflow:
 - `Filename[SampleRun]` and `Filename[BackgroundRun]` were the dynamic keys, and each push loaded and reduced one run. The transmission and empty-beam runs, the bins, and the masks were computed once.

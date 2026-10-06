@@ -595,7 +595,7 @@ client.accumulator(Template(PARTS_SUM, blanks=(<span class="k-stage">'parts'</sp
         <li><b>Records and references.</b> Every connection between requests is a reference: <code>record.ref('centre')</code>, <code>dataset(run=611)</code>, or <code>acc.ref('iofq')</code>. A reference to a pending record is valid. The backend waits for it.</li>
         <li><b>Template</b> is the shared building block: stage, accumulator, batch (<code>apply</code>), and rules all start from one.</li>
         <li><b>Drivers.</b> The backend never decides what to submit or push. A notebook, an app, or the <code>TriggerLoop</code> of rules does.</li>
-        <li><b>Where it runs.</b> <code>local()</code>: values in memory while the client keeps them. The service (designed, not built): every record's outputs written to a file, each accumulator its own job with a declared memory size and deadline. Placement says the results do not differ.</li>
+        <li><b>Where it runs.</b> <code>local()</code>: values in memory while the client keeps them. The service (designed, not built): every record's outputs written to a file; where it holds an accumulator's held state is open. Placement says the results do not differ.</li>
       </ul>
     </div>
     <div>

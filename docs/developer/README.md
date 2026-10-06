@@ -325,8 +325,8 @@ Reading an output whose value is not kept raises an error, and a request that re
 **On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), the outputs of every record are written to a file when the record completes.
 `client.output` of a record, and references to its outputs, read the file.
 The service keeps no value for a client, so there is no release of values.
-The files lie in an area per proposal that the framework owns, and are dropped with the proposal's history.
-An accumulator on the service is a job of its own (see Stages and accumulators).
+The files lie in an area per proposal that the framework owns, and are dropped with the proposal's history at the latest; a file dropped earlier, for example to free disk space, is read as a value that is not kept.
+How the service holds an accumulator is open (open question 5).
 This is designed and not implemented.
 
 ```python
@@ -566,12 +566,9 @@ The pushes logged are still added, and the held state is dropped once its reader
 A released accumulator takes no more pushes or reads.
 To stop the readers too, the driver cancels them with `client.cancel`.
 
-**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), each accumulator runs as its own job on the cluster, with a memory size and a deadline that its client declares when it opens it.
-The job runs the pushes and every request that references the accumulator.
-A state is not a record, so nothing writes it; a request that reads a state makes a record, whose outputs are written like any other's.
+**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), a state is not a record, so nothing writes it; a request that reads a state makes a record, whose outputs are written like any other's.
 `client.output` of an accumulator returns the value and writes nothing.
-Releasing the accumulator or ending its client ends the job once the pushes logged are added and its readers have run; otherwise the deadline ends it, and the client may extend the deadline.
-This is designed and not implemented (open question 5).
+How the service holds an accumulator's held state, bounds its memory, and ends it is open (open question 5).
 
 ### What a binding provides
 
@@ -652,7 +649,7 @@ Each push reduces the new run and adds it to the volume.
 Each cut pins the state after its push, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
 So the loop holds one volume, not one per run or per pending cut.
 `volume.push` returns once the push is logged, so a slow cut holds back the next addition, not the loop.
-On the service, the volume is a job of its own, and each run is reduced in that job ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
+On the service, each cut is written to a file like the output of any record ([ADR 0005](adr/0005-the-service-writes-every-output.md)); where the volume is held is open (open question 5).
 
 A loop that reduces each dataset in a request of its own uses `client.as_completed`.
 It consumes a generator of records in a thread, so submitting does not wait for the loop body, and yields each record once it has finished.
@@ -745,7 +742,7 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how a run number or file becomes a dataset identity, and how local files are identified
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
-- where a stage is kept and computes, and on which node the job of an accumulator runs
+- where a stage is kept and computes, and where the held state of an accumulator is held
 - the file format of each output type, and the folder layout within a proposal's area (scipp/essapps#23)
 - how the service notices a client whose process ended without closing it (scipp/essapps#34)
 - how access across proposals is enforced
@@ -756,4 +753,4 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 2. **Removing a row.** A request over fewer rows is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
-5. **Accumulators on the service.** How a client declares an accumulator's memory size and deadline; what the deadline does to readers that still run; and how the declared size covers a held state that keeps the rows, whose reads compute the plain request over every row ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
+5. **Accumulators on the service.** How the service holds a held state, bounds its memory, and ends it. One job per accumulator on the cluster, with a memory size and a deadline that its client declares, fits a spectroscopy volume of hundreds of GB; whether it fits other accumulators is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open; scipp/essapps#27).
