@@ -216,9 +216,8 @@ class _Sums:
         for table, row in rows.items():
             self._sums[table] += _counts(row['run'])  # in place from the second row
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
-        outputs = self._finalize(**self._sums, **self._fixed)
-        return {name: outputs[name] for name in names}
+    def outputs(self) -> Mapping[str, Any]:
+        return self._finalize(**self._sums, **self._fixed)
 
 
 class Summing:

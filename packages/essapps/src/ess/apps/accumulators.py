@@ -54,7 +54,7 @@ class _Fold:
                 for field, value in row.items():
                     self.total[field] = self._operation(self.total[field], value)
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         return self.total
 
 

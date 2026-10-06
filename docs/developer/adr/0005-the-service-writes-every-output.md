@@ -28,7 +28,7 @@ A standard VISA machine has 64 GB ([systems](../../requirements/systems.md)), so
 - **In the user's process**, [ADR 0002](0002-the-client-is-the-lifetime.md) holds.
 - **On the service, the outputs of every record are written to a file when the record completes.** The store finds a record's file by the record's ID and the output's name; history names no file, so a record never changes. The service keeps no value for a client: there is no `save=` option and no release of values. `client.output` of a record, and a reference to an output of a record, read its file.
 - **The one value the service holds between requests is the held state of an accumulator.** A state is not a record ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)): it changes at every push, and nothing writes it. A request that reads a state makes a record, whose outputs are written like any other's; a request of a copying spec writes the state itself ([ADR 0003](0003-accumulators-add-in-place.md)). `client.output` of an accumulator returns the value and writes nothing, like any read.
-- **Each accumulator runs as its own job on the cluster**, with a memory size and a deadline that its client declares when it opens it. The job runs every push and every request that references the accumulator. Releasing the accumulator or ending its client ends the job once its readers have run; the deadline ends it otherwise. The client may extend the deadline.
+- **Each accumulator runs as its own job on the cluster**, with a memory size and a deadline that its client declares when it opens it. The job runs every push and every request that references the accumulator. A request reads at most one accumulator ([ADR 0003](0003-accumulators-add-in-place.md)), so it runs in that accumulator's job, or anywhere if it reads none. Releasing the accumulator or ending its client ends the job once its readers have run; the deadline ends it otherwise. The client may extend the deadline.
 - **The reduction of one run is never an output, and never written** ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)). A binding with a held state of its own adds each run to it at the push. The held state that keeps the rows reduces all of them at each read.
 
 ```python
@@ -48,7 +48,6 @@ Open, to be designed with the service (scipp/essapps#27):
 
 - how a client declares an accumulator's size and deadline;
 - what the deadline does to readers that still run, and how it relates to release, which ends the job only once the readers have run;
-- whether one request may read two accumulators, whose held states would then have to be in one job; one accumulator with several tables, such as sample and can runs ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), needs none;
 - how the declared size covers a held state that keeps the rows: each read computes the plain request over every row so far, which needs more memory than the rows (7.5 to 9.9 GB for two plus two LoKI runs, against about 4 GB with a held state of its own; [ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Alternatives considered
@@ -58,6 +57,7 @@ Open, to be designed with the service (scipp/essapps#27):
 - **Writing only final outputs.** The framework does not tell intermediate from final results.
 - **Writing every state of an accumulator.** A volume of hundreds of GB would be written once per run, and most states are never read.
 - **Rows that reference outputs, sent to the accumulator's job without being written** (`client.submit(ANGLE, ..., into=volume)`). The per-run reductions would still spread over nodes. But this adds API and a transfer between jobs, and a run's counts binned onto the volume's grid are as large as the volume.
+- **Several accumulators of a client in one job, with one size and deadline.** A request could read two of them, and a row of one could reference another without a file. The client would need a way to declare the group. No requirement has two accumulators that grow at once and meet in one request: sample and background runs are one accumulator with two tables ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 - **The accumulator in the service's own process.** One process would hold a volume of hundreds of GB per user, and one crash would lose all of them.
 - **The volume written to a file after each run, and cuts read from it.** The service would hold nothing. But cuts through a growing volume of hundreds of GB do not follow a slider when read from disk.
 
@@ -70,4 +70,5 @@ Open, to be designed with the service (scipp/essapps#27):
 - The cluster's scheduler bounds an accumulator. A forgotten one costs at most the memory and time it declared.
 - The runs of one accumulator are reduced in its job, on its cores, not spread over nodes. Runs that arrive over hours do not need more.
 - After a scan, a request that copies the volume writes it once ([ADR 0003](0003-accumulators-add-in-place.md)), and the job can end. Cuts then read that file, more slowly.
+- Values move from one accumulator's job to another only as files of records. A finished accumulator is written once, by a record of its last state. Cutting that file is slow, so a large value that a growing accumulator needs, such as a background volume, goes into its template and is read once when it opens ([ADR 0003](0003-accumulators-add-in-place.md)).
 - Reading part of a volume at the pace of a slider, without making a record (README.md, open question "Views"), is served by the accumulator's job.

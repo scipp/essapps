@@ -256,30 +256,34 @@ README.md (Accumulator, Reads, What a binding provides) states the rules; the ba
 
 ```python
 held = open_held_state(binding, read(fixed), tables)   # what depends only on the fixed values, once
-unreadable = validate(template, [])      # why a state with nothing pushed may not be read, or None
 
 def push(rows):                          # {table: row, ...}
     check(rows)                          # names resolved, each row by its table's row model
     wait(rows)                           # until the records they reference have finished
     check_references(rows)
     with lock:                           # the accumulator's
-        reason = validate(template, pushes[accumulator] + [rows])   # the plain request; refused if it changes a value
         wait(readers)                    # until the readers of the current state have run
+        outputs = None                   # those of the current state, if it was read
         held.push(read(rows))            # in place if the binding does so
         append_push(accumulator, rows)
-        unreadable = reason              # None if the plain request is accepted
 
-def pin(reference):                      # a request at submission, or a client.output call
+def pin(reference):                      # a request at submission, client.output, client.provenance
     with lock:                           # so never during an add
-        refuse(unreadable)               # if not None
         upto = len(pushes[accumulator])
+        if checked is None or checked.upto != upto:   # the first read of this state
+            checked = (upto, validate(template, pushes[accumulator]))   # the plain request
+        refuse(checked.reason)           # if not None
         readers += 1                     # until the request has run, or the copy is made
         return reference with upto
+
+def read_outputs():                      # by a reader, once it runs
+    if outputs is None:
+        outputs = held.outputs()         # every output, once per state
+    return outputs
 ```
 
-**Opening.** The template is checked as a stage's is, then its fixed values are validated by the params model with the tables empty and unconstrained, so that the model's field validators apply.
-If a validator fails for lack of rows, each value is validated against its own field only; the plain request validated at each push then shows whether the validators agree with these values.
-The plain request with nothing pushed is validated once, and gives the reason a state with nothing pushed may not be read, if any.
+**Opening.** The template is checked as a stage's is, then each fixed value is typed by its own field and that field's validators.
+The params model's own validators read whole requests, so they run on the plain request at each read.
 Opening waits for the records the template references and reads them once.
 The binding gets every fixed value with data fields loaded and defaults filled in; if it fails to make the held state, opening is refused.
 History holds the template's values as JSON, and the accumulator uses them as history holds them.
@@ -288,21 +292,24 @@ History holds the template's values as JSON, and the accumulator uses them as hi
 It then waits for the records the rows reference to finish, and only then checks those references: completed records of the same proposal, whose outputs fit the fields and are still kept.
 So whether a push is refused does not depend on timing.
 History holds each row as the request over that one row would hold it, with names resolved and defaults filled in.
-Under the accumulator's lock, the push validates the plain request over all rows pushed so far, waits for the readers of the current state, adds the rows, and appends the push.
-It compares every value of the validated request, fixed values and rows, with those the held state was given.
+Under the accumulator's lock, the push waits for the readers of the current state, drops the outputs computed for it, adds the rows, and appends the push.
+A push checks nothing on the whole table, so its cost does not grow with the rows before it.
 Adding runs under the accumulator's own lock, not under the backend's lock that submissions also take, so a long add holds up only the pushes and reads of the same accumulator.
 The pushes are appended in the order they were added.
 A push that does not fit, or whose add fails, appends nothing; after a failed add the accumulator takes no more pushes or reads, and the driver opens a new one.
 
-**Reads.** A read pins the state after the pushes so far: a request when it is submitted, a `client.output` call when it is made.
-`client.provenance` pins in the same way, but reads no output, so it is not a reader.
+**Reads.** A read pins the state after the pushes so far: a request when it is submitted, a `client.output` call when it is made, and `client.provenance`.
+`client.provenance` reads no output, so it is not a reader.
 A read takes the accumulator's lock, then the backend's, as a push does, so it never pins in the middle of an add.
-A submission that references several accumulators takes their locks in the order of their IDs.
+A request reads at most one accumulator, but one submission may hold requests that read different ones; it takes their locks in the order of their IDs.
 The record holds the count.
 
-The outputs of a state are computed outside the backend's lock, under a lock of the accumulator's own, once while the state has readers.
-The first reader computes the outputs it reads, and the backend keeps every output the held state returns; later readers of the same state compute only those not yet computed.
-They are dropped when the state's last reader is done.
+The first read of a state validates its plain request under the accumulator's lock but outside the backend's, and the accumulator keeps the verdict for that state.
+A read of a state whose plain request would be refused is refused with that request's reason.
+The validation takes time in proportion to the rows, so a driver that reads after every push pays it at every push.
+
+The outputs of a state are computed outside the backend's lock, under a lock of the accumulator's own, all at once, the first time a reader reads them.
+The accumulator keeps them until the next push.
 A request reads them as the binding returns them; `client.output` copies them.
 
 **The wait.** A push waits until the readers of the current state are done.
@@ -319,12 +326,12 @@ def push(pushed):                          # {table: row, ...}, data fields load
     for table, row in pushed.items():
         rows[table].append(row)
 
-def outputs(names):                        # the plain request over every row so far
+def outputs():                             # the plain request over every row so far
     return call(**rows)                    # every output, which the backend keeps for the state
 ```
 
 - Its outputs are those of the plain request it computes, so it meets the protocol of README.md (What a binding provides).
-- It returns every output, so the plain request runs once per state while the state has readers.
+- The backend asks for the outputs once per state that is read, so the plain request runs once per such state.
 - It keeps the value of every row, with data fields loaded (see Values).
 
 ## The service
@@ -336,13 +343,13 @@ Batch and automatic reduction run on the service, and a client connects with `co
 - **The files** lie in an area per proposal that the framework owns, and are dropped with the proposal's history. `publish` copies a file into the proposal's upload folder and registers it in SciCat.
 - **The store of the files** is given to the backend, not built into it: each deployment configures its own, and tests use a fake. The file format of each output type and the folder layout within a proposal's area are first-release work (scipp/essapps#23).
 - **The held state of an accumulator** is the one value the service holds between requests. Each accumulator runs as its own job on the cluster, with a memory size and a deadline that its client declares when it opens it. Releasing it or ending its client ends the job once its readers have run, and otherwise its deadline ends it. The client may extend the deadline. The cluster's scheduler bounds a forgotten one.
-- **The job runs the accumulator's pushes and every request that references it.** So the reduction of one run is never an output, and never written. A state is not a record, so nothing writes it; a request that reads it makes a record, whose outputs are written as any other's. `client.output` of an accumulator returns the value and writes nothing.
+- **The job runs the accumulator's pushes and every request that references it.** So the reduction of one run is never an output, and never written. A request reads at most one accumulator, so it has one job to run in, and values reach a job only as files of records ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator). A state is not a record, so nothing writes it; a request that reads it makes a record, whose outputs are written as any other's. `client.output` of an accumulator returns the value and writes nothing.
 - **After a scan**, a request that copies the volume writes it once, and the job can end. Cuts then read that file, more slowly.
 
 ## Open
 
 - How the service notices a client whose process ended without closing it (scipp/essapps#34).
 - The file format of each output type and the folder layout within a proposal's area (scipp/essapps#23).
-- Accumulators on the service, as [ADR 0005](adr/0005-the-service-writes-every-output.md) lists them: how a client declares the memory size and deadline, what the deadline does to readers that still run, whether one request may read two accumulators, and how the declared size covers a held state that keeps the rows.
+- Accumulators on the service, as [ADR 0005](adr/0005-the-service-writes-every-output.md) lists them: how a client declares the memory size and deadline, what the deadline does to readers that still run, and how the declared size covers a held state that keeps the rows.
 - How the service stores history: the in-process backend's log, Kafka, or database tables ([ADR 0004](adr/0004-history-is-append-only-lists.md) lists what the in-process backend shows).
 - A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.

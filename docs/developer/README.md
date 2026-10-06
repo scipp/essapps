@@ -450,11 +450,11 @@ Between pushes, an accumulator keeps what it computed once from the fixed values
 If the binding has no `held_state(fixed)`, the held state is the list of rows pushed so far (see What a binding provides).
 No spec, call, or record names the held state.
 
-- `client.accumulator` checks the template as `client.stage` does, with the tables left out. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+- `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 - Opening waits for the records the template references, and is refused if any of them failed or was cancelled. It reads them once. `iofq.template` holds the values as resolved, as a stage's template does.
 - `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push waits for the records the rows reference to finish, and is refused if any of them failed or was cancelled.
-- Checks on a whole table, such as its length, and the params model's own validators apply to the plain request over all rows pushed so far. A push that the plain request would not yet accept is added, and its state cannot be read until a later push makes the request acceptable.
-- A validator of the params model may change a value, for example derive it from the rows. If the plain request then gives other values than the held state was given, fixed values or rows, the push is refused.
+- Checks on a whole table, such as its length, and the params model's own validators apply when a state is read, not at a push. A table that needs two rows takes them one push at a time, and a state whose plain request would be refused cannot be read (see Reads).
+- Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The spec author promises this; it is not checked.
 - If adding the rows of a push fails, the push is refused and the accumulator takes no more pushes or reads, since the binding may hold part of them.
 
 **One sum, two ways.** Every spec with a table can be given its rows both ways: all in one plain request, or over time through an accumulator.
@@ -496,16 +496,17 @@ exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pinned when sub
 iofq.refs()                                                 # a reference to every output, by name
 ```
 
-A *read* is a request that references the accumulator, from its submission until it has run, or a `client.output` call.
-Every read pins the accumulator's state at that moment: the state after the pushes so far.
+A *read* is a call that pins the accumulator's state: submitting a request that references the accumulator, `client.output`, or `client.provenance`.
+Every read pins the state at that moment: the state after the pushes so far.
 It gives what the same call gives on the record of the plain request over those rows, in push order.
 
 - A reference is pinned to the state when its request is submitted. The record holds `{'accumulator': id, 'output': name, 'upto': n}`, the output after the first `n` pushes. All references to one accumulator in one submission are pinned to the same state, and a reference to an earlier state is refused.
-- `client.output` returns a copy, so that, like a record's output, the value does not change afterwards. A request reads the output itself.
-- A state is read exactly when its plain request would be accepted, a state with nothing pushed included. A read of any other state, such as one with no row in a table that needs one, is refused with the reason that request would be refused. Only the client that opened an accumulator reads it.
-- `client.provenance` pins the state in the same way, but reads no output.
+- `n` counts pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, `upto` 2 is the plain request with sample run 611 and can run 614, and `upto` 3 adds sample run 612 and can run 615.
+- `client.output` returns a copy, so that, like a record's output, the value does not change afterwards. A request reads the output itself, so a read costs no second copy of the held state.
+- A read is refused if the plain request of the state would be refused, with that request's reason, such as no row in a table that needs one; a state with nothing pushed is no exception. The first read of a state validates its plain request, at a cost that grows with the number of rows, so a driver that reads after every push pays it at every push. Only the client that opened an accumulator reads it.
+- `client.provenance` reads no output, so it holds back no push.
 - `client.submit(iofq)` raises `TypeError`. A record of a state is a request of a spec that copies what it reads, such as `COPY` in Drivers.
-- To combine two accumulators, a request references both; on the service this is open (open question 5).
+- A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references a record of its state, such as `COPY`. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
 **Pushes wait for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
 Since a request reads the outputs of the state itself, a push waits until the readers of the current state that came before it have run.
@@ -513,8 +514,21 @@ Readers are the requests that reference the state and were accepted before the p
 No reader waits for a push, so the wait ends.
 A read made while a push waits or adds blocks until the push is done, and pins the state after it.
 A long reader holds back the next push, so the driver decides how often it looks.
-An output of a state is computed the first time a reader asks for it, and kept while the state has readers; no output is computed for a state that no one reads.
-Releasing the accumulator, or ending its client, waits for nothing: a push that waits is refused at once, and the held state is dropped once its readers have run.
+The outputs of a state are computed all at once, the first time the state is read, and kept until the next push; no output is computed for a state that no one reads.
+
+**Releasing.** `push` returns once its rows are added, and releasing stops no work, so a driver may release an accumulator right after its last read:
+
+```python
+iofq.push({'sample_runs': {'run': dataset(run=613)}})         # returns once the row is added
+exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pins the state after this push
+client.release(iofq)                                           # the export still runs
+client.output(exported, 'text')
+```
+
+Releasing the accumulator, or ending its client, waits for nothing, and the held state is dropped once its readers have run.
+A released accumulator takes no more pushes or reads.
+A push from another thread that still waits for readers is refused at once, since no read could follow it.
+To stop the readers too, the driver cancels them with `client.cancel`.
 
 **On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), each accumulator runs as its own job on the cluster, with a memory size and a deadline that its client declares when it opens it.
 The job runs the pushes and every request that references the accumulator.
@@ -541,12 +555,12 @@ A binding of a spec with tables may also provide `held_state(fixed)`, which make
 ```python
 held = binding.held_state(fixed)         # fixed: every value but the tables, with data fields loaded
 held.push({'runs': {'run': run_611}})    # one row for each named table, with data fields loaded
-held.outputs(['normalized'])             # {'normalized': ...}, computed from the held state
+held.outputs()                           # {'normalized': ..., ...}: every output, from the held state
 ```
 
 - After rows are pushed, `outputs` gives what the plain request over those rows gives, with the same fixed values. The workflow author promises this, as `StreamProcessor` asks its users to promise that a workflow is linear in its dynamic keys.
 - `push` takes the rows of one push, one per table, so that a binding can add them at once. It may modify the held state in place, but not the rows.
-- `outputs` may return part of the held state, not a copy, may leave out an output the spec declares optional, and may return more outputs than asked, which the backend keeps while the state has readers. It must not modify what an earlier call for the same state returned, since running readers still use it.
+- `outputs` returns every output, but may leave out one the spec declares optional, and may return part of the held state, not a copy. The backend calls it once for each state that is read, and keeps what it returns until the next push.
 - The backend calls `push` and `outputs` from one thread at a time, and never `outputs` while a push adds.
 
 `combine(operation)` is such a binding, for a spec whose only parameter is one table and whose outputs are the rows' fields, each combined with `operation`.
@@ -660,7 +674,7 @@ Recomputing in a record's environment comes later.
 ## Guarantees
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference; a reference to an accumulator names the state it read by its number of pushes. A record never changes; its status changes once, from pending to finished.
-- A stage never changes what a record says: a record made through a stage is the record of the plain request. A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order.
+- A stage never changes what a record says: a record made through a stage is the record of the plain request. A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order. This rests on two promises of the package: a held state gives what the plain request gives (What a binding provides), and validators that read more than one value change none (Stages and accumulators).
 - Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an accumulator's output it reads, such as a slice of it, since the next push may change that output in place.
 - A record's outputs do not depend on how they were computed: through a stage, from an accumulator, or on another machine. Values may differ in rounding where the order of adding differs.
 - The provenance of a record reaches every dataset it read, through all its inputs and the states of accumulators it read, with their parameter values and software versions.
@@ -686,5 +700,5 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 2. **Removing a row.** A request over fewer rows is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
-5. **Accumulators on the service.** How a client declares an accumulator's memory size and deadline; what the deadline does to readers that still run; whether one request may read two accumulators; and how the declared size covers a held state that keeps the rows, whose reads compute the plain request over every row ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
+5. **Accumulators on the service.** How a client declares an accumulator's memory size and deadline; what the deadline does to readers that still run; and how the declared size covers a held state that keeps the rows, whose reads compute the plain request over every row ([ADR 0005](adr/0005-the-service-writes-every-output.md)).
 6. **Stages.** Whether stages stay a concept of their own, since the part of an accumulator computed once from its fixed values is what a stage caches (scipp/essapps#35).

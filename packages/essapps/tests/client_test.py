@@ -138,7 +138,7 @@ class _Averaging:
             self._total += row['value']
             self._count += 1
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         return {'mean': self._total / self._count}
 
 
@@ -179,7 +179,7 @@ class _Weighing:
         for row in rows.values():
             self._total += row['value'] * row['weight']
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         return {'value': self._total}
 
 
@@ -191,7 +191,7 @@ class WeightedSum:
             held = _Weighing()
             for row in {**fixed, **values}['rows']:
                 held.push({'rows': row})
-            return held.outputs(['value'])
+            return held.outputs()
 
         return total
 
@@ -215,18 +215,15 @@ class PositiveParams(SumParams):
         return abs(scale)
 
 
-class DistinctParams(SumParams):
-    @model_validator(mode='after')
-    def _distinct(self) -> Self:
-        """A run given twice is summed once."""
-        self.runs = [run for i, run in enumerate(self.runs) if run not in self.runs[:i]]
-        return self
-
-
 class MeanSumParams(BaseModel):
     runs: list[RunParams]
     scale: float | None = None
     offset: Array() | None = None  # type: ignore[valid-type]
+
+    @field_validator('scale')
+    @classmethod
+    def _positive(cls, scale: float | None) -> float | None:
+        return None if scale is None else abs(scale)
 
     @model_validator(mode='after')
     def _mean(self) -> Self:
@@ -243,7 +240,6 @@ class TaggedParams(SumParams):
 
 
 POSITIVE = _spec('positive', PositiveParams, Parts)
-DISTINCT = _spec('distinct', DistinctParams, Parts)
 MEAN_SUM = _spec('mean-sum', MeanSumParams, Parts)
 TAGGED = _spec('tagged', TaggedParams, Parts)
 
@@ -257,7 +253,7 @@ class _ScaledTotal:
         for row in rows.values():
             self.total += self._scale * row['run']
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         return {'value': self.total}
 
 
@@ -278,7 +274,7 @@ class ScaledSum:
             held = _ScaledTotal(params['scale'], params['offset'])
             for row in params['runs']:
                 held.push({'runs': row})
-            return held.outputs(['value'])
+            return held.outputs()
 
         return total
 
@@ -405,7 +401,6 @@ def backend(
             FILES_SUM: combine(operator.add),
             SUM: scaled_sum,
             POSITIVE: scaled_sum,
-            DISTINCT: scaled_sum,
             MEAN_SUM: scaled_sum,
             TAGGED: scaled_sum,
         },
@@ -821,34 +816,20 @@ def test_a_field_validator_gives_the_held_state_the_plain_request_s_values(
     assert client.output(positive, 'value') == client.output(plain, 'value') == 2.0
 
 
-def test_a_push_is_refused_if_a_model_validator_changes_a_fixed_value_by_the_rows(
+def test_field_validators_apply_at_the_opening_and_model_validators_at_reads(
     client: Client, scaled_sum: ScaledSum
 ) -> None:
-    given = client.accumulator(
-        Template(MEAN_SUM, params={'scale': 2.0}, blanks=('runs',))
+    mean = client.accumulator(
+        Template(MEAN_SUM, params={'scale': -2.0}, blanks=('runs',))
     )
-    derived = client.accumulator(Template(MEAN_SUM, blanks=('runs',)))
-    with pytest.raises(LookupError, match='a mean needs runs'):
-        client.output(given)  # as the plain request over no rows is refused
-    given.push({'runs': {'run': dataset(run=1)}})
-    plain = client.compute(MEAN_SUM, {'runs': [{'run': dataset(run=1)}]})
+    with pytest.raises(SubmitError, match='a mean needs runs') as refused:
+        client.submit(MEAN_SUM, {'runs': [], 'scale': -2.0})
+    with pytest.raises(LookupError, match=f'^{re.escape(str(refused.value))}$'):
+        client.output(mean)
+    mean.push({'runs': {'run': dataset(run=1)}})
 
-    differ = r"^\['scale'\]: the plain request over the rows gives other values"
-    with pytest.raises(SubmitError, match=differ):
-        derived.push({'runs': {'run': dataset(run=1)}})
-    assert plain.request.params['scale'] == 1.0
-    assert client.output(given, 'value') == 2.0
-    assert [held.total for held in scaled_sum.held] == [2.0, 0.0]  # nothing added
-
-
-def test_a_push_is_refused_if_a_validator_changes_the_rows(client: Client) -> None:
-    distinct = client.accumulator(Template(DISTINCT, blanks=('runs',)))
-    distinct.push({'runs': {'run': dataset(run=1)}})
-
-    differ = r"^\['runs'\]: the plain request over the rows gives other values"
-    with pytest.raises(SubmitError, match=differ):
-        distinct.push({'runs': {'run': dataset(run=1)}})  # the validator drops it
-    assert client.output(distinct, 'value') == 1.0
+    assert scaled_sum.opened == [{'scale': 2.0, 'offset': None}]
+    assert client.output(mean, 'value') == 2.0
 
 
 def test_an_accumulator_s_values_are_typed_as_the_log_holds_them(
@@ -1235,8 +1216,8 @@ class _Summing:
         self._owner.pushed += 1
         self._held.push(rows)
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
-        return self._held.outputs(names)
+    def outputs(self) -> Mapping[str, Any]:
+        return self._held.outputs()
 
 
 @pytest.fixture
@@ -1376,14 +1357,14 @@ BOTH = _spec('both', BothSidesParams, Sides)
 class Subtracting:
     """
     SIDES and BOTH: the sum of the samples minus that of the backgrounds, and
-    the sum of both. ``computed`` lists the names each ``outputs`` call
-    computes. A push sets ``adding``, and adds while ``go`` is set. An
+    the sum of both. ``computed`` counts the ``outputs`` calls that computed.
+    A push sets ``adding``, and adds while ``go`` is set. An
     ``outputs`` call sets ``computing``, and computes while ``compute`` is set;
     with ``failing`` set, the next one fails.
     """
 
     def __init__(self) -> None:
-        self.computed: list[list[str]] = []
+        self.computed = 0
         self.adding = threading.Event()
         self.go = threading.Event()
         self.go.set()
@@ -1417,15 +1398,14 @@ class _Sides:
         for table, row in rows.items():
             self._sums[table] += row['value']  # in place from the second row
 
-    def outputs(self, names: Sequence[str]) -> Mapping[str, Any]:
+    def outputs(self) -> Mapping[str, Any]:
         self._owner.computing.set()
         self._owner.compute.wait(timeout=5)
         if self._owner.failing:
             self._owner.failing = False
             raise ValueError('cannot compute')
-        self._owner.computed.append(list(names))
-        outputs = _subtract(**self._sums)
-        return {name: outputs[name] for name in names}
+        self._owner.computed += 1
+        return _subtract(**self._sums)
 
 
 def _subtract(samples: Any, backgrounds: Any) -> dict[str, Any]:
@@ -1484,9 +1464,7 @@ def test_adding_in_place_gives_the_values_of_adding() -> None:
         for row in rows:
             held.push({'parts': row})
         plain = binding.stage({'parts': rows}, ())()
-        values.append(
-            [held.outputs(['value'])['value'].tolist(), plain['value'].tolist()]
-        )
+        values.append([held.outputs()['value'].tolist(), plain['value'].tolist()])
 
     assert values == [[[6.0, 60.0]] * 2] * 2
     assert rows[0]['value'].tolist() == [1.0, 10.0]  # the first row is copied
@@ -1592,7 +1570,21 @@ def test_references_in_one_submission_pin_one_state_while_rows_are_pushed(
         assert [client.output(r, 'value').tolist() for r in pair] == [[expected]] * 2
 
 
-def test_requests_that_read_two_accumulators_in_either_order_wait_for_both_pushes(
+def test_a_request_that_reads_two_accumulators_is_refused(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    first, second = _total(client), _total(client)
+    for total in (first, second):
+        total.push({'parts': loads[0].refs('value')})
+
+    with pytest.raises(SubmitError, match=r'reads at most one accumulator, not 2$'):
+        client.submit(TOTAL, {'parts': [first.refs(), second.refs()]})
+    twice = client.compute(TOTAL, {'parts': [first.refs(), first.refs()]})
+    assert client.output(twice, 'value').tolist() == [2.0]
+
+
+def test_submissions_that_read_two_accumulators_in_either_order_wait_for_both_pushes(
     in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
@@ -1602,9 +1594,8 @@ def test_requests_that_read_two_accumulators_in_either_order_wait_for_both_pushe
         total.push({'parts': loads[0].refs('value')})
         _copy(client, total)  # holds back the next push
 
-    def read(*totals: Accumulator) -> Record:
-        parts = [{'value': total.ref('value')} for total in totals]
-        return client.submit(TOTAL, {'parts': parts})
+    def read(*totals: Accumulator) -> list[Record]:
+        return client.submit([Request(COPY, {'value': t.ref('value')}) for t in totals])
 
     row = loads[1].refs('value')
     pushes = [
@@ -1619,11 +1610,11 @@ def test_requests_that_read_two_accumulators_in_either_order_wait_for_both_pushe
 
     for pushed in pushes:
         pushed.result(timeout=5)
-    for read in reads:
-        record = read.result(timeout=5)
-        uptos = [part['value'].upto for part in record.request.params['parts']]
-        expected = sum(sum(n for n in (1.0, 2.0)[:upto]) for upto in uptos)
-        assert client.output(record, 'value').tolist() == [expected]
+    for submitted in reads:
+        for record in submitted.result(timeout=5):
+            upto = record.request.params['value'].upto
+            expected = sum((1.0, 2.0)[:upto])
+            assert client.output(record, 'value').tolist() == [expected]
 
 
 @pytest.mark.parametrize(
@@ -1729,7 +1720,7 @@ def test_pushes_into_several_tables_give_the_plain_request_over_them(
     assert client.provenance(sides).records() == [loads[1], loads[0]]
 
 
-def test_readers_of_one_state_compute_each_output_they_read_once(
+def test_readers_of_one_state_compute_its_outputs_once(
     in_place: Client, loads: list[Record], copying: Copying, subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -1739,27 +1730,30 @@ def test_readers_of_one_state_compute_each_output_they_read_once(
     copied = client.submit(COPY, {'value': sides.ref('difference')})
     copying.started.wait(timeout=5)  # it has read 'difference', and holds the state
     both = client.output(sides)
-    again = client.output(sides, 'difference')
+    again = client.output(sides, 'total')
     copying.go.set()
     client.wait(copied)
     sides.push({'backgrounds': loads[1].refs('value')})
     after = client.output(sides, 'difference')
 
-    assert subtracting.computed == [['difference'], ['total'], ['difference']]
+    assert subtracting.computed == 2  # once per state
     assert _listed(both) == {'difference': [1.0], 'total': [1.0]}
     assert [again.tolist(), after.tolist()] == [[1.0], [-1.0]]
 
 
-def test_the_outputs_of_a_state_are_dropped_once_its_last_reader_is_done(
+def test_the_outputs_of_a_state_are_kept_until_the_next_push(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
     sides = _sides_of(client)
     sides.push({'samples': loads[0].refs('value')})
-    reads = [client.output(sides, 'difference') for _ in range(2)]
+    reads = [client.output(sides, name) for name in ('difference', 'total')]
 
-    assert subtracting.computed == [['difference'], ['difference']]
+    assert subtracting.computed == 1  # the first read was done before the second
     assert [r.tolist() for r in reads] == [[1.0], [1.0]]
+    sides.push({'backgrounds': loads[1].refs('value')})
+    assert client.output(sides, 'difference').tolist() == [-1.0]
+    assert subtracting.computed == 2
 
 
 def test_a_read_while_a_push_adds_pins_the_state_after_it(
@@ -1877,7 +1871,7 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
     assert client.output(sides, 'difference').tolist() == [-1.0]
 
 
-def test_concurrent_readers_of_one_state_compute_an_output_once(
+def test_concurrent_readers_of_one_state_compute_its_outputs_once(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -1890,7 +1884,7 @@ def test_concurrent_readers_of_one_state_compute_an_output_once(
     subtracting.compute.set()
     assert read.result(timeout=5).tolist() == [1.0]
     assert [client.output(c, 'value').tolist() for c in copies] == [[1.0]] * 2
-    assert subtracting.computed == [['difference']]
+    assert subtracting.computed == 1
 
 
 def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(

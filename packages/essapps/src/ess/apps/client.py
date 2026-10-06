@@ -156,10 +156,10 @@ class Accumulator:
 
         A row names datasets or references outputs of records, never an
         accumulator. It is checked by its table's row model; rules on a whole
-        table, such as its length, decide only whether a state may be read.
-        The push waits for the records to finish, and refuses them unless they
-        have completed. It then waits for the readers of the accumulator; see
-        :mod:`ess.apps.backend`.
+        table, such as its length, are checked when a state is read. The push
+        waits for the records to finish, and refuses them unless they have
+        completed. It then waits for the readers of the accumulator (see
+        :mod:`ess.apps.backend`), and returns once the rows are added.
         """
         self._push(rows)
 
@@ -168,7 +168,8 @@ class Accumulator:
         A reference to an output of the accumulator.
 
         A request that holds it is pinned at submission to the rows pushed so
-        far, and reads the output of that state.
+        far, and reads the output of that state. A request references at most
+        one accumulator; a row or a template references none.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
