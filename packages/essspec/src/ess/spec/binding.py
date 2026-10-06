@@ -18,7 +18,7 @@ returns what the plain request returns. A framework accepts a plain
 
 An accumulator keeps a held state, made for the values of every field but the
 tables it fills. A binding of a spec with table fields may make held states,
-like ``ess.reduce.streaming.StreamProcessor``::
+like ``ess.spec.pipeline.AccumulatingPipelineBinding``::
 
     held = binding.held_state({'scale': 2.0})    # what depends on them, once
     held.push({'runs': {'run': run_611}})        # a row per named table, data read

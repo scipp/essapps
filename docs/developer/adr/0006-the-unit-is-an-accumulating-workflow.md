@@ -103,8 +103,9 @@ client.output(series, 'stitched')    # STITCH over runs 608 and 609, fitted agai
 ```
 
 **Opening.** The framework refuses, at the call, to open an accumulator whose template has no table blank, has a blank that is not a table, references an accumulator, or has values a request would refuse ([ADR 0003](0003-accumulators-add-in-place.md)).
-A binding may also refuse to open: `combine` refuses fixed values, and a `PipelineBinding` that accumulates with `StreamProcessor` would refuse an accumulated key that depends on two tables (see Consequences; scipp/essapps#40, not implemented).
+A binding may also refuse to open: `combine` refuses fixed values.
 It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops ([ADR 0003](0003-accumulators-add-in-place.md), Failures).
+`AccumulatingPipelineBinding` refuses earlier, when it is made: an accumulated key that depends on two tables is a property of the pipeline, not of the values (see Consequences).
 
 **What the framework sees is flat.**
 A spec's parameters are values, data fields, and tables, and the rows of a table are flat models; `ess.spec` refuses a row that holds another model or table.
@@ -116,7 +117,7 @@ Records, checks, forms, and pushes stay the same for every technique, push order
 **Two examples.**
 The first has one table whose rows have two columns.
 Suppose a package lets each sample run have its own transmission run; esssans uses one transmission run for all runs of a sample ([sans](../../requirements/sans.md)).
-A row holds what the per-run part needs at once, so the run and its transmission run are two fields of one row, and one push hands both to the binding; for `StreamProcessor`, both are dynamic keys of one `accumulate`.
+A row holds what the per-run part needs at once, so the run and its transmission run are two fields of one row, and one push hands both to the binding; for `AccumulatingPipelineBinding`, both set keys of one per-run computation.
 Two lists that must stay aligned, one of runs and one of their transmission runs, would be two tables whose rows could be paired wrongly; they are one table with two columns.
 A per-run value, such as a time range to keep, is a column in the same way.
 
@@ -162,10 +163,14 @@ client.output(iofq, 'iofq')
 #  'can_runs': [{'run': 614}, {'run': 615}]}
 ```
 
-For `StreamProcessor`, the two tables are separate dynamic keys, such as `Filename[SampleRun]` and `Filename[BackgroundRun]`, and a push into one table accumulates only the keys that depend on it.
+For `AccumulatingPipelineBinding`, the two tables set separate keys, such as `Filename[SampleRun]` and `Filename[BackgroundRun]`, and a push into one table computes and adds only the accumulated keys that depend on it.
 
-**A `PipelineBinding` that accumulates with `StreamProcessor`** (scipp/essapps#40, not implemented).
-A package would describe its workflow once, and both esslivedata and this framework would use that description:
+**`AccumulatingPipelineBinding`** binds a sciline pipeline of one row of each table, the pipeline the single-run spec's `PipelineBinding` takes, to the multi-run spec ([README](../README.md), What a binding provides).
+The package names the key each row field sets and the keys to accumulate, which are summed over the rows.
+The binding cuts the pipeline with `sciline.Stage` twice: at the row fields, to compute a row's accumulated keys, and at the accumulated keys, to compute the outputs from the sums.
+A plain request, a stage, and a held state all compute this way.
+
+It takes the description that `StreamProcessor` takes, so esslivedata could build a `StreamProcessor` from the same one:
 
 | `StreamProcessor` | accumulator |
 |---|---|
@@ -189,7 +194,8 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - **A chain of totals**, each a request over the previous total and one new run. A record does not mean the sum of its runs, and a total that grows is copied at every step.
 - **Only specs whose binding makes its own held state can be accumulated.** The caller would then have to know which specs accumulate, and the same spec could be given rows over time or not depending on how its package implements it. Opening an accumulator would fail for the rest.
 - **Nested tables**, such as rows that hold a table of banks, or a table per level. The framework would need a push for each level, rules on the order of pushes, and rules on which work is repeated at which level. All of that is structure of the workflow, which the binding knows and the framework does not.
-- **Fan-out over nodes as part of the unit.** This needs merging two held states, which neither `StreamProcessor` nor this binding protocol offers. No requirement needs it now: runs arrive over hours, and a finished scan can be reduced again in one job.
+- **Accumulating with `StreamProcessor`**, from essreduce. It was the first plan (scipp/essapps#40), and a spike on LoKI data showed that it gives esssans's I(Q). The accumulator uses a small part of it: the static part, dynamic keys, summed accumulated keys, and finalize. Its context keys, rolling windows, and `clear()` break arrival (table above). Importing it loads essreduce, with scippneutron, scippnexus, scipy, and dask. Two cuts with `sciline.Stage` do the same, and show a key that depends on two tables in `Stage.keys`.
+- **Fan-out over nodes as part of the unit.** This needs merging two held states, which neither `StreamProcessor` nor the binding protocol offers. No requirement needs it now: runs arrive over hours, and a finished scan can be reduced again in one job.
 
 ## Consequences
 
@@ -199,11 +205,11 @@ Outputs are computed when read, not at every push, so that a driver that looks r
 - An accumulator whose binding does not accumulate keeps the values of every pushed row. In the user's process, a row that references a record output keeps that value alive while the accumulator lives, even after the client releases the record. A driver that reads such an accumulator after every push repeats the per-run part of every row so far at each read. An accumulating binding avoids both.
 - The binding chooses where to accumulate. Its accumulated keys must add over runs to what the plain request over all runs computes from, such as a numerator and a denominator, not a normalized curve. For esssans these are the numerator and denominator in Q, summed over wavelength bands. One step earlier, the numerator is event data that grows with each run.
 - esssans builds its pixel masks from the sample run's detector, so the can's accumulated keys also depend on the sample file, and a can run cannot be pushed alone. Masks per run type, or detector IDs from a fixed run, would fix this in esssans.
-- sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, stops `StreamProcessor` from building.
+- sciline's mapped nodes are being replaced by stages and drivers over them. Until then, a parameter table at the line between the part computed once and the per-run part, such as masks given per file, may stop `sciline.Stage`, and so `AccumulatingPipelineBinding`, from building; this has not been tried.
 - A row holds what the per-run part needs at once. A run and its own transmission run, if it has one, go in one row. Rows of different tables are independent, even when one push adds them together, and pairing runs into rows is the application's job.
-- Each accumulated key must depend only on the fixed values and on the fields of one table. Then pushes may come in any order and give the same state, up to rounding, and the framework has no rules on order. A binding that cannot keep this promise refuses to open, and the accumulator stops; a `PipelineBinding` with `StreamProcessor` can tell, since `StreamProcessor` computes these dependencies at construction (scipp/essapps#40). The esssans masks above are such a case.
+- Each accumulated key must depend only on the fixed values and on the fields of one table. Then pushes may come in any order and give the same state, up to rounding, and the framework has no rules on order. `AccumulatingPipelineBinding` checks this from the pipeline when it is made, so a package that breaks it fails when imported, before any accumulator opens. The esssans masks above are such a case.
 - Levels below a row are loops inside the binding, over sciline stages and nested inside the per-run work, so that the per-run work runs once per row and not once per bank. A row of (bank, run) would repeat the per-run work for every bank. The framework cannot tell a bank index from a per-run value, so keeping such levels out of rows is a rule for workflow authors.
-- A plain request over a table can run through the same `StreamProcessor`, pushing every row and then computing the outputs once. A run that appears in several rows can be memoized by the binding by its dataset identity.
+- A plain request over a table runs through the same stages as an accumulator, summing every row and then computing the outputs once. A run that appears in several rows can be memoized by the binding by its dataset identity.
 - Results per bank or per angle are outputs, for example with a bank dimension, and the held state may be keyed by a bank or by a value read from each run.
 - If two levels ever both arrive over time, such as sections of runs that are still being written, rows become (run, section). The binding must then keep the per-run work between the rows of one run, as `StreamProcessor` does with context keys. The result still does not depend on the order of pushes, but the cost does. Nothing needs this yet: offline rows are complete files, and watching a file that is still being written is esslivedata's.
 - A state is read only if its plain request would be accepted ([ADR 0003](0003-accumulators-add-in-place.md)). If the spec requires rows in every table, a state whose rows fill only some tables is refused with that reason until each has a row. If the spec lets a table be empty, reading such a state computes every output from the rows there are, as the plain request would; an output that needs a table with no rows fails the read unless the spec declares it optional and the binding leaves it out.

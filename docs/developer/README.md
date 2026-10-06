@@ -612,7 +612,25 @@ A `PipelineBinding` computes what depends only on the fixed values once, through
 Each read repeats the work per run for every row so far.
 In the user's process, the held state keeps the value of every row, so a row that references an output of a record keeps that value while the accumulator lives, even after the client releases the record.
 A binding avoids both costs by providing `held_state(fixed)`.
-`PipelineBinding` provides none; accumulating with `StreamProcessor` is designed and not implemented (scipp/essapps#40).
+`PipelineBinding` provides none.
+`AccumulatingPipelineBinding` provides it for a sciline pipeline of one row of each table, which is also what the single-run spec's `PipelineBinding` takes:
+
+```python
+from ess.spec.pipeline import AccumulatingPipelineBinding
+
+AccumulatingPipelineBinding(pipeline,
+                            params={'bins': QBins, 'beam_centre': BeamCenter, 'direct_beam': DirectBeam},
+                            tables={'sample_runs': {'run': Filename[SampleRun]},
+                                    'can_runs': {'run': Filename[BackgroundRun]}},
+                            outputs={'iofq': BackgroundSubtractedIofQ},
+                            accumulate=(Numerator[SampleRun], Denominator[SampleRun],
+                                        Numerator[BackgroundRun], Denominator[BackgroundRun]))
+```
+
+For each row it computes the accumulated keys of the row's table and adds them; the outputs are computed from the sums.
+A plain request, a stage, and a held state all compute this way, through `sciline.Stage`.
+Each accumulated key must depend on the rows of one table, and the outputs on the rows only through accumulated keys; the binding refuses a pipeline that breaks this when it is made.
+The workflow author promises that the accumulated keys add over runs to what the reduction of all runs computes from (ADR 0006).
 
 ## Drivers
 
