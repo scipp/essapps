@@ -431,7 +431,7 @@ client.compute(IOFQ_MULTI, {'sample_runs': [{'run': dataset(run=611)}],
 ```
 
 - Both declare the same outputs model. The single-run spec does not output partial results of each run, such as a numerator and a denominator, for a later request to sum. Summing belongs to the binding of the multi-run spec ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
-- The workflow author promises that the two agree; nothing checks it (see Symmetries).
+- The workflow author promises that the two agree, and checks it in the package's tests (see Symmetries).
 - Records of the two specs are separate: the same run reduced with `IOFQ` and with `IOFQ_MULTI` makes two records of two specs.
 
 ## Stages and accumulators
@@ -719,7 +719,8 @@ The framework keeps some by construction; the others are promises of the workflo
 | placement | where a request runs: the user's process, the service, which worker | the record and its outputs | the framework |
 
 Arrival, order, and placement hold up to rounding where the order of adding differs.
-Each promise of the workflow author compares two calls with the same inputs, so a package can test it.
+Each promise of the workflow author compares two calls with the same inputs, so a package can test it without knowing the correct outputs.
+`ess.spec.testing` has a check for each: `check_one_row`, `check_caching`, and `check_arrival_and_order`, which pushes the same rows in several orders.
 Caching and arrival differ in two ways that the symmetries leave open.
 A call through a stage makes a record, while a push makes a state, which is recorded only by a request that reads it.
 Arrival keeps the outputs, not the cost: if the binding does not accumulate, each read computes the per-run part of every row again.
