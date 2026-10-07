@@ -2,10 +2,12 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Persisting outputs: what the store keeps, who reads it, and a restart."""
 
+import gc
 import operator
 import shutil
 import threading
 import uuid
+import weakref
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -16,13 +18,14 @@ from pydantic import BaseModel
 from ess.dispatch import (
     Backend,
     Client,
+    ClientEnded,
     Status,
     SubmitError,
     Template,
     dataset,
     local,
 )
-from ess.dispatch.log import Log, Persist
+from ess.dispatch.log import Finished, Log, Persist
 from ess.dispatch.testing import FakeDatasets, FakeStore
 from ess.spec import Array, NexusFile, WorkflowSpec, combine
 
@@ -63,18 +66,31 @@ def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> Workf
 LOAD = _spec('load', RunParams, Loaded)
 SHIFT = _spec('shift', ShiftParams, Value)
 TOTAL = _spec('total', Parts, Value)
+LIST = _spec('list', RunParams, Value)  # a value that can be changed in place
+BOX = _spec('box', RunParams, Value)  # a value that can be referenced weakly
+UNBOX = _spec('unbox', ShiftParams, Value)
+
+
+class Box:
+    def __init__(self, value: float) -> None:
+        self.value = value
 
 
 class GatedStore(FakeStore):
-    """A fake store whose writes wait until ``gate`` is set."""
+    """
+    A fake store whose writes wait until ``gate`` is set; ``entered`` is set
+    once one waits.
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.gate = threading.Event()
         self.gate.set()
+        self.entered = threading.Event()
 
     def write(self, record: str, output: str, value: Any) -> None:
-        self.gate.wait(timeout=5)
+        self.entered.set()
+        assert self.gate.wait(timeout=5), 'a test left the gate closed'
         super().write(record, output, value)
 
 
@@ -101,23 +117,46 @@ def loading() -> Iterator[threading.Event]:
 
 
 @pytest.fixture
-def bind(loading: threading.Event) -> dict[WorkflowSpec, Any]:
+def boxes() -> list[weakref.ref[Box]]:
+    """A weak reference to each value that BOX returned."""
+    return []
+
+
+@pytest.fixture
+def bind(
+    loading: threading.Event, boxes: list[weakref.ref[Box]]
+) -> dict[WorkflowSpec, Any]:
     def load(run: float) -> dict[str, float]:
         loading.wait(timeout=5)
         return {'value': run, 'extra': -run}
+
+    def box(run: float) -> dict[str, Box]:
+        boxes.append(weakref.ref(value := Box(run)))
+        return {'value': value}
 
     return {
         LOAD: load,
         SHIFT: lambda value: {'value': value + 10.0},
         TOTAL: combine(operator.add),
+        LIST: lambda run: {'value': [run]},
+        BOX: box,
+        UNBOX: lambda value: {'value': value.value},
     }
 
 
 @pytest.fixture
+def log() -> Log:
+    return Log()
+
+
+@pytest.fixture
 def backend(
-    datasets: FakeDatasets, store: GatedStore, bind: dict[WorkflowSpec, Any]
+    datasets: FakeDatasets,
+    store: GatedStore,
+    bind: dict[WorkflowSpec, Any],
+    log: Log,
 ) -> Iterator[Backend]:
-    backend = Backend(datasets, bind, store=store)
+    backend = Backend(datasets, bind, store=store, log=log)
     yield backend
     store.gate.set()
     backend.close()
@@ -240,18 +279,12 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     assert other.output(load, 'value') == 1.0
 
 
-def test_persisting_what_is_persisted_logs_nothing(
-    datasets: FakeDatasets, bind: dict[WorkflowSpec, Any], store: GatedStore
-) -> None:
-    log = Log()
-    backend = Backend(datasets, bind, log=log, store=store)
-    client = Client(backend, proposal='p1', submitter='anna')
+def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
     client.persist(load, 'value')
     client.persist([load, load], 'value', 'extra')
     client.release(load)
     assert client.output(load, 'extra') == -1.0
-    backend.close()
 
     persisted = [e for e in log if isinstance(e, Persist)]
     assert [e.outputs for e in persisted] == [('value',), ('extra',)]
@@ -324,6 +357,105 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     store.gate.set()
     closing.join(timeout=5)
     assert (load.id, 'value') in store
+
+
+def test_persisting_a_pending_record_does_not_delay_its_completion(
+    client: Client, store: GatedStore, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=1)})
+    client.persist(load, 'value')
+    store.gate.clear()
+    loading.set()
+
+    assert client.wait(load) is Status.COMPLETED  # while its write waits
+    assert client.output(load, 'value') == 1.0
+    store.gate.set()
+
+
+def test_a_record_lets_go_of_its_inputs_before_its_write(
+    client: Client, store: GatedStore, boxes: list[weakref.ref[Box]]
+) -> None:
+    box = client.submit(BOX, {'run': dataset(run=1)})
+    store.gate.clear()
+    unbox = client.submit(UNBOX, {'value': box.ref('value')}, persist=True)
+    client.release(box)  # only ``unbox`` reads it
+    assert store.entered.wait(timeout=5)
+
+    gc.collect()
+    assert boxes[0]() is None  # dropped while the write of ``unbox`` waits
+    assert client.status(unbox) is Status.PENDING
+    store.gate.set()
+    assert client.wait(unbox) is Status.COMPLETED
+
+
+def test_another_client_reads_a_persisted_value_from_the_store(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    listed = client.compute(LIST, {'run': dataset(run=1)})
+    client.persist(listed)
+    other = connect()
+
+    other.output(listed, 'value').append(99.0)
+    assert client.output(listed, 'value') == [1.0]  # the client's own value
+    assert other.output(listed, 'value') == [1.0]
+
+
+def test_reading_every_output_raises_if_a_write_failed(
+    client: Client, connect: Callable[[], Client], store: GatedStore
+) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    store.fill()
+    client.persist(load, 'value')
+
+    with pytest.raises(LookupError, match='the write failed: no space left'):
+        connect().output(load)
+    store.free()
+    client.persist(load, 'value')
+    assert connect().output(load) == {'value': 1.0}
+
+
+def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
+    client: Client, store: GatedStore
+) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    shift = client.compute(SHIFT, {'value': load.ref('value')})
+    store.fill()
+    client.persist(load, 'value')
+    client.persist(shift)
+
+    with pytest.raises(RuntimeError, match='writes failed') as raised:
+        client.close()
+    assert f'record {load.id} output value: no space left' in str(raised.value)
+    assert f'record {shift.id} output value: no space left' in str(raised.value)
+    with pytest.raises(ClientEnded):
+        client.output(load, 'value')
+
+
+def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
+    client: Client, connect: Callable[[], Client], store: GatedStore
+) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    store.fill()
+    client.persist(load, 'value')
+    with pytest.raises(LookupError, match='the write failed'):
+        connect().output(load, 'value')  # waits for the write
+    store.free()
+    client.persist(load, 'value')
+
+    client.close()
+
+
+def test_a_frozen_record_kept_by_the_client_is_persisted_later(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    total = client.accumulator(Template(TOTAL, blanks=('parts',)))
+    total.push({'parts': load.refs('value')})
+    frozen = client.freeze(total)
+    client.persist(frozen)
+
+    assert connect().output(frozen, 'value') == 1.0
 
 
 # A restart over the same log and store
@@ -442,3 +574,57 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
         again.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: the backend restarted'):
         again.submit(SHIFT, {'value': load.ref('value')})
+
+
+def test_a_restart_runs_again_a_record_written_but_not_finished(
+    tmp_path: Path, start: Callable[[Path], Client], store: GatedStore
+) -> None:
+    first = start(tmp_path / 'log')
+    load = first.compute(LOAD, {'run': dataset(run=1)}, persist=('value',))
+    lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
+    assert isinstance(Log.read(tmp_path / 'log')[-1], Finished)
+    (tmp_path / 'crashed').write_bytes(b''.join(lines[:-1]))  # before it finished
+
+    again = start(tmp_path / 'crashed')
+
+    assert again.wait(load) is Status.COMPLETED
+    assert again.output(load, 'value') == 1.0  # written again
+
+
+def test_a_restart_runs_a_pending_record_that_the_client_persisted(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log')
+    loading.clear()
+    load = first.submit(LOAD, {'run': dataset(run=1)})
+    first.persist(load, 'value')
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.wait(load) is Status.COMPLETED
+    assert again.output(load, 'value') == 1.0
+
+
+def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    store: GatedStore,
+) -> None:
+    first = start(tmp_path / 'log')
+    load = first.compute(LOAD, {'run': dataset(run=1)})
+    store.gate.clear()
+    first.persist(load, 'value')
+    shift = first.submit(SHIFT, {'value': load.ref('value')}, persist=True)
+
+    again = restart(tmp_path / 'log')
+
+    assert again.wait(shift) is Status.FAILED
+    assert again.failure(shift) == (
+        f'the backend restarted: input {load.id} output value: '
+        'the write failed: the backend restarted'
+    )

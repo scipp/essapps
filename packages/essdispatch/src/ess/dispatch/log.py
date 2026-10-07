@@ -6,7 +6,10 @@ and what came of it.
 
 There are six events: a submission, a record that finished, an accumulator
 that opened, a push into one, a request to persist outputs of a record, and a
-write that ended. A submission that read an accumulator, and a freeze, hold a
+write that ended. A persist request made with a submission or a freeze is
+part of that event, and its write is the record's: the record finishes once
+the outputs are written, so no write event follows. A submission that read
+an accumulator, and a freeze, hold a
 record of the plain request of the state read, as the accumulator and its
 number of pushes, before the records that read it; the views list its rows
 when it is read. The backend's views, such as the records by ID, are built by
@@ -74,10 +77,17 @@ class Submitted(BaseModel, frozen=True):
 
 
 class Finished(BaseModel, frozen=True):
+    """
+    A record that finished: ``failure`` says why it failed, or why the
+    backend cancelled it. ``omitted`` names the optional outputs that the
+    workflow of a completed record did not return.
+    """
+
     kind: Literal['finished'] = 'finished'
     record: str
     status: Status
     failure: str | None = None
+    omitted: tuple[str, ...] = ()
 
 
 class Opened(BaseModel, frozen=True):
@@ -86,7 +96,10 @@ class Opened(BaseModel, frozen=True):
 
     The template's blanks are the tables that the pushes fill. ``fixed`` holds
     the template's other values, each typed by its field, defaults filled in:
-    with the rows pushed, they give the plain request of a state.
+    the held state was opened with them, and with the rows pushed they give
+    the plain request of a state. ``template`` holds the values as the client
+    gave them, names resolved, which the client gets back, as it does a
+    stage's template.
     """
 
     kind: Literal['opened'] = 'opened'
@@ -105,7 +118,10 @@ class Pushed(BaseModel, frozen=True):
 
 
 class Persist(BaseModel, frozen=True):
-    """A request to persist outputs of a completed or pending record."""
+    """
+    A request to persist outputs of a completed or pending record, made after
+    its submission.
+    """
 
     kind: Literal['persist'] = 'persist'
     record: str
@@ -114,15 +130,13 @@ class Persist(BaseModel, frozen=True):
 
 class Written(BaseModel, frozen=True):
     """
-    A write of outputs of a record that ended: ``failure`` says why it failed,
-    or is ``None``. ``omitted`` names the outputs among ``outputs`` that the
-    workflow did not return, which have no value to write.
+    A write that ended, of outputs that a persist request named: ``failure``
+    says why it failed, or is ``None``.
     """
 
     kind: Literal['written'] = 'written'
     record: str
     outputs: tuple[str, ...]
-    omitted: tuple[str, ...] = ()
     failure: str | None = None
 
 
