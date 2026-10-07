@@ -38,24 +38,26 @@ A value that is gone does not come back: running the same request again makes a 
 |---|---|---|
 | the client that asked for the record (`submit`, `compute`, `freeze`) without `persist=` | the record's values | it releases the record or ends |
 | a pending request | the values it reads | it has finished and its workflow has returned |
-| a pending read of an accumulator: the record of a state, a `freeze`, a `client.output` | the value of that state, and the pushes up to it | it has finished |
+| a pending read of an accumulator: the record of a state, a `freeze`, a `client.output` | the state it pinned, and the pushes up to it | it has finished, or `client.output` has copied |
+| a value that is part of a held state, such as an output of the record of a state | the held state at that state: the next push is not added | the value is dropped |
 | a push | the values its rows reference | it is added or dropped |
+| a stage | the values its template references | it is released |
 | an accumulator's template | the values it references | the held state has opened |
 | a held state that keeps its rows | the values they reference | the held state is dropped |
-| a persist request | the values it names | they are written |
-| the store | written values | the proposal's history is dropped, or a file is dropped earlier |
+| a persist request | the values it names | they are written, or the write has failed |
+| the store | written values | the proposal's history is dropped, or a value is dropped earlier |
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
 Keeping is the default for what a client asks for.
 [ADR 0003](0003-accumulators-add-in-place.md) gives the keepers of an accumulator, [ADR 0005](0005-nothing-is-written-unless-persisted.md) the persist request and the store.
 
-**A submission reads only values kept for it:** values its own client keeps, values with a persist request, datasets, and the current state of its own client's accumulators.
+**A submission reads only values kept for it:** values its own client keeps, persisted values ([ADR 0005](0005-nothing-is-written-unless-persisted.md)), datasets, and the current state of its own client's accumulators.
 A request that references any other value is refused at submission, whether that record is pending or completed.
 Stages, accumulators, and pushes check what their templates and rows reference in the same way.
 So whether a submission is accepted depends only on what its client keeps, not on how far other work has come.
 Another client, in the same process or not, references a value only once it is persisted.
 
-**`client.output`** reads values its own client keeps, values with a persist request, and accumulators ([ADR 0003](0003-accumulators-add-in-place.md)).
+**`client.output`** reads values its own client keeps, persisted values, and accumulators ([ADR 0003](0003-accumulators-add-in-place.md)).
 Reading a value that nothing keeps for the caller raises; the record stays.
 
 **Work that nothing keeps is cancelled.**
@@ -65,10 +67,12 @@ A workflow that is already running cannot be interrupted: its record is cancelle
 Cancelling frees memory, not CPU.
 
 **Stages and accumulators belong to the client**, and are released the same way.
+A stage keeps the values its template references until it is released, since what it computed from them stays in memory with it.
 What a stage computed is a cache that the backend may drop; its next call computes it again and makes the same record.
 
 **A client ends** at `client.close()` or at the end of `with client:`.
-In-process, a client that is never closed ends with its process; on the service, its lease runs out ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
+In-process, a client made with `local()` owns its backend: closing the client closes the backend, which first waits until the pending records with a persist request are written, so that a script that persists and exits keeps what it asked for.
+A client that is never closed ends with its process; on the service, its lease runs out ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
 A later call of an ended client raises `ClientEnded`.
 In the backend, a client is one entry, kept in memory, not in history.
 
@@ -104,5 +108,5 @@ How the service bounds what a client keeps, and notices a client that vanished, 
 - A cancelled workflow that is already running still uses its worker until it returns.
 - Two clients share values only through the store, also two clients in one process.
 - A kernel restart ends the process, and with it the backend and everything it keeps. Continuing a reduction after the user's process crashed is a non-goal ([requirements](../../requirements/README.md)).
-- A backend restarts only on a log file, which in-process only the tests do ([ADR 0004](0004-history-is-append-only-lists.md)). After a restart, no client keeps anything. A pending record that nothing else keeps is cancelled; what a persist request still needs runs ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
-- A stage whose template references a released record takes no more calls, since each call is checked as the plain request.
+- A backend restarts only on a log file, which in-process only the tests do ([ADR 0004](0004-history-is-append-only-lists.md)). After a restart, no client keeps anything; [ADR 0005](0005-nothing-is-written-unless-persisted.md) (Restart) says what still runs.
+- A stage takes calls for as long as it lives, also after the client released the records its template references.
