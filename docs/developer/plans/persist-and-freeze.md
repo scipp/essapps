@@ -42,13 +42,15 @@ Stated about values, the general rules give each of them (see Records of states)
 ## The model
 
 ```text
-FIT ──> state 3 of volume: VOLUME({'runs': [run 1, run 2, run 3]}) ──> datasets run 1, run 2, run 3
+FIT ──> state 3 of total: SUM({'parts': [r1.value, r2.value, r3.value]}) ──> REDUCE r1, r2, r3 ──> datasets
 IOFQ ──> BEAM_CENTRE ──> dataset run 60330
 ```
 
-A record is a request as the backend accepted it, with its inputs: outputs of other records, and datasets.
-These edges are its provenance, and they never change.
-A record that reads an accumulator, the record of a state or the record that `freeze` returns, reads the accumulator's held state, not its inputs: an edge is not a read.
+- **Nodes** are records and datasets. A record is a request as the backend accepted it, and its **edges** are its inputs: outputs of other records, and datasets. A record and its edges never change; they are its provenance.
+- **An accumulator and a stage are not nodes.** They hold values for a client. Each read of an accumulator adds a node for the state it read, the record of that state's plain request, with edges to the inputs of the rows pushed so far. The accumulator moves on at its next push; the node does not.
+- **A value hangs on a node while something keeps it** (the table below). Releasing drops the client's hold on a value, never a node or an edge.
+- **An edge is a read only for an ordinary record**, which reads its inputs' values when it runs. The record of a state, and the record that `freeze` returns, read the accumulator's held state instead; their edges are provenance only. So it does not matter that r1, r2, and r3 above were released once they were pushed.
+- **A new record is added only on top of values kept for it** (the read rule below). A value that is gone does not come back: running the same request again adds a new node with a value of its own. Nothing is computed again or merged behind the caller's back.
 
 A value exists while something keeps it:
 
@@ -214,4 +216,6 @@ V is the size of a large output, such as a spectroscopy volume of hundreds of GB
 4. **Modified values.** In the user's process, `client.output` returns the value itself. A notebook that modifies it in place breaks the promise every workflow makes, and changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
 5. **A look without waiting.** `client.output(acc)` pins the state after the pushes logged so far and waits until it has been added, as every read waits ([ADR 0003](../adr/0003-accumulators-add-in-place.md)). A driver that looks after every push therefore runs at the pace of the additions (story D7), which holds back pushes that would otherwise queue. A display may want the latest state already added, without waiting; add that form if a story needs it.
 6. **The service.** How the cap per client is set, and where a client's values are held when its work spreads over nodes.
-7. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
+7. **One record per read, or per state.** Each submission that reads an accumulator makes its own record of the state. Submissions that pin the same state could share one: no later submission can reference it, so sharing brings back no circular wait. It saves history, not memory.
+8. **Labels and members** stay as they are, given at submission. Simon is not attached to their current form (README, open question 3).
+9. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
