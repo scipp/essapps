@@ -29,6 +29,7 @@ So what is written are the outputs of requests: results, and inputs worth keepin
 
 **Nothing is written unless persisted**, in the user's process and on the service alike.
 To *persist* an output is to write it to the *store*, which then keeps it ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers).
+An output is *persisted* while a persist request names it and its write has not failed: it is written, or its write is pending.
 
 ```python
 r = client.submit(IOFQ, {'run': dataset(run=60339)})     # its values are kept for this client
@@ -40,9 +41,11 @@ total = client.freeze(volume, persist=('counts',))        # the last state of an
 - **`client.persist(records, *outputs)`** logs a request to persist the named outputs, or all of them, of records its client keeps. It adds the store as a keeper. The client keeps its own hold until it releases the record, so reads stay in memory until then. It is refused for a record the client does not keep, and for an output that one of the records lacks.
 - **`client.submit(..., persist=True)`**, or `persist=('iofq',)` for named outputs, logs the persist request with the submission. The client does not keep these records. The outputs named are kept until written; the others are dropped when the record completes. Batch reduction and the trigger loop submit this way, so their clients keep nothing. A rule names the outputs it persists, all of them by default.
 - **`client.freeze(acc, persist=...)`** does the same for the record of the last state ([ADR 0003](0003-accumulators-add-in-place.md)).
-- **Once a persist request is logged**, every client of the proposal can read and reference the values it names, such as a colleague's notebook, an AI agent, or a rule's template. Reads wait for the write.
-- **History** logs each persist request, and a `Written` event when a write ends, with the outputs written or the failure ([ADR 0004](0004-history-is-append-only-lists.md)). A record's status is that of its computation. A failed write fails the persist request, not the record. The failure shows where the value is read: `client.output` of it, and the requests that reference it, fail with the write's reason. A client that still keeps the record can ask again.
-- **Asking to persist an output already persisted** does nothing.
+- **Every client of the proposal reads and references persisted values**, such as a colleague's notebook, an AI agent, or a rule's template. Reads wait for the write.
+- **History** logs each persist request, and each write when it ends, with the outputs written or why it failed ([ADR 0004](0004-history-is-append-only-lists.md)).
+- **A failed write of a record persisted at submission fails the record**, with the write's reason. Such a record is done only once it is written, so a batch driver or the trigger loop sees a failed write as it sees any failed record. Nothing keeps the value any more; the request is submitted again.
+- **A failed write of `client.persist`** fails that persist request only. The record keeps its status, and the client, which still keeps the value, can ask again. The value is no longer persisted: for other clients, reads raise with the write's reason, and requests that reference it are refused, or fail if they were waiting for the write.
+- **Asking to persist an output that is persisted** does nothing.
 - **`client.publish`** reads the value as `client.output` does, and puts it in the catalogue with its provenance. It needs no persist request.
 - **The store finds a value by the record's ID and the output's name.** History names no file, so a record never changes.
 - **Values are dropped from the store with the proposal's history at the latest** ([ADR 0004](0004-history-is-append-only-lists.md)). A value dropped earlier, for example to free disk space (system story H1), is read as a value that nothing keeps: reading it raises, a request that references it is refused at submission, and the record stays.
@@ -52,7 +55,7 @@ total = client.freeze(volume, persist=('counts',))        # the last state of an
 | | user's process (`local()`) | service |
 |---|---|---|
 | values that are not persisted | in the process's memory | in the service's memory, under a cap per client |
-| a client ends | at `close()`, or with its process | at `close()`, or when its lease runs out (scipp/essapps#34) |
+| a client ends | at `close()`, which waits until the pending records with a persist request are written, or with its process | at `close()`, or when its lease runs out (scipp/essapps#34) |
 | the store | given to `local(store=...)`; without one, `persist` is refused; in the first release, only tests pass a store, a fake one in memory | the proposal's area |
 | history | in memory, or in a file | the service's |
 
@@ -64,12 +67,13 @@ total = client.freeze(volume, persist=('counts',))        # the last state of an
 - **Values reach other nodes** as the system decides, for example through a scratch file deleted once nothing keeps the value.
 
 **A restart** keeps history and the store, and no client.
-A pending record runs if every value it reads is written, will be written for a pending record with a persist request, or is a dataset.
-A record that reads a held state fails, since the held state is gone, and so does a record whose other inputs are gone.
-A pending record that nothing keeps any more is cancelled ("backend restarted").
+Each pending record is decided in this order:
 
-**An upgrade of the service** lets the old instance finish the pending records with a persist request, what they read, and the pushes they need, before it stops (system story H2).
-The upgrade ends every client of the old instance.
+1. It is cancelled ("the backend restarted") unless a persist request names it, or a pending record that a persist request names reads it, directly or through other pending records.
+2. Otherwise it runs if each value it reads is a dataset, is written, or is an output of a pending record that runs.
+3. Otherwise it fails. A record that reads a held state fails, since the held state is gone, and so does a record that reads a completed value that was not persisted.
+
+A write that had not ended at the restart has failed, since the value is gone: a record persisted at submission fails with it, and so do the pending records that read the value.
 
 ## Open
 
@@ -82,10 +86,11 @@ To be designed with the service (scipp/essapps#27, scipp/essapps#23):
 - **When values are dropped from the store before history** (system story H1), and by whom.
 - **The file format of each output type, and the layout of the store within a proposal's area** (scipp/essapps#23).
 - **Whether `persist=` at submission should also keep the values for the client**, or both calls need more options. This is settled once stories use them.
+- **An upgrade with persisted work running.** The requirements assume that the reductions running at an upgrade whose results someone asked to keep finish ([systems](../../requirements/systems.md), Assumed; system story H2). The old instance could finish them before it stops, but only one backend writes history, so the new version could not start until the longest of them ended: hours for an overnight batch. The new instance could instead treat the upgrade as a restart and run them again, which loses the time they had run. Whether the old instance takes submissions meanwhile, and what its clients see, depends on the choice. Either way, the upgrade ends every client of the old instance.
 
 ## Alternatives considered
 
-- **The service writes every output.** It writes and reads back what nobody asked for, every look included, to give unattended work, restarts, and other nodes a value that outlives its client. Those needs are met without it: unattended drivers persist at submission, an upgrade finishes pending persisted work, and the system moves a value to another node only when a reader there needs it.
+- **The service writes every output.** It writes and reads back what nobody asked for, every look included, to give unattended work, restarts, and other nodes a value that outlives its client. Those needs are met without it: unattended drivers persist at submission, a restart runs pending persisted work again, and the system moves a value to another node only when a reader there needs it.
 - **The service persists by default, with an opt-out for looks.** Writing then stays the default cost, and every interactive client must remember to opt out. The clients that must persist, the trigger loop and batch applications, are framework code.
 - **No cap per client on the service**, since the trigger loop would reach it, and a closing batch client would take its values with it. Both persist at submission, so neither keeps anything under the cap.
 - **Writing only final outputs.** The framework does not tell intermediate from final results.
