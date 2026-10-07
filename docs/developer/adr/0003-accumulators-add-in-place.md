@@ -65,7 +65,7 @@ A request that reads a state the accumulator has yet to reach waits for it, as i
 
 - **`client.output(acc, name, select=None)`** copies the output, or the part of it that `select` names, and makes no record. It is a reader of the state only until it has copied, so a selection holds back the next push only for as long as it takes to copy the slice.
 - **A request that references `acc.ref(name)`** reads the record of the state's plain request, which its submission makes ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). It reads the state's output in place while it runs, so a read costs no second copy of the held state, such as the 4D volume of spectroscopy.
-- **`client.freeze(acc)`** ends the accumulator, and returns the record of its last state (Freeze).
+- **`client.freeze(acc)`** returns the record of its last state, and the accumulator takes no more pushes (Freeze).
 - A state is counted in pushes, not rows. A push may add a row to each of several tables, and the log of the first `n` pushes gives the rows of each table:
 
   ```python
@@ -94,8 +94,8 @@ This is the spec author's promise; it is documented, not checked.
 No output is computed for a state that no one reads.
 Two reads of one state, such as `client.output(acc, 'a')` and then `client.output(acc, 'b')`, compute once.
 
-**Adding.** A push is added once the records its rows reference have completed and nothing keeps the value of the state before it.
-The value of a state is kept by its pending reads ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers): a record of the state until the requests that read it have run, including those cancelled while they run; a freeze until its record has finished; and `client.output` calls in progress.
+**Adding.** A push is added once the records its rows reference have completed and nothing keeps the state before it ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers).
+The state is kept by its pending reads, and by the outputs of a record of the state, which are part of the held state, until they are dropped: once the requests that read them have returned, including those cancelled while they run.
 `client.provenance` reads no output and holds back no push.
 Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the reads of the state before it, all logged before the push, since only the submission that made the record of a state reads it.
 So no wait goes round in a circle.
@@ -107,7 +107,8 @@ The record of the state still names a plain request, since the log holds the row
 The same holds if the held state fails to open.
 A driver that wants to skip a run whose reduction failed waits for that record before pushing it.
 
-**Freeze.** `client.freeze(acc, persist=None)` returns the record of the plain request of the state after the pushes logged before it, and ends the accumulator.
+**Freeze.** `client.freeze(acc, persist=None)` returns the record of the plain request of the state after the pushes logged before it.
+The accumulator then takes no more pushes, and once that record has completed, no reads either: it is finished, and its last state lives on as the record.
 The client keeps that record, unless `persist=` hands it to the store ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
 
 ```python
@@ -123,8 +124,9 @@ client.output(total, 'counts')             # the volume, read as any record's ou
 - The plain request of that state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
 - The record reads the held state: until it has finished, it keeps the held state and the pushes up to its state.
 - Its values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
-- Once the record has completed, the accumulator takes no reads either; a read of it is refused and names the record, which is read instead.
-- If the record fails or is cancelled, the accumulator takes no pushes, but can still be read and frozen again, unless it has stopped (Failures).
+- A read of the accumulator after that is refused and names the record, which is read instead.
+- If the record fails or is cancelled, the accumulator still takes no pushes, but can be read and frozen again, unless it has stopped (Failures).
+- The client keeps a frozen accumulator until it releases it or ends, as any accumulator; once the record has completed, it holds no value.
 
 **Releasing.** Releasing an accumulator drops the client's hold on it.
 The pinned reads keep their states and the pushes up to them, so a driver may release an accumulator right after its last read:
