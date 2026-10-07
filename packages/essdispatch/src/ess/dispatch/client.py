@@ -228,8 +228,9 @@ class Client:
         End the client: release everything it keeps, which cancels the
         work that nothing else keeps.
 
-        A client that owns its backend then closes it, which waits until no
-        record is pending and every push is added.
+        A client that owns its backend then closes it, which waits for the
+        work that still runs: workflows already running, and the pushes that
+        readers of a released accumulator still need.
         """
         self._backend.close_client(self._id)
         if self._owns_backend:
@@ -350,6 +351,8 @@ class Client:
     def stage(self, template: Template) -> Stage:
         """
         A stage of the template; the client keeps it until it releases it.
+        The stage keeps the outputs its template references until then, so
+        the records they belong to may be released.
 
         A template a request would refuse is refused here. The stage's
         template holds the values as the backend resolved them, so a dataset
@@ -380,11 +383,12 @@ class Client:
         """
         Release records, stages, or accumulators: one, a list, or a dict.
 
-        A released record's outputs are dropped once the pending requests that
-        read them have run; the record stays. A pending record that nothing
-        else keeps is cancelled. A released stage takes no more calls. A
+        A released record's outputs are dropped once nothing else keeps them,
+        such as a pending request that reads them; the record stays. A
+        pending record that nothing else keeps is cancelled. A released stage
+        takes no more calls, and lets go of what its template references. A
         released accumulator takes no more pushes or readers; the pushes up
-        to the last state a pending read pinned are still added, the later
+        to the last state a pending read still holds are added, the later
         ones are dropped, and its state is dropped once its readers are done.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)

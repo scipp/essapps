@@ -470,6 +470,37 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     assert shifting.staged == [('offset',)]
 
 
+def test_a_stage_keeps_what_its_template_references_until_it_is_released(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=2)})
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    client.release(load)
+    loading.set()
+
+    shifted = client.compute(shift, {'offset': 1.0})
+    assert client.output(shifted, 'value') == 3.0
+    with pytest.raises(SubmitError, match='not kept by this client'):
+        client.submit(SHIFT, {'value': load.ref('value'), 'offset': 1.0})
+
+
+def test_releasing_a_stage_lets_go_of_what_its_template_references(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=2)})
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    client.release([load, shift])
+    loading.set()
+
+    assert client.status(load) is Status.CANCELLED
+
+
 def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     client: Client, scaling: Staging, datasets: FakeDatasets
 ) -> None:
@@ -654,6 +685,19 @@ def test_cancelling_work_that_nothing_keeps_passes_along_a_chain(
     client.release(scaled)
     loading.set()
     assert client.status([load, shifted, scaled]) == [Status.CANCELLED] * 3
+
+
+def test_cancelling_passes_along_a_chain_of_any_length(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    chain = [client.submit(LOAD, {'run': dataset(run=1)})]
+    for _ in range(1000):
+        chain.append(client.submit(SHIFT, {'value': chain[-1].ref('value')}))
+    client.release(chain)  # the last one releases the whole chain
+    loading.set()
+
+    assert set(client.status(chain)) == {Status.CANCELLED}
 
 
 def test_a_client_reads_and_references_only_what_it_keeps(
@@ -923,6 +967,42 @@ def test_field_validators_apply_at_the_opening_and_model_validators_at_reads(
 
     assert client.output(mean, 'value') == 2.0  # once the held state has opened
     assert scaled_sum.opened == [{'scale': 2.0, 'offset': None}]
+
+
+class FaultyParams(BaseModel):
+    """A table whose model validator has a bug: it raises at two rows."""
+
+    parts: list[Parts]
+
+    @model_validator(mode='after')
+    def _faulty(self) -> Self:
+        if len(self.parts) == 2:
+            raise TypeError('a bug in a validator')
+        return self
+
+
+FAULTY = _spec('faulty', FaultyParams, Parts)
+
+
+def test_a_read_whose_validator_raises_holds_back_no_push(
+    datasets: FakeDatasets,
+) -> None:
+    bind = {
+        LOAD: lambda run: {'value': run, 'extra': 0.0},
+        FAULTY: combine(operator.add),
+    }
+    backend = Backend(datasets, bind)
+    client = Client(backend, proposal='p1', submitter='anna')
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    faulty = client.accumulator(Template(FAULTY, blanks=('parts',)))
+    for _ in range(2):
+        faulty.push({'parts': load.refs('value')})
+    with pytest.raises(TypeError, match='a bug in a validator'):
+        client.output(faulty, 'value')
+    faulty.push({'parts': load.refs('value')})
+
+    assert _start(lambda: client.output(faulty, 'value')).result(timeout=5) == 3.0
+    backend.close()  # not before: a reader left behind would hold it open
 
 
 def test_an_accumulator_s_values_are_typed_as_the_log_holds_them(
@@ -1286,24 +1366,6 @@ def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
     loading.set()
 
 
-def test_ending_a_client_cancels_the_reads_of_its_accumulator(
-    backend: Backend, client: Client, loading: threading.Event
-) -> None:
-    other = Client(backend, proposal='p1', submitter='bob')
-    total = _total(client)
-    total.push({'parts': client.compute(LOAD, {'run': dataset(run=1)}).refs('value')})
-    loading.clear()
-    pending = client.submit(LOAD, {'run': dataset(run=2)})
-    parts = [{'value': total.ref('value')}, pending.refs('value')]
-    summed = client.submit(TOTAL, {'parts': parts})
-    state_id = summed.request.params['parts'][0]['value'].record
-    (state,) = [r for r in client.records() if r.id == state_id]
-    client.close()
-    loading.set()
-
-    assert other.status([pending, state, summed]) == [Status.CANCELLED] * 3
-
-
 class Sum:
     """
     ``combine(operator.add)`` that counts the rows its held states add.
@@ -1354,8 +1416,8 @@ def log() -> Log:
 
 
 @pytest.fixture
-def summed(datasets: FakeDatasets, summing: Sum, log: Log) -> Iterator[Client]:
-    """A client of a backend that sums TOTAL with ``summing`` and logs to ``log``."""
+def summed_backend(datasets: FakeDatasets, summing: Sum, log: Log) -> Iterator[Backend]:
+    """A backend that sums TOTAL with ``summing`` and logs to ``log``."""
     backend = Backend(
         datasets,
         {
@@ -1365,8 +1427,14 @@ def summed(datasets: FakeDatasets, summing: Sum, log: Log) -> Iterator[Client]:
         },
         log=log,
     )
-    yield Client(backend, proposal='p1', submitter='anna')
+    yield backend
     backend.close()
+
+
+@pytest.fixture
+def summed(summed_backend: Backend) -> Client:
+    """A client of ``summed_backend``."""
+    return Client(summed_backend, proposal='p1', submitter='anna')
 
 
 def test_an_accumulator_adds_each_row_once(summed: Client, summing: Sum) -> None:
@@ -1437,19 +1505,57 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
 
 
 def test_closing_a_client_drops_the_pushes_that_no_read_needs(
-    datasets: FakeDatasets, summing: Sum
+    summed_backend: Backend, summed: Client, summing: Sum
 ) -> None:
-    bind = {LOAD: lambda run: {'value': run, 'extra': 0.0}, TOTAL: summing}
-    with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        loads = client.compute([Request(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
-        summing.go.clear()
-        total = _total(client)
-        for load in loads:
-            total.push({'parts': load.refs('value')})
-        summing.adding.wait(timeout=5)
-        threading.Timer(0.05, summing.go.set).start()
+    client = summed
+    loads = client.compute([Request(LOAD, {'run': dataset(run=n)}) for n in (1, 2)])
+    summing.go.clear()
+    total = _total(client)
+    for load in loads:
+        total.push({'parts': load.refs('value')})
+    summing.adding.wait(timeout=5)
+    client.close()
+    summing.go.set()
+    summed_backend.close()
 
     assert summing.pushed == 1  # the push being added when the client closed
+
+
+def test_ending_a_client_cancels_the_reads_of_its_accumulator(
+    summed_backend: Backend, summed: Client, summing: Sum
+) -> None:
+    client = summed
+    other = Client(summed_backend, proposal='p1', submitter='bob')
+    load = client.compute(LOAD, {'run': dataset(run=1)})
+    summing.go.clear()
+    total = _total(client)
+    total.push({'parts': load.refs('value')})
+    shifted = client.submit(SHIFT, {'value': total.ref('value')})
+    state = _state(client, shifted)
+    client.close()
+    summing.go.set()
+
+    assert other.status([state, shifted]) == [Status.CANCELLED] * 2
+
+
+def test_a_released_accumulator_drops_the_pushes_once_their_reader_is_cancelled(
+    summed_backend: Backend, summed: Client, summing: Sum
+) -> None:
+    client = summed
+    loads = client.compute([Request(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)])
+    summing.go.clear()
+    total = _total(client)
+    for load in loads:
+        total.push({'parts': load.refs('value')})
+    read = client.submit(SHIFT, {'value': total.ref('value')})  # pins three pushes
+    summing.adding.wait(timeout=5)
+    client.release(total)  # the read keeps the pushes
+    client.release(read)  # and no longer once it is cancelled
+    summing.go.set()
+    summed_backend.close()
+
+    assert client.status(read) is Status.CANCELLED
+    assert summing.pushed == 1  # the push being added when the read was cancelled
 
 
 def test_a_released_accumulator_adds_the_pushes_up_to_the_last_state_read(
