@@ -122,7 +122,7 @@ Ending the client releases the accumulator in the same way.
 **What may read an accumulator.** A request reads at most one accumulator. A row or a template reads none. Only the submission that made the record of a state reads it ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)).
 
 - A request reads a state in place, only while it runs, and the next push is added after it. A row or a template's value lives as long as the accumulator or stage that holds it: the held state that keeps the rows stores each row's value, and the framework cannot tell whether a binding's own held state does. Read in place, that value would change at the other accumulator's next push; holding back that push instead would last as long as the holder.
-- A request reads a held state in place, so it runs in the process that holds it. A request that read two accumulators would need both held states in one process, or one moved to the other. In the user's process both are in one process; where the service holds held states is open ([ADR 0005](0005-the-service-writes-every-output.md), Open), and this rule keeps that choice free. Lifting it later breaks no code.
+- A request reads a held state in place, so it runs in the process that holds it. A request that read two accumulators would need both held states in one process, or one moved to the other. In the user's process both are in one process; where the service holds held states is open ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Open), and this rule keeps that choice free. Lifting it later breaks no code.
 
 The cases that use an accumulator's outputs together with other values:
 

@@ -323,7 +323,7 @@ A client made with `local()` owns its backend: closing the client also closes th
 A client that is never closed ends with its process.
 Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
 
-**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), the outputs of every record are written to a file when the record completes.
+**On the service** ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), the outputs of every record are written to a file when the record completes.
 `client.output` of a record, and references to its outputs, read the file.
 The service keeps no value for a client, so there is no release of values.
 The files lie in an area per proposal that the framework owns, and are dropped with the proposal's history at the latest; a file dropped earlier, for example to free disk space, is read as a value that is not kept.
@@ -568,7 +568,7 @@ The pushes logged are still added, and the held state is dropped once its reader
 A released accumulator takes no more pushes or reads.
 To stop the readers too, the driver cancels them with `client.cancel`. The record of the state they read still computes the outputs once before the next push is added, unless the driver cancels it too.
 
-**On the service** ([ADR 0005](adr/0005-the-service-writes-every-output.md)), nothing writes the outputs of the record of a state: the service holds them as it holds the held state. The outputs of a request that reads it are written like any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
+**On the service** ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), nothing writes the outputs of the record of a state: the service holds them as it holds the held state. The outputs of a request that reads it are written like any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 `client.output` of an accumulator returns the value and writes nothing.
 How the service holds an accumulator's held state, bounds its memory, and ends it is open (open question 5).
 
@@ -651,7 +651,7 @@ Each push reduces the new run and adds it to the volume.
 Each cut pins the state after its push and reads a record of that state, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
 So the loop holds one volume, not one per run or per pending cut.
 `volume.push` returns once the push is logged, so a slow cut holds back the next addition, not the loop.
-On the service, each cut is written to a file like the output of any record ([ADR 0005](adr/0005-the-service-writes-every-output.md)); where the volume is held is open (open question 5).
+On the service, each cut is written to a file like the output of any record ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)); where the volume is held is open (open question 5).
 
 A loop that reduces each dataset in a request of its own uses `client.as_completed`.
 It consumes a generator of records in a thread, so submitting does not wait for the loop body, and yields each record once it has finished.
@@ -756,4 +756,4 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 2. **Removing a row.** A request over fewer rows is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
 4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
-5. **Accumulators on the service.** How the service holds a held state, bounds its memory, and ends it. One job per accumulator on the cluster, with a memory size and a deadline that its client declares, fits a spectroscopy volume of hundreds of GB; whether it fits other accumulators is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open; scipp/essapps#27).
+5. **Accumulators on the service.** How the service holds a held state, bounds its memory, and ends it. One job per accumulator on the cluster, with a memory size and a deadline that its client declares, fits a spectroscopy volume of hundreds of GB; whether it fits other accumulators is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open; scipp/essapps#27).

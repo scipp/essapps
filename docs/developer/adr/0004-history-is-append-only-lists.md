@@ -75,4 +75,4 @@ History is four lists, each only appended to:
   - A file that is only appended to stores lists that only grow, with one write per change. A submission is one line, so it is stored whole or not at all, and a line cut short by a crash is dropped when the file is read.
   - A log must keep old event formats readable for as long as it is kept, while the views may change between versions. Database tables would be migrated instead.
   - A backend that rebuilds its views from the log at start holds every record of its proposals in memory.
-  - H2 needs stored output values, which on the service are its files ([ADR 0005](0005-the-service-writes-every-output.md)): without them, a record pending at a restart fails if one of its inputs had already completed.
+  - H2 needs stored output values, which on the service are its files ([ADR 0005](0005-nothing-is-written-unless-persisted.md)): without them, a record pending at a restart fails if one of its inputs had already completed.

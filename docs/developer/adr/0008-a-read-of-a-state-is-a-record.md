@@ -47,7 +47,7 @@ cut.request.params   # {'data': OutputRef(record='r7', output='iofq')}
 
   What the record says is the same as for any record: its request, which gives its outputs.
 - **A read of the state's outputs without a request**, `client.output(acc)`, makes no record.
-- **The service holds the outputs of the record of a state as it holds the held state, and nothing writes them.** This is an exception to [ADR 0005](0005-the-service-writes-every-output.md). A driver that reads after every push, as story D7 does, would otherwise write one spectroscopy volume of hundreds of GB per read. If the outputs are lost, the record is computed again as its plain request.
+- **The service holds the outputs of the record of a state as it holds the held state, and nothing writes them.** This is an exception to [ADR 0005](0005-nothing-is-written-unless-persisted.md). A driver that reads after every push, as story D7 does, would otherwise write one spectroscopy volume of hundreds of GB per read. If the outputs are lost, the record is computed again as its plain request.
 
 ## Alternatives considered
 
@@ -64,7 +64,7 @@ cut.request.params   # {'data': OutputRef(record='r7', output='iofq')}
 - Running a record again submits its request, and the requests of the records it reads whose outputs are gone.
 - Cancelling the readers of a pending record of a state does not free the next push at once: the record still computes the outputs once, unless it is cancelled too.
 - A user can cancel a record of a state that another client of the proposal submitted, as any record of the proposal; its readers then fail.
-- At a restart, a pending record of a state has no accumulator to compute from, so it runs as its plain request on an ordinary worker, at the cost of the per-run work of every row and with the memory of the plain request: for a spectroscopy volume, hundreds of GB. A memory bound per request is open ([ADR 0005](0005-the-service-writes-every-output.md), Open). The requests that read it run after it. Several submissions that read one state each made a record of it, so a restart computes that state once per such record.
+- At a restart, a pending record of a state has no accumulator to compute from, so it runs as its plain request on an ordinary worker, at the cost of the per-run work of every row and with the memory of the plain request: for a spectroscopy volume, hundreds of GB. A memory bound per request is open ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Open). The requests that read it run after it. Several submissions that read one state each made a record of it, so a restart computes that state once per such record.
 - A restarted backend keeps no output values, so a pending record of a state runs after a restart only if its rows and template reference datasets alone; one whose rows reference outputs of records fails, as any record does whose inputs' values are gone.
 - A state that its plain request would refuse is refused at the submission that reads it; the record of that request is never made.
-- The service holds the outputs of records of states next to its files ([ADR 0005](0005-the-service-writes-every-output.md)); how much it may hold is part of how the service holds held states, which is open there.
+- The service holds the outputs of records of states next to its files ([ADR 0005](0005-nothing-is-written-unless-persisted.md)); how much it may hold is part of how the service holds held states, which is open there.

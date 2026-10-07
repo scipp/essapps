@@ -8,7 +8,7 @@ The service is designed and not implemented.**
 This document describes how the backend keeps what the API promises about records, accumulators, and values.
 Other parts of the system, such as where stages run, get sections here when they are designed.
 [ADR 0004](adr/0004-history-is-append-only-lists.md) records why history is four lists that a backend stores as it chooses and drops per proposal.
-[ADR 0002](adr/0002-the-client-is-the-lifetime.md) and [ADR 0005](adr/0005-the-service-writes-every-output.md) record what keeps a value in the user's process and on the service, and [ADR 0003](adr/0003-accumulators-add-in-place.md) how an accumulator keeps its held state.
+[ADR 0002](adr/0002-the-client-is-the-lifetime.md) and [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) record what keeps a value in the user's process and on the service, and [ADR 0003](adr/0003-accumulators-add-in-place.md) how an accumulator keeps its held state.
 
 This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, table, row, plain request, stage, accumulator, push, state, held state, and read.
 Story IDs such as D7 refer to [user-stories.md](user-stories.md) and [system-stories.md](system-stories.md).
@@ -382,13 +382,13 @@ def outputs():                             # the plain request over every row so
 
 ## The service
 
-**Designed in [ADR 0005](adr/0005-the-service-writes-every-output.md); not implemented.**
+**Designed in [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md); not implemented.**
 Batch and automatic reduction run on the service, and a client connects with `connect(url, proposal=...)`.
 
 - **The outputs of every record are written to a file** when the record completes. The store finds a record's file by the record's ID and the output's name; history names no file. `client.output` of a record, and references to its outputs, read the file. The service keeps no value for a client, so it needs no lease and no cap per client for values.
 - **The files** lie in an area per proposal that the framework owns, and are dropped with the proposal's history at the latest. A file dropped earlier, for example to free disk space (system story H1), is read as a value that is not kept. `publish` copies a file into the proposal's upload folder and registers it in SciCat.
 - **The store of the files** is given to the backend, not built into it: each deployment configures its own, and tests use a fake. The file format of each output type and the folder layout within a proposal's area are first-release work (scipp/essapps#23).
-- **Besides history and the files**, the service holds caches, which it may drop at any time, such as what a stage computed or a copy of a file it has read, and the held states of accumulators. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open).
+- **Besides history and the files**, the service holds caches, which it may drop at any time, such as what a stage computed or a copy of a file it has read, and the held states of accumulators. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 - **Nothing writes the outputs of the record of a state**: the service holds them as it holds the held state, since a driver that reads after every push would otherwise write one volume per read. The outputs of a request that reads it are written as any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). If the outputs of the record of a state are lost, the record is computed again as its plain request. `client.output` of an accumulator returns the value and writes nothing. A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
 - **After a scan**, a request that copies the volume writes it once. Cuts then read that file, more slowly.
 
@@ -396,7 +396,7 @@ Batch and automatic reduction run on the service, and a client connects with `co
 
 - How the service notices a client whose process ended without closing it (scipp/essapps#34).
 - The file format of each output type and the folder layout within a proposal's area (scipp/essapps#23).
-- Accumulators on the service: how the service holds a held state, bounds its memory, and ends it ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open).
-- What a finish records besides the status: the outputs written, and the software environment that ran the request ([ADR 0005](adr/0005-the-service-writes-every-output.md), Open).
+- Accumulators on the service: how the service holds a held state, bounds its memory, and ends it ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
+- What a finish records besides the status: the outputs written, and the software environment that ran the request ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 - How the service stores history: the in-process backend's log, Kafka, or database tables ([ADR 0004](adr/0004-history-is-append-only-lists.md) lists what the in-process backend shows).
 - A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.
