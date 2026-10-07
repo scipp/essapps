@@ -2,7 +2,7 @@
 
 - Status: proposal, not decided
 - Date: 2026-10-07
-- Replaces: ADR 0008 as written in PR scipp/essapps#47 (not merged), and the rule of [ADR 0005](../adr/0005-the-service-writes-every-output.md) that the service writes every output
+- Replaces: ADR 0008 as written in PR scipp/essapps#47 (not merged), and the rule of [ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md) that the service writes every output
 - Answers: scipp/essapps#49 (a record and its outputs)
 - Changes: scipp/essapps#48 (views) becomes the selection argument of `client.output`
 
@@ -32,7 +32,7 @@ total = client.freeze(volume, persist=True)               # the last state as a 
 The README with ADR 0008 has three problems (Simon, review of #47):
 
 1. **Accumulators differ from other workflows.** ADR 0008 gives the record of a state five rules that no other record has: no client keeps its outputs; only the submission that made it reads it; `client.output` of it copies; on the service, nothing writes it; after a restart, a pending one is computed again as its plain request.
-2. **The service and the user's process keep values by different rules.** The client keeps values in memory in one ([ADR 0002](../adr/0002-the-client-is-the-lifetime.md)); every output is written to a file in the other ([ADR 0005](../adr/0005-the-service-writes-every-output.md)); both have exceptions for states.
+2. **The service and the user's process keep values by different rules.** The client keeps values in memory in one ([ADR 0002](../adr/0002-the-client-is-the-lifetime.md)); every output is written to a file in the other ([ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md)); both have exceptions for states.
 3. **Overhead nobody asked for.** The service writes and reads back every output: the masked counts of story S3 are written 500 times in a batch of 500, and a volume a web UI only looks at is written whole. Copying the last state of an accumulator (`COPY`) needs a second volume.
 
 The rules in (1) are not about accumulators.
@@ -209,9 +209,9 @@ V is the size of a large output, such as a spectroscopy volume of hundreds of GB
 
 ## Alternatives considered
 
-- **The service writes every output** ([ADR 0005](../adr/0005-the-service-writes-every-output.md)). It writes and reads back what nobody asked for, every look included, to give unattended work, restarts, and other nodes a value that outlives its client. Those needs are met without it: unattended drivers persist at submission, an upgrade finishes pending persisted work, and the system moves a value to another node only when a reader there needs it.
+- **The service writes every output** ([ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md)). It writes and reads back what nobody asked for, every look included, to give unattended work, restarts, and other nodes a value that outlives its client. Those needs are met without it: unattended drivers persist at submission, an upgrade finishes pending persisted work, and the system moves a value to another node only when a reader there needs it.
 - **The service persists by default, with an opt-out for looks.** Writing then stays the default cost, and every interactive client must remember to opt out. The clients that must persist, the trigger loop and batch applications, are framework code.
-- **A cap per client was rejected in [ADR 0005](../adr/0005-the-service-writes-every-output.md)**, because the trigger loop would reach it, and a closing batch client would take its values with it. Both persist at submission, so neither keeps anything under the cap.
+- **A cap per client was rejected in [ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md)**, because the trigger loop would reach it, and a closing batch client would take its values with it. Both persist at submission, so neither keeps anything under the cap.
 - **ADR 0008 as written.** Its five rules restate rules about values as rules about one kind of record.
 - **Requests read only frozen accumulators**, and looks read the growing state. A request that reads the state in place does what a selection does, with more work done in place, and its record is an ordinary one (Records of states).
 - **Views first, with records made only at persist** (first draft, reviewed 2026-10-07). It needed a second handle type, records of upstream views without values that a later `persist` could not complete, and pinned states kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.

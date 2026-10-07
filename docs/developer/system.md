@@ -1,14 +1,15 @@
 # ESS data-reduction framework: the system
 
 **Status: the design of how the system keeps history and values.
-The in-process backend implements the history, the clients, the accumulators, and dropping values, and never drops history.
-Persisting, the store, freezing, selections, and cancelling work that nothing keeps are designed and not yet implemented.
+The in-process backend implements the history, the clients, the accumulators, dropping values, and cancelling work that nothing keeps, and never drops history.
+It logs the record of a state with its whole request, not yet as the accumulator and its number of pushes.
+Persisting, the store, freezing, and selections are designed and not yet implemented.
 The service is designed and not implemented.**
 
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
 This document describes how the backend keeps what the API promises about records, accumulators, and values.
 Other parts of the system, such as where stages run, get sections here when they are designed.
-[ADR 0004](adr/0004-history-is-append-only-lists.md) records why history is four lists that a backend stores as it chooses and drops per proposal.
+[ADR 0004](adr/0004-history-is-append-only-lists.md) records why history is six lists that a backend stores as it chooses and drops per proposal.
 [ADR 0002](adr/0002-the-client-is-the-lifetime.md) and [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) record what keeps a value and when it is written, and [ADR 0003](adr/0003-accumulators-add-in-place.md) how an accumulator keeps its held state.
 
 This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, table, row, plain request, stage, accumulator, push, state, held state, and read.
@@ -43,7 +44,8 @@ History is six lists, each only appended to:
 | persist requests | request to persist outputs of a record | record ID, output names | `client.persist`, or a submission or freeze with `persist=`, is accepted |
 | writes | write that ended | record ID, the outputs written, or why the write failed | a write ends |
 
-Client entries are not history: opening or ending a client, making a stage, releasing anything, and `client.output` append nothing, and no client entry survives a restart.
+Client entries are not history: opening or ending a client, making a stage, releasing anything, and `client.output` append nothing of their own, and no client entry survives a restart.
+A release that leaves a pending record with no keeper appends its finish, `cancelled`.
 A record does not say which stage it went through.
 A record never names an accumulator: a submission that reads one appends a record of the state's plain request before the records that read it ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
 
@@ -161,7 +163,7 @@ If a crash cuts the last line short while it is being written, that line is drop
 Each log has exactly one backend, and each backend one log.
 A backend holds an exclusive lock (`flock`) on its log file from start to close, and a second backend on the same file, in any process, is refused at start.
 The operating system releases the lock when the process ends, so a backend started after a crash or for an upgrade (system story H2) takes the file over.
-Two notebooks that share results are clients of one backend; a backend in each notebook shares nothing.
+Two notebooks that share results are clients of one backend with a store, and share what they persist; a backend in each notebook shares nothing.
 
 Event formats must stay readable for as long as the log is kept.
 The maps may change between versions.
@@ -176,10 +178,10 @@ No client survives a restart, so the backend keeps only what the store keeps and
 backend = Backend(datasets, bind, log=Log(Path('log.jsonl')), store=store)   # applies the events in the file
 ```
 
-- A pending record runs if every value it reads is written, will be written for a pending record with a persist request, or is a dataset. It runs from scratch, without its stage, since client entries do not survive a restart.
-- A pending record that reads a held state fails, since the held state did not survive the restart. So does a pending record whose other inputs are gone.
-- A pending record that nothing keeps any more is cancelled (`backend restarted`): it has no persist request, and no pending record that runs reads it.
-- A record that completed before the restart, and whose write had not ended, has lost its value: its persist request fails, and so do the pending records that read it.
+[ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) (Restart) gives the rule: a pending record that no persist request needs is cancelled (`the backend restarted`); one that a persist request needs runs if each value it reads is a dataset, is written, or is an output of a pending record that runs, and fails otherwise.
+A pending record runs from scratch, without its stage, since client entries do not survive a restart.
+A pending record that reads a held state fails, since the held state did not survive the restart.
+A write that had not ended has failed, since its value is gone.
 
 This is what system story H2 (backend upgrade with runs in flight) needs from history.
 H2 also needs every event format to stay readable across versions, and the store, so that a pending record whose input had completed still runs.
@@ -201,7 +203,7 @@ With a retention period R:
 
 ```text
 day 0     a batch of 500 runs is submitted; the laptop closes, so its client ends
-day 1     the last record of the batch finishes; the proposal is idle from now
+day 1     the last record of the batch is written and finishes; the proposal is idle from now
 day 3     the user opens a notebook: the records are there, and the proposal is no longer idle
 day 3     the notebook closes; the proposal is idle from now
 day 3+R   the proposal's history is dropped
@@ -236,16 +238,16 @@ README.md states what keeps an output value (How long records and values are kep
 The backend keeps three things for that rule:
 
 - in each client entry, the IDs of the records the client asked for and has not released;
-- for each output, how many pending records, pending reads of accumulators, and steps of accumulators reference it and have not yet run;
+- for each output, how many pending records, pending reads of accumulators, and steps of accumulators reference it and have not yet run, and how many stages reference it;
 - for each output, whether a persist request names it, and whether it has been written.
 
 A pending record holds its inputs from submission until its workflow returns, even if the record is cancelled meanwhile, since the workflow still reads them.
 A step of an accumulator, opening its held state or adding a push, holds the outputs it references from the call that made it until it is done or dropped.
-An output value is dropped from memory once no client entry keeps its record, no pending record or step that reads it has yet to run, and no persist request waits for its write.
+An output value is dropped from memory once no client entry keeps its record, no stage references it, no pending record or step that reads it has yet to run, and no persist request waits for its write.
 A written value is read from the store.
-The backend checks this when a client releases a record or ends, when a workflow returns or a record finishes without running, when a step is done or dropped, when a write ends, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
+The backend checks this when a client releases a record or a stage or ends, when a workflow returns or a record finishes without running, when a step is done or dropped, when a write ends, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
 
-**What a submission reads.** A submission, a stage call, an opening, and a push check each record they reference against what is kept for their client: a record the client entry keeps, or an output with a persist request.
+**What a submission reads.** A submission, a stage, an opening, and a push check each record they reference against what is kept for their client: a record the client entry keeps, or a persisted output.
 Any other reference is refused, also to a record that is still pending and that only another pending request reads.
 `client.output` reads the same values, waiting for a pending record or write; any other raises.
 
@@ -253,7 +255,7 @@ Any other reference is refused, also to a record that is still pending and that 
 A workflow that is already running cannot be interrupted: its record is cancelled at once, and the workflow runs to its end while its outputs are dropped.
 The backend checks this at the same points at which it drops values.
 
-A stage keeps what it computed from its fixed values, and an accumulator its held state, until the client releases them or ends.
+A stage keeps what it computed from its fixed values and the values its template references, and an accumulator its held state, until the client releases them or ends.
 A held state that keeps the rows (see Accumulators) holds the value of each row, also an output of a record that the client has released.
 What a stage computed is a cache: the backend may drop it at any time, and the next call through the stage computes it again and makes the same record.
 The in-process backend never drops it.
@@ -270,7 +272,7 @@ How the stories fare, in the user's process and on the service:
 | B4: cuts through a volume | the volume: the notebook's client; each cut: a copy of the selection, a plain value in the notebook |
 | C5: two stages tuned together, both results read afterwards | the notebook's client |
 | C1: a beam centre used by other requests | the client of the notebook that made it, until it releases it or ends; for other clients, the store once persisted |
-| D2: overnight batch, laptop closed | the store: the batch is persisted at submission, and each output written when its record completes |
+| D2: overnight batch, laptop closed | the store: the batch is persisted at submission, and each record's outputs are written before it completes |
 | D6: a batch's results read weeks later | the store, until the proposal's history is dropped |
 | D7: a cut after each run | the volume: the accumulator's held state (`Summing`), added in place; each cut: a copy of the selection; the last state: the record that `freeze` returns, written to the store. One volume is kept, not one per cut |
 | E1: the curve a rule made, read later | the store: the rule persists what it submits |
@@ -416,7 +418,7 @@ Batch and automatic reduction run on the service, and a client connects with `co
 - **The store is given to the backend**, not built into it: each deployment configures its own, and tests use a fake. The format of each output type and the layout within a proposal's area are first-release work (scipp/essapps#23).
 - **Values reach other nodes** as the system decides, for example through a scratch file deleted once nothing keeps the value.
 - **Besides history and the store**, the service holds the values its clients keep, caches, which it may drop at any time, such as what a stage computed or a copy of a value it has read, and the held states of accumulators. The outputs of the record of a state are part of the held state. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open). A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
-- **An upgrade** lets the old instance finish the pending records with a persist request, what they read, and the pushes they need, before it stops (system story H2). It ends every client of the old instance.
+- **An upgrade** ends every client of the old instance. Whether persisted work running at the upgrade is finished by the old instance or run again by the new one is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 
 ## Open
 
@@ -424,5 +426,6 @@ Batch and automatic reduction run on the service, and a client connects with `co
 - The format of each persisted output type and the layout of the store within a proposal's area (scipp/essapps#23).
 - Accumulators on the service: how the service holds a held state, bounds its memory, and ends it ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 - What a finish records besides the status, such as the software environment that ran the request ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
+- An upgrade with persisted work running: the old instance finishes it, or the new one runs it again ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 - How the service stores history: the in-process backend's log, Kafka, or database tables ([ADR 0004](adr/0004-history-is-append-only-lists.md) lists what the in-process backend shows).
 - A forwarder: something a client keeps that holds the last value pushed into it, as in sciline. It joins stages and accumulators when a story needs one, for example a driving server that shows the latest curve of each sample.

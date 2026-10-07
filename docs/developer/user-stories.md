@@ -50,7 +50,7 @@ It has a helper for tests: `datasets.add_published(entry)` lists a published ent
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets and store: the specs it offers and the software versions its records name. The upgrade ends every client of the backend before it.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets, history, and store: the specs it offers and the software versions its records name. The upgrade ends every client of the backend before it.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use this one:
@@ -434,12 +434,13 @@ assert [r.member for r in failed] == ['7']
 assert reasons == ['file signature not found']
 assert reruns[0].request == failed[0].request
 assert morning.latest('night', member='7') == reruns[0]
+assert morning.output(night['1'], 'iofq').values.tolist() == [2.0, 2.0]     # written in the night
 assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
 assert morning.status(failed) == ['failed']                          # the failure stays
 assert len(morning.records(label='night')) == 31                     # and so does its record
 ```
 
-The night's client keeps nothing: each output is written to the store when its record completes, and the morning client reads it there.
+The night's client keeps nothing: each record's outputs are written to the store before it completes, and the morning client reads them there.
 
 Gap: labels and members on records are tentative, as in D1.
 That the runs continue while no client is connected is system story D2.

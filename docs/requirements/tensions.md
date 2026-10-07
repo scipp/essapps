@@ -1,7 +1,7 @@
 # Tensions between needs
 
 Some needs pull against each other, and how each pull is settled shapes the framework more than any single need does.
-Settled: results kept in memory while users work with them and written only when someone asks, a large volume held once, the technique deciding where runs are summed, applications pairing runs, only parameters stored as values, a simple system, and results kept only while users work with them.
+Settled: results kept in memory while users work with them and written only when someone asks, a large volume held once, the technique deciding where runs are summed, applications pairing runs, only parameters stored as values, a simple system, and results that someone asked to keep found again for days to weeks, not longer.
 Open: whether one reduction may use data of several proposals, where large results are cut down for a web interface, whether data must be erasable when no run may be reduced twice, and whether results reach SciCat automatically.
 
 Each tension has a line with its resolution or question, and one sub-bullet for each side.
@@ -9,7 +9,7 @@ A settled tension names the decision that settles it; the decision itself lives 
 
 ## Settled
 
-- **Fast interactive work versus bounded memory.** Results stay in memory while a user works with them: in the user's own process for interactive work, such as a notebook, and on the service under a limit per user. A result is written to a file only when someone asks to keep it. Batch and automatic reduction ask for the results they keep as they submit, so they keep nothing in memory but what runs are still being added to, such as a growing volume (next tension), with its memory bounded by how the service works. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-the-client-is-the-lifetime.md), [ADR 0005](../developer/adr/0005-nothing-is-written-unless-persisted.md)*
+- **Fast interactive work versus bounded memory.** Results stay in memory while a user works with them: in the user's own process for interactive work, such as a notebook, and on the service under a limit for each notebook or application connected to it. A result is written to a file only when someone asks to keep it. Batch and automatic reduction ask for the results they keep as they submit, so they keep nothing in memory but what runs are still being added to, such as a growing volume (next tension), with its memory bounded by how the service works. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-the-client-is-the-lifetime.md), [ADR 0005](../developer/adr/0005-nothing-is-written-unless-persisted.md)*
   - A user looks at the results of a reduction while deciding what to do next ([users](users.md)). *Simon, 2026-09-04*
   - Batch and automatic reduction must bound leaks and peak memory by how the services work ([users](users.md)). *Simon, 2026-10-02*
 - **A large volume held once versus looking at it while it grows.** Hold one copy and add each run in place; a cut through the volume can be made at any time without racing the addition, and no earlier state of the volume is kept. *Simon, 2026-10-02 and 2026-10-05; [ADR 0003](../developer/adr/0003-accumulators-add-in-place.md)*

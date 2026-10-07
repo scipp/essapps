@@ -73,4 +73,4 @@ A rule whose requests are refused, such as for an unknown spec version, submits 
 
 - Adding, replacing, and listing rules in a running driving server.
 - A can measured after the sample, and other lookups than `LastBefore`.
-- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule); the loop's client keeps the accumulator.
+- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule). The loop's client would keep the accumulator, the only thing it keeps, and freeze it with `persist=` once the sum is complete.

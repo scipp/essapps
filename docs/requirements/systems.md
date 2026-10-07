@@ -56,7 +56,7 @@ Open: whether the batch- and automatic-reduction services may submit cluster job
 ## Assumed
 
 - Whoever keeps the services running needs their metrics and logs, for example in Grafana, an ECDC tool; this may be the team that develops the services, which belongs to DMSC. *Simon, 2026-09-04 and 2026-10-05; decide with DMSC.*
-- An upgrade of the batch- or automatic-reduction service lets the reductions running at that moment whose results someone asked to keep finish, and those they wait for, so that nobody submits them again. *System story H2; ask instrument scientists whether submitting them again after an upgrade is acceptable.*
+- An upgrade of the batch- or automatic-reduction service does not lose the reductions running at that moment whose results someone asked to keep, nor those they wait for: they finish, or run again, without anyone submitting them again. *System story H2; ask instrument scientists whether submitting them again after an upgrade is acceptable.*
 
 ## Open
 

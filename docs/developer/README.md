@@ -80,8 +80,8 @@ The terms this document defines, in the order they appear:
 | state | an accumulator after its first n pushes; its outputs are those of its plain request, the template with each table filled by the rows of these pushes | framework | backend, at each push |
 | held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding accumulates, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
 | accumulating binding | a binding that adds each push to a held state of its own, such as a numerator and a denominator; for any other binding, the backend keeps the rows | workflow author | workflow author |
-| read | `client.output` on an accumulator, submitting a request that references one, or freezing it; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
-| freeze | ending an accumulator and turning its last state into a record, without a copy | framework | notebook, app |
+| read | `client.output` on an accumulator, submitting a request that references one, freezing it, or `client.provenance` of it; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
+| freeze | turning an accumulator's last state into a record, without a copy; the accumulator takes no more pushes | framework | notebook, app |
 
 The terms down to template are enough for most work.
 The term stage follows sciline (scipp/sciline ADR 0003).
@@ -196,7 +196,7 @@ On the service, only the selected part leaves the backend.
 | `client.status(records)` | the status of each record now |
 | `client.wait(records)` | blocks until finished; returns the status of each, does not raise for failures |
 | `client.failure(records)` | why each record failed, or `None` |
-| `client.cancel(records)` | ends unfinished records as `cancelled` |
+| `client.cancel(records)` | ends unfinished records of the proposal as `cancelled`, also those another client submitted |
 | `client.as_completed(records)` | yields records one at a time, in the order they finish (see Drivers) |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
@@ -304,16 +304,17 @@ A result needed for longer is published (see Provenance and publication).
 A value exists while something keeps it:
 
 - **the client that asked for the record**, with `submit`, `compute`, or `freeze` without `persist=`, until it releases the record or ends;
-- **a pending request that reads it**, until the request has run;
-- **a push whose rows reference it**, until the push is added, and an accumulator whose template references it, until its held state has opened;
+- **a pending request that reads it**, until it has finished and its workflow has returned;
+- **a pending read of an accumulator**, for the state it pinned and the pushes up to it; a value that is part of a held state, such as an output of the record of a state, keeps that held state until the value is dropped (see Adding waits for readers);
+- **a push whose rows reference it**, until the push is added or dropped; **a stage** whose template references it, until the stage is released; and **an accumulator** whose template references it, until its held state has opened;
 - **an accumulator whose held state keeps the rows pushed into it**, for the values those rows reference, until the held state is dropped (see What a binding provides);
-- **the store**, once a client has asked to persist the value (see Persist).
+- **a persist request**, until the value is written, and then **the store** (see Persist).
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
 A value that is gone does not come back: running the same request again makes a new record.
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
 
-**What a client may read.** A submission reads only values kept for it: values its own client keeps, persisted values, datasets, and the current state of its own client's accumulators.
+**What a client may read.** A submission reads only values kept for it: values its own client keeps, persisted values (see Persist), datasets, and the current state of its own client's accumulators.
 A request that references any other value is refused at submission, also while that record is still pending.
 `client.output` reads the same values, and raises for any other; the record stays.
 So another client, also one in the same process, reads a value only once it is persisted.
@@ -340,7 +341,8 @@ A client made with `local()` owns its backend: closing the client also closes th
 A client that is never closed ends with its process.
 
 **Persist.** Nothing is written unless persisted, in the user's process and on the service ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
-To *persist* an output is to write it to the *store*, which then keeps it:
+To *persist* an output is to write it to the *store*, which then keeps it.
+An output is *persisted* while a persist request names it and its write has not failed: it is written, or its write is pending.
 
 ```python
 client.persist(result)                              # every output of a record this client keeps
@@ -350,10 +352,11 @@ client.submit(requests, label='night', persist=('iofq',))       # only iofq; the
 ```
 
 - `client.persist` adds the store as a keeper of a record the client keeps. The client keeps its own hold until it releases the record, so reads stay in memory until then.
-- `persist=` at submission hands the records to the store: the client does not keep them. The outputs named are kept until written, and the others are dropped when the record completes. Batch reduction and the trigger loop submit this way, so their clients keep nothing.
-- Once a persist request is logged, every client of the proposal can read and reference the values it names. Reads wait for the write.
-- A failed write fails the persist request, not the record. `client.output` of the value, and the requests that reference it, fail with the write's reason. A client that still keeps the record can ask again.
-- Persisting an output that is already persisted does nothing.
+- `persist=` at submission hands the records to the store: the client does not keep them. The outputs named are kept until written, and the others are dropped when the workflow returns. Batch reduction and the trigger loop submit this way, so their clients keep nothing.
+- Every client of the proposal reads and references persisted values. Reads wait for the write.
+- A record persisted at submission finishes once it is written. If the write fails, the record fails with the write's reason, and is submitted again like any failed record.
+- If a write that `client.persist` asked for fails, only that persist request fails. The client still keeps the value and can ask again; other clients' reads of it raise with the write's reason.
+- Persisting an output that is persisted does nothing.
 - Persisted values are dropped with the proposal's history at the latest. A value dropped earlier, for example to free disk space, is read as a value that nothing keeps.
 
 ```python
@@ -561,8 +564,7 @@ exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pinned when sub
 iofq.refs()                                                 # a reference to every output, by name
 ```
 
-A *read* is a call that pins the accumulator's state: `client.output`, submitting a request that references the accumulator, `client.freeze`, or `client.provenance`.
-Every read pins the state at that moment: the state after the pushes logged so far.
+Every read (see Terms) pins the state at that moment: the state after the pushes logged so far.
 It gives what the same call gives on the record of the plain request over those rows, in push order.
 Pinning never waits for a push to be added.
 A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
@@ -571,7 +573,7 @@ A request that reads a state the accumulator has yet to reach waits for it, as i
 - `client.output` of an accumulator copies the output, or the part that `select` names, and makes no record. It holds back the next push only while it copies.
 - A submission pins the state of each accumulator its requests reference, and makes a record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
 - The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state returns, and a request reads them in place, so a read costs no second copy of the held state.
-- The record of a state is a record like any other. No client asked for it, so no client keeps it: its outputs are kept for the requests of its submission until they have run, and then dropped. So no later request may reference it, and `client.output` of it raises; the accumulator is read instead. Nothing writes it.
+- No client asked for the record of a state, so no client keeps it: its outputs are kept for the requests of its submission until they have run. A later request cannot reference it, and `client.output` of it raises; the accumulator is read instead.
 - A state is counted in pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, the state after 2 pushes is the plain request with sample run 611 and can run 614, and the state after 3 adds sample run 612 and can run 615.
 - A read is refused if the plain request of the state would be refused, with that request's reason, such as no row in a table that needs one; a state with nothing pushed is no exception. The first read of a state validates its plain request, at a cost that grows with the number of rows, so a driver that reads after every push pays it at every push. Only the client that opened an accumulator reads it.
 - `client.provenance` reads no output, so it holds back no push.
@@ -579,15 +581,13 @@ A request that reads a state the accumulator has yet to reach waits for it, as i
 - A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references the record that `freeze` returns. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
 **Adding waits for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
-Since a request reads the outputs of the state itself, a push is added only once nothing keeps the state before it.
+Since a request reads the outputs of the state itself, a push is added only once nothing keeps the state before it (see How long records and values are kept): no pending read, and no request still running that reads the record of that state, also one that was cancelled.
 Adding it also waits for the records its rows reference to complete.
-The state is kept by its pending reads: the records of that state, until the requests that read them have run, including those cancelled while they run; a freeze, until its record has finished; and `client.output` calls in progress.
-Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the reads of the state before it, all logged before the push, since only the submission that made the record of a state reads it. So no wait goes round in a circle.
 The backend adds the pushes of one accumulator on its workers, one at a time, in the order they were logged.
 A long reader holds back the next addition, but not the driver.
 The outputs of a state are computed all at once, the first time the state is read, and kept until the next push is added; no output is computed for a state that no one reads.
 
-**Freeze.** `client.freeze(acc)` ends the accumulator and returns the record of its last state, the state after the pushes logged before it:
+**Freeze.** `client.freeze(acc)` returns the record of the accumulator's last state, the state after the pushes logged before it, and the accumulator takes no more pushes:
 
 ```python
 total = client.freeze(iofq)              # no copy, no more pushes
@@ -597,7 +597,7 @@ client.freeze(volume, persist=True)      # the store keeps it, not the client
 
 - The record's values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
 - The client keeps the record, unless `persist=` hands it to the store, as at submission.
-- A push logged after the freeze is refused. Once the record has completed, a read of the accumulator is refused and names the record.
+- A push logged after the freeze is refused. Once the record has completed, a read of the accumulator is refused and names the record. The client keeps the accumulator until it releases it, as any accumulator.
 - The plain request of the last state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
 - If the record fails or is cancelled, the accumulator takes no pushes, but can still be read and frozen again, unless it has stopped.
 
@@ -690,7 +690,7 @@ volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):    # the scan's 300 runs
     volume.push({'runs': {'run': run}})                  # added once the previous cut is copied
     show(client.output(volume, 'counts', select={'q': 0}))   # copies the cut; makes no record
-total = client.freeze(volume, persist=True)              # the last state as a record, written
+total = client.freeze(volume)                            # the last state as a record
 ```
 
 `VOLUME` is a toy spec of the stories ([user-stories.md](user-stories.md), Toy specs); its binding has a held state of its own.

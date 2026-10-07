@@ -63,7 +63,7 @@ Property: the vanadium output passes to the sample's stage in memory, within one
 ### D2. Overnight cluster batch
 
 Actor: NMX user. Goal: thirty long runs finish overnight while the laptop is closed.
-Property: requests run to completion with no client connected, in parallel as far as the cluster allows. The batch is persisted at submission, so each output is written to the store when its record completes, and the next day's client reads it ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
+Property: requests run to completion with no client connected, in parallel as far as the cluster allows. The batch is persisted at submission, so each record's outputs are written to the store before it completes, and the next day's client reads it ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
 
 ### D3. Cancel and resubmit
 
@@ -109,9 +109,9 @@ Property: stored outputs can be dropped by proposal, label, or age. Every record
 ### H2. Backend upgrade with runs in flight
 
 Actor: DMSC. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade with a persist request finishes, and so do the records it reads and the pushes it needs; the old instance finishes them before it stops. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
+Property: every record pending at the upgrade with a persist request finishes without anyone submitting it again, and so do the records it reads. Whether the old instance finishes them before it stops, or the new one runs them again, is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open); a record that reads an accumulator's held state finishes only if the old instance finishes it. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
 
 ### H3. History ends when the work does
 
 Actor: user. Goal: the records of a proposal are there while the user works with them, and for days to weeks after; what was published lasts.
-Property: once a proposal has been idle for the retention period, with no client open and no record pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running trigger loop keeps its proposal from being idle, so it never reduces a handled dataset again. A published entry still answers what produced it after the history behind it is dropped.
+Property: once a proposal has been idle for the retention period, with no client open, no record pending, and no write pending, its history is dropped as a whole, never in part. So a kept record's provenance is complete. A running trigger loop keeps its proposal from being idle, so it never reduces a handled dataset again. A published entry still answers what produced it after the history behind it is dropped.

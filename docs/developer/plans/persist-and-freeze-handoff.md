@@ -33,6 +33,10 @@ For a fresh session. Read [persist-and-freeze.md](persist-and-freeze.md) first: 
 8. The store in the first release is a fake in memory, passed by tests. Its format stays open.
 9. Values modified in place stay an open question; the docs warn.
 10. History logs pushes, and the record of a state as the accumulator and its number of pushes (the last code slice); details decided while implementing.
+11. A record persisted at submission finishes once written: a failed write fails the record with the write's reason, so D2's morning check and the trigger loop see it as any failed record. A failed write of `client.persist` fails only that persist request; the client still keeps the value and can ask again. An output is persisted while its write is done or pending.
+12. An upgrade with persisted work running is open (ADR 0005, Open; #27): the old instance finishing it conflicts with the one-backend history lock.
+13. A stage keeps the values its template references until it is released.
+14. Closing `local()` waits until the pending records with a persist request are written.
 
 ## Order of the work
 
@@ -52,7 +56,7 @@ Three stacked PRs, each with its story tests passing (`.venv/bin/python -m pytes
    - Persist requests and `Written` events; `persist=` and `client.persist`.
    - Reads from the store, and the restart rule.
    - The trigger loop persists what a rule names.
-   - History stores the record of a state as the accumulator and its number of pushes.
+   - History stores the record of a state as the accumulator and its number of pushes. The restart rule needs this first: today the log does not mark a record as a record of a state, so after a restart the backend cannot tell which pending records read a held state.
 
 The parts that only concern the service (cap, lease, upgrade) stay design: there is no service code.
 Before opening each PR: fresh reviewers from several angles (concurrency and lifetimes, stories, simplicity), told that the current docs are not authority.
