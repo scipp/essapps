@@ -41,7 +41,7 @@ client.output(records[60339], 'iofq')
 
 What the framework adds to the plain loop:
 
-- Each call is kept as a record and can be found later: in the user's process (`local()`) by that process, and on the service by other notebooks and programs too.
+- Each call is kept as a record and can be found later: in the user's process (`local()`) by that process, and on the service by other notebooks and programs too. Its values are kept for the client that asked for it, and for everyone once persisted.
 - Calls can run elsewhere and in parallel.
 - Every result can answer where it came from: which spec, which parameter values, which datasets, which software versions.
 
@@ -60,14 +60,16 @@ The terms this document defines, in the order they appear:
 | Term | What it is | Code from | Made by |
 |---|---|---|---|
 | backend | the process that runs requests and keeps records | framework | DMSC, as the service; or a notebook or app with `local()` |
-| client | the object through which a notebook or app talks to one backend; it keeps its stages and accumulators, and in the user's process the values it makes, until it releases them or ends | framework | notebook, app |
+| client | the object through which a notebook or app talks to one backend; it keeps its stages and accumulators, and the values of the records it asks for, until it releases them or ends | framework | notebook, app |
 | spec | the signature of a workflow: name, version, parameters, outputs; a parameter may be a table | workflow author | workflow author |
 | binding | the code that computes a spec, such as a function or a sciline pipeline | workflow author, framework (`ess.spec.pipeline.PipelineBinding`) | workflow author |
 | request | a spec and its parameter values | framework | notebook, app |
 | record | a request as the backend accepted it, with the names of its outputs; it never changes | framework | backend, at submission |
-| reference | an input that points to an output of a record, to a dataset, or to a state of an accumulator | framework | notebook, app |
+| reference | an input that points to an output of a record, to a dataset, or to an output of an accumulator | framework | notebook, app |
+| selection | the part of an array output that `client.output(..., select=...)` copies, by dimension | framework | notebook, app |
 | label, member | names under which records are found later | | notebook, app |
 | template | a spec with values for some parameters, its *fixed values*; the others (*blanks*) are filled later | framework | notebook, app |
+| persist, store | to persist an output is to write it to the store, which then keeps it; nothing else is written | framework | notebook, app, at submission or later |
 | dataset source | where a backend finds datasets: it resolves names and reads data through it, and answers its clients' queries from it | framework | DMSC; a fake one in tests |
 | table, row | a parameter whose value is a list of rows of one flat model; a row is one run, or the runs that belong together | workflow author | notebook, app |
 | single-run spec, multi-run spec | two specs of one reduction: one takes one run of each kind (sample, can), the other a table of runs of each kind; with one row per table, the multi-run spec gives the outputs of the single-run spec | workflow author | workflow author |
@@ -78,7 +80,8 @@ The terms this document defines, in the order they appear:
 | state | an accumulator after its first n pushes; its outputs are those of its plain request, the template with each table filled by the rows of these pushes | framework | backend, at each push |
 | held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding accumulates, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
 | accumulating binding | a binding that adds each push to a held state of its own, such as a numerator and a denominator; for any other binding, the backend keeps the rows | workflow author | workflow author |
-| read | submitting a request that references an accumulator, or `client.output` on one; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
+| read | `client.output` on an accumulator, submitting a request that references one, or freezing it; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
+| freeze | ending an accumulator and turning its last state into a record, without a copy | framework | notebook, app |
 
 The terms down to template are enough for most work.
 The term stage follows sciline (scipp/sciline ADR 0003).
@@ -178,7 +181,13 @@ result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # subm
 result.request.params                    # every value, defaults included
 client.status(result)                    # 'completed'
 client.output(result, 'iofq')            # raises if the record failed
+client.output(result, 'iofq', select={'Q': slice(0, 10)})   # a copy of part of it
 ```
+
+`select=` picks part of an array output by dimension name, an index or a slice for each dimension it names, and copies only that part.
+It makes no record.
+It is refused for an output that is not an array, for a dimension the output lacks, and for an index out of range.
+On the service, only the selected part leaves the backend.
 
 | Call | Does |
 |---|---|
@@ -205,7 +214,8 @@ Requests submitted together are checked together: if one is invalid, none is sub
 
 ## References
 
-An input is given by *reference*: to an output of a record, to a dataset (see Datasets), or to the state of an accumulator (see Stages and accumulators).
+An input is given by *reference*: to an output of a record, to a dataset (see Datasets), or to an output of an accumulator (see Stages and accumulators).
+A reference to an output of a record must name a value kept for the submitting client (see How long records and values are kept).
 A reference to a record that has not finished yet is a valid input, so a chain is submitted without waiting:
 
 ```python
@@ -283,24 +293,30 @@ The backend keeps two kinds of things with different lifetimes:
 | | What | Kept |
 |---|---|---|
 | record | what ran, with which inputs, and what came of it | until its proposal has been idle for days to weeks |
-| output value | the data an output holds, such as an I(Q) array | one rule for each deployment, see below |
+| output value | the data an output holds, such as an I(Q) array | while something keeps it, see below |
 
 Records are the proposal's history.
 They are read long after the request ran: a batch's failures are read the next morning, a rule's progress by another user or program.
-A proposal is idle while none of its clients is open and none of its records is pending; once it has been idle for a retention period of days to weeks, its records are dropped as a whole.
+A proposal is idle while none of its clients is open, none of its records is pending, and none of its writes is pending; once it has been idle for a retention period of days to weeks, its records are dropped as a whole.
 A result needed for longer is published (see Provenance and publication).
 
-**In the user's process** (`local()`, [ADR 0002](adr/0002-the-client-is-the-lifetime.md)), output values are kept in memory, and only while something keeps them.
-Four things do:
+**Values.** A record and its inputs never change, but its values come and go ([ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
+A value exists while something keeps it:
 
-- **the client that made its record, until the client releases it or ends;**
-- **a pending request that reads it, until the request has run;**
-- **a push whose rows reference it, until the push is added, and an accumulator whose template references it, until its held state has opened;**
-- **an accumulator whose held state keeps the rows pushed into it, for the outputs those rows reference, until the client releases the accumulator or ends** (see What a binding provides).
+- **the client that asked for the record**, with `submit`, `compute`, or `freeze` without `persist=`, until it releases the record or ends;
+- **a pending request that reads it**, until the request has run;
+- **a push whose rows reference it**, until the push is added, and an accumulator whose template references it, until its held state has opened;
+- **an accumulator whose held state keeps the rows pushed into it**, for the values those rows reference, until the held state is dropped (see What a binding provides);
+- **the store**, once a client has asked to persist the value (see Persist).
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
-The record of an accumulator's state is the exception to the first: no client keeps its outputs, and only the requests of the submission that made it read them (see Stages and accumulators, Reads).
+A value that is gone does not come back: running the same request again makes a new record.
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
+
+**What a client may read.** A submission reads only values kept for it: values its own client keeps, persisted values, datasets, and the current state of its own client's accumulators.
+A request that references any other value is refused at submission, also while that record is still pending.
+`client.output` reads the same values, and raises for any other; the record stays.
+So another client, also one in the same process, reads a value only once it is persisted.
 
 | Call | Does |
 |---|---|
@@ -312,30 +328,45 @@ A client also keeps its stages and accumulators until it releases them or ends (
 centre = client.compute(BEAM_CENTRE, {'run': dataset(run=60330)})
 result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request still reads the centre
-client.output(result, 'iofq')       # kept: this client made the record
-client.output(centre, 'centre')     # raises: the value is not kept
+client.output(result, 'iofq')       # kept: this client asked for the record
+client.output(centre, 'centre')     # raises: nothing keeps it for this client
 ```
 
-Releasing and ending stop no work: pending requests still run, and pushes are still added.
-A released record that is still pending drops its values once it completes and no pending request or push reads them.
+**Work that nothing keeps is cancelled.** When nothing keeps a pending record's values any more, because its client released it or ended and no pending request reads it, the record finishes as `cancelled`.
+Cancelling a request lets go of what it reads, so this passes along a chain.
+A workflow that is already running is not interrupted: its record is cancelled at once, and its outputs are dropped when it returns.
 Any later call of a client that has ended raises `ClientEnded`.
-A client made with `local()` owns its backend: closing the client also closes the backend, which waits until no record is pending and every push is added.
+A client made with `local()` owns its backend: closing the client also closes the backend, which waits until the pending records with a persist request are written.
 A client that is never closed ends with its process.
-Reading an output whose value is not kept raises an error, and a request that references it is refused at submission; the record itself remains.
 
-**On the service** ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), the outputs of every record are written to a file when the record completes.
-`client.output` of a record, and references to its outputs, read the file.
-The service keeps no value for a client, so there is no release of values.
-The files lie in an area per proposal that the framework owns, and are dropped with the proposal's history at the latest; a file dropped earlier, for example to free disk space, is read as a value that is not kept.
-How the service holds an accumulator is open (open question 5).
-This is designed and not implemented.
+**Persist.** Nothing is written unless persisted, in the user's process and on the service ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
+To *persist* an output is to write it to the *store*, which then keeps it:
 
 ```python
-client.submit(requests, label='night')         # each output written when its record completes
-morning = connect(url, proposal='p1')          # the next day, any process
-night = morning.records(label='night')
-morning.output(night[0], 'iofq')               # read from the record's file
+client.persist(result)                              # every output of a record this client keeps
+client.persist(result, 'iofq')                      # only the outputs named
+client.submit(requests, label='night', persist=True)            # each written when it completes
+client.submit(requests, label='night', persist=('iofq',))       # only iofq; the other outputs are dropped
 ```
+
+- `client.persist` adds the store as a keeper of a record the client keeps. The client keeps its own hold until it releases the record, so reads stay in memory until then.
+- `persist=` at submission hands the records to the store: the client does not keep them. The outputs named are kept until written, and the others are dropped when the record completes. Batch reduction and the trigger loop submit this way, so their clients keep nothing.
+- Once a persist request is logged, every client of the proposal can read and reference the values it names. Reads wait for the write.
+- A failed write fails the persist request, not the record. `client.output` of the value, and the requests that reference it, fail with the write's reason. A client that still keeps the record can ask again.
+- Persisting an output that is already persisted does nothing.
+- Persisted values are dropped with the proposal's history at the latest. A value dropped earlier, for example to free disk space, is read as a value that nothing keeps.
+
+```python
+client.submit(requests, label='night', persist=True)
+morning = connect(url, proposal='p1')               # the next day, any process
+night = morning.records(label='night')
+morning.output(night[0], 'iofq')                    # read from the store
+```
+
+**The two deployments.** In the user's process, values that are not persisted are kept in the process's memory, and the store is given to `local(store=...)`; without one, `persist` is refused.
+In the first release, only tests pass a store, a fake one in memory.
+On the service, values that are not persisted are kept in the service's memory under a cap per client, a client that vanished ends when its lease runs out, and the store is an area per proposal that the framework owns.
+The service is designed and not implemented.
 
 What lasts beyond the proposal's history is what `publish` puts in a catalogue (see Provenance and publication).
 
@@ -483,8 +514,8 @@ If the binding does not accumulate, the held state is the list of rows pushed so
 No spec, call, or record names the held state.
 
 - `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops.
-- Opening returns once the backend has checked and logged it, as `client.submit` does. It is refused if a record the template references has failed or was cancelled, and does not wait for one that is pending. The backend reads these records once, when it opens the held state after they have completed. `iofq.template` holds the values as resolved, as a stage's template does.
-- `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push is refused if a record the rows reference has failed or was cancelled, and does not wait for one that is pending. It returns once logged, and the backend adds it later (see Adding waits for readers).
+- Opening returns once the backend has checked and logged it, as `client.submit` does. It is refused if a record the template references is not kept for the client, has failed, or was cancelled, and does not wait for one that is pending. The backend reads these records once, when it opens the held state after they have completed. `iofq.template` holds the values as resolved, as a stage's template does.
+- `push({table: row, ...})` adds one row to each table it names, and the rows enter one state. A key that is not one of the accumulator's tables is refused. Each row is checked by its table's row model, as the request over that one row would check it, and may not reference an accumulator. The push is refused if a record the rows reference is not kept for the client, has failed, or was cancelled, and does not wait for one that is pending. It returns once logged, and the backend adds it later (see Adding waits for readers).
 - Checks on a whole table, such as its length, and the params model's own validators apply when a state is read, not at a push. A table that needs two rows takes them one push at a time, and a state whose plain request would be refused cannot be read (see Reads).
 - Validators that read more than one value, such as the params model's own or those of a table field, must not change a value, for example derive a fixed value from the rows: the held state was given the values typed one by one. The workflow author promises this; it is not checked.
 - If adding the rows of a push fails, the accumulator stops, since the binding may hold part of them. It stops too if a record the rows reference fails or is cancelled, or if the held state fails to open. Later pushes and reads are then refused with the reason, and the records of states it did not reach fail with it, and so do the requests that read them.
@@ -522,39 +553,55 @@ A binding that cannot do this refuses to open, and the accumulator stops.
 **Reads.** An accumulator is read as a record is ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 ```python
-client.output(iofq, 'iofq')                                 # as client.output(record, 'iofq')
+client.output(iofq, 'iofq')                                 # a copy of what client.output(record, 'iofq') gives
+client.output(iofq, 'iofq', select={'Q': slice(0, 10)})     # a copy of part of it
 client.output(iofq)                                         # every output it returned, by name
 client.provenance(iofq)                                     # that of the plain request over the rows so far
 exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pinned when submitted
 iofq.refs()                                                 # a reference to every output, by name
 ```
 
-A *read* is a call that pins the accumulator's state: submitting a request that references the accumulator, `client.output`, or `client.provenance`.
+A *read* is a call that pins the accumulator's state: `client.output`, submitting a request that references the accumulator, `client.freeze`, or `client.provenance`.
 Every read pins the state at that moment: the state after the pushes logged so far.
 It gives what the same call gives on the record of the plain request over those rows, in push order.
 Pinning never waits for a push to be added.
 A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
 `client.output` waits for it as for a pending record, and `client.provenance` returns at once.
 
-- A submission pins the state of each accumulator its requests reference, and makes one record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
+- `client.output` of an accumulator copies the output, or the part that `select` names, and makes no record. It holds back the next push only while it copies.
+- A submission pins the state of each accumulator its requests reference, and makes a record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
+- The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state returns, and a request reads them in place, so a read costs no second copy of the held state.
+- The record of a state is a record like any other. No client asked for it, so no client keeps it: its outputs are kept for the requests of its submission until they have run, and then dropped. So no later request may reference it, and `client.output` of it raises; the accumulator is read instead. Nothing writes it.
 - A state is counted in pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, the state after 2 pushes is the plain request with sample run 611 and can run 614, and the state after 3 adds sample run 612 and can run 615.
-- The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state returns, and a request reads them in place, so a read costs no second copy of the held state. No client keeps them: they are dropped once the requests that read them have run, and a later request that references them is refused.
-- `client.output` of the accumulator, or of the record of a state, returns a copy, so that, like a record's output, the value does not change afterwards.
 - A read is refused if the plain request of the state would be refused, with that request's reason, such as no row in a table that needs one; a state with nothing pushed is no exception. The first read of a state validates its plain request, at a cost that grows with the number of rows, so a driver that reads after every push pays it at every push. Only the client that opened an accumulator reads it.
 - `client.provenance` reads no output, so it holds back no push.
-- `client.submit(iofq)` raises `TypeError`. A copy of a state that a client keeps is the record of a request of a spec that copies what it reads, such as `COPY` in Drivers.
-- A request reads at most one accumulator, and a row or a template reads none. Only the submission that made the record of a state reads it ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references a copy of its state, such as `COPY`. Sample and background runs that arrive at the same time are two tables of one accumulator.
+- `client.submit(iofq)` raises `TypeError`.
+- A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references the record that `freeze` returns. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
 **Adding waits for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
-Since a request reads the outputs of the state itself, a push is added only once the readers of the state before it have run.
+Since a request reads the outputs of the state itself, a push is added only once nothing keeps the state before it.
 Adding it also waits for the records its rows reference to complete.
-Readers are the records of that state, until the requests that read them have run, including those cancelled while they run, and `client.output` calls in progress.
-Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the records of the state before it and the requests of their submissions, all logged before the push, since only the submission that made the record of a state reads it. So no wait goes round in a circle.
+The state is kept by its pending reads: the records of that state, until the requests that read them have run, including those cancelled while they run; a freeze, until its record has finished; and `client.output` calls in progress.
+Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the reads of the state before it, all logged before the push, since only the submission that made the record of a state reads it. So no wait goes round in a circle.
 The backend adds the pushes of one accumulator on its workers, one at a time, in the order they were logged.
 A long reader holds back the next addition, but not the driver.
 The outputs of a state are computed all at once, the first time the state is read, and kept until the next push is added; no output is computed for a state that no one reads.
 
-**Releasing.** Releasing stops no work, so a driver may release an accumulator right after its last read:
+**Freeze.** `client.freeze(acc)` ends the accumulator and returns the record of its last state, the state after the pushes logged before it:
+
+```python
+total = client.freeze(iofq)              # no copy, no more pushes
+client.output(total, 'iofq')             # read as any record's output
+client.freeze(volume, persist=True)      # the store keeps it, not the client
+```
+
+- The record's values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
+- The client keeps the record, unless `persist=` hands it to the store, as at submission.
+- A push logged after the freeze is refused. Once the record has completed, a read of the accumulator is refused and names the record.
+- The plain request of the last state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
+- If the record fails or is cancelled, the accumulator takes no pushes, but can still be read and frozen again, unless it has stopped.
+
+**Releasing.** Releasing an accumulator drops the client's hold on it, so a driver may release an accumulator right after its last read:
 
 ```python
 iofq.push({'sample_runs': {'run': dataset(run=613)}})         # returns once logged
@@ -564,12 +611,12 @@ client.output(exported, 'text')
 ```
 
 Releasing the accumulator, or ending its client, waits for nothing.
-The pushes logged are still added, and the held state is dropped once its readers have run.
+The pinned reads keep their states and the pushes up to them, and the held state is dropped once its readers have run.
+Pushes that no pinned read needs are dropped.
 A released accumulator takes no more pushes or reads.
-To stop the readers too, the driver cancels them with `client.cancel`. The record of the state they read still computes the outputs once before the next push is added, unless the driver cancels it too.
+Work that nothing keeps any more is cancelled: releasing `exported` too would cancel it, and with it the record of the state it reads.
 
-**On the service** ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), nothing writes the outputs of the record of a state: the service holds them as it holds the held state. The outputs of a request that reads it are written like any other's ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
-`client.output` of an accumulator returns the value and writes nothing.
+**On the service**, the outputs of the record of a state are part of the held state, held where the held state is.
 How the service holds an accumulator's held state, bounds its memory, and ends it is open (open question 5).
 
 ### What a binding provides
@@ -641,17 +688,17 @@ This one adds each run of a rotation scan to a volume as it arrives, and cuts th
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):    # the scan's 300 runs
-    volume.push({'runs': {'run': run}})                  # added once the previous cut has run
-    client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}, label='cut', member='17')
-total = client.compute(COPY, {'data': volume.ref('counts')})   # a copy of the last state
+    volume.push({'runs': {'run': run}})                  # added once the previous cut is copied
+    show(client.output(volume, 'counts', select={'q': 0}))   # copies the cut; makes no record
+total = client.freeze(volume, persist=True)              # the last state as a record, written
 ```
 
-`VOLUME`, `CUT`, and `COPY` are toy specs of the stories ([user-stories.md](user-stories.md), Toy specs); `VOLUME`'s binding has a held state of its own.
+`VOLUME` is a toy spec of the stories ([user-stories.md](user-stories.md), Toy specs); its binding has a held state of its own.
 Each push reduces the new run and adds it to the volume.
-Each cut pins the state after its push and reads a record of that state, and the next push is added once that cut has run, since the push adds to the volume the cut reads.
-So the loop holds one volume, not one per run or per pending cut.
-`volume.push` returns once the push is logged, so a slow cut holds back the next addition, not the loop.
-On the service, each cut is written to a file like the output of any record ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)); where the volume is held is open (open question 5).
+Each cut pins the state after its push, and the next push is added once that cut has been copied, since the push adds to the volume the cut reads.
+So the loop holds one volume, not one per run or per cut, and makes one record, at the end.
+`client.output` waits until the push is added, so the loop runs at the pace of the additions.
+A cut that is kept, or a fit of the growing volume, is a request that references `volume.ref('counts')`; it reads the state in place and makes a record of it.
 
 A loop that reduces each dataset in a request of its own uses `client.as_completed`.
 It consumes a generator of records in a thread, so submitting does not wait for the loop body, and yields each record once it has finished.
@@ -667,11 +714,14 @@ For example, a sample needs the empty-can run measured most recently before it:
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
 requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, datasets, lookup=cans)
-client.submit(requests, label='iofq')
+client.submit(requests, label='iofq', persist=('iofq',))
 ```
 
-A *rule* is plain data: a name, a template, a selector, and a label, and optionally a lookup or a series.
-It says: for each new dataset the selector matches, fill the template and submit it under the label.
+A batch application submits with `persist=`, so its client keeps nothing and the results are found the next day (see Persist).
+
+A *rule* is plain data: a name, a template, a selector, and a label, and optionally a lookup, a series, and the outputs it persists, all of them by default.
+It says: for each new dataset the selector matches, fill the template and submit it under the label, persisted.
+A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 With a *series*, one request takes all matching datasets with the same value of a metadata field so far, in run order, each as a row `{'run': dataset}` of the template's table blank.
 At ESTIA, a sample is measured at several angles, one run each; with `series='sample'`, each new angle submits a request that stitches all angles of that sample measured so far, with the sample as the member:
@@ -683,6 +733,7 @@ TriggerLoop(client, rules=[rule]).run()
 ```
 
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
+It submits with `persist=`, so its client keeps nothing.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
 Templates and rules are plain data; the core keeps no store of them, and records do not name them.
@@ -703,6 +754,7 @@ pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its prov
 ```
 
 Publishing puts an output in the catalogue with its provenance; that entry, not the record, is what lasts.
+`publish` reads the value as `client.output` does, so it needs no persist request.
 Records say what ran, including a workflow bound in a notebook's own backend; publishing is not refused on that account.
 Superseding a published entry with a correction is the catalogue's job.
 Recomputing in a record's environment comes later.
@@ -731,11 +783,11 @@ Arrival keeps the outputs, not the cost: if the binding does not accumulate, eac
 
 - A record holds the spec, every parameter value including defaults, and its inputs by reference. A record references only outputs of records and datasets; a request that reads an accumulator references the record of the state its submission pinned ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). A record never changes; its status changes once, from pending to finished.
 - A stage never changes what a record says: a record made through a stage is the record of the plain request (caching). A read of an accumulator gives what the same call gives on the record of the plain request over the rows pushed so far, in push order (arrival). This rests on two promises of the workflow author: a held state gives what the plain request gives (What a binding provides), and validators that read more than one value change none (Stages and accumulators).
-- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an accumulator's output it reads, such as a slice of it, since the next push may change that output in place.
+- Every connection between requests is a reference. A value passed in memory is the referenced output itself, so a workflow must not modify its inputs. Nor may it return an output that shares memory with an input, such as a slice of it: a workflow cannot tell whether an input is a record's value or an accumulator's state, which the next push may change in place. `ess.spec.testing` checks this for values backed by numpy.
 - A record's outputs do not depend on how they were computed: through a stage, from an accumulator, or on another machine. Values may differ in rounding where the order of adding differs.
 - The provenance of a record reaches every dataset it read, through all its inputs, with their parameter values and software versions.
 - A proposal's records are kept until the proposal has been idle for the retention period, and then dropped as a whole. A published entry answers what produced it without access to the records.
-- Output values are kept as stated in How long records and values are kept; releasing a value or ending a client stops no work.
+- Output values are kept as stated in How long records and values are kept. A submission reads only values kept for its client, so whether it is accepted does not depend on how far other work has come. Work that nothing keeps is cancelled. Nothing is written unless persisted.
 
 ## Left to the system
 
@@ -746,8 +798,8 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 - how data is uploaded or fetched
 - when and where a request runs, and how pending inputs are waited for
 - where a stage is kept and computes, and where the held state of an accumulator is held
-- the file format of each output type, and the folder layout within a proposal's area (scipp/essapps#23)
-- how the service notices a client whose process ended without closing it (scipp/essapps#34)
+- the format of each persisted output type, and the layout of the store within a proposal's area (scipp/essapps#23)
+- how the service notices a client whose process ended without closing it, and how it sets the cap per client (scipp/essapps#27, scipp/essapps#34)
 - how access across proposals is enforced
 
 ## Open questions
@@ -755,5 +807,7 @@ Not part of this API, and not visible in the code of notebooks, apps, or workflo
 1. **Grouping.** Spreading one accumulator over several nodes, for example to reduce a finished scan again quickly, needs a merge of two held states. Neither `StreamProcessor` nor the binding protocol offers one, and no requirement needs it yet: runs arrive over hours, and a finished scan can be reduced again in one job ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 2. **Removing a row.** A request over fewer rows is always possible. Whether an accumulator offers `remove`, and what it costs, depends on whether it keeps each row.
 3. **Labels and members** on records, and `member_field`, are tentative.
-4. **Views.** Reading part of an output, such as one cut through a volume, quickly and without making a record. The form waits for the plotting work.
+4. **Looks that compute.** `select=` only indexes. A projection, or a thick slice summed, would run a spec next to the value and return its result without a record. The form waits for the plotting work. So does a look at the latest state already added, without waiting for the pushes logged so far.
 5. **Accumulators on the service.** How the service holds a held state, bounds its memory, and ends it. One job per accumulator on the cluster, with a memory size and a deadline that its client declares, fits a spectroscopy volume of hundreds of GB; whether it fits other accumulators is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open; scipp/essapps#27).
+6. **Persist at submission.** `persist=` makes the store the only keeper; `client.persist` adds it next to the client. Whether `persist=` should also keep the values for the client, or both calls need more options, is settled once stories use them.
+7. **Values modified in place.** In the user's process, `client.output` of a record returns the value itself. A notebook that modifies it in place breaks the promise every workflow makes, and changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
