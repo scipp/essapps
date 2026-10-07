@@ -49,12 +49,12 @@ def test_f2_reproduce_after_two_upgrades(
     result = client.compute(
         IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0]), 'threshold': 1.5}
     )
-    upgrade(versions={'scipp': '99.0'})
+    upgraded = upgrade(versions={'scipp': '99.0'})
 
     with pytest.raises(SubmitError, match='scipp'):
-        client.recompute(result)
-    again = client.compute(result.request.spec, result.request.params)
+        upgraded.recompute(result)
+    again = upgraded.compute(result.request.spec, result.request.params)
 
     assert again.request == result.request
-    assert client.provenance(again).software['scipp'] == '99.0'
-    assert client.provenance(result).software['scipp'] != '99.0'
+    assert upgraded.provenance(again).software['scipp'] == '99.0'
+    assert upgraded.provenance(result).software['scipp'] != '99.0'

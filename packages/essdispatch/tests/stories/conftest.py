@@ -24,8 +24,9 @@ import scipp as sc
 from pydantic import BaseModel
 
 from ess.dispatch import Backend, Client, ClientEnded, Record, Status
+from ess.dispatch.log import Log
 from ess.dispatch.records import map_refs
-from ess.dispatch.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets, FakeStore
 from ess.spec import (
     Array,
     DatasetRef,
@@ -352,24 +353,51 @@ def datasets() -> FakeDatasets:
 
 
 @pytest.fixture
-def backend(datasets: FakeDatasets) -> Iterator[Backend]:
-    backend = Backend(datasets, TOYS)
+def store() -> FakeStore:
+    return FakeStore()
+
+
+@pytest.fixture
+def history() -> Log:
+    """The history of the backend, in memory, which an upgrade takes over."""
+    return Log()
+
+
+@pytest.fixture
+def backend(
+    datasets: FakeDatasets, store: FakeStore, history: Log
+) -> Iterator[Backend]:
+    backend = Backend(datasets, TOYS, log=history, store=store)
     yield backend
     backend.close()
 
 
 @pytest.fixture
-def upgrade(datasets: FakeDatasets) -> Iterator[Callable[..., Client]]:
-    """A client of a new backend that offers only the given toy specs."""
+def upgrade(
+    datasets: FakeDatasets,
+    store: FakeStore,
+    history: Log,
+    backend: Backend,
+    clients: list[Client],
+) -> Iterator[Callable[..., Client]]:
+    """
+    A client of a new backend over the same datasets, history, and store,
+    which offers only the given toy specs. The upgrade ends every client of
+    the backend before it, and that backend once its persisted work is done.
+    """
     backends: list[Backend] = []
 
     def upgrade(specs: list[WorkflowSpec]) -> Client:
-        backends.append(Backend(datasets, {s: TOYS[s] for s in specs}))
+        for client in clients:
+            client.close()
+        backend.close()
+        bind = {s: TOYS[s] for s in specs}
+        backends.append(Backend(datasets, bind, log=history, store=store))
         return Client(backends[-1], proposal='p1', submitter='anna')
 
     yield upgrade
-    for backend in backends:
-        backend.close()
+    for upgraded in backends:
+        upgraded.close()
 
 
 @pytest.fixture

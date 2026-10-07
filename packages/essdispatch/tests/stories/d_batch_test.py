@@ -26,7 +26,7 @@ def test_d1_temperature_scan(
     corrupt(runs[1])
     template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
     requests = apply(template, runs, client.datasets, member_field='temperature')
-    scan = client.compute(requests, label='scan')
+    scan = client.compute(requests, label='scan', persist=True)
 
     assert [
         client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')
@@ -51,7 +51,7 @@ def test_d2_overnight_cluster_batch(
     runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
     corrupt(runs['7'])
     for member, run in runs.items():
-        client.submit(IOFQ, {'run': run}, label='night', member=member)
+        client.submit(IOFQ, {'run': run}, label='night', member=member, persist=True)
 
     morning = connect()
     night = {r.member: r for r in morning.records(label='night')}
@@ -59,7 +59,13 @@ def test_d2_overnight_cluster_batch(
     reasons = morning.failure(failed)
     repair(runs['7'])
     reruns = [
-        morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
+        morning.submit(
+            r.request.spec,
+            r.request.params,
+            label=r.label,
+            member=r.member,
+            persist=True,
+        )
         for r in failed
     ]
     morning.wait(reruns)
@@ -68,6 +74,7 @@ def test_d2_overnight_cluster_batch(
     assert reasons == ['file signature not found']
     assert reruns[0].request == failed[0].request
     assert morning.latest('night', member='7') == reruns[0]
+    assert morning.output(night['1'], 'iofq').values.tolist() == [2.0, 2.0]
     assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
     assert morning.status(failed) == ['failed']
     assert len(morning.records(label='night')) == 31
@@ -77,12 +84,16 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
     runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
     wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
     first = client.submit(
-        apply(wrong, runs, client.datasets, member_field='run'), label='scan'
+        apply(wrong, runs, client.datasets, member_field='run'),
+        label='scan',
+        persist=True,
     )
     client.cancel(first)
     fixed = replace(wrong, params={'threshold': 0.5})
     second = client.compute(
-        apply(fixed, runs, client.datasets, member_field='run'), label='scan'
+        apply(fixed, runs, client.datasets, member_field='run'),
+        label='scan',
+        persist=True,
     )
 
     assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
@@ -108,7 +119,9 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
     client.compute(
-        apply(template, runs, client.datasets, member_field='run'), label='scan'
+        apply(template, runs, client.datasets, member_field='run'),
+        label='scan',
+        persist=True,
     )
 
     before = client.records(label='scan')
@@ -120,7 +133,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
         client.submit(renamed, label='scan')
     moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
     requests = apply(moved, runs, client.datasets, member_field='run')
-    after = list(client.compute(requests, label='scan').values())
+    after = list(client.compute(requests, label='scan', persist=True).values())
 
     assert [
         client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])
@@ -146,7 +159,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
         volume.push({'runs': {'run': run}})  # added once the previous cut is copied
         pushed.append(run)
         cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
-    total = client.freeze(volume)  # the story persists it; these fixtures have no store
+    total = client.freeze(volume, persist=True)
 
     assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
     assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]

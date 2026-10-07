@@ -25,7 +25,16 @@ from ess.dispatch import (
     Template,
     dataset,
 )
-from ess.dispatch.log import Event, Finished, Log, NewRecord, Opened, Pushed, Submitted
+from ess.dispatch.log import (
+    Event,
+    Finished,
+    Log,
+    NewRecord,
+    NewStateRecord,
+    Opened,
+    Pushed,
+    Submitted,
+)
 from ess.dispatch.testing import FakeDatasets
 from ess.spec import (
     AccumulatorRef,
@@ -218,17 +227,22 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     template = Template(TOTAL, blanks=('values',))
     events = Log.read(tmp_path / 'log')
     assert events[6:10] == [
-        Opened(accumulator=total.id, proposal='p1', template=template),
+        Opened(accumulator=total.id, proposal='p1', template=template, fixed={}),
         *(
             Pushed(accumulator=total.id, rows={'values': load.refs('value')})
             for load in loads
         ),
     ]
     state, reader = events[10].records  # the record of the state, then its reader
-    assert state.request == Request(TOTAL, {'values': [x.refs('value') for x in loads]})
+    assert state == NewStateRecord(
+        id=state.id, accumulator=total.id, pushes=3, outputs=('value',)
+    )
     assert reader.id == read.id
     read_state = OutputRef(record=state.id, output='value')
     assert read.request.params == {'values': [{'value': read_state}]}
+    assert _record(client, state.id).request == Request(
+        TOTAL, {'values': [x.refs('value') for x in loads]}
+    )
     assert client.output(read, 'value') == 6.0
 
 
