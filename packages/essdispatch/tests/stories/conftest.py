@@ -278,17 +278,6 @@ def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
     return {'counts': _array(runs)}
 
 
-class Data(BaseModel):
-    data: Array()  # type: ignore[valid-type]
-
-
-COPY = _spec('copy', Data, Data)
-
-
-def copy(data: sc.Variable) -> dict[str, sc.Variable]:
-    return {'data': data.copy()}
-
-
 class CutParams(BaseModel):
     data: Array()  # type: ignore[valid-type]
     index: int
@@ -354,7 +343,6 @@ TOYS = {
     EXPORT: export,
     PARTS_SUM: combine(operator.add),
     VOLUME: Summing(volume, 'runs'),
-    COPY: copy,
 }
 
 
