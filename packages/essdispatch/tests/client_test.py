@@ -571,7 +571,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
         f'record {cancelled.id} cancelled': Template(
             SHIFT, params={'value': cancelled.ref('value')}, blanks=('offset',)
         ),
-        'the value is not kept': Template(
+        f'record {released.id} is not kept by this client': Template(
             SHIFT, params={'value': released.ref('value')}, blanks=('offset',)
         ),
     }
@@ -587,7 +587,7 @@ def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> No
     load = client.compute(LOAD, {'run': dataset(run=1)})
     client.release(load)
 
-    not_kept = f'record {load.id} output value: the value is not kept'
+    not_kept = f'record {load.id} is not kept by this client'
     with pytest.raises(LookupError, match=not_kept):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match=f'^value: {not_kept}$'):
@@ -611,7 +611,7 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
         client.output(first, 'value')
 
 
-def test_a_released_pending_record_drops_its_outputs_when_it_completes(
+def test_a_released_pending_record_that_nothing_reads_is_cancelled(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -619,9 +619,59 @@ def test_a_released_pending_record_drops_its_outputs_when_it_completes(
     client.release(load)
     loading.set()
 
-    assert client.wait(load) is Status.COMPLETED
-    with pytest.raises(LookupError, match='not kept'):
-        client.output(load, 'value')
+    assert client.status(load) is Status.CANCELLED
+    assert client.failure(load) == 'nothing keeps its outputs'
+    with pytest.raises(SubmitError, match=f'^value: record {load.id} cancelled$'):
+        client.submit(SHIFT, {'value': load.ref('value')})
+
+
+def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=1)})
+    shifted = client.submit(SHIFT, {'value': load.ref('value'), 'offset': 1.0})
+    client.release(load)
+
+    not_kept = f'^value: record {load.id} is not kept by this client$'
+    with pytest.raises(SubmitError, match=not_kept):  # however far it has run
+        client.submit(SHIFT, {'value': load.ref('value')})
+    loading.set()
+    assert client.output(shifted, 'value') == 2.0
+    assert client.status(load) is Status.COMPLETED
+
+
+def test_cancelling_work_that_nothing_keeps_passes_along_a_chain(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=1)})
+    shifted = client.submit(SHIFT, {'value': load.ref('value')})
+    scaled = client.submit(SHIFT, {'value': shifted.ref('value')})
+    client.release([load, shifted])
+    assert client.status([load, shifted]) == [Status.PENDING] * 2  # scaled reads them
+
+    client.release(scaled)
+    loading.set()
+    assert client.status([load, shifted, scaled]) == [Status.CANCELLED] * 3
+
+
+def test_a_client_reads_and_references_only_what_it_keeps(
+    backend: Backend, client: Client, loading: threading.Event
+) -> None:
+    other = Client(backend, proposal='p1', submitter='bob')
+    done = client.compute(LOAD, {'run': dataset(run=1)})
+    loading.clear()
+    pending = client.submit(LOAD, {'run': dataset(run=2)})
+
+    for record in (done, pending):
+        not_kept = f'record {record.id} is not kept by this client'
+        with pytest.raises(LookupError, match=not_kept):
+            other.output(record, 'value')
+        with pytest.raises(SubmitError, match=f'^value: {not_kept}$'):
+            other.submit(SHIFT, {'value': record.ref('value')})
+    loading.set()
+    assert other.wait(pending) is Status.COMPLETED  # its status is the proposal's
 
 
 def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
@@ -660,22 +710,17 @@ def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> No
             call()
 
 
-def test_closing_a_client_stops_no_work_and_drops_what_it_keeps(
+def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(
     backend: Backend, client: Client, loading: threading.Event
 ) -> None:
     other = Client(backend, proposal='p1', submitter='bob')
-    done = client.compute(LOAD, {'run': dataset(run=1)})
     loading.clear()
     pending = client.submit(LOAD, {'run': dataset(run=2)})
-    shifted = other.submit(SHIFT, {'value': pending.ref('value')})
+    shifted = client.submit(SHIFT, {'value': pending.ref('value')})
     client.close()
     loading.set()
 
-    assert other.wait([pending, shifted]) == [Status.COMPLETED] * 2
-    assert other.output(shifted, 'value') == 2.0  # read before it was dropped
-    for record in (done, pending):
-        with pytest.raises(SubmitError, match='not kept'):
-            other.submit(SHIFT, {'value': record.ref('value')})
+    assert other.status([pending, shifted]) == [Status.CANCELLED] * 2
 
 
 def test_a_with_block_closes_the_client(backend: Backend) -> None:
@@ -687,12 +732,14 @@ def test_a_with_block_closes_the_client(backend: Backend) -> None:
         client.output(load, 'value')
 
 
-def test_closing_a_local_client_closes_its_backend_once_nothing_is_pending(
+def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
     datasets: FakeDatasets, loading: threading.Event
 ) -> None:
+    started = threading.Event()
     loaded = []
 
     def load(run: float) -> dict[str, Any]:
+        started.set()
         loading.wait(timeout=5)
         loaded.append(run)
         return {'value': run, 'extra': -run}
@@ -700,9 +747,10 @@ def test_closing_a_local_client_closes_its_backend_once_nothing_is_pending(
     loading.clear()
     with local(proposal='p1', datasets=datasets, bind={LOAD: load}) as client:
         client.submit(LOAD, {'run': dataset(run=1)})
+        started.wait(timeout=5)
         threading.Timer(0.05, loading.set).start()
 
-    assert loaded == [1.0]
+    assert loaded == [1.0]  # cancelled when the client closed, but it ran
 
 
 # Accumulators
@@ -1006,7 +1054,9 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
         r"\['speed'\]: not parameters": {'speed': 2.0},
         'scale: Input should be a valid number': {'scale': 'x'},
         f'record {cancelled.id} cancelled': {'offset': cancelled.ref('value')},
-        'the value is not kept': {'offset': released.ref('value')},
+        f'record {released.id} is not kept by this client': {
+            'offset': released.ref('value')
+        },
     }
     for reason, params in refused.items():
         with pytest.raises(SubmitError, match=reason):
@@ -1105,7 +1155,7 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         elsewhere.submit(SHIFT, {'value': total.ref('value')})
 
 
-def test_only_a_request_reads_an_accumulator_and_only_its_submission_its_state(
+def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
     client: Client, loading: threading.Event
 ) -> None:
     load = client.compute(LOAD, {'run': dataset(run=1)})
@@ -1119,8 +1169,7 @@ def test_only_a_request_reads_an_accumulator_and_only_its_submission_its_state(
 
     refusals = {
         total.ref('value'): 'only a request may reference an accumulator',
-        state: f'the record of a state {state.record} is read only by the '
-        'submission that made it',
+        state: f'record {state.record} is not kept by this client',
     }
     for ref, refused in refusals.items():
         for accumulator in (total, other):
@@ -1131,7 +1180,7 @@ def test_only_a_request_reads_an_accumulator_and_only_its_submission_its_state(
         with pytest.raises(SubmitError, match=f'^offset: {refused}'):
             client.accumulator(Template(SUM, params={'offset': ref}, blanks=('runs',)))
     later = rf'^value: {refusals[state]}'
-    with pytest.raises(SubmitError, match=later):  # it would hold back the push
+    with pytest.raises(SubmitError, match=later):
         client.submit(SHIFT, {'value': state})
     loading.set()
     assert client.output(read, 'value') == 3.0
@@ -1237,7 +1286,7 @@ def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
     loading.set()
 
 
-def test_ending_a_client_waits_for_nothing_and_its_accumulator_is_still_read(
+def test_ending_a_client_cancels_the_reads_of_its_accumulator(
     backend: Backend, client: Client, loading: threading.Event
 ) -> None:
     other = Client(backend, proposal='p1', submitter='bob')
@@ -1247,24 +1296,25 @@ def test_ending_a_client_waits_for_nothing_and_its_accumulator_is_still_read(
     pending = client.submit(LOAD, {'run': dataset(run=2)})
     parts = [{'value': total.ref('value')}, pending.refs('value')]
     summed = client.submit(TOTAL, {'parts': parts})
-    shifted = other.submit(SHIFT, {'value': summed.ref('value')})
+    state_id = summed.request.params['parts'][0]['value'].record
+    (state,) = [r for r in client.records() if r.id == state_id]
     client.close()
     loading.set()
 
-    assert other.wait([summed, shifted]) == [Status.COMPLETED] * 2
-    assert other.output(shifted, 'value') == 3.0  # summed read 1.0 from total
+    assert other.status([pending, state, summed]) == [Status.CANCELLED] * 3
 
 
 class Sum:
     """
     ``combine(operator.add)`` that counts the rows its held states add.
 
-    A row is added while ``go`` is set. With ``failing`` set, the next row
-    fails to add.
+    A row is added while ``go`` is set; ``adding`` says a push has started.
+    With ``failing`` set, the next row fails to add.
     """
 
     def __init__(self) -> None:
         self.pushed = 0
+        self.adding = threading.Event()
         self.failing = False
         self.go = threading.Event()
         self.go.set()
@@ -1281,6 +1331,7 @@ class _Summing:
         self._held = held
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
+        self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.failing:
             self._owner.failing = False
@@ -1385,7 +1436,7 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
             total.push({'parts': {'value': 1.0}})
 
 
-def test_closing_a_backend_adds_the_pushes_logged_first(
+def test_closing_a_client_drops_the_pushes_that_no_read_needs(
     datasets: FakeDatasets, summing: Sum
 ) -> None:
     bind = {LOAD: lambda run: {'value': run, 'extra': 0.0}, TOTAL: summing}
@@ -1395,9 +1446,28 @@ def test_closing_a_backend_adds_the_pushes_logged_first(
         total = _total(client)
         for load in loads:
             total.push({'parts': load.refs('value')})
+        summing.adding.wait(timeout=5)
         threading.Timer(0.05, summing.go.set).start()
 
-    assert summing.pushed == 2
+    assert summing.pushed == 1  # the push being added when the client closed
+
+
+def test_a_released_accumulator_adds_the_pushes_up_to_the_last_state_read(
+    summed: Client, summing: Sum
+) -> None:
+    client = summed
+    loads = client.compute([Request(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 1)])
+    summing.go.clear()
+    total = _total(client)
+    total.push({'parts': loads[0].refs('value')})
+    total.push({'parts': loads[1].refs('value')})
+    read = client.submit(SHIFT, {'value': total.ref('value')})
+    total.push({'parts': loads[2].refs('value')})
+    client.release(total)
+    summing.go.set()
+
+    assert client.output(read, 'value') == 3.0
+    assert summing.pushed == 2  # the last push was dropped
 
 
 def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
@@ -1602,7 +1672,7 @@ def test_adding_in_place_leaves_the_outputs_pushed_unchanged(
     assert [client.output(x, 'value').tolist() for x in loads] == [[1.0], [2.0]]
 
 
-def test_the_record_of_a_state_is_read_as_a_copy_until_its_readers_have_run(
+def test_no_client_reads_or_references_the_record_of_a_state(
     in_place: Client, loads: list[Record], copying: Copying
 ) -> None:
     client = in_place
@@ -1611,23 +1681,20 @@ def test_the_record_of_a_state_is_read_as_a_copy_until_its_readers_have_run(
     total.push({'parts': loads[0].refs('value')})
     copied = _copy(client, total)  # holds the state until it has run
     state = _state(client, copied)
-    value = client.output(state, 'value')
-    copying.go.set()
-    client.wait(copied)
 
-    gone = f'record {state.id} output value: the value is not kept'
-    with pytest.raises(LookupError, match=f'^{gone}$'):
+    not_kept = f'record {state.id} is not kept by this client'
+    with pytest.raises(LookupError, match=f'^{not_kept}$'):
         client.output(state, 'value')
     for refuse in (
         lambda: client.submit(COPY, {'value': state.ref('value')}),
         lambda: client.stage(Template(COPY, params={'value': state.ref('value')})),
         lambda: total.push({'parts': {'value': state.ref('value')}}),
     ):
-        with pytest.raises(SubmitError, match=f'value: {gone}$'):
+        with pytest.raises(SubmitError, match=f'value: {not_kept}$'):
             refuse()
+    copying.go.set()
     total.push({'parts': loads[1].refs('value')})
     assert client.output(total, 'value').tolist() == [3.0]
-    assert value.tolist() == [1.0]  # a copy, which the push leaves unchanged
     assert client.output(copied, 'value').tolist() == [1.0]
 
 
@@ -1779,7 +1846,7 @@ def test_a_released_accumulator_still_adds_the_pushes_logged(
     copying.started.wait(timeout=5)
     total.push({'parts': loads[1].refs('value')})  # waits for the first copy
     second = _copy(client, total)
-    client.release(total)  # stops no work
+    client.release(total)  # the copies keep their states
     copying.go.set()
 
     assert [client.output(r, 'value').tolist() for r in (first, second)] == [
@@ -1796,7 +1863,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     total = _total(client)
     total.push({'parts': loads[0].refs('value')})
     copied = _copy(client, total)
-    client.release(total)  # stops no work
+    client.release(total)  # the copy keeps its state
 
     released = 'the accumulator was released or is unknown'
     with pytest.raises(SubmitError, match=f'^{released}$'):

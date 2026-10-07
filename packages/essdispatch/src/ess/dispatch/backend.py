@@ -8,9 +8,8 @@ What the backend knows of history is its log (see ``log.py``): every
 submission, finished record, opened accumulator, and push is appended as one
 event and then applied to its views (see ``views.py``). A change is checked
 before its event is appended, so the log holds only events that apply. A
-backend given a log that already has events applies them first and runs the
-records left pending as plain requests, without their stages or
-accumulators.
+backend given a log that already has events applies them first. It has no
+clients, so nothing keeps the records left pending, and they are cancelled.
 
 A client is one entry in the backend, from :meth:`Backend.open_client` to
 :meth:`Backend.close_client`: its proposal, the records whose outputs it keeps,
@@ -22,7 +21,16 @@ outputs of the backend that wrote it.
 
 An output value is kept while the client that made its record keeps it, or
 while a pending request or a step of an accumulator that reads it has yet to
-run. Releasing and ending stop no work.
+run. A pending record whose outputs nothing keeps is cancelled, since they
+would be dropped the moment they are computed; cancelling lets go of what it
+reads, so this passes along a chain. A workflow already running is not
+interrupted: its record is cancelled at once, and its outputs are dropped when
+it returns.
+
+A client reads, and its requests, stages, and accumulators reference, only
+the outputs of records it keeps, whether they are pending or completed. So
+whether a call is accepted does not depend on how far other work has run, and
+a value kept only for another client or for a pending request is refused.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
@@ -61,10 +69,9 @@ and its provenance. Pinning never waits for a push to be added. A request
 references an accumulator's output by a placeholder (``AccumulatorRef``). The
 submission makes one record of the plain request of the pinned state for each
 accumulator its requests reference, logs it before them, and the records of
-the requests reference that record's outputs (ADR 0008). Only that
-submission reads the record of a state; a later request, a stage, or a row or
-template refuses it. A request reads at most one accumulator, and a row or a
-template reads none. A state may be
+the requests reference that record's outputs. No client keeps the record of a
+state, so only the requests of that submission read it. A request reads at
+most one accumulator, and a row or a template reads none. A state may be
 read only if its plain request would be accepted. The first read of a state
 validates that request, outside the backend's lock, and a read of a state
 whose request would be refused is refused with that request's reason. So
@@ -78,20 +85,20 @@ The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
 kept until the next push. The record of a state is computed from the held
 state, as a call through a stage is from what the stage holds: its outputs
-are what the binding returns, not a copy. No client keeps them; they are kept
-until the requests that read them have run, and the record holds the state as
-its reader until then. Reading the outputs of such a record, or of the
-accumulator, copies them. So the next push waits until the readers of the
-state before it are done: the records of that state, until the requests that
-read them have run, even those cancelled while they run, and the reads of its
-outputs in progress. Every wait is for work logged before the waiter: a
-request waits for records submitted before it and for pushes logged before
-its submission, and a push waits for the records of the state before it and
-the requests of their submissions, all logged before the push, since only
-the submission that made a record of a state reads it. So no wait goes round
-in a circle.
-Releasing the accumulator or ending its client stops no work: the pushes
-logged are added, and the held state is dropped once its readers are done.
+are what the binding returns, not a copy. They are kept until the requests
+that read them have run, and the record holds the state as its reader until
+then. Reading the outputs of the accumulator copies them. So the next push
+waits until the readers of the state before it are done: the records of that
+state, until the requests that read them have run, even those cancelled while
+they run, and the reads of its outputs in progress. Every wait is for work
+logged before the waiter: a request waits for records submitted before it and
+for pushes logged before its submission, and a push waits for the records of
+the state before it and the requests of their submissions, all logged before
+the push, since only the submission that made a record of a state reads it.
+So no wait goes round in a circle.
+Releasing the accumulator or ending its client keeps the pushes up to the
+last state a reader pinned, which are still added, and drops the later ones;
+the held state is dropped once its readers are done.
 """
 
 from __future__ import annotations
@@ -469,9 +476,9 @@ class Backend:
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
-            for record_id in self._views.records:
+            for record_id in list(self._views.records):
                 if record_id not in self._views.finished:
-                    self._schedule(record_id)
+                    self._finish(record_id, Status.CANCELLED, 'the backend restarted')
 
     def close(self) -> None:
         """
@@ -687,13 +694,11 @@ class Backend:
         Check the outputs of records and accumulators a request reads; lock held.
 
         Only a submission reads accumulators, from the ``states`` it pinned,
-        each with its plain request or why that would be refused. Only the
-        submission that made a record of a state reads it, which happens in
-        :meth:`_create`, after these checks. A stage or an accumulator that
-        held a state of an accumulator would hold back its every push for as
-        long as it lives, and a row pushed into one would read another's value
-        while it adds. A later request would hold back the next push, and wait
-        for it if it also read a later state.
+        each with its plain request or why that would be refused; it reads
+        the records of these states, which it makes in :meth:`_create`, after
+        these checks. A stage or an accumulator that held a state of an
+        accumulator would hold back its every push for as long as it lives,
+        and a row pushed into one would read another's value while it adds.
         """
         params = self._specs[request.spec].params
         try:
@@ -702,11 +707,6 @@ class Backend:
                     if states is None and isinstance(ref, AccumulatorRef):
                         raise SubmitError(
                             f'{where}: only a request may reference an accumulator'
-                        )
-                    if isinstance(ref, OutputRef) and ref.record in self._state_of:
-                        raise SubmitError(
-                            f'{where}: the record of a state {ref.record} is read '
-                            'only by the submission that made it'
                         )
                     spec_id = self._readable(ref, where, caller, states or {})
                     outputs = self._output_fields[spec_id]
@@ -767,7 +767,11 @@ class Backend:
         The spec of a record or accumulator a request may read; lock held.
 
         An accumulator must be the client's own, not stopped, and its state
-        pinned in ``states`` readable.
+        pinned in ``states`` readable. A record must be one whose outputs the
+        client keeps, pending or completed: whether a request is accepted
+        does not depend on how far its inputs have run. So no client reads
+        the record of a state, which only the submission that made it keeps
+        (see the module docstring).
         """
         if isinstance(ref, AccumulatorRef):
             try:
@@ -788,6 +792,10 @@ class Backend:
         status = self._views.status(ref.record)
         if status in (Status.FAILED, Status.CANCELLED):
             raise SubmitError(f'{field}: record {ref.record} {status}')
+        if ref.record not in caller.kept:
+            raise SubmitError(
+                f'{field}: record {ref.record} is not kept by this client'
+            )
         return record.spec
 
     # Execution
@@ -955,25 +963,28 @@ class Backend:
 
     def _drop(self, record_id: str, *names: str) -> None:
         """
-        Drop the record's outputs that no client keeps and no pending record
-        that reads them has yet to run; lock held.
+        Drop the record's outputs that nothing keeps: no client, and no
+        pending record or accumulator step that has yet to read them; lock
+        held.
 
-        A record of a state that has completed lets go of the state once its
-        outputs are dropped.
+        A pending record that nothing keeps is cancelled, since its outputs
+        would be dropped the moment they are computed; cancelling lets go of
+        what it reads, so this passes along a chain. A record of a state that
+        has completed lets go of the state once its outputs are dropped.
         """
         if any(record_id in c.kept for c in self._clients.values()):
+            return
+        record = self._views.records[record_id]
+        if record_id not in self._views.finished:
+            if not any(self._readers[(record_id, n)] for n in record.outputs):
+                self._finish(record_id, Status.CANCELLED, 'nothing keeps its outputs')
             return
         for name in names:
             if not self._readers[(record_id, name)]:
                 self._outputs.pop((record_id, name), None)
         state = self._state_of.get(record_id)
-        if (
-            state is not None
-            and record_id in self._views.finished
-            and not any(
-                (record_id, n) in self._outputs
-                for n in self._views.records[record_id].outputs
-            )
+        if state is not None and not any(
+            (record_id, n) in self._outputs for n in record.outputs
         ):
             del self._state_of[record_id]
             self._let_go([state])
@@ -1051,7 +1062,8 @@ class Backend:
 
     def close_client(self, client: str) -> None:
         """
-        End the client and release everything it keeps; stops no work.
+        End the client and release everything it keeps, which cancels the
+        work that nothing else keeps (see :meth:`release`).
 
         A client that has ended is ended again without effect.
         """
@@ -1072,24 +1084,45 @@ class Backend:
 
     def release(self, ids: Iterable[str], client: str) -> None:
         """
-        Release records, stages, and accumulators the client keeps; stops no work.
+        Release records, stages, and accumulators the client keeps.
 
         A released record's outputs are dropped once the pending records that
-        read them have run. A released stage takes no more requests, and those
-        made through it still run through it. A released accumulator takes no
-        more pushes or readers; the pushes logged are still added, and its
-        held state is dropped once its readers are done. Releasing what the
-        client does not keep does nothing.
+        read them have run, and a pending record that nothing else keeps is
+        cancelled (see :meth:`_drop`). A released stage takes no more
+        requests, and those made through it still run through it. A released
+        accumulator takes no more pushes or readers; the pushes up to the
+        last state that a reader pinned are still added, the later ones are
+        dropped, and its held state is dropped once its readers are done.
+        Releasing what the client does not keep does nothing.
         """
         with self._changed:
             caller = self._client(client)
             for i in ids:
                 caller.stages.pop(i, None)
-                caller.accumulators.pop(i, None)
+                if (acc := caller.accumulators.pop(i, None)) is not None:
+                    self._unneeded(acc)
                 if i in caller.kept:
                     caller.kept.remove(i)
                     self._drop(i, *self._views.records[i].outputs)
             self._changed.notify_all()
+
+    def _unneeded(self, acc: _Accumulator) -> None:
+        """
+        Drop the steps of a released accumulator that no reader needs, and
+        let go of what they read; lock held.
+
+        A reader needs the steps up to the state it pinned. The step a worker
+        is doing cannot be stopped, so it stays.
+        """
+        pinned = [upto for held, upto in self._readers if held is acc]
+        done = -1 if acc.added is None else acc.added  # the opening is step 0
+        needed = max(pinned, default=done) - done
+        dropped = []
+        while len(acc.steps) > max(needed, int(acc.busy)):
+            dropped.append(acc.steps.pop()[1])
+        for reads in dropped:
+            self._let_go(reads)
+        self._advance(acc)
 
     def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
         """
@@ -1411,7 +1444,10 @@ class Backend:
             return [self._status(i, proposal) for i in ids]
 
     def failure(self, record_id: str, client: str) -> str | None:
-        """Why a record failed; ``None`` unless it has failed."""
+        """
+        Why a record failed, or why the backend cancelled it; ``None`` for a
+        record pending, completed, or cancelled by a client.
+        """
         with self._changed:
             self._mine(record_id, self._client(client).proposal)
             finished = self._views.finished.get(record_id)
@@ -1471,30 +1507,36 @@ class Backend:
         self, record_id: str, names: Sequence[str] | None, client: str
     ) -> dict[str, Any]:
         """
-        Values of a completed record's outputs, if still kept: of ``names``,
-        or of every output the workflow returned if ``names`` is ``None``.
+        Values of a record's outputs, once it has completed: of ``names``, or
+        of every output the workflow returned if ``names`` is ``None``.
 
-        Those of a record of a state are copies, made while it holds the
-        state, since the next push changes the held state.
+        Only a record whose outputs the client keeps is read. Raises
+        ``LookupError`` for any other, also once the client releases a record
+        whose outputs this waits for, and ``RuntimeError`` if the record fails
+        or is cancelled.
         """
         with self._changed:
-            record = self._mine(record_id, self._client(client).proposal)
+            caller = self._client(client)
+            record = self._mine(record_id, caller.proposal)
+            self._changed.wait_for(
+                lambda: (
+                    record_id not in caller.kept or record_id in self._views.finished
+                )
+            )
+            if record_id not in caller.kept:
+                raise LookupError(f'record {record_id} is not kept by this client')
+            finished = self._views.finished[record_id]
+            if finished.status is not Status.COMPLETED:
+                raise RuntimeError(
+                    f'record {record_id} {finished.status}: {finished.failure}'
+                )
             if names is None:
                 names = [
                     n
                     for n in record.outputs
                     if self._outputs.get((record_id, n)) is not _OMITTED
                 ]
-            values = {n: self._value(record.ref(n)) for n in names}
-            if record_id not in self._state_of:
-                return values
-            read = [(record_id, n) for n in names]
-            self._readers.update(read)
-        try:
-            return copy.deepcopy(values)
-        finally:
-            with self._changed:
-                self._let_go(read)
+            return {n: self._value(record.ref(n)) for n in names}
 
     def accumulator_outputs(
         self, accumulator_id: str, names: Sequence[str] | None, client: str

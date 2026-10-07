@@ -20,8 +20,10 @@ datasets. So a GUI application can make every other call from its UI thread.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
-ends. Releasing and ending stop no work: a pending request still runs, and
-keeps the values it reads until it has run.
+ends. A pending request keeps the values it reads until it has run. Work that
+nothing keeps any more is cancelled: a pending record whose outputs neither
+its client nor a pending request keeps. A client reads, and its requests
+reference, only the outputs it keeps.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
 
 from .backend import Backend, Entry
 from .datasets import DatasetSource, Selector
-from .records import Record, Request, Row, SpecId, Status, Template
+from .records import Record, Request, Row, SpecId, Template
 
 
 def _items(what: Any) -> list[Any]:
@@ -223,7 +225,8 @@ class Client:
 
     def close(self) -> None:
         """
-        End the client: release everything it keeps, and stop no work.
+        End the client: release everything it keeps, which cancels the
+        work that nothing else keeps.
 
         A client that owns its backend then closes it, which waits until no
         record is pending and every push is added.
@@ -378,10 +381,11 @@ class Client:
         Release records, stages, or accumulators: one, a list, or a dict.
 
         A released record's outputs are dropped once the pending requests that
-        read them have run; the record stays. A released stage takes no more
-        calls. A released accumulator takes no more pushes or readers; the
-        pushes made before are still added, and its state is dropped once its
-        readers are done. Releasing stops no work.
+        read them have run; the record stays. A pending record that nothing
+        else keeps is cancelled. A released stage takes no more calls. A
+        released accumulator takes no more pushes or readers; the pushes up
+        to the last state a pending read pinned are still added, the later
+        ones are dropped, and its state is dropped once its readers are done.
         """
         self._backend.release([x.id for x in _items(what)], client=self._id)
 
@@ -392,19 +396,16 @@ class Client:
         The value of an output, or every output returned, by name, if ``name``
         is None; an optional output that was not returned is left out.
 
-        A record's, once it has completed. An accumulator's are those of its
+        A record's, once it has completed, if the client keeps it; raises
+        ``LookupError`` for a record it does not keep, and ``RuntimeError``
+        for one that fails or is cancelled. An accumulator's are those of its
         state after the pushes so far, once they are added, copied, so that
-        like a record's they do not change. So are those of the record of a
-        state, which are kept only until the requests that read them have run.
+        like a record's they do not change.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
             values = self._backend.accumulator_outputs(what.id, names, self._id)
         else:
-            (status,) = self._backend.wait([what.id], self._id)
-            if status is not Status.COMPLETED:
-                failure = self._backend.failure(what.id, self._id)
-                raise RuntimeError(f'record {what.id} {status}: {failure}')
             values = self._backend.outputs(what.id, names, self._id)
         return values if name is None else values[name]
 
