@@ -31,7 +31,7 @@ total = client.freeze(volume, persist=True)               # the last state as a 
 
 The README with ADR 0008 has three problems (Simon, review of #47):
 
-1. **Accumulators differ from other workflows.** ADR 0008 gives the record of a state four rules that no other record has: no client keeps its outputs; only the submission that made it reads it; `client.output` of it copies; on the service, nothing writes it.
+1. **Accumulators differ from other workflows.** ADR 0008 gives the record of a state five rules that no other record has: no client keeps its outputs; only the submission that made it reads it; `client.output` of it copies; on the service, nothing writes it; after a restart, a pending one is computed again as its plain request.
 2. **The service and the user's process keep values by different rules.** The client keeps values in memory in one ([ADR 0002](../adr/0002-the-client-is-the-lifetime.md)); every output is written to a file in the other ([ADR 0005](../adr/0005-the-service-writes-every-output.md)); both have exceptions for states.
 3. **Overhead nobody asked for.** The service writes and reads back every output: the masked counts of story S3 are written 500 times in a batch of 500, and a volume a web UI only looks at is written whole. Copying the last state of an accumulator (`COPY`) needs a second volume.
 
@@ -77,11 +77,12 @@ A workflow cannot tell whether an input is a record's value or an accumulator's 
 ## Persist
 
 - **`client.persist(records, *outputs)`** logs a request to persist the named outputs, or all of them, of records its client keeps. It adds the store as a keeper. The client's own hold stays until it releases the record, so reads stay in memory until then.
-- **`client.submit(..., persist=True)`**, or `persist=('iofq',)` for named outputs, logs the request with the submission. The client does not keep these records. The outputs named are kept until written; the others are dropped when the record completes. Batch reduction and the trigger loop submit this way, so their clients keep nothing.
+- **`client.submit(..., persist=True)`**, or `persist=('iofq',)` for named outputs, logs the request with the submission. The client does not keep these records. The outputs named are kept until written; the others are dropped when the record completes. Batch reduction and the trigger loop submit this way, so their clients keep nothing. A rule names the outputs it persists, all of them by default.
 - **`client.freeze(acc, persist=...)`** does the same for the record of the last state.
 - **Once a persist request is logged**, every client of the proposal can read and reference the values it names, such as a colleague's notebook, an AI agent, or a rule's template. Reads wait for the write.
-- **History** logs each persist request, and a `Written` event when a write ends, with the outputs written or the failure. A record's status is that of its computation. A failed write fails the persist request, not the record, and the request can be made again.
+- **History** logs each persist request, and a `Written` event when a write ends, with the outputs written or the failure. A record's status is that of its computation. A failed write fails the persist request, not the record, and the request can be made again. The failure shows where the value is read: `client.output` of it, and the requests that reference it, fail with the write's reason.
 - **Asking to persist an output already persisted** does nothing.
+- **`client.publish`** reads the value as `client.output` does, and puts it in the catalogue with its provenance. It needs no persist request.
 
 ## Accumulators
 
@@ -100,16 +101,17 @@ Pushes work as now ([ADR 0003](../adr/0003-accumulators-add-in-place.md)): a pus
 The record of a state is made for the submission that reads it.
 No client asked for it, so no client keeps it.
 Its value is kept for the requests of that submission until their workflows have returned.
-The general rules then give each rule that ADR 0008 states on its own:
+The general rules then give four of the rules that ADR 0008 states on its own, and replace the fifth:
 
 | ADR 0008 rule | Follows from |
 |---|---|
 | no client keeps its outputs; they are dropped once its readers have run | the keepers table: no client asked for it, and its readers keep it until they have run |
 | only the submission that made it reads it, since a later reader could deadlock with a later push | a submission reads only values kept for it; this value is kept for no later submission |
 | `client.output` of it copies | `client.output` of it raises, since nothing keeps it for the caller; the accumulator is read instead |
-| on the service, nothing writes it | nothing is written unless persisted, and only values a client keeps can be persisted |
-| a pending one is computed again after a restart | a record that reads a held state fails at a restart (Restart) |
+| on the service, nothing writes it | nothing is written unless persisted, and only records a client asks for can be persisted; no client asks for the record of a state |
+| a pending one is computed again after a restart | replaced: a record that reads a held state fails at a restart, since the held state is gone (Restart); computing it again would reduce every row |
 
+It is listed by `client.records()` and in provenance like any record of the proposal.
 Its edges to the rows' records are provenance, not reads, so it does not matter that the client released those records after pushing them.
 Every wait is still for work logged before the waiter ([ADR 0003](../adr/0003-accumulators-add-in-place.md), Adding), so no wait goes round in a circle.
 
@@ -121,6 +123,7 @@ Every wait is still for work logged before the waiter ([ADR 0003](../adr/0003-ac
 - The plain request of that state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
 - The record reads the held state: until it has finished, it keeps the held state and the pushes up to its state.
 - Its values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
+- Once the record has completed, the accumulator takes no reads either; a read of it is refused and names the record, which is read instead.
 - If the record fails or is cancelled, the accumulator takes no pushes, but can still be read and frozen again, unless it has stopped ([ADR 0003](../adr/0003-accumulators-add-in-place.md), Failures).
 
 `COPY` is not needed: a finished accumulator is frozen.
@@ -139,7 +142,7 @@ The rules above hold in both. What differs:
 |---|---|---|
 | values that are not persisted | in the process's memory | in the service's memory, under a cap per client |
 | a client ends | at `close()`, or with its process | at `close()`, or when its lease runs out (scipp/essapps#34) |
-| the store | a folder given to `local(store=...)`; without one, `persist` raises | the proposal's area |
+| the store | a folder given to `local(store=...)`; without one, `persist` raises; in the first release, only tests pass a store, a fake one in memory | the proposal's area |
 | history | in memory, or in the store's folder | the service's |
 
 On the service:
@@ -198,7 +201,7 @@ V is the size of a large output, such as a spectroscopy volume of hundreds of GB
 - **The service writes every output** ([ADR 0005](../adr/0005-the-service-writes-every-output.md)). It writes and reads back what nobody asked for, every look included, to give unattended work, restarts, and other nodes a value that outlives its client. Those needs are met without it: unattended drivers persist at submission, an upgrade finishes pending persisted work, and the system moves a value to another node only when a reader there needs it.
 - **The service persists by default, with an opt-out for looks.** Writing then stays the default cost, and every interactive client must remember to opt out. The clients that must persist, the trigger loop and batch applications, are framework code.
 - **A cap per client was rejected in [ADR 0005](../adr/0005-the-service-writes-every-output.md)**, because the trigger loop would reach it, and a closing batch client would take its values with it. Both persist at submission, so neither keeps anything under the cap.
-- **ADR 0008 as written.** Its four rules restate rules about values as rules about one kind of record.
+- **ADR 0008 as written.** Its five rules restate rules about values as rules about one kind of record.
 - **Requests read only frozen accumulators**, and looks read the growing state. A request that reads the state in place does what a selection does, with more work done in place, and its record is an ordinary one (Records of states).
 - **Views first, with records made only at persist** (first draft, reviewed 2026-10-07). It needed a second handle type, records of upstream views without values that a later `persist` could not complete, and pinned states kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
 - **`with client.borrow(acc, 'counts') as counts:`**, a read in the client's own code without a copy. Code in the block that waits for a later state of the same accumulator waits for itself, an interactive plot made in the block keeps the data after it, and on the service a borrow is a copy over the network. Likely revisited in some form, for example once jobs that read an accumulator run where it is held (Simon).
@@ -209,5 +212,6 @@ V is the size of a large output, such as a spectroscopy volume of hundreds of GB
 2. **Selections** (scipp/essapps#48): their form, and a look that computes, which runs a request next to the state and returns its result without a record.
 3. **One accumulator per request.** Lift it once the service places a request next to the held states it reads.
 4. **Modified values.** In the user's process, `client.output` returns the value itself. A notebook that modifies it in place breaks the promise every workflow makes, and changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
-5. **The service.** How the cap per client is set, and where a client's values are held when its work spreads over nodes.
-6. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
+5. **A look without waiting.** `client.output(acc)` pins the state after the pushes logged so far and waits until it has been added, as every read waits ([ADR 0003](../adr/0003-accumulators-add-in-place.md)). A driver that looks after every push therefore runs at the pace of the additions (story D7), which holds back pushes that would otherwise queue. A display may want the latest state already added, without waiting; add that form if a story needs it.
+6. **The service.** How the cap per client is set, and where a client's values are held when its work spreads over nodes.
+7. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
