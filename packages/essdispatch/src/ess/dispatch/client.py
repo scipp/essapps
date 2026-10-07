@@ -20,10 +20,11 @@ datasets. So a GUI application can make every other call from its UI thread.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
-ends. A pending request keeps the values it reads until it has run. Work that
-nothing keeps any more is cancelled: a pending record whose outputs neither
-its client nor a pending request keeps. A client reads, and its requests
-reference, only the outputs it keeps.
+ends. A pending request keeps the values it reads until it has run, and the
+store the outputs a client persists. Work that nothing keeps any more is
+cancelled: a pending record whose outputs neither its client, nor a pending
+request, nor a persist request keeps. A client reads, and its requests
+reference, only the outputs it keeps and those persisted.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ import functools
 import queue
 import threading
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -43,6 +44,7 @@ from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
 from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
 from .records import Record, Request, Row, SpecId, Template
+from .store import Store
 
 
 def _items(what: Any) -> list[Any]:
@@ -229,8 +231,9 @@ class Client:
         work that nothing else keeps.
 
         A client that owns its backend then closes it, which waits for the
-        work that still runs: workflows already running, and the pushes that
-        readers of a released accumulator still need.
+        work that still runs: workflows already running, the pushes that
+        readers of a released accumulator still need, and the records and
+        writes that persist requests wait for.
         """
         self._backend.close_client(self._id)
         if self._owns_backend:
@@ -245,6 +248,7 @@ class Client:
         *,
         label: str | None = None,
         member: str | None = None,
+        persist: bool | Sequence[str] = False,
     ) -> Any:
         """
         Submit a spec or a stage with values, or requests.
@@ -252,6 +256,12 @@ class Client:
         Requests may be one, a list, or a dict. The records come back pending,
         in the shape given. Under a label, the keys of a dict become the
         members of their records.
+
+        With ``persist=True``, or the names of outputs, the client does not
+        keep these records: the store keeps the outputs named, and the others
+        are dropped once a record completes. Each record completes once they
+        are written, and fails if the write fails. Unattended drivers submit
+        this way.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -277,7 +287,7 @@ class Client:
                 _items(what), members, _names(what), strict=True
             )
         ]
-        records = self._backend.submit(entries, client=self._id)
+        records = self._backend.submit(entries, client=self._id, persist=persist)
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
@@ -381,10 +391,13 @@ class Client:
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
         return Accumulator(resolved, accumulator_id, outputs, push)
 
-    def freeze(self, accumulator: Accumulator) -> Record:
+    def freeze(
+        self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
+    ) -> Record:
         """
         The record of the accumulator's last state, the state after the pushes
         so far; the client keeps it, and the accumulator takes no more pushes.
+        With ``persist``, the store keeps it instead, as with ``submit``.
 
         The record's outputs are what the held state returns, computed once
         and not copied. Once the record has completed, the accumulator is
@@ -395,7 +408,22 @@ class Client:
         waits for that answer. If the record fails or is cancelled, the
         accumulator can be read and frozen again.
         """
-        return self._backend.freeze(accumulator.id, client=self._id)
+        return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
+
+    def persist(self, records: Any, *outputs: str) -> None:
+        """
+        Write the named outputs, or every output, of records the client keeps
+        to the store, each once it has completed; returns at once.
+
+        The store then keeps them, and every client of the proposal reads and
+        references them. This client keeps its hold until it releases a
+        record, so it reads them from memory until then. If a write fails,
+        the record stays as it is; a read by another client raises with the
+        reason, and this call may be made again. Persisting what is persisted
+        does nothing.
+        """
+        ids = [r.id for r in _items(records)]
+        self._backend.persist(ids, outputs, client=self._id)
 
     def release(self, what: Any) -> None:
         """
@@ -425,9 +453,10 @@ class Client:
         The value of an output, or every output returned, by name, if ``name``
         is None; an optional output that was not returned is left out.
 
-        A record's, once it has completed, if the client keeps it; raises
-        ``LookupError`` for a record it does not keep, and ``RuntimeError``
-        for one that fails or is cancelled. An accumulator's are those of its
+        A record's, once it has completed, if the client keeps it, or once
+        written, if persisted; raises ``LookupError`` for a record it neither
+        keeps nor persisted, or whose write failed, and ``RuntimeError`` for
+        one that fails or is cancelled. An accumulator's are those of its
         state after the pushes so far, once they are added, copied, so that
         like a record's they do not change.
 
@@ -489,14 +518,16 @@ def local(
     datasets: DatasetSource,
     bind: Mapping[WorkflowSpec, Binding | Function],
     submitter: str = 'user',
+    store: Store | None = None,
 ) -> Client:
     """
     A client of its own backend in this process, running the workflows bound here.
 
-    Closing the client closes the backend.
+    Closing the client closes the backend, which waits until what is persisted
+    is written. Without a ``store``, persisting is refused.
     """
     return Client(
-        Backend(datasets, bind),
+        Backend(datasets, bind, store=store),
         proposal=proposal,
         submitter=submitter,
         owns_backend=True,

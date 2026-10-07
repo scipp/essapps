@@ -4,10 +4,12 @@
 The backend's history: an append-only log of what ran, with which inputs,
 and what came of it.
 
-There are four events: a submission, a record that finished, an accumulator
-that opened, and a push into one. A submission that read an accumulator holds
-a record of the plain request of the state it read, before the records that
-read it. The backend's views, such as the records by ID, are built by
+There are six events: a submission, a record that finished, an accumulator
+that opened, a push into one, a request to persist outputs of a record, and a
+write that ended. A submission that read an accumulator, and a freeze, hold a
+record of the plain request of the state read, as the accumulator and its
+number of pushes, before the records that read it; the views list its rows
+when it is read. The backend's views, such as the records by ID, are built by
 applying the events in order, when they are appended and again when a backend
 starts from an existing log.
 
@@ -26,7 +28,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from io import FileIO
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -34,13 +36,33 @@ from .records import Request, Row, Status, Template, as_refs
 
 
 class NewRecord(BaseModel, frozen=True):
-    """One record of a submission, as the backend accepted it."""
+    """
+    One record of a submission, as the backend accepted it.
+
+    ``persist`` names the outputs persisted at submission: the record
+    finishes once they are written.
+    """
 
     id: str
     request: Request
     outputs: tuple[str, ...]
     label: str | None = None
     member: str | None = None
+    persist: tuple[str, ...] = ()
+
+
+class NewStateRecord(BaseModel, frozen=True):
+    """
+    The record of the plain request of an accumulator's state: the
+    accumulator's template with each table filled by the rows of its first
+    ``pushes`` pushes. A freeze names the outputs it persists in ``persist``.
+    """
+
+    id: str
+    accumulator: str
+    pushes: int
+    outputs: tuple[str, ...]
+    persist: tuple[str, ...] = ()
 
 
 class Submitted(BaseModel, frozen=True):
@@ -48,7 +70,7 @@ class Submitted(BaseModel, frozen=True):
     time: datetime
     proposal: str
     submitter: str
-    records: tuple[NewRecord, ...]
+    records: tuple[NewRecord | NewStateRecord, ...]
 
 
 class Finished(BaseModel, frozen=True):
@@ -62,13 +84,16 @@ class Opened(BaseModel, frozen=True):
     """
     An accumulator that opened, with its template as the backend accepted it.
 
-    The template's blanks are the tables that the pushes fill.
+    The template's blanks are the tables that the pushes fill. ``fixed`` holds
+    the template's other values, each typed by its field, defaults filled in:
+    with the rows pushed, they give the plain request of a state.
     """
 
     kind: Literal['opened'] = 'opened'
     accumulator: str
     proposal: str
     template: Template
+    fixed: dict[str, Any]
 
 
 class Pushed(BaseModel, frozen=True):
@@ -79,8 +104,33 @@ class Pushed(BaseModel, frozen=True):
     rows: dict[str, Row]
 
 
-Event = Annotated[Submitted | Finished | Opened | Pushed, Field(discriminator='kind')]
-_event = TypeAdapter(Event)
+class Persist(BaseModel, frozen=True):
+    """A request to persist outputs of a completed or pending record."""
+
+    kind: Literal['persist'] = 'persist'
+    record: str
+    outputs: tuple[str, ...]
+
+
+class Written(BaseModel, frozen=True):
+    """
+    A write of outputs of a record that ended: ``failure`` says why it failed,
+    or is ``None``. ``omitted`` names the outputs among ``outputs`` that the
+    workflow did not return, which have no value to write.
+    """
+
+    kind: Literal['written'] = 'written'
+    record: str
+    outputs: tuple[str, ...]
+    omitted: tuple[str, ...] = ()
+    failure: str | None = None
+
+
+Event = Annotated[
+    Submitted | Finished | Opened | Pushed | Persist | Written,
+    Field(discriminator='kind'),
+]
+_event: TypeAdapter[Event] = TypeAdapter(Event)
 
 
 def _with_refs(event: Event) -> Event:
@@ -93,13 +143,17 @@ def _with_refs(event: Event) -> Event:
                         'request': Request(r.request.spec, as_refs(r.request.params))
                     }
                 )
+                if isinstance(r, NewRecord)
+                else r
                 for r in event.records
             )
             return event.model_copy(update={'records': records})
         case Opened():
             params = as_refs(event.template.params)
             template = dataclasses.replace(event.template, params=params)
-            return event.model_copy(update={'template': template})
+            return event.model_copy(
+                update={'template': template, 'fixed': as_refs(event.fixed)}
+            )
         case Pushed():
             return event.model_copy(update={'rows': as_refs(event.rows)})
     return event

@@ -18,7 +18,7 @@ from ess.dispatch import (
     TriggerLoop,
     apply,
 )
-from ess.dispatch.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets, FakeStore
 from ess.spec import Array, NexusFile, WorkflowSpec
 
 
@@ -63,6 +63,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             LOAD: lambda run: {'value': run},
             SUBTRACT: lambda run, can: {'value': run - can},
         },
+        store=FakeStore(),
     )
     yield Client(backend, proposal='p1', submitter='anna')
     backend.close()
