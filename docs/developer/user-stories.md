@@ -19,12 +19,11 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `VANADIUM` | `run`, `scale=1.0` | `normalization` | the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `runs`: a table of rows with a field `run`; `scale=1.0` | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs`, `background_runs`: tables of rows with a field `run` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | a copy of the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
-| `ANGLE` | `run` | `counts` | the counts | a reduction of one run into a volume |
+| `ANGLE` | `run` | `counts` | a copy of the counts | a reduction of one run into a volume |
 | `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
 | `VOLUME` | `runs`: a table of rows with a field `run` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
-| `COPY` | `data` | `data` | a copy of `data` | a copy of a state of an accumulator that a client keeps |
 | `STITCH` | `runs`: a table of rows with a field `run`; `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
@@ -32,6 +31,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 The binding of `IOFQ` is the function `iofq`.
 `NORMALIZE`, `BACKGROUND`, and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so a push into an accumulator adds to the sums instead of keeping the rows.
 `PARTS_SUM` is bound to `combine(operator.add)`.
+No toy spec returns an output that shares memory with an input.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
 ## Conventions
@@ -39,7 +39,7 @@ A story may add a toy spec to this table; it must take runs directly and be chec
 Fixtures: `client` is a client for proposal `p1`.
 In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), which is designed and not implemented.
-The story tests make a `Client` of one in-process `Backend` for both.
+The story tests make a `Client` of one in-process `Backend` for both, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
 `other` is a client of a second backend.
 Every backend in the stories reads the same datasets and publishes to the same `scicat`.
@@ -50,7 +50,7 @@ It has a helper for tests: `datasets.add_published(entry)` lists a published ent
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets: the specs it offers and the software versions its records name.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets and store: the specs it offers and the software versions its records name. The upgrade ends every client of the backend before it.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use this one:
@@ -289,16 +289,16 @@ Actor: spectroscopy user in the web UI. Goal: drag through cuts of a Q-E volume,
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
 volume = client.compute(ANGLE, {'run': run})                 # stands in for a Q-E volume
-cuts = [client.output(volume, 'counts', index=i) for i in range(4)]   # dragging a slider
+cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]   # dragging a slider
 fit = client.compute(CUT, {'data': volume.ref('counts'), 'index': 2})
 
 assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
 assert client.output(fit, 'cut').value == 3.0
-assert client.records() == [volume, fit]                     # the views made no record
+assert client.records() == [volume, fit]                     # the selections made no record
 ```
 
-Gap: the form of a view waits for the plotting work; `client.output(..., index=)` stands in for it.
-The chosen cut is a parameter of the next request. How fast a view comes back is system story B4.
+The chosen cut is a parameter of the next request. How fast a selection comes back is system story B4.
+Gap: a selection only indexes; a look that computes, such as a projection, waits for the plotting work (README.md open question 4).
 
 ### B6. Find last week's result
 
@@ -398,7 +398,7 @@ runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperat
 corrupt(runs[1])                                                     # 260K
 template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
 requests = apply(template, runs, client.datasets, member_field='temperature')
-scan = client.compute(requests, label='scan')                        # keyed by temperature
+scan = client.compute(requests, label='scan', persist=True)         # keyed by temperature
 
 assert [client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')] == [
     [4.0], [12.0], [20.0]]
@@ -419,15 +419,15 @@ Actor: NMX user. Goal: submit thirty long runs, close the laptop, and the next d
 runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
 corrupt(runs['7'])                                                   # the transfer was cut short
 for member, run in runs.items():
-    client.submit(IOFQ, {'run': run}, label='night', member=member)
+    client.submit(IOFQ, {'run': run}, label='night', member=member, persist=True)
 
 morning = connect()                                                  # the next day, a new client
 night = {r.member: r for r in morning.records(label='night')}
 failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
 reasons = morning.failure(failed)
 repair(runs['7'])                                                    # the transfer is repeated
-reruns = [morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member)
-          for r in failed]
+reruns = [morning.submit(r.request.spec, r.request.params, label=r.label, member=r.member,
+                         persist=True) for r in failed]
 morning.wait(reruns)
 
 assert [r.member for r in failed] == ['7']
@@ -439,6 +439,8 @@ assert morning.status(failed) == ['failed']                          # the failu
 assert len(morning.records(label='night')) == 31                     # and so does its record
 ```
 
+The night's client keeps nothing: each output is written to the store when its record completes, and the morning client reads it there.
+
 Gap: labels and members on records are tentative, as in D1.
 That the runs continue while no client is connected is system story D2.
 
@@ -449,10 +451,12 @@ Actor: user of the shared service. Goal: cancel a running batch of 500 with a wr
 ```python
 runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
 wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
-first = client.submit(apply(wrong, runs, client.datasets, member_field='run'), label='scan')
+first = client.submit(apply(wrong, runs, client.datasets, member_field='run'), label='scan',
+                      persist=True)
 client.cancel(first)
 fixed = replace(wrong, params={'threshold': 0.5})
-second = client.compute(apply(fixed, runs, client.datasets, member_field='run'), label='scan')
+second = client.compute(apply(fixed, runs, client.datasets, member_field='run'), label='scan',
+                        persist=True)
 
 assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
 assert [client.output(r, 'iofq').values.tolist() for r in second.values()] == 500 * [[2.0, 2.0]]
@@ -482,7 +486,7 @@ Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again
 ```python
 template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
-client.compute(apply(template, runs, client.datasets, member_field='run'), label='scan')
+client.compute(apply(template, runs, client.datasets, member_field='run'), label='scan', persist=True)
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
@@ -492,7 +496,7 @@ with pytest.raises(SubmitError, match='threshold'):
     client.submit(renamed, label='scan')
 moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
 requests = apply(moved, runs, client.datasets, member_field='run')
-after = list(client.compute(requests, label='scan').values())
+after = list(client.compute(requests, label='scan', persist=True).values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
     [2.0, 7.0], [0.0, 2.0, 3.0, 4.0]]
@@ -502,7 +506,7 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
-The service wrote `before[0]`'s output to a file when the record completed, so it can be read weeks later, until the proposal's history is dropped ([system.md](system.md), The service).
+`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped ([system.md](system.md), The service).
 
 ### D7. Rotation scan over three hundred angles
 
@@ -517,27 +521,23 @@ for n in range(1, 301):
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-    volume.push({'runs': {'run': run}})                        # added once the previous cut has run
+    volume.push({'runs': {'run': run}})                        # added once the previous cut is copied
     pushed.append(run)
-    cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0},
-                              label='cut', member='17'))
-total = client.compute(COPY, {'data': volume.ref('counts')})
+    cuts.append(client.output(volume, 'counts', select={'q': 0}))   # a copy of the cut; no record
+total = client.freeze(volume, persist=True)                    # the last state, written once
 
-assert [client.output(c, 'cut').value for c in cuts] == [float(k) for k in range(1, 301)]
-assert client.output(total, 'data').values.tolist() == [300.0, 45150.0]
-provenance = client.provenance(total)
-assert [r.request for r in provenance.records()] == [          # the runs, in push order
-    Request(VOLUME, {'runs': [{'run': run} for run in pushed]})]
-states = [r for r in client.records() if r.spec.name == VOLUME.name]  # one per read
-assert [len(r.request.params['runs']) for r in states] == [*range(1, 301), 300]
-assert len(provenance.datasets()) == 300                       # run 5, measured again, once
+assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
+assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
+assert total.request == Request(VOLUME, {'runs': [{'run': run} for run in pushed]})   # push order
+assert client.records() == [total]                             # the cuts made no record
+assert len(client.provenance(total).datasets()) == 300         # run 5, measured again, once
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
-Each cut pins the state after its push and reads a record of that state, and the next push is added once that cut has run.
-`COPY` reads the record of the last state, the plain request over the 300 rows, and copies its volume.
-On the service, each cut is written to a file; where the volume is held is open (README.md open question 5).
+Each cut pins the state after its push and copies only the selected cut, and the next push is added once the copy is made.
+`freeze` turns the last state into a record without a copy: its value is the volume itself, written once to the store.
+Where the service holds the volume is open (README.md open question 5).
 That a cut is ready within seconds of each run, and how history grows with the runs, is system story D7.
 
 ## E. Automatic reduction
@@ -568,7 +568,7 @@ assert client.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The service writes each curve to a file when its record completes, so any client of the proposal reads it later ([system.md](system.md), The service).
+The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve later ([system.md](system.md), The service).
 
 ### E2. Automatic reduction goes quiet
 
@@ -656,15 +656,15 @@ Actor: user. Goal: learn before anything runs that the exact result is not repro
 
 ```python
 result = client.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0]), 'threshold': 1.5})
-upgrade(versions={'scipp': '99.0'})
+upgraded = upgrade(versions={'scipp': '99.0'})                 # ends client
 
 with pytest.raises(SubmitError, match='scipp'):
-    client.recompute(result)                                   # in the record's environment
-again = client.compute(result.request.spec, result.request.params)   # in the current one
+    upgraded.recompute(result)                                 # in the record's environment
+again = upgraded.compute(result.request.spec, result.request.params)   # in the current one
 
 assert again.request == result.request
-assert client.provenance(again).software['scipp'] == '99.0'
-assert client.provenance(result).software['scipp'] != '99.0'
+assert upgraded.provenance(again).software['scipp'] == '99.0'
+assert upgraded.provenance(result).software['scipp'] != '99.0'
 ```
 
 Gap: `client.recompute(record)`, which runs a request in its record's environment or refuses before running, is deferred.
@@ -723,8 +723,9 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **The service** (sections D and E): designed and not implemented; the file format of each output type and the folder layout of its files are open (scipp/essapps#23).
-- **Views** (B4): the form of a read of part of an output waits for the plotting work.
+- **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open (scipp/essapps#23).
+- **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
+- **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two held states; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
