@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """What a client keeps: its stages, its accumulators, and the values of its records."""
 
+import gc
 import operator
 import re
 import statistics
@@ -14,6 +15,7 @@ from typing import Any, Self
 
 import numpy as np
 import pytest
+import scipp as sc
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ess.dispatch import (
@@ -36,6 +38,7 @@ from ess.dispatch.testing import FakeDatasets
 from ess.spec import (
     AccumulatorRef,
     Array,
+    ArraySpec,
     Function,
     NexusFile,
     OpaqueFile,
@@ -1726,7 +1729,8 @@ class Subtracting:
     the sum of both. ``computed`` counts the ``outputs`` calls that computed.
     A push sets ``adding``, and adds while ``go`` is set. An
     ``outputs`` call sets ``computing``, and computes while ``compute`` is set;
-    with ``failing`` set, the next one fails.
+    with ``failing`` set, the next one fails. ``held`` refers weakly to each
+    held state made.
     """
 
     def __init__(self) -> None:
@@ -1738,6 +1742,7 @@ class Subtracting:
         self.compute = threading.Event()
         self.compute.set()
         self.failing = False
+        self.held: list[weakref.ref[_Sides]] = []
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
         def compute(**values: Any) -> dict[str, Any]:
@@ -1750,7 +1755,9 @@ class Subtracting:
         return compute
 
     def held_state(self, fixed: Mapping[str, Any]) -> Any:
-        return _Sides(self)
+        state = _Sides(self)
+        self.held.append(weakref.ref(state))
+        return state
 
 
 class _Sides:
@@ -2306,3 +2313,233 @@ def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(
 
         assert client.output(copied, 'value').tolist() == total.tolist() == [1.0]
         assert calls == [1]
+
+
+# Freeze
+
+
+def test_a_freeze_is_the_record_of_the_last_state_computed_once(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    sides.push({'backgrounds': loads[1].refs('value')})
+    looked = client.output(sides, 'difference')
+    plain = client.provenance(sides).request
+    total = client.freeze(sides)
+
+    assert total.request == plain
+    assert client.output(total, 'difference').tolist() == looked.tolist() == [-1.0]
+    assert subtracting.computed == 1  # the look and the freeze read one state
+    assert total in client.records()
+
+
+def test_a_push_after_a_freeze_is_refused_while_its_record_is_pending(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    subtracting.compute.clear()
+    total = client.freeze(sides)
+
+    with pytest.raises(SubmitError, match=f'frozen as record {total.id}'):
+        sides.push({'samples': loads[1].refs('value')})
+    with pytest.raises(SubmitError, match=f'frozen as record {total.id}'):
+        client.freeze(sides)
+    subtracting.compute.set()
+    assert client.output(total, 'total').tolist() == [1.0]
+
+
+def test_a_frozen_accumulator_is_read_through_its_record(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    total = client.freeze(sides)
+    client.wait(total)
+
+    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+        client.output(sides)
+    with pytest.raises(SubmitError, match=f'read record {total.id} instead'):
+        _copy(client, sides, 'difference')
+    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+        client.provenance(sides)
+    copied = client.compute(COPY, {'value': total.ref('difference')})
+    assert client.output(copied, 'value').tolist() == [1.0]
+
+
+def test_templates_and_rows_reference_a_frozen_record(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    first = _total(client)
+    first.push({'parts': loads[0].refs('value')})
+    first.push({'parts': loads[1].refs('value')})
+    frozen = client.freeze(first)
+    second = _total(client)
+    second.push({'parts': frozen.refs('value')})
+    second.push({'parts': loads[0].refs('value')})
+    staged = client.stage(Template(COPY, params={'value': frozen.ref('value')}))
+
+    assert client.output(second, 'value').tolist() == [4.0]
+    assert client.output(client.compute(staged, {}), 'value').tolist() == [3.0]
+
+
+def test_a_freeze_whose_plain_request_would_be_refused_is_refused(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    both = client.accumulator(Template(BOTH, blanks=('samples', 'backgrounds')))
+    both.push({'samples': loads[0].refs('value')})
+
+    with pytest.raises(SubmitError, match='backgrounds'):
+        client.freeze(both)
+    both.push({'backgrounds': loads[1].refs('value')})  # takes pushes again
+    total = client.freeze(both)
+    assert client.output(total, 'difference').tolist() == [-1.0]
+
+
+def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    subtracting.compute.clear()
+    cancelled = client.freeze(sides)
+    client.release(cancelled)  # nothing keeps it any more
+    subtracting.compute.set()
+
+    assert client.wait(cancelled) == Status.CANCELLED
+    with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
+        sides.push({'backgrounds': loads[1].refs('value')})
+    assert client.output(sides, 'total').tolist() == [1.0]
+    again = client.freeze(sides)
+    assert client.output(again, 'total').tolist() == [1.0]
+
+
+def test_a_frozen_held_state_is_dropped_once_its_readers_are_done(
+    in_place: Client,
+    loads: list[Record],
+    copying: Copying,
+    subtracting: Subtracting,
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    copying.go.clear()
+    copied = _copy(client, sides, 'difference')  # pins the same state
+    copying.started.wait(timeout=5)
+    total = client.freeze(sides)
+    client.wait(total)
+
+    assert subtracting.held[0]() is not None  # the copy still reads the state
+    copying.go.set()
+    client.wait(copied)
+    client.release(copied)
+    gc.collect()
+    assert subtracting.held[0]() is None
+    assert client.output(total, 'difference').tolist() == [1.0]
+
+
+# Selections
+
+
+class Grid(BaseModel):
+    value: Array(ArraySpec(dims=('x', 'y')))  # type: ignore[valid-type]
+    loose: Array()  # type: ignore[valid-type]
+    text: OpaqueFile
+
+
+GRID = _spec('grid', RunParams, Grid)
+
+
+def grid(run: float) -> dict[str, Any]:
+    values = np.arange(6.0).reshape(3, 2) * run
+    value = sc.array(dims=['x', 'y'], values=values)
+    return {'value': value, 'loose': [run], 'text': 'a'}
+
+
+@pytest.fixture
+def grids(datasets: FakeDatasets) -> Iterator[Client]:
+    """A client of a backend with GRID, a 3x2 array per run, and TOTAL over them."""
+    bind = {GRID: grid, TOTAL: combine(operator.add)}
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        yield client
+
+
+def test_a_selection_copies_part_of_an_output_and_makes_no_record(
+    grids: Client,
+) -> None:
+    client = grids
+    record = client.compute(GRID, {'run': dataset(run=1)})
+    row = client.output(record, 'value', select={'x': 1})
+    corner = client.output(record, 'value', select={'x': slice(0, 2), 'y': 1})
+    row.values[0] = 99.0
+
+    assert row.dims == ('y',)
+    assert corner.values.tolist() == [1.0, 3.0]
+    assert client.output(record, 'value')['x', 1].values.tolist() == [2.0, 3.0]
+    assert client.records() == [record]
+
+
+def test_a_selection_of_an_accumulator_copies_part_of_its_current_state(
+    grids: Client,
+) -> None:
+    client = grids
+    runs = [client.compute(GRID, {'run': dataset(run=n)}) for n in (1, 2)]
+    total = _total(client)
+    cuts = []
+    for run in runs:
+        total.push({'parts': run.refs('value')})
+        cuts.append(client.output(total, 'value', select={'y': 1}))
+
+    assert [c.values.tolist() for c in cuts] == [[1.0, 3.0, 5.0], [3.0, 9.0, 15.0]]
+    assert client.records() == runs
+
+
+def test_a_selection_is_refused_for_an_output_that_is_not_an_array(
+    grids: Client,
+) -> None:
+    client = grids
+    record = client.compute(GRID, {'run': dataset(run=1)})
+
+    with pytest.raises(ValueError, match='array'):
+        client.output(record, 'text', select={'x': 0})
+    with pytest.raises(ValueError, match='array'):
+        client.output(record, 'loose', select={'x': 0})  # declared, not returned
+    with pytest.raises(ValueError, match='name of an output'):
+        client.output(record, select={'x': 0})
+
+
+def test_a_selection_is_refused_for_a_dimension_the_output_lacks(
+    grids: Client,
+) -> None:
+    client = grids
+    record = client.compute(GRID, {'run': dataset(run=1)})
+    total = _total(client)
+    total.push({'parts': record.refs('value')})
+
+    with pytest.raises(ValueError, match=r"\['z'\]"):
+        client.output(record, 'value', select={'z': 0})  # as the spec declares
+    with pytest.raises(ValueError, match=r"\['z'\]"):
+        client.output(total, 'value', select={'z': 0})  # as the value has it
+
+
+def test_a_selection_out_of_range_raises_what_the_slice_raises(
+    grids: Client,
+) -> None:
+    client = grids
+    record = client.compute(GRID, {'run': dataset(run=1)})
+    total = _total(client)
+    total.push({'parts': record.refs('value')})
+
+    with pytest.raises(IndexError):
+        client.output(record, 'value', select={'x': 3})
+    with pytest.raises(IndexError):
+        client.output(total, 'value', select={'x': 3})
+    total.push({'parts': record.refs('value')})  # the read let go of the state
+    assert client.output(total, 'value', select={'x': 2}).values.tolist() == [8.0, 10.0]

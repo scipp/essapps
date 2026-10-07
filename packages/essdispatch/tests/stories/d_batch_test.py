@@ -10,7 +10,7 @@ import pytest
 
 from ess.dispatch import Client, Request, Selector, SubmitError, Template, apply
 
-from .conftest import COPY, CUT, IOFQ, IOFQ_V2, VOLUME, Measure
+from .conftest import IOFQ, IOFQ_V2, VOLUME, Measure
 
 
 def test_d1_temperature_scan(
@@ -143,26 +143,16 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        volume.push({'runs': {'run': run}})  # added once the previous cut has run
+        volume.push({'runs': {'run': run}})  # added once the previous cut is copied
         pushed.append(run)
-        cuts.append(
-            client.submit(
-                CUT,
-                {'data': volume.ref('counts'), 'index': 0},
-                label='cut',
-                member='17',
-            )
-        )
-    total = client.compute(COPY, {'data': volume.ref('counts')})
+        cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
+    total = client.freeze(volume)  # the story persists it; these fixtures have no store
 
-    assert [client.output(c, 'cut').value for c in cuts] == [
-        float(k) for k in range(1, 301)
-    ]
-    assert client.output(total, 'data').values.tolist() == [300.0, 45150.0]
+    assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
+    assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
+    assert total.request == Request(  # push order
+        VOLUME, {'runs': [{'run': run} for run in pushed]}
+    )
+    assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)
-    assert [r.request for r in provenance.records()] == [  # the runs, in push order
-        Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),
-    ]
-    states = [r for r in client.records() if r.spec.name == VOLUME.name]
-    assert [len(r.request.params['runs']) for r in states] == [*range(1, 301), 300]
     assert len(provenance.datasets()) == 300  # run 5, measured again, once

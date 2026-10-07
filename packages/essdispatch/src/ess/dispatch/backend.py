@@ -93,21 +93,31 @@ state, as a call through a stage is from what the stage holds: its outputs
 are what the binding returns, not a copy, and may share memory with the held
 state, which the next push may change in place. They are kept until the
 requests that read them have run, and the record holds the state as its
-reader until then. Reading the outputs of the accumulator copies them. So the
-next push waits until the readers of the state before it are done, since the
-held state cannot go back to that state and no reader may see its outputs
-change: the records of that state, until the requests that read them have
-run, even those cancelled while they run, and the reads of its outputs in
-progress. Every wait is for work logged before the waiter: a request waits
-for records submitted before it and for pushes logged before its submission,
-and a push waits for the records of the state before it and the requests of
-their submissions, all logged before the push, since only the submission that
-made a record of a state reads it.
+reader until then. Reading the outputs of the accumulator copies them, or
+only the part that a selection names. So the next push waits until the
+readers of the state before it are done, since the held state cannot go back
+to that state and no reader may see its outputs change: the records of that
+state, until the requests that read them have run, even those cancelled while
+they run, and the reads of its outputs in progress. Every wait is for work
+logged before the waiter: a request waits for records submitted before it and
+for pushes logged before its submission, and a push waits for the records of
+the state before it and the requests of their submissions, all logged before
+the push, since only the submission that made a record of a state reads it.
 So no wait goes round in a circle.
 Releasing the accumulator or ending its client keeps the pushes up to the last
 state a reader still holds, which are still added, and drops the later ones,
 again each time a reader lets go; the held state is dropped once its readers
 are done.
+
+A freeze is a read whose record of the state the client keeps. From the
+moment it pins the state, the accumulator takes no more pushes. Once that
+record has completed, it holds the outputs of the last state, the accumulator
+takes no readers, and its held state is dropped once its last reader is done.
+A freeze whose record fails or is cancelled leaves the accumulator readable,
+and it may be frozen again.
+
+A selection reads part of an array output of a record or an accumulator's
+state by dimension name, and copies only that part.
 """
 
 from __future__ import annotations
@@ -135,6 +145,7 @@ from ess.spec import (
     Binding,
     DataField,
     DatasetRef,
+    Format,
     Function,
     HeldState,
     OutputRef,
@@ -247,6 +258,28 @@ def _returned(value: Any, where: str) -> Any:
     if value is _OMITTED:
         raise LookupError(f'{where}: the workflow did not return it')
     return value
+
+
+Selection = Mapping[str, int | slice]
+"""Part of an array: an index or a slice for each dimension it names."""
+
+
+def _selected(value: Any, select: Selection, where: str) -> Any:
+    """
+    A copy of the part of an array that ``select`` names; needs no lock.
+
+    An array is a value with named dimensions that slices as
+    ``value[dim, index]``, such as a scipp variable or data array. An index
+    out of range raises what the slice raises.
+    """
+    dims = getattr(value, 'dims', None)
+    if not isinstance(dims, tuple):
+        raise ValueError(f'{where}: select= needs an array, not {type(value).__name__}')
+    if unknown := set(select) - set(dims):
+        raise ValueError(f'{where}: no dimension {sorted(unknown)} in {dims}')
+    for dim, index in select.items():
+        value = value[dim, index]
+    return value.copy()
 
 
 def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
@@ -372,7 +405,10 @@ class _Accumulator:
     overwrite each other's, which costs only another validation.
     ``stopped`` says why the accumulator takes no more pushes or readers, or
     is ``None``. ``released`` says its client released it or ended: it then
-    keeps only the steps that a reader still needs.
+    keeps only the steps that a reader still needs. ``frozen`` names the
+    record of its last freeze, from the moment the freeze pins the state:
+    the accumulator then takes no more pushes, and no readers once that
+    record has completed.
 
     :meth:`outputs` computes every output of the current state the first time
     a reader reads it, and keeps them until :meth:`drop`, which the backend
@@ -394,6 +430,7 @@ class _Accumulator:
         self.checked: tuple[int, Request | str] | None = None
         self.stopped: str | None = None
         self.released = False
+        self.frozen: str | None = None
         self._declared = tuple(outputs.model_fields)
         self._required = _required(outputs)
         self._computing = threading.Lock()
@@ -430,6 +467,14 @@ class _Accumulator:
         held, and no reader left, so none computes.
         """
         self._computed = None
+
+    def end(self) -> None:
+        """
+        Drop the held state once the record of its frozen state has its
+        outputs, and no reader is left; the backend's lock held.
+        """
+        self._computed = None
+        del self.state
 
 
 def _state_key(accumulator_id: str, upto: int) -> str:
@@ -713,12 +758,13 @@ class Backend:
         by ID, as the accumulator and its number of pushes logged, each held
         as a reader holds it until the caller lets go of it; lock held.
 
-        An accumulator that is released, unknown, or stopped is left out.
+        An accumulator that is released, unknown, or takes no readers is left
+        out.
         """
         pinned = {}
         for i in ids:
             acc = caller.accumulators.get(i)
-            if acc is not None and acc.stopped is None:
+            if acc is not None and self._unreadable(acc) is None:
                 pinned[i] = (acc, len(self._views.pushes.get(i, ())))
         self._readers.update(pinned.values())
         return pinned
@@ -907,8 +953,14 @@ class Backend:
         with self._changed:
             self._complete(record_id, outputs)
             # A record of a state that completed lets go of the state in
-            # _drop, once its outputs are dropped; any other record here.
-            if state is None or self._views.status(record_id) is not Status.COMPLETED:
+            # _drop, once its outputs are dropped; any other record here. The
+            # record of a freeze holds the outputs of the accumulator's last
+            # state, which takes no more pushes, so it lets go here too.
+            completed = self._views.status(record_id) is Status.COMPLETED
+            if state is None or not completed:
+                self._let_go(reads)
+            elif state[0].frozen == record_id:
+                del self._state_of[record_id]
                 self._let_go(reads)
 
     def _call(
@@ -1055,6 +1107,9 @@ class Backend:
             try:
                 while self._unread_values:
                     match self._unread_values.popleft():
+                        case (_Accumulator() as acc, _) if self._unreadable(acc):
+                            if acc.stopped is None:  # frozen
+                                acc.end()
                         case (_Accumulator() as acc, _) if acc.released:
                             self._unneeded(acc)
                         case (_Accumulator() as acc, _):
@@ -1331,10 +1386,64 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
+            if acc.frozen is not None:
+                raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
             request = Request(acc.template.spec, {t: [r] for t, r in stored.items()})
             self._check_reads(Entry(request), request, caller, {})
             self._append(Pushed(accumulator=accumulator_id, rows=stored))
             self._queue(acc, typed)
+
+    def freeze(self, accumulator_id: str, client: str) -> Record:
+        """
+        Freeze the accumulator: the record of the plain request of its state
+        after the pushes logged so far, which the client keeps.
+
+        The freeze pins that state as a read does, and refuses every push
+        from then on. Its plain request is checked outside the lock; if it
+        would be refused, so is the freeze, and the accumulator takes pushes
+        again. The record's outputs are those of the held state, computed
+        once and not copied; once it has completed, the accumulator takes no
+        readers, and its held state is dropped when its last reader is done.
+        If the record fails or is cancelled, the accumulator may be read and
+        frozen again, but takes no pushes.
+        """
+        record_id = uuid.uuid4().hex
+        with self._changed:
+            acc = self._accumulator(self._client(client), accumulator_id)
+            if acc.frozen is not None and self._views.status(acc.frozen) is (
+                Status.PENDING
+            ):
+                raise SubmitError(f'the accumulator is frozen as record {acc.frozen}')
+            before, acc.frozen = acc.frozen, record_id
+            upto = len(self._views.pushes.get(accumulator_id, ()))
+            self._readers[(acc, upto)] += 1
+        try:
+            if isinstance(plain := self._check_state(acc, upto), str):
+                raise SubmitError(plain)
+            with self._changed:
+                caller = self._client(client)
+                self._accumulator(caller, accumulator_id)  # not released or stopped
+                outputs = tuple(self._specs[plain.spec].outputs.model_fields)
+                new = NewRecord(id=record_id, request=plain, outputs=outputs)
+                self._append(
+                    Submitted(
+                        time=datetime.now(UTC),
+                        proposal=caller.proposal,
+                        submitter=caller.submitter,
+                        records=(new,),
+                    )
+                )
+                caller.kept.add(record_id)
+                self._state_of[record_id] = (acc, upto)
+                self._schedule(record_id)
+                return self._views.records[record_id]
+        except BaseException:  # a validator may raise anything
+            with self._changed:
+                acc.frozen = before
+            raise
+        finally:
+            with self._changed:
+                self._let_go([(acc, upto)])
 
     def _pushable(
         self, accumulator_id: str, rows: Mapping[str, Row], client: str
@@ -1495,12 +1604,26 @@ class Backend:
         return result
 
     def _accumulator(self, caller: _Client, accumulator_id: str) -> _Accumulator:
+        """The client's accumulator, if it takes readers; lock held."""
         acc = caller.accumulators.get(accumulator_id)
         if acc is None:
             raise SubmitError('the accumulator was released or is unknown')
-        if acc.stopped is not None:
-            raise SubmitError(acc.stopped)
+        if (reason := self._unreadable(acc)) is not None:
+            raise SubmitError(reason)
         return acc
+
+    def _unreadable(self, acc: _Accumulator) -> str | None:
+        """
+        Why the accumulator takes no readers, or ``None``; lock held. Once the
+        record of a freeze has completed, that record is read instead.
+        """
+        if acc.stopped is not None:
+            return acc.stopped
+        if acc.frozen is not None and self._views.status(acc.frozen) is (
+            Status.COMPLETED
+        ):
+            return f'the accumulator is frozen: read record {acc.frozen} instead'
+        return None
 
     def _current(
         self, accumulator_id: str, client: str, *, reader: bool
@@ -1629,11 +1752,16 @@ class Backend:
             return [r for r in records.values() if r.proposal == proposal]
 
     def outputs(
-        self, record_id: str, names: Sequence[str] | None, client: str
+        self,
+        record_id: str,
+        names: Sequence[str] | None,
+        client: str,
+        select: Selection | None = None,
     ) -> dict[str, Any]:
         """
         Values of a record's outputs, once it has completed: of ``names``, or
-        of every output the workflow returned if ``names`` is ``None``.
+        of every output the workflow returned if ``names`` is ``None``; with
+        ``select``, a copy of that part of each (see :meth:`_check_select`).
 
         Only a record whose outputs the client keeps is read. Raises
         ``LookupError`` for any other, also once the client releases a record
@@ -1643,6 +1771,8 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             record = self._mine(record_id, caller.proposal)
+            if select is not None:
+                self._check_select(record.spec, names, select)
             self._changed.wait_for(
                 lambda: (
                     record_id not in caller.kept or record_id in self._views.finished
@@ -1661,14 +1791,51 @@ class Backend:
                     for n in record.outputs
                     if self._outputs.get((record_id, n)) is not _OMITTED
                 ]
-            return {n: self._value(record.ref(n)) for n in names}
+            values = {n: self._value(record.ref(n)) for n in names}
+        if select is None:
+            return values
+        return {
+            n: _selected(v, select, f'record {record_id} output {n}')
+            for n, v in values.items()
+        }
+
+    def _check_select(
+        self, spec_id: SpecId, names: Sequence[str] | None, select: Selection
+    ) -> None:
+        """
+        Refuse a selection of outputs that are not arrays, or of a dimension
+        an output's declared array lacks; needs no lock.
+
+        Only outputs named in ``names`` are selected from, so as not to pick
+        the same part of arrays of different dimensions.
+        """
+        if names is None:
+            raise ValueError('select= needs the name of an output')
+        fields = self._output_fields[spec_id]
+        declared = self._specs[spec_id].outputs.model_fields
+        for name in (n for n in names if n in declared):  # others raise when read
+            field = fields.get(name)
+            where = f'{spec_id} output {name!r}'
+            if field is None or field.format is not Format.SCIPP:
+                raise ValueError(f'{where}: select= needs an array output')
+            if field.array is not None and (
+                unknown := set(select) - set(field.array.dims)
+            ):
+                raise ValueError(
+                    f'{where}: no dimension {sorted(unknown)} in {field.array.dims}'
+                )
 
     def accumulator_outputs(
-        self, accumulator_id: str, names: Sequence[str] | None, client: str
+        self,
+        accumulator_id: str,
+        names: Sequence[str] | None,
+        client: str,
+        select: Selection | None = None,
     ) -> dict[str, Any]:
         """
         Copies of outputs of the accumulator's current state: of ``names``, or
-        of every output its held state returns if ``names`` is ``None``.
+        of every output its held state returns if ``names`` is ``None``; with
+        ``select``, of that part of each only (see :meth:`_check_select`).
 
         The read pins the state after the pushes logged so far, waits until
         the accumulator has reached it, and is one of the state's readers
@@ -1678,6 +1845,8 @@ class Backend:
         """
         acc, upto, _ = self._current(accumulator_id, client, reader=True)
         try:
+            if select is not None:
+                self._check_select(acc.template.spec, names, select)
             with self._changed:
                 self._changed.wait_for(
                     lambda: acc.added == upto or acc.stopped is not None
@@ -1689,13 +1858,17 @@ class Backend:
                 if name not in declared:
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')
             outputs = acc.outputs()
-            return copy.deepcopy(
-                {
-                    n: _returned(outputs[n], f'{accumulator_id}[:{upto}].{n}')
-                    for n in (declared if names is None else names)
-                    if names is not None or outputs[n] is not _OMITTED
-                }
-            )
+            values = {
+                n: _returned(outputs[n], f'{accumulator_id}[:{upto}].{n}')
+                for n in (declared if names is None else names)
+                if names is not None or outputs[n] is not _OMITTED
+            }
+            if select is None:
+                return copy.deepcopy(values)
+            return {
+                n: _selected(v, select, f'{accumulator_id}[:{upto}].{n}')
+                for n, v in values.items()
+            }
         finally:
             with self._changed:
                 self._let_go([(acc, upto)])
