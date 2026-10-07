@@ -10,14 +10,14 @@
 
 ```python
 r = client.submit(IOFQ, {'run': dataset(run=60339)})     # a record; its value is kept for this client
-client.output(r, 'iofq', index=3)                         # reads (a selection of) the value: nothing written
+client.output(r, 'iofq', select={'angle': 3})            # reads (a selection of) the value: nothing written
 client.persist(r)                                         # writes its outputs to the store
 client.submit(requests, label='night', persist=True)      # unattended: each written when it completes
 
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in runs:
     volume.push({'runs': {'run': run}})
-    show(client.output(volume, 'counts', index=0))        # copies the slice; makes no record
+    show(client.output(volume, 'counts', select={'angle': 0}))   # copies the slice; makes no record
 fit = client.submit(FIT, {'data': volume.ref('counts'), 'index': 2})   # reads the current state in place
 total = client.freeze(volume, persist=True)               # the last state as a record: no copy, no more pushes
 ```
@@ -72,6 +72,7 @@ A request that needs any other value is refused at submission, whether that reco
 Reading a value that nothing keeps for the caller raises; the record stays.
 
 **Work that nothing will keep is cancelled.** When nothing keeps a pending record's values any more, the record finishes as cancelled: its value would be dropped the moment it was computed. Cancelling a request lets go of what it reads, so this passes along a chain.
+A workflow that is already running cannot be interrupted: its record is cancelled at once, and the workflow runs to its end while its outputs are dropped. Cancelling frees memory, not CPU.
 
 **Every workflow** leaves its inputs unchanged and returns no output that shares memory with an input.
 A workflow cannot tell whether an input is a record's value or an accumulator's state, so this is one promise for all workflows.
@@ -86,13 +87,21 @@ A workflow cannot tell whether an input is a record's value or an accumulator's 
 - **Asking to persist an output already persisted** does nothing.
 - **`client.publish`** reads the value as `client.output` does, and puts it in the catalogue with its provenance. It needs no persist request.
 
+## Selections
+
+`client.output(what, name, select={'dim': index or slice})` reads part of an output of a record or of an accumulator's state, and copies only that part. It makes no record.
+
+- It indexes by dimension name. It is refused for an output that is not an array, for a dimension the output lacks, and for an index out of range, with the error the slice raises.
+- On the service, only the selected part leaves the backend.
+- A selection that computes, such as a projection or a thick slice summed, is a look (open question 2), not a `select=`.
+
 ## Accumulators
 
 Pushes work as now ([ADR 0003](../adr/0003-accumulators-add-in-place.md)): a push is added once nothing keeps the value of the state before it.
 
 **Reads.**
 
-- `client.output(acc, name, selection=None)` pins the state after the pushes logged so far, waits until it has been added, and copies the output or the selection. It makes no record.
+- `client.output(acc, name, select=None)` pins the state after the pushes logged so far, waits until it has been added, and copies the output or the selection. It makes no record.
 - A request that references `acc.ref(name)` pins the state at submission. The backend makes the record of the state's plain request for that submission, and the request's record references it. The request reads the state's value in place while it runs.
 - A template or a row reads no accumulator: it would hold back every push for as long as the stage or accumulator holding it lives. It references the record that `freeze` returns.
 - A request reads at most one accumulator. Two held states must be in one process to be read together, and where the service holds them is open.
@@ -210,12 +219,11 @@ V is the size of a large output, such as a spectroscopy volume of hundreds of GB
 
 ## Open questions
 
-1. **Names.** `persist` or `save`; `freeze` or `close` (`client.close()` ends a client).
-2. **Selections** (scipp/essapps#48): their form, and a look that computes, which runs a request next to the state and returns its result without a record.
+1. **Persist at submission.** `submit(..., persist=...)` makes the store the only keeper; `client.persist(r)` adds it next to the client. Whether `persist=` should also keep the values for the client, or both calls need more options, is settled once stories use them.
+2. **A look that computes**, such as a projection or a thick slice summed: a spec run next to the value, which returns its result without a record. `select=` only indexes.
 3. **One accumulator per request.** Lift it once the service places a request next to the held states it reads.
 4. **Modified values.** In the user's process, `client.output` returns the value itself. A notebook that modifies it in place breaks the promise every workflow makes, and changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
 5. **A look without waiting.** `client.output(acc)` pins the state after the pushes logged so far and waits until it has been added, as every read waits ([ADR 0003](../adr/0003-accumulators-add-in-place.md)). A driver that looks after every push therefore runs at the pace of the additions (story D7), which holds back pushes that would otherwise queue. A display may want the latest state already added, without waiting; add that form if a story needs it.
 6. **The service.** How the cap per client is set, and where a client's values are held when its work spreads over nodes.
-7. **One record per read, or per state.** Each submission that reads an accumulator makes its own record of the state. Submissions that pin the same state could share one: no later submission can reference it, so sharing brings back no circular wait. It saves history, not memory.
-8. **Labels and members** stay as they are, given at submission. Simon is not attached to their current form (README, open question 3).
-9. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
+7. **Labels and members** stay as they are, given at submission. Simon is not attached to their current form (README, open question 3).
+8. **Rules that push into an accumulator** ([automatic-reduction.md](../automatic-reduction.md), open).
