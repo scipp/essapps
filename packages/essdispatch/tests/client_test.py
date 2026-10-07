@@ -325,6 +325,16 @@ def append_digit(number: float, digit: float) -> float:
     return number * 10 + digit
 
 
+def _eventually(condition: Callable[[], bool]) -> bool:
+    """Whether ``condition`` holds within five seconds, as other threads go on."""
+    deadline = time.monotonic() + 5
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
 def _start(call: Callable[[], Any]) -> Future[Any]:
     """
     Run ``call`` on a thread of its own; the future returns or raises as it does.
@@ -1730,7 +1740,8 @@ class Subtracting:
     A push sets ``adding``, and adds while ``go`` is set. An
     ``outputs`` call sets ``computing``, and computes while ``compute`` is set;
     with ``failing`` set, the next one fails. ``held`` refers weakly to each
-    held state made.
+    held state made, and ``returned`` to the difference that each ``outputs``
+    call returned, if an array.
     """
 
     def __init__(self) -> None:
@@ -1743,6 +1754,7 @@ class Subtracting:
         self.compute.set()
         self.failing = False
         self.held: list[weakref.ref[_Sides]] = []
+        self.returned: list[weakref.ref[np.ndarray]] = []
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
         def compute(**values: Any) -> dict[str, Any]:
@@ -1778,7 +1790,10 @@ class _Sides:
             self._owner.failing = False
             raise ValueError('cannot compute')
         self._owner.computed += 1
-        return _subtract(**self._sums)
+        outputs = _subtract(**self._sums)
+        if isinstance(outputs['difference'], np.ndarray):
+            self._owner.returned.append(weakref.ref(outputs['difference']))
+        return outputs
 
 
 def _subtract(samples: Any, backgrounds: Any) -> dict[str, Any]:
@@ -2332,6 +2347,7 @@ def test_a_freeze_is_the_record_of_the_last_state_computed_once(
     assert total.request == plain
     assert client.output(total, 'difference').tolist() == looked.tolist() == [-1.0]
     assert subtracting.computed == 1  # the look and the freeze read one state
+    assert client.output(total, 'difference') is subtracting.returned[0]()  # no copy
     assert total in client.records()
 
 
@@ -2410,15 +2426,93 @@ def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
     sides.push({'samples': loads[0].refs('value')})
     subtracting.compute.clear()
     cancelled = client.freeze(sides)
+    subtracting.computing.wait(timeout=5)  # it runs, and holds the state
     client.release(cancelled)  # nothing keeps it any more
     subtracting.compute.set()
 
     assert client.wait(cancelled) == Status.CANCELLED
+    # no push comes to drop the outputs computed for the cancelled freeze
+    assert _eventually(
+        lambda: gc.collect() >= 0 and [r() for r in subtracting.returned] == [None]
+    )
     with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
         sides.push({'backgrounds': loads[1].refs('value')})
     assert client.output(sides, 'total').tolist() == [1.0]
     again = client.freeze(sides)
     assert client.output(again, 'total').tolist() == [1.0]
+
+
+def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    subtracting.failing = True
+    failed = client.freeze(sides)
+
+    assert client.wait(failed) == Status.FAILED
+    with pytest.raises(SubmitError, match=f'frozen as record {failed.id}'):
+        sides.push({'backgrounds': loads[1].refs('value')})
+    assert client.output(sides, 'total').tolist() == [1.0]
+    again = client.freeze(sides)
+    assert client.output(again, 'total').tolist() == [1.0]
+
+
+class GatedParams(BaseModel):
+    """A table whose model validator refuses one row, once ``GATE`` opens."""
+
+    parts: list[Parts]
+
+    @model_validator(mode='after')
+    def _gated(self) -> Self:
+        if len(self.parts) == 1:
+            GATE.reached.set()
+            GATE.opened.wait(timeout=5)
+            raise ValueError('needs two parts')
+        return self
+
+
+class Gate:
+    """Where GATED's validator waits: it sets ``reached``, and waits for ``opened``."""
+
+    def __init__(self) -> None:
+        self.reached = threading.Event()
+        self.opened = threading.Event()
+
+
+GATE = Gate()
+GATED = _spec('gated', GatedParams, Parts)
+
+
+@pytest.fixture
+def gate() -> Gate:
+    GATE.reached.clear()
+    GATE.opened.clear()
+    return GATE
+
+
+def test_a_push_during_a_freeze_that_is_refused_is_logged(
+    datasets: FakeDatasets, gate: Gate
+) -> None:
+    bind = {
+        LOAD: lambda run: {'value': run, 'extra': 0.0},
+        GATED: combine(operator.add),
+    }
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        load = client.compute(LOAD, {'run': dataset(run=1)})
+        gated = client.accumulator(Template(GATED, blanks=('parts',)))
+        gated.push({'parts': load.refs('value')})
+        freeze = _start(lambda: client.freeze(gated))
+        gate.reached.wait(timeout=5)  # the freeze is being checked
+        push = _start(lambda: gated.push({'parts': load.refs('value')}))
+        time.sleep(0.05)  # the push reaches the backend, and waits
+        gate.opened.set()
+
+        with pytest.raises(SubmitError, match='needs two parts'):
+            freeze.result(timeout=5)
+        push.result(timeout=5)
+        assert client.output(gated, 'value') == 2.0
 
 
 def test_a_frozen_held_state_is_dropped_once_its_readers_are_done(
@@ -2450,7 +2544,6 @@ def test_a_frozen_held_state_is_dropped_once_its_readers_are_done(
 
 class Grid(BaseModel):
     value: Array(ArraySpec(dims=('x', 'y')))  # type: ignore[valid-type]
-    loose: Array()  # type: ignore[valid-type]
     text: OpaqueFile
 
 
@@ -2460,7 +2553,7 @@ GRID = _spec('grid', RunParams, Grid)
 def grid(run: float) -> dict[str, Any]:
     values = np.arange(6.0).reshape(3, 2) * run
     value = sc.array(dims=['x', 'y'], values=values)
-    return {'value': value, 'loose': [run], 'text': 'a'}
+    return {'value': value, 'text': 'a'}
 
 
 @pytest.fixture
@@ -2501,35 +2594,19 @@ def test_a_selection_of_an_accumulator_copies_part_of_its_current_state(
     assert client.records() == runs
 
 
-def test_a_selection_is_refused_for_an_output_that_is_not_an_array(
+def test_a_selection_is_refused_for_an_output_not_declared_as_an_array(
     grids: Client,
 ) -> None:
     client = grids
     record = client.compute(GRID, {'run': dataset(run=1)})
 
-    with pytest.raises(ValueError, match='array'):
+    with pytest.raises(ValueError, match='needs an array'):
         client.output(record, 'text', select={'x': 0})
-    with pytest.raises(ValueError, match='array'):
-        client.output(record, 'loose', select={'x': 0})  # declared, not returned
     with pytest.raises(ValueError, match='name of an output'):
         client.output(record, select={'x': 0})
 
 
-def test_a_selection_is_refused_for_a_dimension_the_output_lacks(
-    grids: Client,
-) -> None:
-    client = grids
-    record = client.compute(GRID, {'run': dataset(run=1)})
-    total = _total(client)
-    total.push({'parts': record.refs('value')})
-
-    with pytest.raises(ValueError, match=r"\['z'\]"):
-        client.output(record, 'value', select={'z': 0})  # as the spec declares
-    with pytest.raises(ValueError, match=r"\['z'\]"):
-        client.output(total, 'value', select={'z': 0})  # as the value has it
-
-
-def test_a_selection_out_of_range_raises_what_the_slice_raises(
+def test_a_selection_the_output_cannot_take_raises_what_the_slice_raises(
     grids: Client,
 ) -> None:
     client = grids
@@ -2541,5 +2618,7 @@ def test_a_selection_out_of_range_raises_what_the_slice_raises(
         client.output(record, 'value', select={'x': 3})
     with pytest.raises(IndexError):
         client.output(total, 'value', select={'x': 3})
-    total.push({'parts': record.refs('value')})  # the read let go of the state
+    with pytest.raises(sc.DimensionError):
+        client.output(total, 'value', select={'z': 0})
+    total.push({'parts': record.refs('value')})  # the reads let go of the state
     assert client.output(total, 'value', select={'x': 2}).values.tolist() == [8.0, 10.0]

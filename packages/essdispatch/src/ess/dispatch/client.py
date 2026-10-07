@@ -391,8 +391,9 @@ class Client:
         read through it: a read of the accumulator is refused and names the
         record, and the held state is dropped once its readers are done. A
         freeze is refused, and the accumulator takes pushes again, if the
-        plain request of the state would be refused. If the record fails or
-        is cancelled, the accumulator can be read and frozen again.
+        plain request of the state would be refused; a push made meanwhile
+        waits for that answer. If the record fails or is cancelled, the
+        accumulator can be read and frozen again.
         """
         return self._backend.freeze(accumulator.id, client=self._id)
 
@@ -417,6 +418,7 @@ class Client:
         self,
         what: Record | Accumulator,
         name: str | None = None,
+        *,
         select: Selection | None = None,
     ) -> Any:
         """
@@ -432,16 +434,19 @@ class Client:
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
         ``{'q': slice(0, 10)}``, and copies only that part; it makes no
-        record. It is refused for an output that is not an array and for a
-        dimension the output lacks; an index out of range raises what the
-        slice raises. An accumulator holds back its next push only while the
-        part is copied.
+        record. It is refused for an output not declared as an array; a
+        dimension the output lacks, or an index out of range, raises what the
+        slice raises. A read of an accumulator holds back its next push while
+        the state is checked, its outputs are computed if no reader has yet,
+        and the part is copied.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
-            values = self._backend.accumulator_outputs(what.id, names, self._id, select)
+            values = self._backend.accumulator_outputs(
+                what.id, names, self._id, select=select
+            )
         else:
-            values = self._backend.outputs(what.id, names, self._id, select)
+            values = self._backend.outputs(what.id, names, self._id, select=select)
         return values if name is None else values[name]
 
     def records(self, *, label: str | None = None) -> list[Record]:
