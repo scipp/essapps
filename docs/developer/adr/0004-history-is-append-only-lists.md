@@ -34,7 +34,6 @@ What the stories need from history:
 - Records outlive the backend process: B6, H2, H3, and the trigger loop, which knows which datasets a rule has handled only from the records under the rule's label.
 - A submission is stored whole or not at all.
 - The order of the records under a label, and of the pushes into an accumulator, is kept.
-
 - Persisted values are found again: which outputs were asked to be persisted, and whether the write succeeded.
 
 Records never change, a record's status is set once, and pushes, persist requests, and writes are only added.
@@ -55,7 +54,7 @@ History is six lists, each only appended to:
 
 - A record never changes. Its status is its finish; a record without one is pending.
 - A request that reads an accumulator reads a record of the plain request of the state, which the accumulator's template and its pushes give ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). History stores such a record as the accumulator and its number of pushes, and lists the rows when it is read, so history grows by a constant amount per push and per read. A record that `freeze` returns is stored the same way ([ADR 0003](0003-accumulators-add-in-place.md)).
-- A record's status is that of its computation. A write that fails fails its persist request, not the record ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
+- A record persisted at submission finishes once its write ends: completed if its outputs were written, failed with the write's reason if not. A failed write of `client.persist` fails only that persist request ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
 - Output values are not history. [ADR 0002](0002-the-client-is-the-lifetime.md) says what keeps them, and [ADR 0005](0005-nothing-is-written-unless-persisted.md) how they are persisted.
 - A proposal is idle while none of its clients is open, none of its records is pending, and none of its writes is pending. Once it has been idle for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. A result needed for longer is published.
 - How a backend stores the lists is its choice. The in-process backend stores them as one event log, in memory or in a file of JSON lines.
@@ -81,4 +80,4 @@ History is six lists, each only appended to:
   - A file that is only appended to stores lists that only grow, with one write per change. A submission is one line, so it is stored whole or not at all, and a line cut short by a crash is dropped when the file is read.
   - A log must keep old event formats readable for as long as it is kept, while the views may change between versions. Database tables would be migrated instead.
   - A backend that rebuilds its views from the log at start holds every record of its proposals in memory.
-  - H2 needs persisted values ([ADR 0005](0005-nothing-is-written-unless-persisted.md)): a record pending at a restart runs only if every value it reads is written, will be written, or is a dataset.
+  - H2 needs persisted values: a record pending at a restart runs only if each value it reads is a dataset, is written, or is an output of a pending record that runs ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Restart).
