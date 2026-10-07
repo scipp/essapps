@@ -52,6 +52,7 @@ def test_d2_overnight_cluster_batch(
     corrupt(runs['7'])
     for member, run in runs.items():
         client.submit(IOFQ, {'run': run}, label='night', member=member, persist=True)
+    client.close()  # the laptop is closed; the persisted runs go on
 
     morning = connect()
     night = {r.member: r for r in morning.records(label='night')}

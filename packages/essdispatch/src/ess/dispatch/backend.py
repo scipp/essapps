@@ -31,23 +31,29 @@ A workflow already running is not interrupted: its record is cancelled at
 once, and its outputs are dropped when it returns.
 
 To persist an output is to write it to the backend's store, which then keeps
-it. A persist request made with a submission or a freeze replaces the
-client's hold: the record finishes once the outputs named are written, and
-fails if the write fails. One made by the client for a record it keeps adds
-the store next to the client, and a failed write fails only that request. A
-worker writes a record's outputs when its workflow returns, or at once if the
-record has completed. A written value is read from the store once nothing
-else keeps it in memory.
+it; a write replaces what the store holds under that name. A persist request
+made with a submission or a freeze replaces the client's hold: the worker
+writes the outputs named when the workflow returns, and the record finishes
+once they are written, or fails if the write fails. One made later by the
+client for a record it keeps adds the store next to the client: a worker
+writes the outputs once the record has completed, a failed write fails only
+that request, and closing the client raises if it failed. The store may hold
+a value that no event names, written for a record cancelled meanwhile or by
+a write that failed part-way; nothing reads it.
 
 A client reads, and its requests, stages, and accumulators reference, only the
 outputs of records it keeps, whether they are pending or completed, and
 persisted outputs, written or with their write pending; a request through a
-stage that has yet to stage also those the stage keeps, and one through a
-stage that has staged reads only the values of its blanks. So whether a call
-is accepted does not depend on how far other work has run, and a value kept
-only for another client or for a pending request is refused. A request, or a
-read of outputs, that may read an output only because it is persisted waits
-for its write, and fails if the write fails.
+stage that has yet to stage also those the stage keeps (see
+:meth:`Backend._access`), and one through a stage that has staged reads only
+the values of its blanks. So whether a call is accepted does not depend on
+how far other work has run, and a value kept only for another client or for a
+pending request is refused. A request, or a read of outputs, that may read an
+output only because it is persisted waits for its write, and fails if the
+write fails. A client reads the outputs it keeps from memory, and persisted
+ones from the store, so it never gets the value another client holds; a
+workflow reads its inputs from memory while the backend holds them,
+whichever client keeps them.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
@@ -200,7 +206,7 @@ from .records import (
     map_refs,
 )
 from .store import Store
-from .views import Views
+from .views import PENDING, Views, WriteFailed
 
 
 class ClientEnded(RuntimeError):
@@ -254,13 +260,6 @@ def _problems(
     ]
 
 
-def _filled(template: Template, pushes: Sequence[Mapping[str, Row]]) -> Request:
-    """The template with each table filled by the rows pushed into it, in push order."""
-    return template.fill(
-        {t: [rows[t] for rows in pushes if t in rows] for t in template.blanks}
-    )
-
-
 def _field_validators(
     model: type[BaseModel], fields: Collection[str]
 ) -> dict[str, Any]:
@@ -280,7 +279,13 @@ def _field_validators(
 
 
 _OMITTED = object()
-"""The value of an optional output that a workflow or a held state left out."""
+"""The value of an optional output that a held state left out."""
+
+
+def _not_returned(record_id: str, output: str) -> LookupError:
+    return LookupError(
+        f'record {record_id} output {output}: the workflow did not return it'
+    )
 
 
 def _returned(value: Any, where: str) -> Any:
@@ -426,9 +431,9 @@ class _Accumulator:
     opens the held state or adds to it, outside the backend's lock.
 
     ``checked`` holds the number of pushes of the last state whose plain
-    request was validated, and that request as a record holds it, or why it
-    would be refused. Two reads that validate different states at once may
-    overwrite each other's, which costs only another validation.
+    request was validated, and why it would be refused, or ``None``. Two
+    reads that validate different states at once may overwrite each other's,
+    which costs only another validation.
     ``stopped`` says why the accumulator takes no more pushes or readers, or
     is ``None``: it failed, or the record of its freeze completed. ``released``
     says its client released it or ended: it then keeps only the steps that a
@@ -453,7 +458,7 @@ class _Accumulator:
         self.added: int | None = None
         self.steps: deque[tuple[dict[str, Any], list[tuple[str, str]]]] = deque()
         self.busy = False
-        self.checked: tuple[int, Request | str] | None = None
+        self.checked: tuple[int, str | None] | None = None
         self.stopped: str | None = None
         self.released = False
         self.freezing = False
@@ -515,10 +520,10 @@ def _write_key(record_id: str, output: str) -> str:
     return f'{record_id}.{output} written'
 
 
-_Pinned = tuple[_Accumulator, int, Request | str]
+_Pinned = tuple[_Accumulator, int, str | None]
 """
-A state a submission pinned: the accumulator, its number of pushes, and the
-plain request of that state, or why that request would be refused.
+A state a submission pinned: the accumulator, its number of pushes, and why
+the plain request of that state would be refused, or ``None``.
 """
 
 _Read = tuple[str, str] | tuple[_Accumulator, int]
@@ -535,13 +540,15 @@ class _Client:
 
     ``kept`` holds the IDs of the records whose outputs the client keeps: the
     records it made, without persisting them at submission, and has not
-    released.
+    released. ``persisted`` holds the outputs it asked to persist after their
+    submission, whose writes closing the client reports if they failed.
     """
 
     def __init__(self, proposal: str, submitter: str) -> None:
         self.proposal = proposal
         self.submitter = submitter
         self.kept: set[str] = set()
+        self.persisted: set[tuple[str, str]] = set()
         self.stages: dict[str, _Stage] = {}
         self.accumulators: dict[str, _Accumulator] = {}
 
@@ -595,8 +602,6 @@ class Backend:
         self._unread_values: deque[_Read] = deque()
         self._letting_go = False
         self._on_finished: dict[str, list[Callable[[Record], None]]] = {}
-        # outputs, by record ID and name, that a worker is writing to the store
-        self._writing: set[tuple[str, str]] = set()
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
@@ -617,7 +622,7 @@ class Backend:
             self._changed.wait_for(
                 lambda: (
                     self._views.records.keys() <= self._views.finished.keys()
-                    and not self._views.writing
+                    and PENDING not in self._views.writes.values()
                     and not self._accumulating
                 )
             )
@@ -637,11 +642,14 @@ class Backend:
         3. Otherwise it runs if each value it reads is a dataset, is written,
            or is an output of a pending record that runs, and fails if not.
            A record of a state fails, since the held state it reads is gone.
+
+        A record persisted at submission that had written its outputs, but
+        not finished, runs again, and its writes replace what the store holds.
         """
         views = self._views
         lost: dict[str, list[str]] = {}
-        for record_id, name in sorted(views.writing):
-            if views.status(record_id) is Status.COMPLETED:
+        for (record_id, name), write in views.writes.items():
+            if write == PENDING and views.status(record_id) is Status.COMPLETED:
                 lost.setdefault(record_id, []).append(name)
         for record_id, names in lost.items():
             failure = 'the backend restarted'
@@ -649,7 +657,8 @@ class Backend:
                 Written(record=record_id, outputs=tuple(names), failure=failure)
             )
         pending = [i for i in views.records if i not in views.finished]
-        needed = {record_id for record_id, _ in views.writing}
+        needed = {i for i in pending if i in views.persisted}
+        needed |= {i for (i, _), write in views.writes.items() if write == PENDING}
         for record_id in reversed(pending):  # a record follows what it reads
             if record_id in needed and record_id not in views.states:
                 inputs = views.records[record_id].request.inputs()
@@ -672,15 +681,22 @@ class Backend:
         Why a record pending at a restart cannot read its inputs, or ``None``;
         ``runs`` are the pending records that run. Lock held.
         """
-        if record_id in self._views.states:
+        views = self._views
+        if record_id in views.states:
             return 'the held state it reads is gone'
-        for ref in self._views.records[record_id].request.inputs():
-            if ref.record in runs or (ref.record, ref.output) in self._views.written:
+        for ref in views.records[record_id].request.inputs():
+            where = f'input {ref.record} output {ref.output}'
+            if ref.record in runs:
                 continue
-            status = self._views.status(ref.record)
-            if status is not Status.COMPLETED:
+            if (status := views.status(ref.record)) is not Status.COMPLETED:
                 return f'input {ref.record} {status}'
-            return f'input {ref.record} output {ref.output} was not persisted'
+            if views.omitted((ref.record, ref.output)):
+                return f'{where}: the workflow did not return it'
+            write = views.write((ref.record, ref.output))
+            if isinstance(write, WriteFailed):
+                return f'{where}: the write failed: {write.reason}'
+            if write is None:
+                return f'{where} was not persisted'
         return None
 
     def spec(self, spec_id: SpecId) -> WorkflowSpec:
@@ -785,13 +801,13 @@ class Backend:
             if stage is not None and stage.call is not None:
                 blanks = {k: v for k, v in request.params.items() if k in stage.blanks}
                 request = Request(request.spec, blanks)
-            return {
+            also = stage.reads if stage is not None else ()
+            keys = {
                 (ref.record, ref.output)
                 for ref in request.inputs()
-                if ref.record not in caller.kept
-                and ref.record not in state_ids.values()
-                and (stage is None or (ref.record, ref.output) not in stage.reads)
+                if ref.record not in state_ids.values()
             }
+            return {key for key in keys if self._access(caller, key, also)}
 
         requests = [Request(r.spec, map_refs(r.params, state_record)) for r in requests]
         stored = [from_store(e, r) for e, r in zip(entries, requests, strict=True)]
@@ -840,7 +856,7 @@ class Backend:
         return [self._views.records[i] for i in ids]
 
     def _persisted(
-        self, spec_id: SpecId, persist: bool | Sequence[str] | None
+        self, spec_id: SpecId, persist: bool | Sequence[str]
     ) -> tuple[str, ...]:
         """
         The outputs of the spec that ``persist`` names: every one if
@@ -979,7 +995,9 @@ class Backend:
                         )
                     if target is not None and not _agree(outputs[ref.output], target):
                         raise SubmitError(f'{where}: {ref} does not fit the field')
-                    if isinstance(ref, OutputRef) and self._omitted(ref):
+                    if isinstance(ref, OutputRef) and self._views.omitted(
+                        (ref.record, ref.output)
+                    ):
                         raise SubmitError(
                             f'{where}: record {ref.record} output {ref.output}: '
                             'the workflow did not return it'
@@ -1047,9 +1065,8 @@ class Backend:
                 raise SubmitError(
                     f'{field}: only a request may reference an accumulator'
                 )
-            _, _, plain = states[ref.accumulator]
-            if isinstance(plain, str):
-                raise SubmitError(f'{field}: {plain}')
+            if (refused := states[ref.accumulator][2]) is not None:
+                raise SubmitError(f'{field}: {refused}')
             return acc.template.spec
         record = self._views.records.get(ref.record)
         if record is None:
@@ -1061,15 +1078,39 @@ class Backend:
         status = self._views.status(ref.record)
         if status in (Status.FAILED, Status.CANCELLED):
             raise SubmitError(f'{field}: record {ref.record} {status}')
-        key = (ref.record, ref.output)
-        if ref.record in caller.kept or key in also or self._views.persists(key):
-            return record.spec
-        if (failure := self._views.unwritten.get(key)) is not None:
+        try:
+            self._access(caller, (ref.record, ref.output), also)
+        except SubmitError as error:
+            raise SubmitError(f'{field}: {error}') from None
+        return record.spec
+
+    def _access(
+        self,
+        caller: _Client,
+        key: tuple[str, str],
+        also: Collection[tuple[str, str]] = (),
+    ) -> bool:
+        """
+        Whether the client reads an output from the store, not from memory;
+        lock held. Raises ``SubmitError`` if it may not read it.
+
+        This is the read rule: a client reads from memory the outputs of the
+        records it keeps, and ``also``, those its request's stage keeps; and
+        from the store the outputs that are persisted, written or with the
+        write pending. Nothing else, so whether a call is accepted does not
+        depend on how far other work has run.
+        """
+        record_id, name = key
+        if record_id in caller.kept or key in also:
+            return False
+        write = self._views.write(key)
+        if isinstance(write, WriteFailed):
             raise SubmitError(
-                f'{field}: record {ref.record} output {ref.output}: '
-                f'the write failed: {failure}'
+                f'record {record_id} output {name}: the write failed: {write.reason}'
             )
-        raise SubmitError(f'{field}: record {ref.record} is not kept by this client')
+        if write is None:
+            raise SubmitError(f'record {record_id} is not kept by this client')
+        return True
 
     # Execution
 
@@ -1083,7 +1124,9 @@ class Backend:
         pushes have read the outputs its rows reference. A record through a
         stage that has staged reads only the outputs its blanks reference. A
         record also waits for the pending writes of the outputs it reads
-        ``from_store``, those it may read only because they are persisted.
+        ``from_store``, those it may read only because they are persisted:
+        for the record, if they are persisted at its submission, and for the
+        write otherwise.
         """
         state = self._state_of.get(record_id)
         if state is None:
@@ -1093,8 +1136,11 @@ class Backend:
             refs = request.inputs()
             self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
             waiting = {ref.record for ref in refs} - self._views.finished.keys()
-            waiting |= {_write_key(*key) for key in from_store} & {
-                _write_key(*key) for key in self._views.writing
+            # a write that a persist request made later names ends on its own
+            waiting |= {
+                _write_key(*key)
+                for key in from_store
+                if self._views.writes.get(key) == PENDING
             }
         else:
             acc, upto = state
@@ -1111,12 +1157,13 @@ class Backend:
     def _run(self, record_id: str) -> None:
         """
         Run a record's workflow, holding the values it reads until it returns,
-        and write the outputs a persist request names before it completes.
+        and write the outputs persisted at its submission before it completes.
 
         It holds them even once the record is cancelled, since the workflow
-        still reads them. A record of a state that completes holds the state
-        until its outputs are dropped (see :meth:`_drop`), except the record
-        of a freeze, after which the accumulator takes no readers.
+        still reads them, and lets go of them before the write. A record of a
+        state that completes holds the state until its outputs are dropped
+        (see :meth:`_drop`), except the record of a freeze, after which the
+        accumulator takes no readers.
         """
         with self._changed:
             if record_id in self._views.finished:
@@ -1126,38 +1173,56 @@ class Backend:
             state = self._state_of.get(record_id)
             reads = self._unread.pop(record_id)
         try:
-            if state is None:
-                call, blanks = self._call(record.request, stage)
-                outputs = dict(call(**blanks))
-            else:
-                outputs = state[0].outputs()
-            if problem := self._unfit(record.spec, outputs):
-                raise ValueError(problem)
+            outputs = self._compute(record, stage, state)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
                 self._finish(record_id, Status.FAILED, str(error) or repr(error))
                 self._let_go(reads)
             return
         with self._changed:
-            names = self._to_write(record_id)
+            if state is None:
+                self._let_go(reads)
+            names = self._views.persisted.get(record_id, ())
         failure = self._write(record_id, {n: outputs[n] for n in names if n in outputs})
         with self._changed:
             # A record of a state that completed lets go of the state in
-            # _drop, once its outputs are dropped; any other record here. The
-            # record of a freeze holds the outputs of the accumulator's last
-            # state, which takes no more pushes, so it lets go here too, and
-            # the accumulator takes no more readers: that record is read.
+            # _drop, once its outputs are dropped. The record of a freeze
+            # holds the outputs of the accumulator's last state, which takes
+            # no more pushes, so it lets go here, and the accumulator takes
+            # no more readers: that record is read.
             frozen = state[0] if state and state[0].frozen == record_id else None
             if frozen is not None:
                 self._state_of.pop(record_id, None)
-            self._complete(record_id, outputs, names, failure)
+            self._complete(record_id, outputs, failure)
             completed = self._views.status(record_id) is Status.COMPLETED
             if frozen is not None and completed:
                 frozen.stopped = (
                     f'the accumulator is frozen: read record {record_id} instead'
                 )
-            if state is None or not completed or frozen is not None:
+            if state is not None and (not completed or frozen is not None):
                 self._let_go(reads)
+
+    def _compute(
+        self,
+        record: Record,
+        stage: _Stage | None,
+        state: tuple[_Accumulator, int] | None,
+    ) -> dict[str, Any]:
+        """
+        The outputs a record's workflow returns, or those of the state it
+        reads; no lock. What the workflow read goes out of scope here, so
+        once the caller lets go of the values read, nothing holds them.
+        """
+        outputs: dict[str, Any]
+        if state is None:
+            call, blanks = self._call(record.request, stage)
+            outputs = dict(call(**blanks))
+        else:
+            computed = state[0].outputs().items()
+            outputs = {n: v for n, v in computed if v is not _OMITTED}
+        if problem := self._unfit(record.spec, outputs):
+            raise ValueError(problem)
+        return outputs
 
     def _call(
         self, request: Request, stage: _Stage | None
@@ -1260,8 +1325,8 @@ class Backend:
     def _read(self, values: dict[str, Any]) -> dict[str, Any]:
         """
         ``values`` with the outputs and datasets they reference read: outputs
-        held in memory under the backend's lock, written outputs from the
-        store and datasets outside it.
+        held in memory under the backend's lock, outputs written and no
+        longer held from the store, and datasets outside the lock.
         """
         with self._changed:
             values = map_refs(
@@ -1272,21 +1337,15 @@ class Backend:
 
     def _value(self, ref: OutputRef) -> Any:
         """
-        The value of an output of a completed record, if returned, or ``ref``
-        itself if only the store holds it; lock held.
-
-        The caller reads only what something keeps for it, so the value is
-        in memory or written.
+        The value of an output of a completed record held in memory, or
+        ``ref`` itself if only the store holds it; lock held. The caller
+        reads only what something keeps for it, so the value is one or the
+        other.
         """
-        where = f'record {ref.record} output {ref.output}'
         key = (ref.record, ref.output)
-        if key in self._outputs:
-            return _returned(self._outputs[key], where)
-        if key in self._views.omitted:
-            raise LookupError(f'{where}: the workflow did not return it')
-        if key not in self._views.written:
-            raise LookupError(f'{where}: the value is not kept')
-        return ref
+        if self._views.omitted(key):
+            raise _not_returned(*key)
+        return self._outputs.get(key, ref)
 
     def _stored(self, ref: Ref) -> Any:
         """The value of a dataset, or of a written output; needs no lock."""
@@ -1297,11 +1356,6 @@ class Backend:
         if self._store is None:
             raise LookupError(f'{ref}: the backend has no store')
         return self._store.read(ref.record, ref.output)
-
-    def _omitted(self, ref: OutputRef) -> bool:
-        """Whether the workflow did not return the output; lock held."""
-        key = (ref.record, ref.output)
-        return self._outputs.get(key) is _OMITTED or key in self._views.omitted
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
@@ -1359,22 +1413,23 @@ class Backend:
         """
         if any(record_id in c.kept for c in self._clients.values()):
             return
-        record = self._views.records[record_id]
+        names = self._views.records.outputs(record_id)
         kept = [
             n
-            for n in record.outputs
-            if self._readers[(record_id, n)] or (record_id, n) in self._views.writing
+            for n in names
+            if self._readers[(record_id, n)]
+            or self._views.write((record_id, n)) == PENDING
         ]
         if record_id not in self._views.finished:
             if not kept:
                 self._finish(record_id, Status.CANCELLED, 'nothing keeps its outputs')
             return
-        for name in record.outputs:
+        for name in names:
             if name not in kept:
                 self._outputs.pop((record_id, name), None)
         state = self._state_of.get(record_id)
         if state is not None and not any(
-            (record_id, n) in self._outputs for n in record.outputs
+            (record_id, n) in self._outputs for n in names
         ):
             del self._state_of[record_id]
             self._let_go([state])
@@ -1392,56 +1447,31 @@ class Backend:
         return None
 
     def _complete(
-        self,
-        record_id: str,
-        outputs: dict[str, Any],
-        written: Sequence[str],
-        failure: str | None,
+        self, record_id: str, outputs: dict[str, Any], failure: str | None
     ) -> None:
         """
-        Complete a record with outputs, once ``written`` were written, or
-        their write failed with ``failure``; lock held. An optional output the
-        workflow left out is kept as ``_OMITTED``.
+        Complete a record with the outputs its workflow returned, once those
+        persisted at its submission were written, or fail it with ``failure``
+        if their write failed; lock held. Then write the outputs that a
+        persist request made meanwhile names.
 
-        A record persisted at submission fails if its write fails. A write
-        that ends after the record was cancelled is not logged.
+        Nothing is logged for a record cancelled meanwhile, also if its
+        outputs were written.
         """
         if record_id in self._views.finished:  # cancelled meanwhile
-            self._writing -= {(record_id, n) for n in written}
             return
-        if written:
-            omitted = [n for n in written if n not in outputs]
-            self._written(record_id, written, omitted, failure)
-        if failure is not None and record_id in self._views.persisted:
+        if failure is not None:
             self._finish(record_id, Status.FAILED, f'the write failed: {failure}')
-            self._wake(record_id, written, failure)
             return
-        spec_id = self._views.records[record_id].spec
-        for name in self._specs[spec_id].outputs.model_fields:
-            self._outputs[(record_id, name)] = outputs.get(name, _OMITTED)
-        self._finish(record_id, Status.COMPLETED)
-        self._wake(record_id, written, failure)
-        self._start_writes(record_id)
+        for name, value in outputs.items():
+            self._outputs[(record_id, name)] = value
+        names = self._views.records.outputs(record_id)
+        omitted = tuple(n for n in names if n not in outputs)
+        self._finish(record_id, Status.COMPLETED, omitted=omitted)
+        self._start_writes(record_id, names)
         self._drop(record_id)
 
     # Writing
-
-    def _to_write(self, record_id: str) -> list[str]:
-        """
-        The outputs of the record that a persist request names and no worker
-        writes yet, marked as being written; lock held. Empty for a record
-        that has finished without completing.
-        """
-        if self._views.status(record_id) not in (Status.PENDING, Status.COMPLETED):
-            return []
-        names = [
-            n
-            for n in self._views.records[record_id].outputs
-            if (record_id, n) in self._views.writing
-            and (record_id, n) not in self._writing
-        ]
-        self._writing.update((record_id, n) for n in names)
-        return names
 
     def _write(self, record_id: str, values: Mapping[str, Any]) -> str | None:
         """Write the values to the store; why it failed, or ``None``; no lock."""
@@ -1455,77 +1485,69 @@ class Backend:
             return str(error) or repr(error)
         return None
 
-    def _written(
-        self,
-        record_id: str,
-        names: Sequence[str],
-        omitted: Sequence[str],
-        failure: str | None,
-    ) -> None:
+    def _start_writes(self, record_id: str, names: Iterable[str]) -> None:
         """
-        Log a write that ended; lock held. The caller then wakes the records
-        that wait for it (see :meth:`_wake`), once the record it wrote has
-        finished, if it was pending.
+        Write, on a worker, those of ``names`` of a completed record whose
+        write a persist request made after the submission has pending; lock
+        held. The caller passes each name once for each such request, so no
+        output is written twice at once.
         """
-        self._writing -= {(record_id, n) for n in names}
-        self._append(
-            Written(
-                record=record_id,
-                outputs=tuple(names),
-                omitted=tuple(omitted),
-                failure=failure,
-            )
-        )
-
-    def _wake(self, record_id: str, names: Sequence[str], failure: str | None) -> None:
-        """Start or fail the records that wait for a write; lock held."""
-        for name in names:
-            key = _write_key(record_id, name)
-            for dependent in self._dependents.pop(key, set()):
-                if failure is None:
-                    self._satisfied(dependent, key)
-                else:
-                    self._finish(
-                        dependent,
-                        Status.FAILED,
-                        f'input {record_id} output {name}: the write failed: {failure}',
-                    )
-        self._changed.notify_all()
-
-    def _start_writes(self, record_id: str) -> None:
-        """
-        Write, on a worker, the outputs of a completed record that a persist
-        request names and no worker writes yet; lock held.
-        """
-        if names := self._to_write(record_id):
-            self._executor.submit(self._write_outputs, record_id, names)
+        pending = self._views.writes
+        if todo := [n for n in names if pending.get((record_id, n)) == PENDING]:
+            self._executor.submit(self._write_outputs, record_id, todo)
 
     def _write_outputs(self, record_id: str, names: Sequence[str]) -> None:
         """
-        Write outputs of a completed record; a persist request keeps them in
-        memory until then.
+        Write outputs of a completed record, and wake the records that wait
+        for them; their write being pending keeps them in memory until then.
         """
         with self._changed:
             values = {n: self._outputs[(record_id, n)] for n in names}
-        failure = self._write(
-            record_id, {n: v for n, v in values.items() if v is not _OMITTED}
-        )
+        failure = self._write(record_id, values)
         with self._changed:
-            omitted = [n for n, v in values.items() if v is _OMITTED]
-            self._written(record_id, names, omitted, failure)
-            self._wake(record_id, names, failure)
+            self._append(
+                Written(record=record_id, outputs=tuple(names), failure=failure)
+            )
+            for name in names:
+                key = _write_key(record_id, name)
+                for dependent in self._dependents.pop(key, set()):
+                    if failure is None:
+                        self._satisfied(dependent, key)
+                    else:
+                        self._finish(
+                            dependent,
+                            Status.FAILED,
+                            f'input {record_id} output {name}: '
+                            f'the write failed: {failure}',
+                        )
             self._drop(record_id)
+            self._changed.notify_all()
 
     def _finish(
-        self, record_id: str, status: Status, failure: str | None = None
+        self,
+        record_id: str,
+        status: Status,
+        failure: str | None = None,
+        omitted: tuple[str, ...] = (),
     ) -> None:
-        """Finish a record and start or fail what waits for it; lock held."""
-        todo = [(record_id, status, failure)]
+        """
+        Finish a record and start or fail what waits for it; lock held.
+        ``omitted`` names the outputs a completed record's workflow did not
+        return.
+        """
+        todo = [(record_id, status, failure, omitted)]
         while todo:
-            finished_id, finished, message = todo.pop()
+            finished_id, finished, message, left_out = todo.pop()
             if finished_id in self._views.finished:
                 continue
-            self._append(Finished(record=finished_id, status=finished, failure=message))
+            self._append(
+                Finished(
+                    record=finished_id,
+                    status=finished,
+                    failure=message,
+                    omitted=left_out,
+                )
+            )
             for call in self._on_finished.pop(finished_id, ()):
                 call(self._views.records[finished_id])
             self._let_go(self._unread.pop(finished_id, ()))  # if it never started
@@ -1540,7 +1562,12 @@ class Backend:
             for dependent in self._dependents.pop(finished_id, set()):
                 if finished is not Status.COMPLETED:
                     todo.append(
-                        (dependent, Status.FAILED, f'input {finished_id} {finished}')
+                        (
+                            dependent,
+                            Status.FAILED,
+                            f'input {finished_id} {finished}',
+                            (),
+                        )
                     )
                     continue
                 self._satisfied(dependent, finished_id)
@@ -1570,14 +1597,28 @@ class Backend:
         End the client and release everything it keeps, which cancels the
         work that nothing else keeps (see :meth:`release`).
 
-        A client that has ended is ended again without effect.
+        It first waits until the outputs the client asked to persist (see
+        :meth:`persist`) are written, and once it has ended raises
+        ``RuntimeError`` naming each whose write failed: the client was the
+        only one told. A client that has ended is ended again without effect.
         """
+        views = self._views
         with self._changed:
             caller = self._clients.get(client)
             if caller is None:
                 return
             self.release([*caller.kept, *caller.stages, *caller.accumulators], client)
+            self._changed.wait_for(
+                lambda: all(views.write(key) != PENDING for key in caller.persisted)
+            )
             del self._clients[client]
+            failed = [
+                f'record {record_id} output {name}: {write.reason}'
+                for record_id, name in sorted(caller.persisted)
+                if isinstance(write := views.write((record_id, name)), WriteFailed)
+            ]
+        if failed:
+            raise RuntimeError(f'writes failed: {"; ".join(failed)}')
 
     def _client(self, client: str) -> _Client:
         """The client, unless it has ended."""
@@ -1614,7 +1655,9 @@ class Backend:
                     self._drop(i)
             self._changed.notify_all()
 
-    def persist(self, ids: Sequence[str], outputs: Sequence[str], client: str) -> None:
+    def persist(
+        self, ids: Sequence[str], outputs: Sequence[str], *, client: str
+    ) -> None:
         """
         Log a request to persist the named outputs, or every output, of each
         record, and write those of completed records on a worker.
@@ -1623,7 +1666,8 @@ class Backend:
         and have every output named; otherwise nothing is logged. The store
         then keeps the outputs too, while the client keeps its hold. An
         output that is persisted is left as it is; one whose write failed is
-        written again.
+        written again. Closing the client reports a write that failed (see
+        :meth:`close_client`).
         """
         if self._store is None:
             raise SubmitError('persisting needs a store, which this backend lacks')
@@ -1641,12 +1685,13 @@ class Backend:
                 if lacking := [n for n in outputs if n not in record.outputs]:
                     raise SubmitError(f'{record.spec} has no outputs {lacking}')
             for record_id in dict.fromkeys(ids):
-                names = outputs or self._views.records[record_id].outputs
+                names = outputs or self._views.records.outputs(record_id)
+                caller.persisted.update((record_id, n) for n in names)
                 new = [n for n in names if not self._views.persists((record_id, n))]
                 if new:
                     self._append(Persist(record=record_id, outputs=tuple(new)))
                 if self._views.status(record_id) is Status.COMPLETED:
-                    self._start_writes(record_id)
+                    self._start_writes(record_id, new)
 
     def _unneeded(self, acc: _Accumulator) -> None:
         """
@@ -1776,6 +1821,7 @@ class Backend:
     def freeze(
         self,
         accumulator_id: str,
+        *,
         client: str,
         persist: bool | Sequence[str] = False,
     ) -> Record:
@@ -1806,13 +1852,13 @@ class Backend:
             upto = len(self._views.pushes.get(accumulator_id, ()))
             self._readers[(acc, upto)] += 1
         try:
-            if isinstance(plain := self._check_state(acc, upto), str):
-                raise SubmitError(plain)
+            if (refused := self._check_state(acc, upto)) is not None:
+                raise SubmitError(refused)
             with self._changed:
                 caller = self._client(client)
                 self._accumulator(caller, accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
-                pinned = {accumulator_id: (acc, upto, plain)}
+                pinned = {accumulator_id: (acc, upto, None)}
                 self._create(
                     [],
                     [],
@@ -1961,36 +2007,32 @@ class Backend:
                 self._finish(record_id, Status.FAILED, acc.stopped)
         self._changed.notify_all()
 
-    def _check_state(self, acc: _Accumulator, upto: int) -> Request | str:
+    def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
         """
-        The plain request of the accumulator's state after ``upto`` pushes,
-        checked as a request is, or why it would be refused; needs no lock.
-        Its record lists the same request from history (see ``views.py``),
-        since the validators must not change a value (see the module
-        docstring).
+        Why the plain request of the accumulator's state after ``upto`` pushes
+        would be refused, or ``None``; needs no lock.
 
-        It is the accumulator's template with each table filled by the rows
-        pushed into it, in push order, and defaults filled in. ``acc.checked``
-        keeps it for the last state validated. The validation takes time in
-        proportion to the rows, so it runs outside the backend's lock, over
-        the rows that the log holds.
+        That request is the one its records list (see ``views.py``): the
+        template's values that the held state was given, with each table
+        filled by the rows pushed, in push order. Each was checked by its
+        field when it was given; the params model's own validators run here,
+        and must not change a value (see the module docstring).
+        ``acc.checked`` keeps the answer for the last state validated. The
+        validation takes time in proportion to the rows, so it runs outside
+        the backend's lock.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
             return checked[1]
         with self._changed:
-            pushed = self._views.pushes.get(acc.id, [])[:upto]
-        request = _filled(acc.template, [p.rows for p in pushed])
-        result: Request | str
+            plain = self._views.plain(acc.id, upto)
+        refused: str | None = None
         try:
-            values = self._typed(request.spec, request.params)
-            stored = {f: _check_storable(f, v) for f, v in values.items()}
+            self._typed(plain.spec, plain.params)
         except SubmitError as error:
-            result = str(error)
-        else:
-            result = Request(request.spec, stored)
-        acc.checked = (upto, result)  # another check may overwrite it at once
-        return result
+            refused = str(error)
+        acc.checked = (upto, refused)  # another check may overwrite it at once
+        return refused
 
     def _accumulator(self, caller: _Client, accumulator_id: str) -> _Accumulator:
         """The client's accumulator, if it takes readers; lock held."""
@@ -2017,12 +2059,12 @@ class Backend:
 
     def _current(
         self, accumulator_id: str, client: str, *, reader: bool
-    ) -> tuple[_Accumulator, int, Request]:
+    ) -> tuple[_Accumulator, int]:
         """
-        The accumulator, its number of pushes logged, and the plain request of
-        that state, its current state pinned as a read pins it; held as a
-        reader holds it if ``reader``, until the caller lets go of it. Raises
-        ``LookupError`` if the state may not be read.
+        The accumulator and its number of pushes logged, its current state
+        pinned as a read pins it; held as a reader holds it if ``reader``,
+        until the caller lets go of it. Raises ``LookupError`` if the state
+        may not be read.
         """
         try:
             with self._changed:
@@ -2033,14 +2075,14 @@ class Backend:
         except SubmitError as error:
             raise LookupError(str(error)) from None
         try:
-            if isinstance(plain := self._check_state(acc, upto), str):
-                raise LookupError(plain)
+            if (refused := self._check_state(acc, upto)) is not None:
+                raise LookupError(refused)
         except BaseException:  # a validator may raise anything
             if reader:
                 with self._changed:
                     self._let_go([(acc, upto)])
             raise
-        return acc, upto, plain
+        return acc, upto
 
     # Queries and control, within the client's proposal
 
@@ -2128,7 +2170,9 @@ class Backend:
         The plain request of the accumulator's current state, pinned as a
         read pins it. Raises ``LookupError`` if the state may not be read.
         """
-        return self._current(accumulator_id, client, reader=False)[2]
+        acc, upto = self._current(accumulator_id, client, reader=False)
+        with self._changed:
+            return self._views.plain(acc.id, upto)
 
     def records(self, client: str, label: str | None = None) -> list[Record]:
         """The records of the proposal, oldest first, under ``label`` if given."""
@@ -2155,12 +2199,14 @@ class Backend:
         ``select``, a copy of that part of each. A selection names outputs
         declared as arrays (``Format.SCIPP``).
 
-        A record is read from memory while the client keeps it, and its
-        persisted outputs, once written, otherwise: this waits for the record
-        and for a pending write. Raises ``LookupError`` for an output that
-        neither holds, also once the client releases a record whose outputs
-        this waits for, or whose write failed, and ``RuntimeError`` if the
-        record fails or is cancelled.
+        A record the client keeps is read from memory; otherwise its
+        persisted outputs are read from the store, once written (see
+        :meth:`_access`): this waits for the record and for a pending write.
+        Raises ``RuntimeError`` if the record fails or is cancelled, and
+        ``LookupError`` for an output the client may not read, also once it
+        releases a record whose outputs this waits for, or whose write
+        failed. Every output of a record the client does not keep is every
+        output persisted, and raises if one of their writes failed.
         """
         views = self._views
         with self._changed:
@@ -2168,49 +2214,45 @@ class Backend:
             record = self._mine(record_id, caller.proposal)
             if select is not None:
                 self._check_select(record.spec, names)
-            wanted = record.outputs if names is None else names
 
-            def claimed() -> bool:
-                """Whether the outputs wanted are persisted, or were asked to be."""
-                asked = [
-                    views.persists((record_id, n))
-                    or (record_id, n) in views.unwritten
-                    or n in views.persisted.get(record_id, ())
-                    for n in wanted
-                ]
-                return any(asked) if names is None else all(asked)
+            wanted = record.outputs if names is None else names
 
             def ready() -> bool:
                 if record_id in caller.kept:
                     return record_id in views.finished
-                if not claimed():
-                    return True
-                return record_id in views.finished and not any(
-                    (record_id, n) in views.writing for n in wanted
-                )
+                return all(views.write((record_id, n)) != PENDING for n in wanted)
 
             self._changed.wait_for(ready)
             kept = record_id in caller.kept
-            if not kept and not claimed():
-                raise LookupError(f'record {record_id} is not kept by this client')
-            finished = views.finished[record_id]
-            if finished.status is not Status.COMPLETED:
-                raise RuntimeError(
-                    f'record {record_id} {finished.status}: {finished.failure}'
-                )
+            every = names is None
             if names is None:
                 names = [
                     n
                     for n in record.outputs
-                    if not self._omitted(record.ref(n))
-                    and (kept or (record_id, n) in views.written)
+                    if kept or views.write((record_id, n)) is not None
                 ]
+                if not names:
+                    raise LookupError(f'record {record_id} is not kept by this client')
+            finished = views.finished.get(record_id)
+            if finished is not None and finished.status is not Status.COMPLETED:
+                raise RuntimeError(
+                    f'record {record_id} {finished.status}: {finished.failure}'
+                )
+            try:
+                for name in names:
+                    self._access(caller, (record_id, name))
+            except SubmitError as error:
+                raise LookupError(str(error)) from None
+            if every:
+                names = [n for n in names if not views.omitted((record_id, n))]
             for name in names:
-                if not kept and (failure := views.unwritten.get((record_id, name))):
-                    raise LookupError(
-                        f'record {record_id} output {name}: the write failed: {failure}'
-                    )
-            values = {n: self._value(record.ref(n)) for n in names}
+                if views.omitted((record_id, name)):
+                    raise _not_returned(record_id, name)
+            # from memory if kept, else from the store: never another's value
+            values = {
+                n: self._outputs[(record_id, n)] if kept else record.ref(n)
+                for n in names
+            }
         values = map_refs(values, self._stored)
         if select is None:
             return values
@@ -2251,7 +2293,7 @@ class Backend:
         the module docstring). An accumulator that cannot be read, or stops
         before it reaches the state, raises ``LookupError``.
         """
-        acc, upto, _ = self._current(accumulator_id, client, reader=True)
+        acc, upto = self._current(accumulator_id, client, reader=True)
         try:
             if select is not None:
                 self._check_select(acc.template.spec, names)

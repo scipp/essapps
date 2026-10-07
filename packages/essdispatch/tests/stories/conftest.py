@@ -364,12 +364,20 @@ def history() -> Log:
 
 
 @pytest.fixture
-def backend(
+def backends(
     datasets: FakeDatasets, store: FakeStore, history: Log
-) -> Iterator[Backend]:
-    backend = Backend(datasets, TOYS, log=history, store=store)
-    yield backend
-    backend.close()
+) -> Iterator[list[Backend]]:
+    """The backend, and those that upgrades started after it; the current one last."""
+    backends = [Backend(datasets, TOYS, log=history, store=store)]
+    yield backends
+    for backend in backends:
+        backend.close()
+
+
+@pytest.fixture
+def clients() -> list[Client]:
+    """Every client that ``connect`` and ``upgrade`` made."""
+    return []
 
 
 @pytest.fixture
@@ -377,41 +385,34 @@ def upgrade(
     datasets: FakeDatasets,
     store: FakeStore,
     history: Log,
-    backend: Backend,
+    backends: list[Backend],
     clients: list[Client],
-) -> Iterator[Callable[..., Client]]:
+) -> Callable[..., Client]:
     """
     A client of a new backend over the same datasets, history, and store,
-    which offers only the given toy specs. The upgrade ends every client of
-    the backend before it, and that backend once its persisted work is done.
+    which offers the given toy specs, every one by default; ``connect`` then
+    makes clients of it. The upgrade ends every client of the backend before
+    it, and that backend once its persisted work is done.
     """
-    backends: list[Backend] = []
 
-    def upgrade(specs: list[WorkflowSpec]) -> Client:
+    def upgrade(specs: list[WorkflowSpec] | None = None) -> Client:
         for client in clients:
             client.close()
-        backend.close()
-        bind = {s: TOYS[s] for s in specs}
+        backends[-1].close()
+        bind = TOYS if specs is None else {s: TOYS[s] for s in specs}
         backends.append(Backend(datasets, bind, log=history, store=store))
-        return Client(backends[-1], proposal='p1', submitter='anna')
+        clients.append(Client(backends[-1], proposal='p1', submitter='anna'))
+        return clients[-1]
 
-    yield upgrade
-    for upgraded in backends:
-        upgraded.close()
-
-
-@pytest.fixture
-def clients() -> list[Client]:
-    """Every client that ``connect`` made."""
-    return []
+    return upgrade
 
 
 @pytest.fixture
-def connect(backend: Backend, clients: list[Client]) -> Callable[..., Client]:
-    """A new client of the same backend, by default for proposal p1."""
+def connect(backends: list[Backend], clients: list[Client]) -> Callable[..., Client]:
+    """A new client of the current backend, by default for proposal p1."""
 
     def connect(proposal: str = 'p1', user: str = 'anna') -> Client:
-        clients.append(Client(backend, proposal=proposal, submitter=user))
+        clients.append(Client(backends[-1], proposal=proposal, submitter=user))
         return clients[-1]
 
     return connect
@@ -446,7 +447,7 @@ def repair(datasets: FakeDatasets) -> Callable[..., None]:
 
 
 @pytest.fixture(autouse=True)
-def replay(backend: Backend, clients: list[Client]) -> Iterator[None]:
+def replay(backends: list[Backend], clients: list[Client]) -> Iterator[None]:
     """
     After the story, each client that has not ended runs every completed
     record whose outputs it keeps again as its request, and compares the
@@ -456,7 +457,7 @@ def replay(backend: Backend, clients: list[Client]) -> Iterator[None]:
     depend on. A reference to an output the client does not keep, such as one
     of the record of an accumulator's state, is replaced by the same output of
     that record run again. No record holds a reference to an accumulator.
-    It runs before ``backend`` is closed.
+    It runs before the backends are closed.
     """
     yield
     for client in list(clients):

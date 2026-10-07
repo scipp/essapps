@@ -39,9 +39,9 @@ class Rule:
     The blank is then a table, and each dataset is a row of it, in the row's
     field ``row_field``.
 
-    ``persist`` names the outputs the loop persists, every one by default.
-    What the template references must be persisted, since the loop's client
-    keeps nothing.
+    ``persist`` names the outputs the loop persists, or is ``None`` for every
+    one; the loop always persists, so that its client keeps nothing. What the
+    template references must be persisted for the same reason.
     """
 
     name: str
@@ -52,7 +52,7 @@ class Rule:
     lookup: Lookup | None = None
     series: str | None = None
     row_field: str = 'run'
-    persist: bool | tuple[str, ...] = True
+    persist: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -93,7 +93,9 @@ class TriggerLoop:
                 reasons += [f'skipped {r.dataset}: {e}' for r, e in skipped.items()]
                 if requests:
                     records = self._client.submit(
-                        requests, label=rule.label, persist=rule.persist
+                        requests,
+                        label=rule.label,
+                        persist=True if rule.persist is None else rule.persist,
                     )
                     submitted.extend(records.values())
                 elif not skipped:

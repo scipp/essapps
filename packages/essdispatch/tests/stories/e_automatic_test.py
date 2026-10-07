@@ -17,7 +17,9 @@ from .conftest import IOFQ, IOFQ_V2, STITCH, Measure
 NO_PUBLISH = 'publication is not implemented'
 
 
-def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> None:
+def test_e1_series_grows_reduction_follows(
+    client: Client, connect: Callable[..., Client], measure: Measure
+) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
     template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
     rule = Rule(
@@ -36,10 +38,11 @@ def test_e1_series_grows_reduction_follows(client: Client, measure: Measure) -> 
     measure(2, [1.0, 2.0], role='sample', sample='si')
     loop.step()
 
-    curve = client.latest('reflectivity', member='si')
-    assert len(client.records(label='reflectivity')) == 2
+    user = connect()  # any client of the proposal
+    curve = user.latest('reflectivity', member='si')
+    assert len(user.records(label='reflectivity')) == 2
     assert curve.request.params['runs'] == [{'run': r} for r in (r2, r3, r4)]
-    assert client.output(curve, 'stitched').values.tolist() == [
+    assert user.output(curve, 'stitched').values.tolist() == [
         1.0,
         2.0,
         2.0,
@@ -86,7 +89,7 @@ def test_e3_reduction_of_our_own_output(
 
 
 def test_e4_template_improved_during_a_beamtime(
-    client: Client, measure: Measure
+    client: Client, connect: Callable[..., Client], measure: Measure
 ) -> None:
     rule = Rule(
         'auto-iofq',
@@ -101,12 +104,13 @@ def test_e4_template_improved_during_a_beamtime(
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
     (after,) = TriggerLoop(client, rules=[improved]).step()
 
+    user = connect()  # any client of the proposal
     assert after.request.datasets() == [second]
-    assert [client.output(r, 'iofq').values.tolist() for r in (before, after)] == [
+    assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
         [3.0, 7.0],
         [2.0, 7.0],
     ]
     stale = [
-        r for r in client.records(label='iofq') if r.request.params['threshold'] != 1.5
+        r for r in user.records(label='iofq') if r.request.params['threshold'] != 1.5
     ]
     assert [r.request.datasets() for r in stale] == [[first]]

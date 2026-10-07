@@ -21,10 +21,12 @@ datasets. So a GUI application can make every other call from its UI thread.
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
 ends. A pending request keeps the values it reads until it has run, and the
-store the outputs a client persists. Work that nothing keeps any more is
+store keeps the outputs a client persists. Work that nothing keeps any more is
 cancelled: a pending record whose outputs neither its client, nor a pending
 request, nor a persist request keeps. A client reads, and its requests
-reference, only the outputs it keeps and those persisted.
+reference, only the outputs it keeps and those persisted. It reads the outputs
+it keeps from memory and the others from the store, so it never gets the
+value another client holds.
 """
 
 from __future__ import annotations
@@ -230,14 +232,19 @@ class Client:
         End the client: release everything it keeps, which cancels the
         work that nothing else keeps.
 
-        A client that owns its backend then closes it, which waits for the
-        work that still runs: workflows already running, the pushes that
-        readers of a released accumulator still need, and the records and
-        writes that persist requests wait for.
+        It first waits until the outputs it asked to persist with
+        :meth:`persist` are written, and raises ``RuntimeError`` naming each
+        whose write failed, once it has ended. A client that owns its backend
+        then closes it, which waits for the work that still runs: workflows
+        already running, the pushes that readers of a released accumulator
+        still need, and the records and writes that persist requests wait
+        for.
         """
-        self._backend.close_client(self._id)
-        if self._owns_backend:
-            self._backend.close()
+        try:
+            self._backend.close_client(self._id)
+        finally:
+            if self._owns_backend:
+                self._backend.close()
 
     # Submitting
 
@@ -419,8 +426,8 @@ class Client:
         references them. This client keeps its hold until it releases a
         record, so it reads them from memory until then. If a write fails,
         the record stays as it is; a read by another client raises with the
-        reason, and this call may be made again. Persisting what is persisted
-        does nothing.
+        reason, this call may be made again, and :meth:`close` raises if it
+        still failed. Persisting what is persisted does nothing.
         """
         ids = [r.id for r in _items(records)]
         self._backend.persist(ids, outputs, client=self._id)
