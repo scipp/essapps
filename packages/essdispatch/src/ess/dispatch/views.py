@@ -5,9 +5,16 @@ What the backend knows, built from its log.
 
 :meth:`Views.apply` is the only way the views change, and what it does
 depends on nothing but the events. A backend that applies its log again
-therefore has the views of the backend that wrote it. What is not history,
-such as clients and their stages and accumulators, and output values, the
-backend keeps elsewhere.
+therefore has the views of the backend that wrote it. The backend answers
+every query from the views, and reads the log only when it starts. So the
+views may change between versions, while the events must stay readable as
+long as a log is kept. What is not history, such as clients and their stages
+and accumulators, and output values, the backend keeps elsewhere.
+
+Every order the backend relies on lies within one proposal: labels are kept
+by proposal, an accumulator and its pushes belong to one proposal, and a
+record reads only records of its own proposal. So history may be stored, and
+dropped, per proposal.
 """
 
 from __future__ import annotations

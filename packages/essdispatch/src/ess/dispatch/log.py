@@ -16,6 +16,12 @@ when it is read. The backend's views, such as the records by ID, are built by
 applying the events in order, when they are appended and again when a backend
 starts from an existing log.
 
+An event names only records and accumulators appended before it, or earlier
+in the same submission: a finish, a persist request, or a write names its
+record, a push its accumulator, a record the records it reads, and a record
+of a state its accumulator. Applying the events in order relies on this, and
+so does a restart, which walks the pending records backwards.
+
 Clients and their stages and accumulators are not history, and neither are
 output values or anything a binding computed; those have their own lifetime.
 A submission is one event, so a backend that stops half-way through one has
@@ -215,10 +221,12 @@ class Log:
     Without a path the log lives in memory. With a path it is a file of one
     JSON event per line, and the log holds the file until :meth:`close`: a
     second log on the same file, in this process or another, is refused, so
-    a file has one writer. The events already in the file are read first. A
-    last line cut short, by a crash while it was written, is dropped. A write
-    that fails, for example on a full disk, leaves the file as it was, so no
-    later event follows a line cut short.
+    a file has one writer. The operating system lets go of the file when the
+    process ends, so a log opened after a crash takes it over. The events
+    already in the file are read first. A last line cut short, by a crash
+    while it was written, is dropped; any other line that is not an event
+    raises. A write that fails, for example on a full disk, leaves the file
+    as it was, so no later event follows a line cut short.
     """
 
     def __init__(self, path: Path | None = None) -> None:
