@@ -343,6 +343,16 @@ class _Stage:
         self.stopped: str | None = None
         self.staging = threading.Lock()
 
+    def read_part(self, request: Request) -> Request:
+        """
+        The part of a call's ``request`` that the call reads: all of it until
+        the stage has staged, then only its blanks; backend's lock held.
+        """
+        if self.call is None:
+            return request
+        blanks = {k: v for k, v in request.params.items() if k in self.blanks}
+        return Request(request.spec, blanks)
+
 
 class _Accumulator:
     """
@@ -736,11 +746,9 @@ class Backend:
         params = self._specs[request.spec].params
         stage = caller.stages[entry.stage] if entry.stage is not None else None
         also = set(stage.reads) if stage is not None else set()
+        read = stage.read_part(request) if stage is not None else request
         try:
-            for field, value in request.params.items():
-                if stage is not None and stage.call is not None:
-                    if field not in stage.blanks:
-                        continue
+            for field, value in read.params.items():
                 for where, ref, target in _reads(params, field, value):
                     spec_id = self._readable(ref, where, caller, states, also)
                     outputs = self._output_fields[spec_id]
@@ -853,10 +861,8 @@ class Backend:
         state = self._state_of.get(record_id)
         if state is None:
             request = self._views.records[record_id].request
-            stage = self._stage_of.get(record_id)
-            if stage is not None and stage.call is not None:
-                blanks = {k: v for k, v in request.params.items() if k in stage.blanks}
-                request = Request(request.spec, blanks)
+            if (stage := self._stage_of.get(record_id)) is not None:
+                request = stage.read_part(request)
             refs = request.inputs()
             self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
             waiting = {ref.record for ref in refs} - self._views.finished.keys()
