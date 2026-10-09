@@ -642,6 +642,8 @@ class Backend:
         3. Otherwise it runs if each value it reads is a dataset, is written,
            or is an output of a pending record that runs, and fails if not.
            A record of a state fails, since the held state it reads is gone.
+           A call through a stage runs as its plain request, since the stage
+           is gone, so it reads the values of the stage's template too.
 
         A record persisted at submission that had written its outputs, but
         not finished, runs again, and its writes replace what the store holds.
@@ -798,9 +800,8 @@ class Backend:
 
         def from_store(entry: Entry, request: Request) -> set[tuple[str, str]]:
             stage = caller.stages[entry.stage] if entry.stage is not None else None
-            if stage is not None and stage.call is not None:
-                blanks = {k: v for k, v in request.params.items() if k in stage.blanks}
-                request = Request(request.spec, blanks)
+            if stage is not None:
+                request = stage.read_part(request)
             also = stage.reads if stage is not None else ()
             keys = {
                 (ref.record, ref.output)
