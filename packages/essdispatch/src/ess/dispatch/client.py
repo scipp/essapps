@@ -20,10 +20,13 @@ datasets. So a GUI application can make every other call from its UI thread.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
-ends. A pending request keeps the values it reads until it has run. Work that
-nothing keeps any more is cancelled: a pending record whose outputs neither
-its client nor a pending request keeps. A client reads, and its requests
-reference, only the outputs it keeps.
+ends. A pending request keeps the values it reads until it has run, and the
+store keeps the outputs a client persists. Work that nothing keeps any more is
+cancelled: a pending record whose outputs neither its client, nor a pending
+request, nor a persist request keeps. A client reads, and its requests
+reference, only the outputs it keeps and those persisted. It reads the outputs
+it keeps from memory and the others from the store, so it never gets the
+value another client holds.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ import functools
 import queue
 import threading
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -43,6 +46,7 @@ from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
 from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
 from .records import Record, Request, Row, SpecId, Template
+from .store import Store
 
 
 def _items(what: Any) -> list[Any]:
@@ -136,13 +140,23 @@ class Accumulator:
     A template whose blanks, tables, are filled one push at a time.
 
     Its outputs are those of the plain request over the rows pushed so far,
-    read as a record's are: with ``client.output``, or by a request through
-    :meth:`ref` and :meth:`refs`. A binding with a held state of its own
-    adds each row to it, so earlier rows are not computed again; for any
-    other binding, the backend keeps the rows and computes the plain request
-    over all of them for each state read. ``template`` holds the
-    other values as the backend accepted them, ``outputs`` the output names
-    the spec declares, and ``id`` names the accumulator in the backend.
+    read by the client that opened it as a record's are: with
+    ``client.output``, or by a request through :meth:`ref` and :meth:`refs`.
+    A binding with a held state of its own adds each row to it, so earlier
+    rows are not computed again; for any other binding, the backend keeps the
+    rows and computes the plain request over all of them for each state read.
+    The outputs of a state are computed all at once, at the first pin that
+    needs them, and kept until the next push is added; no output is computed
+    for a state that nobody pins. The first pin of a state also validates its
+    plain request, which takes time in proportion to the rows.
+
+    A push, and a submission that pins, return once logged, so a driver does
+    not slow down when the backend falls behind. A driver that should skip
+    pins meanwhile checks whether the record of its previous pin has finished.
+
+    ``template`` holds the other values as the backend accepted them,
+    ``outputs`` the output names the spec declares, and ``id`` names the
+    accumulator in the backend.
     """
 
     def __init__(
@@ -160,18 +174,26 @@ class Accumulator:
     def push(self, rows: Mapping[str, Row]) -> None:
         """
         Add one row to each named table of the template, as a request over the
-        table takes it; the rows enter one state.
+        table takes it; the rows enter one state. A name that is not one of
+        the template's blanks is refused.
 
         A row names datasets or references outputs of records, never an
         accumulator. It is checked by its table's row model; rules on a whole
-        table, such as its length, are checked when a state is read. A record
-        that has failed or was cancelled is refused, and one that is pending
-        is not waited for. The push returns once it is logged; the backend
-        adds the rows once these records have completed and the readers of
-        the state before the push are done (see :mod:`ess.dispatch.backend`). If
-        adding fails, or a record has not completed, the accumulator stops:
-        later pushes are refused, and so are reads of a state it did not
-        reach.
+        table, such as its length, are checked when a state is pinned. So a
+        table with a maximum length cannot be pinned again once a push
+        exceeds it, since no row can be removed. A record that has failed or
+        was cancelled is refused, and one that is pending is not waited for.
+        The push returns once it is logged. The backend adds the pushes one at
+        a time, in the order logged, each once the records its rows reference
+        have completed and the readers of the state before it are done (see
+        :mod:`ess.dispatch.backend`).
+
+        If adding fails, or a record has not completed, the accumulator stops
+        for good: the records of states it did not reach fail, and so do the
+        requests that read them, and every later push and pin is refused. The
+        reason names the step, such as ``push 0`` for the first push. A driver
+        that should skip a run whose reduction failed waits for that record
+        before it pushes.
         """
         self._push(rows)
 
@@ -181,8 +203,12 @@ class Accumulator:
 
         Submitting the request pins the state after the rows pushed so far,
         makes a record of that state's plain request, and replaces the
-        reference by the same output of that record. A request references at
-        most one accumulator; a row or a template references none.
+        reference by the same output of that record. No client keeps that
+        record, so only the requests of that submission read it. The request
+        waits until the accumulator has reached the state, as it waits for a
+        record it references, and is refused if the state's plain request
+        would be refused. A request references at most one accumulator; a row
+        or a template references none.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')
@@ -199,7 +225,8 @@ class Client:
 
     ``with client:`` closes the client at the end of the block. A client that
     owns its backend, as :func:`local` makes one, also closes the backend.
-    Any call of a client that has ended raises ``ClientEnded``.
+    Any call of a client that has ended raises ``ClientEnded``, except
+    :meth:`close`, which then does nothing.
     """
 
     def __init__(
@@ -228,13 +255,19 @@ class Client:
         End the client: release everything it keeps, which cancels the
         work that nothing else keeps.
 
-        A client that owns its backend then closes it, which waits for the
-        work that still runs: workflows already running, and the pushes that
-        readers of a released accumulator still need.
+        It first waits until the outputs it asked to persist with
+        :meth:`persist` are written, and raises ``RuntimeError`` naming each
+        whose write failed, once it has ended. A client that owns its backend
+        then closes it, which waits for the work that still runs: workflows
+        already running, the pushes that readers of a released accumulator
+        still need, and the records and writes that persist requests wait
+        for. A client that is never closed ends with its process.
         """
-        self._backend.close_client(self._id)
-        if self._owns_backend:
-            self._backend.close()
+        try:
+            self._backend.close_client(self._id)
+        finally:
+            if self._owns_backend:
+                self._backend.close()
 
     # Submitting
 
@@ -245,13 +278,29 @@ class Client:
         *,
         label: str | None = None,
         member: str | None = None,
+        persist: bool | Sequence[str] = False,
     ) -> Any:
         """
         Submit a spec or a stage with values, or requests.
 
         Requests may be one, a list, or a dict. The records come back pending,
         in the shape given. Under a label, the keys of a dict become the
-        members of their records.
+        members of their records. An accumulator is not submitted: a request
+        reads it through :meth:`Accumulator.ref`.
+
+        The backend checks the values against its own spec, so a ``SpecId``
+        in place of the spec gets the same checks. A request that cannot run
+        raises ``SubmitError`` naming the field at fault, after the request's
+        key or index if several are given: an invalid value, an unknown spec
+        or dataset, a reference the client may not read, or an output that
+        does not fit its field. Then no request of the call is submitted; the
+        records of earlier calls stay.
+
+        With ``persist=True``, or the names of outputs, the client does not
+        keep these records: the store keeps the outputs named, and the others
+        are dropped once a record completes. Each record completes once they
+        are written, and fails if the write fails. Unattended drivers submit
+        this way.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -277,7 +326,7 @@ class Client:
                 _items(what), members, _names(what), strict=True
             )
         ]
-        records = self._backend.submit(entries, client=self._id)
+        records = self._backend.submit(entries, client=self._id, persist=persist)
         return _reshape(what, records)
 
     def compute(self, *args: Any, **kwargs: Any) -> Any:
@@ -367,12 +416,16 @@ class Client:
         """
         An accumulator of the template; the client keeps it until it releases it.
 
-        The template's blanks are table fields. A template a request would
-        refuse is refused here, with the blanks left out, and its values are
-        held as the backend resolved them. Opening returns once the template
-        is checked; the backend reads its values once, after the records they
-        reference have completed, and the accumulator stops if the binding
-        then fails to open.
+        The template's blanks are one or more of the spec's table fields. A
+        template a request would refuse is refused here, with the blanks left
+        out, and so is one that references an accumulator. The held state gets
+        each value typed by its own field and that field's validators; the
+        accumulator's template holds the values as the backend resolved them.
+        A record the template references that has failed or was cancelled is
+        refused, and one that is pending is not waited for. Opening returns
+        once the template is checked; the backend reads its values once, after
+        the records they reference have completed, and the accumulator stops
+        if the binding then fails to open.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
@@ -381,10 +434,13 @@ class Client:
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
         return Accumulator(resolved, accumulator_id, outputs, push)
 
-    def freeze(self, accumulator: Accumulator) -> Record:
+    def freeze(
+        self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
+    ) -> Record:
         """
         The record of the accumulator's last state, the state after the pushes
         so far; the client keeps it, and the accumulator takes no more pushes.
+        With ``persist``, the store keeps it instead, as with ``submit``.
 
         The record's outputs are what the held state returns, computed once
         and not copied. Once the record has completed, the accumulator is
@@ -393,9 +449,27 @@ class Client:
         freeze is refused, and the accumulator takes pushes again, if the
         plain request of the state would be refused; a push made meanwhile
         waits for that answer. If the record fails or is cancelled, the
-        accumulator can be read and frozen again.
+        accumulator can be read and frozen again. A template or a row, which
+        may not reference an accumulator, references this record instead.
         """
-        return self._backend.freeze(accumulator.id, client=self._id)
+        return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
+
+    def persist(self, records: Any, *outputs: str) -> None:
+        """
+        Write the named outputs, or every output, of records the client keeps
+        to the store, each once it has completed; returns at once. It raises
+        ``SubmitError``, and persists nothing, for a record the client does
+        not keep, a failed or cancelled one, or an output a record lacks.
+
+        The store then keeps them, and every client of the proposal reads and
+        references them. This client keeps its hold until it releases a
+        record, so it reads them from memory until then. If a write fails,
+        the record stays as it is; a read by another client raises with the
+        reason, this call may be made again, and :meth:`close` raises if it
+        still failed. Persisting what is persisted does nothing.
+        """
+        ids = [r.id for r in _items(records)]
+        self._backend.persist(ids, outputs, client=self._id)
 
     def release(self, what: Any) -> None:
         """
@@ -425,16 +499,20 @@ class Client:
         The value of an output, or every output returned, by name, if ``name``
         is None; an optional output that was not returned is left out.
 
-        A record's, once it has completed, if the client keeps it; raises
-        ``LookupError`` for a record it does not keep, and ``RuntimeError``
-        for one that fails or is cancelled. An accumulator's are those of its
-        state after the pushes so far, once they are added, copied, so that
-        like a record's they do not change.
+        A record's, once it has completed, if the client keeps it, or once
+        written, if persisted; raises ``LookupError`` for a record it neither
+        keeps nor persisted, whose write failed, or whose value the store no
+        longer holds, and ``RuntimeError`` for one that fails or is cancelled.
+        An accumulator's are those of its state after the pushes so far, once
+        they are added, copied, so that like a record's they do not change.
+        The read makes no record. It raises ``LookupError`` if the state's
+        plain request would be refused, with its reason, also for a state
+        with nothing pushed.
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
-        ``{'q': slice(0, 10)}``, and copies only that part; it makes no
-        record. It is refused for an output not declared as an array; a
+        ``{'q': slice(0, 10)}``, and copies only that part. It is refused
+        without ``name``, and for an output not declared as an array; a
         dimension the output lacks, or an index out of range, raises what the
         slice raises. A read of an accumulator holds back its next push while
         the state is checked, its outputs are computed if no reader has yet,
@@ -467,7 +545,9 @@ class Client:
         Where a record, or the current state of an accumulator, came from.
 
         An accumulator's state is the plain request over the rows pushed so
-        far, so its provenance is that of the record of this request.
+        far, so its provenance is that of the record of this request. It pins
+        the state, but returns at once, without waiting for the pushes to be
+        added.
         """
         if isinstance(what, Accumulator):
             request = self._backend.plain_request(what.id, self._id)
@@ -489,14 +569,17 @@ def local(
     datasets: DatasetSource,
     bind: Mapping[WorkflowSpec, Binding | Function],
     submitter: str = 'user',
+    store: Store | None = None,
 ) -> Client:
     """
     A client of its own backend in this process, running the workflows bound here.
 
-    Closing the client closes the backend.
+    Closing the client closes the backend, which waits until what is persisted
+    is written. Without a ``store``, persisting is refused. The backend keeps
+    history in memory, so its records end with the process.
     """
     return Client(
-        Backend(datasets, bind),
+        Backend(datasets, bind, store=store),
         proposal=proposal,
         submitter=submitter,
         owns_backend=True,

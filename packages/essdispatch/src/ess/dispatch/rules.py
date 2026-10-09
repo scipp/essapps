@@ -4,7 +4,9 @@
 Rules and the trigger loop: automatic reduction of new datasets.
 
 A rule is plain data. The trigger loop is a driver: it uses a client, never
-runs in the backend, and keeps no memory of its own. It finds new datasets
+runs in the backend, and keeps no memory of its own. It persists what it
+submits, so its client keeps nothing, and any client of the proposal reads the
+results. It finds new datasets
 through the client. Which datasets a rule has handled is read from the records
 under the rule's label, so a restarted or replaced loop picks up where the last
 one stopped. The label belongs to the rule: any record under it counts,
@@ -36,6 +38,10 @@ class Rule:
     of that metadata field so far, in run order, and that value is its member.
     The blank is then a table, and each dataset is a row of it, in the row's
     field ``row_field``.
+
+    ``persist`` names the outputs the loop persists, or is ``None`` for every
+    one; the loop always persists, so that its client keeps nothing. What the
+    template references must be persisted for the same reason.
     """
 
     name: str
@@ -46,6 +52,7 @@ class Rule:
     lookup: Lookup | None = None
     series: str | None = None
     row_field: str = 'run'
+    persist: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -85,7 +92,11 @@ class TriggerLoop:
                 requests, skipped = self._requests(rule)
                 reasons += [f'skipped {r.dataset}: {e}' for r, e in skipped.items()]
                 if requests:
-                    records = self._client.submit(requests, label=rule.label)
+                    records = self._client.submit(
+                        requests,
+                        label=rule.label,
+                        persist=True if rule.persist is None else rule.persist,
+                    )
                     submitted.extend(records.values())
                 elif not skipped:
                     reasons.append('no new dataset')

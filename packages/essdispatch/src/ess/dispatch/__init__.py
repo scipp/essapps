@@ -15,6 +15,7 @@ from .records import (
     Template,
 )
 from .rules import Rule, RuleStatus, TriggerLoop
+from .store import Store
 
 __all__ = [
     'Accumulator',
@@ -34,6 +35,7 @@ __all__ = [
     'SpecId',
     'Stage',
     'Status',
+    'Store',
     'SubmitError',
     'Template',
     'TriggerLoop',

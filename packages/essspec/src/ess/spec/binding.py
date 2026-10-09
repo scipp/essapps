@@ -70,7 +70,10 @@ class HeldState(Protocol):
         once. It may modify what it holds in place, and so change an output
         returned before it, but not the rows. A held state that starts from
         the first row's values copies them, so that adding in place never
-        changes the output they came from.
+        changes the output they came from. Whether a push needs memory for a
+        second copy of what it holds is the binding's choice: binning a run's
+        events into a held grid needs none, histogramming the run and adding
+        the histogram needs one.
         """
         ...
 
@@ -97,5 +100,10 @@ class HeldStateBinding(Binding, Protocol):
         that field's validators; the params model's own validators run on
         the plain request of a state when it is read. Its ``push`` and
         ``outputs`` are called from one thread at a time.
+
+        The held state keeps what it holds for each table apart, so that the
+        order of pushes into different tables does not change a state. A
+        binding that cannot do so for the tables ``fixed`` leaves out raises,
+        as it may for any values it refuses; the accumulator then stops.
         """
         ...
