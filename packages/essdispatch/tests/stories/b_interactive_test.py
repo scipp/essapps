@@ -2,8 +2,6 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section B of docs/developer/user-stories.md: manual and interactive reduction."""
 
-import pytest
-
 from ess.dispatch import Client, Template, apply
 
 from .conftest import ANGLE, CUT, IOFQ, NORMALIZE, Measure
@@ -62,13 +60,12 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
     assert client.records() == [again]
 
 
-@pytest.mark.xfail(reason='views (client.output(..., index=)) are not implemented')
 def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     volume = client.compute(ANGLE, {'run': run})
-    cuts = [client.output(volume, 'counts', index=i) for i in range(4)]
+    cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]
     fit = client.compute(CUT, {'data': volume.ref('counts'), 'index': 2})
 
     assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
     assert client.output(fit, 'cut').value == 3.0
-    assert client.records() == [volume, fit]
+    assert client.records() == [volume, fit]  # the selections made no record
