@@ -2,42 +2,29 @@
 
 - Status: accepted
 - Deciders: Simon
-- Date: 2026-10-05, rewritten 2026-10-07
-- Supersedes: [ADR 0001](0001-history-as-an-event-log.md)
+- Date: 2026-10-05, rewritten 2026-10-09
 
 ## Context
 
-[ADR 0001](0001-history-as-an-event-log.md) made four decisions at once:
+A record names a spec, every parameter value, its inputs by reference, and its outputs.
+A record never changes, only its status, which is set once.
+Pushes, persist requests, and writes are only added.
+So history only grows until it is dropped.
 
-1. A snapshot of an accumulator is stored as the accumulator and the number of elements it covers, and each element is stored once, at its push.
-2. Output values are not history.
-3. History is kept as long as the proposal.
-4. History is an append-only log of events, and records, labels, and the elements of accumulators are views built by applying the events in order.
+The stories need four things from history:
 
-Story D7 became linear through the first decision, since a snapshot no longer lists its elements.
-The fourth framed the whole system: system.md described every part in terms of events and views.
-
-A reading of the in-process backend found what depends on the log:
-
-- Every query reads the views: status, records under a label, provenance, the checks of references, and the pushes that give the plain request of a state that a submission reads.
-- Only a backend that starts on an existing log reads the events, to rebuild its views and run the records left pending. `local()` keeps its log in memory, so this never happens there; only the tests start a backend on a log file.
-- No query asks for the state at an earlier time. Provenance follows records and pushes as they are.
-- A restart cannot finish a pending record whose input had already completed, since values are not history. System story H2 needs persisted values for that, not only history ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
-
-The third decision conflicts with the requirements ([tensions](../../requirements/tensions.md), "Finding results again versus a second catalogue"):
-
-- When a proposal ends is not defined. If it lasts as long as the proposal's raw data, history is kept forever: a record of what ran next to SciCat, where the lasting history belongs.
-- Users must find their results while they consider their work ongoing, as with an application they leave open: days to weeks for batch and automatic reduction. A limit is acceptable, and a result needed for longer goes to SciCat.
-
-What the stories need from history:
-
-- Records outlive the backend process: B6, H2, H3, and the trigger loop, which knows which datasets a rule has handled only from the records under the rule's label.
+- Records outlive the backend process (B6, H2, H3). The trigger loop knows which datasets a rule has handled only from the records under the rule's label.
 - A submission is stored whole or not at all.
 - The order of the records under a label, and of the pushes into an accumulator, is kept.
-- Persisted values are found again: which outputs were asked to be persisted, and whether the write succeeded.
+- Persisted values are found again.
 
-Records never change, a record's status is set once, and pushes, persist requests, and writes are only added.
-So history only grows until it is dropped, with or without a log.
+Two forces bound its size.
+
+**Pins multiply rows.** Story D7 pins an accumulator after each of its 300 pushes.
+If each record of a state listed its rows, history would hold about 45,000 rows, and every layer that handles records would handle them all.
+In the in-process backend, D7 with 1000 pushes took 5.6 s with every row listed (501,500 stored references), and 0.86 s with a count of pushes.
+
+**A proposal has no defined end.** Users need their records and outputs for days to weeks ([tensions](../../requirements/tensions.md), "Finding results again versus a second catalogue").
 
 ## Decision
 
@@ -47,37 +34,36 @@ History is six lists, each only appended to:
 |---|---|---|
 | records | record | ID, time, proposal, submitter, request, output names, label, member |
 | accumulators | opened accumulator | ID, proposal, template, and the template's values typed with defaults filled in |
-| finishes | finished record | record ID, status, failure message, the optional outputs a completed record's workflow did not return |
+| finishes | finished record | record ID, status, failure message, the names of optional outputs that the workflow did not return |
 | pushes | push into an accumulator | accumulator ID, one row per table |
 | persist requests | request to persist outputs of a record, made after its submission | record ID, output names |
 | writes | write of a persist request that ended | record ID, the outputs written, or why the write failed |
 
-- A record never changes. Its status is its finish; a record without one is pending.
-- A request that reads an accumulator reads a record of the plain request of the state, which the accumulator's template and its pushes give ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). History stores such a record as the accumulator and its number of pushes, and lists the rows when it is read, so history grows by a constant amount per push and per read. A record that `freeze` returns is stored the same way ([ADR 0003](0003-accumulators-add-in-place.md)).
-- A persist request made at submission is part of the record, and its write is the record's: the record finishes once the write ends, completed if its outputs were written, failed with the write's reason if not, so no write is listed for it. A failed write of `client.persist` fails only that persist request ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
-- Output values are not history. [ADR 0002](0002-a-value-lives-while-something-keeps-it.md) says what keeps them, and [ADR 0005](0005-nothing-is-written-unless-persisted.md) how they are persisted.
-- A proposal is idle while none of its clients is open, none of its records is pending, and none of its writes is pending. Once it has been idle for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. A result needed for longer is published.
-- How a backend stores the lists is its choice. The in-process backend stores them as one event log, in memory or in a file of JSON lines.
+- A record never changes. Its status is its finish, and a record without one is pending.
+- The record of a state ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)) is stored as the accumulator and its number of pushes. Its rows are those of the first n pushes, taken from the pushes list when needed. So history grows by a constant amount per push and per pin. The record that `freeze` returns is stored the same way.
+- A persist request made at submission is part of the record. The outcome of that write is the record's finish, so the writes list holds no entry for it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
+- Output values are not history ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)). History names no file.
+- Once a proposal has been idle (README, [How long records and values are kept](../README.md#how-long-records-and-values-are-kept)) for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. An output needed for longer is published (README, [Provenance and publication](../README.md#provenance-and-publication)).
+- How a backend stores the lists is its choice. The in-process backend appends them to one event log, in memory or in a file of JSON lines.
 
 ## Alternatives considered
 
-- **History as an event log (ADR 0001).** The lists hold the same history. The log adds one order across all the lists, and views rebuilt by applying the events in that order; nothing outside storage reads either. It would also tie a hosted backend to a log.
-- **History kept as long as the proposal (ADR 0001).** Possibly forever, and so a second record of what ran next to SciCat.
-- **Each record dropped by age, keeping the older records that a kept record reads.** Bounds the history of every proposal, and a kept record's provenance stays complete. But the trigger loop would reduce again every dataset whose records were dropped, so it would need a memory of its own: a set of handled datasets per rule, or the inputs that the derived datasets in SciCat list. The second needs automatic reduction to publish every result, which the requirements leave open.
-- **A proposal's history dropped a retention period after its last record.** The same unit with a simpler clock. But a trigger loop that sees no new dataset for that long loses its rule's records and then reduces every dataset again, and an open client would lose the records it still reads.
-- **The record of a state stored with every row of its request.** A driver that reads after every push makes records of 1, 2, ..., n rows, so history grows with the square of the number of pushes: 45,000 rows for 300 pushes. The pushes already hold the rows once.
-- **No stored history in the in-process backend until a hosted backend exists.** This removes the log file, the restart, and their tests. But the in-process backend is the only place where storing and restarting are tried, and what it shows informs a hosted backend.
+- **History defined as one event log, with records and labels as views**, indexes rebuilt from the log. The lists hold the same history. The log adds one order across all lists, and nothing outside storage reads that order. It would tie a hosted backend to a log.
+- **History kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
+- **Each record dropped by age, keeping the older records that a kept record reads.** The trigger loop would reduce again every dataset whose records were dropped. It would need a memory of its own, such as a set of handled datasets per rule.
+- **A proposal's history dropped a fixed time after its last record.** A trigger loop that sees no new dataset for that long loses its rule's records and then reduces every dataset again. An open client would lose the records it still uses.
+- **The record of a state stored with every row, in storage that shares repeated rows.** Sharing saves bytes, but every layer above the store still handles every row, and that grows with the square of the number of pins.
+- **Output values kept with their records.** This stores one output per state, and makes a catalogue of outputs next to SciCat, which is a non-goal.
 
 ## Consequences
 
-- Dropping a proposal's history leaves no dangling reference: no other proposal reads its records (system story G5), and an idle proposal has no open client and no record that waits. The provenance of every kept record is complete.
-- A running trigger loop keeps a client of its proposal open, so the proposal is not idle and the loop never reduces a handled dataset again. A loop started for a proposal whose history was dropped reduces its datasets again.
-- A proposal that is never idle, such as one whose automatic reduction runs all year, keeps its history that long.
-- A client whose process ended without closing it keeps its proposal from being idle until the backend ends it. How the service notices such a client is open (scipp/essapps#34).
+- Dropping a proposal's history leaves no dangling reference. No other proposal reads its records (system story G5), and an idle proposal has no open client and no pending record.
+- A running trigger loop keeps a client of its proposal open, so the proposal is not idle. A loop started for a proposal whose history was dropped reduces its datasets again.
+- A proposal that is never idle, such as one whose automatic reduction runs all year, keeps all its history.
+- A client whose process ended without closing it keeps its proposal from being idle until the backend closes it (scipp/essapps#34).
 - A backend that restarts does not know when its earlier clients ended, so it counts idle time from its start.
-- The in-process backend keeps its log and never drops history. system.md describes the lists first, and the log as how this backend stores them.
-- What the in-process backend shows for a hosted one:
-  - A file that is only appended to stores lists that only grow, with one write per change. A submission is one line, so it is stored whole or not at all, and a line cut short by a crash is dropped when the file is read.
-  - A log must keep old event formats readable for as long as it is kept, while the views may change between versions. Database tables would be migrated instead.
-  - A backend that rebuilds its views from the log at start holds every record of its proposals in memory.
-  - H2 needs persisted values: a record pending at a restart runs only if each value it reads is a dataset, is written, or is an output of a pending record that runs ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Restart).
+- The in-process backend never drops history.
+- Its log appends one line per change, so a submission is stored whole or not at all. A line cut short by a crash is dropped when the file is read.
+- Old event formats must stay readable as long as the log is kept.
+- A backend that rebuilds its indexes of records from the log at start holds every record of its proposals in memory.
+- A restart keeps history, not values, so pending work goes on only if what it reads was persisted ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
