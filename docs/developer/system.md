@@ -1,9 +1,8 @@
 # ESS data-reduction framework: the system
 
 **Status: the design of how the system keeps history and values.
-The in-process backend implements the history, the clients, the accumulators, dropping values, and cancelling work that nothing keeps, and never drops history.
-It logs the record of a state with its whole request, not yet as the accumulator and its number of pushes.
-Persisting, the store, freezing, and selections are designed and not yet implemented.
+The in-process backend implements the history, the clients, the accumulators, dropping values, cancelling work that nothing keeps, freezing, selections, and persisting to a store it is given, and never drops history.
+Only a fake store held in memory exists.
 The service is designed and not implemented.**
 
 [README.md](README.md) describes the API: what workflow authors, app authors, and notebooks write, and what they can rely on.
@@ -38,16 +37,17 @@ History is six lists, each only appended to:
 | List | One item per | Holds | Appended when |
 |---|---|---|---|
 | records | record | ID, time, proposal, submitter, request, output names, label, member; for the record of a state, the accumulator and its number of pushes in place of the request | a submission or a freeze is accepted |
-| accumulators | opened accumulator | ID, proposal, template | an accumulator is accepted, before its held state opens |
-| finishes | finished record | record ID, status, failure message | a record completes, fails, or is cancelled |
+| accumulators | opened accumulator | ID, proposal, template, and the template's values typed with defaults filled in, which with the pushes give the plain request of a state | an accumulator is accepted, before its held state opens |
+| finishes | finished record | record ID, status, failure message, the optional outputs a completed record's workflow did not return | a record completes, fails, or is cancelled |
 | pushes | push into an accumulator | accumulator ID, one row per table, each as a request over it holds it | a push is accepted, before its rows are added |
 | persist requests | request to persist outputs of a record | record ID, output names | `client.persist`, or a submission or freeze with `persist=`, is accepted |
-| writes | write that ended | record ID, the outputs written, or why the write failed | a write ends |
+| writes | write of `client.persist` that ended | record ID, the outputs written, or why the write failed | such a write ends |
 
 Client entries are not history: opening or ending a client, making a stage, releasing anything, and `client.output` append nothing of their own, and no client entry survives a restart.
 A release that leaves a pending record with no keeper appends its finish, `cancelled`.
 A record does not say which stage it went through.
 A record never names an accumulator: a submission that reads one appends a record of the state's plain request before the records that read it ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)).
+A persist request made at submission is part of the record, and its write is the record's: the record finishes once the write ends, so no write is appended for it.
 
 ### An example
 
@@ -64,8 +64,7 @@ finishes          #2  completed
 pushes            a   {runs: {run: uuid:run-2}}
 records           #3  volume/v1  a after 2 pushes
 persist requests  #3  all outputs
-finishes          #3  completed
-writes            #3  counts
+finishes          #3  completed, once its outputs are written
 ```
 
 `uuid:run-1` is the dataset identity the backend resolved `dataset(run=1)` to.
@@ -149,8 +148,8 @@ Each event appends to history:
 | `opened` | one accumulator |
 | `finished` | one finish |
 | `pushed` | one push |
-| `persist` | one persist request |
-| `written` | one write that ended |
+| `persist` | one persist request made after submission; one made at submission is part of `submitted` |
+| `written` | one write of such a request that ended |
 
 The backend appends an event to the log, then applies it to its maps (`Views.apply`).
 A refused call appends nothing, so every event in the log can be applied when the log is read again.
@@ -181,7 +180,7 @@ backend = Backend(datasets, bind, log=Log(Path('log.jsonl')), store=store)   # a
 [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) (Restart) gives the rule: a pending record that no persist request needs is cancelled (`the backend restarted`); one that a persist request needs runs if each value it reads is a dataset, is written, or is an output of a pending record that runs, and fails otherwise.
 A pending record runs from scratch, without its stage, since client entries do not survive a restart.
 A pending record that reads a held state fails, since the held state did not survive the restart.
-A write that had not ended has failed, since its value is gone.
+A write of `client.persist` of a completed record that had not ended has failed, since its value is gone; a record persisted at submission is pending until its write ends, so it runs again, and its writes replace what the store holds.
 
 This is what system story H2 (backend upgrade with runs in flight) needs from history.
 H2 also needs every event format to stay readable across versions, and the store, so that a pending record whose input had completed still runs.
@@ -251,6 +250,8 @@ The backend checks this when a client releases a record or a stage or ends, when
 Any other reference is refused, also to a record that is still pending and that only another pending request reads.
 A call through a stage that has not yet staged may also reference what the stage keeps; once the stage has staged, a call reads only the values of its blanks, and its record's edges to the template's values are provenance.
 `client.output` reads the same values, waiting for a pending record or write; any other raises.
+It reads the values its client keeps from memory and the others from the store, so a client never gets the value another client holds.
+A workflow reads its inputs from memory while the backend holds them, whichever client keeps them.
 
 **Cancelling work that nothing keeps.** When a pending record loses its last keeper, the backend finishes it as `cancelled`, and lets go of what it reads, which may cancel the records that only it read.
 A workflow that is already running cannot be interrupted: its record is cancelled at once, and the workflow runs to its end while its outputs are dropped.
@@ -387,6 +388,7 @@ The driver then opens a new accumulator.
 Releasing the accumulator or ending its client removes it from the client entry, so it takes no more pushes or reads.
 The steps up to the last pinned state still run, and the later ones are dropped; the held state is dropped once its readers have run.
 A pending record that nothing keeps any more, such as a cut whose client released it, is cancelled, and so is a record of a state that only it read.
+Ending a client waits until the writes of its `client.persist` requests have ended, and raises naming those that failed.
 Closing the backend waits until no record with a persist request is pending and no write is pending.
 
 **The held state that keeps the rows.** For a binding without `held_state(fixed)`, `open_held_state` makes a held state that keeps the rows pushed so far:

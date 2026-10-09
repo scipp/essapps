@@ -67,7 +67,7 @@ Pinning never waits for a push to be added.
 A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
 `client.output` waits for it, as it waits for a pending record.
 
-- **`client.output(acc, name, select=None)`** copies the output, or the part of it that `select` names, and makes no record. It is a reader of the state only until it has copied, so a selection holds back the next push only for as long as it takes to copy the slice.
+- **`client.output(acc, name, select=None)`** copies the output, or the part of it that `select` names, and makes no record. It is a reader of the state while the state's plain request is checked, its outputs are computed if no reader has yet, and the output or the part is copied. A selection saves the copy of the whole output, not the computation of the outputs.
 - **A request that references `acc.ref(name)`** reads the record of the state's plain request, which its submission makes ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). It reads the state's output in place while it runs, so a read costs no second copy of the held state, such as the 4D volume of spectroscopy.
 - **`client.freeze(acc)`** returns the record of its last state, and the accumulator takes no more pushes (Freeze).
 - A state is counted in pushes, not rows. A push may add a row to each of several tables, and the log of the first `n` pushes gives the rows of each table:
@@ -130,9 +130,9 @@ client.output(total, 'counts')             # the volume, read as any record's ou
 ```
 
 - Freeze and pushes are ordered as they are logged: a push logged after a freeze is refused.
-- The plain request of that state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
+- The plain request of that state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was. A push made while the freeze is checked waits for that answer: it is logged if the freeze is refused, and refused if the freeze is logged.
 - The record is a reader of its state: until it has finished, the held state and the pushes up to its state stay, also if the accumulator is released.
-- Its values are the outputs of the last state, computed once and not copied. No push follows, so they stay as they are. Once the record has completed, the backend drops the held state, and the values keep any memory they share with it.
+- Its values are the outputs of the last state, computed once and not copied. No push follows, so they stay as they are. Once the record has completed, the backend drops the held state when the last reader of that state is done, such as a request of an earlier submission that pinned it; the values keep any memory they share with it.
 - A read of the accumulator after that is refused and names the record, which is read instead.
 - If the record fails or is cancelled, the accumulator still takes no pushes, but can be read and frozen again, unless it has stopped (Failures).
 - The client keeps a frozen accumulator until it releases it or ends, as any accumulator; once the record has completed, it holds no value.

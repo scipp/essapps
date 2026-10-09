@@ -37,6 +37,9 @@ For a fresh session. Read [persist-and-freeze.md](persist-and-freeze.md) first: 
 12. An upgrade with persisted work running is open (ADR 0005, Open; #27): the old instance finishing it conflicts with the one-backend history lock.
 13. A stage keeps the values its template references until it is released.
 14. Closing `local()` waits until the pending records with a persist request are written.
+15. Closing a client waits for the writes of its `client.persist` requests and raises naming each that failed (review of #52).
+16. A rule's `persist` names outputs or is `None` for every one; a rule cannot turn persisting off.
+17. A client reads the values it keeps from memory and the others from the store, so it never gets another client's value; a workflow reads its inputs from memory while the backend holds them.
 
 ## Order of the work
 

@@ -50,7 +50,7 @@ It has a helper for tests: `datasets.add_published(entry)` lists a published ent
 `scicat` is a fake publisher; `scicat.entries[pid]` is a published entry, with `.provenance`.
 `folder` is a directory with files that hold counts, as `measure` datasets do.
 `corrupt(run)` makes a dataset unreadable, with the failure message `'file signature not found'`; `repair(run)` undoes it.
-`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets, history, and store: the specs it offers and the software versions its records name. The upgrade ends every client of the backend before it.
+`upgrade(specs=..., versions=...)` returns a client of an upgraded backend over the same datasets, history, and store: the specs it offers, every one by default, and the software versions its records name. The upgrade ends every client of the backend before it, and `connect` then makes clients of the upgraded backend.
 `replace` is `dataclasses.replace`.
 
 Besides the calls in README.md, the stories use this one:
@@ -420,6 +420,7 @@ runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
 corrupt(runs['7'])                                                   # the transfer was cut short
 for member, run in runs.items():
     client.submit(IOFQ, {'run': run}, label='night', member=member, persist=True)
+client.close()                                                       # the laptop is closed
 
 morning = connect()                                                  # the next day, a new client
 night = {r.member: r for r in morning.records(label='night')}
@@ -561,15 +562,16 @@ r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
 measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
 loop.step()
 
-curve = client.latest('reflectivity', member='si')
-assert len(client.records(label='reflectivity')) == 2         # one per step, not one per arrival
+user = connect()                                              # any client of the proposal
+curve = user.latest('reflectivity', member='si')
+assert len(user.records(label='reflectivity')) == 2           # one per step, not one per arrival
 assert curve.request.params['runs'] == [{'run': r} for r in (r2, r3, r4)]   # run order, not arrival order
-assert client.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+assert user.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 ```
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve later ([system.md](system.md), The service).
+The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([system.md](system.md), The service).
 
 ### E2. Automatic reduction goes quiet
 
@@ -618,10 +620,11 @@ improved = replace(rule, template=replace(rule.template, params={'threshold': 1.
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
 (after,) = TriggerLoop(client, rules=[improved]).step()
 
+user = connect()                                                # any client of the proposal
 assert after.request.datasets() == [second]                     # run 1 is not reduced again
-assert [client.output(r, 'iofq').values.tolist() for r in (before, after)] == [
+assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
-stale = [r for r in client.records(label='iofq') if r.request.params['threshold'] != 1.5]
+stale = [r for r in user.records(label='iofq') if r.request.params['threshold'] != 1.5]
 assert [r.request.datasets() for r in stale] == [[first]]       # to reprocess, if the user wants
 ```
 

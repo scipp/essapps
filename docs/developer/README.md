@@ -190,7 +190,7 @@ client.output(result, 'iofq', select={'Q': slice(0, 10)})   # a copy of part of 
 
 `select=` picks part of an array output by dimension name, an index or a slice for each dimension it names, and copies only that part.
 It makes no record.
-It is refused for an output that is not an array, for a dimension the output lacks, and for an index out of range.
+It is refused without the name of an output, and for an output not declared as an array; a dimension the output lacks, or an index out of range, raises what the slice raises.
 On the service, only the selected part leaves the backend.
 
 | Call | Does |
@@ -358,9 +358,9 @@ client.submit(requests, label='night', persist=('iofq',))       # only iofq; the
 
 - `client.persist` adds the store as a keeper of a record the client keeps. The client keeps its own hold until it releases the record, so reads stay in memory until then.
 - `persist=` at submission hands the records to the store: the client does not keep them. The outputs named are kept until written, and the others are dropped when the workflow returns. Batch reduction and the trigger loop submit this way, so their clients keep nothing.
-- Every client of the proposal reads and references persisted values. Reads wait for the write.
+- Every client of the proposal reads and references persisted values. Reads wait for the write. A client reads the values it keeps from memory and the others from the store, so it never gets the value another client holds.
 - A record persisted at submission finishes once it is written. If the write fails, the record fails with the write's reason, and is submitted again like any failed record.
-- If a write that `client.persist` asked for fails, only that persist request fails. The client still keeps the value and can ask again; other clients' reads of it raise with the write's reason.
+- If a write that `client.persist` asked for fails, only that persist request fails. The client still keeps the value and can ask again; other clients' reads of it raise with the write's reason. Closing the client waits for its writes, and raises naming each that failed.
 - Persisting an output that is persisted does nothing.
 - Persisted values are dropped with the proposal's history at the latest. A value dropped earlier, for example to free disk space, is read as a value that nothing keeps.
 
@@ -577,7 +577,7 @@ Pinning never waits for a push to be added.
 A request that reads a state the accumulator has yet to reach waits for it, as it waits for a record it references.
 `client.output` waits for it as for a pending record, and `client.provenance` returns at once.
 
-- `client.output` of an accumulator copies the output, or the part that `select` names, and makes no record. It holds back the next push only while it copies.
+- `client.output` of an accumulator copies the output, or the part that `select` names, and makes no record. It holds back the next push while the state is checked, its outputs are computed if no reader has yet, and the part is copied.
 - A submission pins the state of each accumulator its requests reference, and makes a record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
 - The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state's `outputs` returns, not a copy, and a request reads them in place, so a read costs no second copy of the held state. They stay as they are until the next push, which waits for that request (see Adding waits for readers).
 - No client asked for the record of a state, so no client keeps it: its outputs are kept for the requests of its submission until they have run. A later request cannot reference it, and `client.output` of it raises; the accumulator is read instead.
@@ -773,7 +773,7 @@ TriggerLoop(client, rules=[rule]).run()
 ```
 
 The *trigger loop* is the driver for rules. It runs in a driving server, which has its own API to add, replace, and list rules.
-It submits with `persist=`, so its client keeps nothing.
+It submits with `persist=`, so its client keeps nothing: a rule's `persist` names the outputs, every one by default, and persisting cannot be turned off.
 It reads which datasets it has handled from the records under each rule's label, so a restarted loop needs no memory of its own.
 The label belongs to the rule: any record under it counts as handled, failed or not, so manual work uses labels of its own.
 Templates and rules are plain data; the core keeps no store of them, and records do not name them.
