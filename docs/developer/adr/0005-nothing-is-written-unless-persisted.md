@@ -11,7 +11,7 @@ Users find the results of a batch reduction they started the day before (same pa
 An upgrade of the service is assumed to let the reductions running at that moment finish ([systems](../../requirements/systems.md), Assumed; system story H2).
 The framework does not tell intermediate from final results ([users](../../requirements/users.md)), so it cannot decide by itself which outputs to write.
 
-[ADR 0002](0002-the-client-is-the-lifetime.md) decides what keeps a value: the client that asked for a record keeps its values until it releases them or ends.
+[ADR 0002](0002-a-value-lives-while-something-keeps-it.md) decides what keeps a value: the client that asked for a record keeps its values until it releases them or ends.
 That rule alone fails for unattended work.
 The trigger loop submits through one client and never releases anything, so automatic reduction would keep every output it makes.
 A batch client that closes would take its values with it, so the next morning only the records would be left.
@@ -28,7 +28,7 @@ So what is written are the outputs of requests: results, and inputs worth keepin
 ## Decision
 
 **Nothing is written unless persisted**, in the user's process and on the service alike.
-To *persist* an output is to write it to the *store*, which then keeps it ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers).
+To *persist* an output is to write it to the *store*, which then keeps it ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), the keepers).
 An output is *persisted* while a persist request names it and its write has not failed: it is written, or its write is pending.
 
 ```python

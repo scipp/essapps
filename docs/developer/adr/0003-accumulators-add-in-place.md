@@ -31,7 +31,7 @@ For N pushes into a value of size V, with a request that reads the value after e
 | add in place, copy for each request that reads it | 2V | one V per read | N·V |
 | add in place, requests read the value itself | V | V | V |
 
-The loop holds N·V in the first two rows because a client keeps the values it asks for ([ADR 0002](0002-the-client-is-the-lifetime.md)).
+The loop holds N·V in the first two rows because a client keeps the values it asks for ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 
 ## Decision
 
@@ -151,7 +151,7 @@ client.output(cut, 'cut')
 
 Releasing waits for nothing.
 Pushes that no pinned read needs are dropped, and the held state is dropped once its readers have run.
-Work that nothing keeps any more is cancelled ([ADR 0002](0002-the-client-is-the-lifetime.md)): releasing the cut too cancels it, and with it the record of the state it reads.
+Work that nothing keeps any more is cancelled ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)): releasing the cut too cancels it, and with it the record of the state it reads.
 A released accumulator takes no more pushes or reads.
 Ending the client releases the accumulator in the same way.
 

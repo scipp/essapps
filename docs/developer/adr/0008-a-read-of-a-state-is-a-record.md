@@ -24,7 +24,7 @@ Everything that follows records would have to handle it apart:
 The arrival symmetry already says what a state is: state n gives the outputs of the plain request over the rows of the first n pushes ([README](../README.md), Symmetries; [ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 
 A record of a state differs from other records in one way: its value is what the held state returned for the state, not a copy, and the next push may change it in place.
-What may keep and read such a value follows from the rules about values that [ADR 0002](0002-the-client-is-the-lifetime.md) and [ADR 0005](0005-nothing-is-written-unless-persisted.md) state for every record.
+What may keep and read such a value follows from the rules about values that [ADR 0002](0002-a-value-lives-while-something-keeps-it.md) and [ADR 0005](0005-nothing-is-written-unless-persisted.md) state for every record.
 
 ## Decision
 
@@ -47,7 +47,7 @@ Three things are particular to it:
 
 Everything else follows from the rules for every record.
 No client asked for it, so no client keeps it, and nothing writes it.
-Its value is kept for the requests of its submission until their workflows have returned ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers), and while it is kept, the next push waits.
+Its value is kept for the requests of its submission until their workflows have returned ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), the keepers), and while it is kept, the next push waits.
 A later submission does not reference it, since a submission reads only values kept for it; so no reader can wait for a push that waits for that reader.
 `client.output` of it raises, since it reads only values kept for the caller; the accumulator is read instead.
 A workflow that reads it must neither modify it nor return it or a view of it, as for every input ([README](../README.md), Guarantees).

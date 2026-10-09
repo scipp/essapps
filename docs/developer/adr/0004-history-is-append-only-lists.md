@@ -55,7 +55,7 @@ History is six lists, each only appended to:
 - A record never changes. Its status is its finish; a record without one is pending.
 - A request that reads an accumulator reads a record of the plain request of the state, which the accumulator's template and its pushes give ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)). History stores such a record as the accumulator and its number of pushes, and lists the rows when it is read, so history grows by a constant amount per push and per read. A record that `freeze` returns is stored the same way ([ADR 0003](0003-accumulators-add-in-place.md)).
 - A record persisted at submission finishes once its write ends: completed if its outputs were written, failed with the write's reason if not. A failed write of `client.persist` fails only that persist request ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
-- Output values are not history. [ADR 0002](0002-the-client-is-the-lifetime.md) says what keeps them, and [ADR 0005](0005-nothing-is-written-unless-persisted.md) how they are persisted.
+- Output values are not history. [ADR 0002](0002-a-value-lives-while-something-keeps-it.md) says what keeps them, and [ADR 0005](0005-nothing-is-written-unless-persisted.md) how they are persisted.
 - A proposal is idle while none of its clients is open, none of its records is pending, and none of its writes is pending. Once it has been idle for the retention period, days to weeks as the deployment sets it, its history is dropped as a whole. A result needed for longer is published.
 - How a backend stores the lists is its choice. The in-process backend stores them as one event log, in memory or in a file of JSON lines.
 

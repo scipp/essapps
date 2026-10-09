@@ -10,7 +10,7 @@ The service is designed and not implemented.**
 This document describes how the backend keeps what the API promises about records, accumulators, and values.
 Other parts of the system, such as where stages run, get sections here when they are designed.
 [ADR 0004](adr/0004-history-is-append-only-lists.md) records why history is six lists that a backend stores as it chooses and drops per proposal.
-[ADR 0002](adr/0002-the-client-is-the-lifetime.md) and [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) record what keeps a value and when it is written, and [ADR 0003](adr/0003-accumulators-add-in-place.md) how an accumulator keeps its held state.
+[ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md) and [ADR 0005](adr/0005-nothing-is-written-unless-persisted.md) record what keeps a value and when it is written, and [ADR 0003](adr/0003-accumulators-add-in-place.md) how an accumulator keeps its held state.
 
 This document uses the terms of README.md (see its Terms table), in particular spec, binding, client, record, table, row, plain request, stage, accumulator, push, state, held state, and read.
 Story IDs such as D7 refer to [user-stories.md](user-stories.md) and [system-stories.md](system-stories.md).
@@ -234,7 +234,7 @@ A call of a client without an entry raises `ClientEnded`; the backend is the onl
 
 ### Values
 
-README.md states what keeps an output value (How long records and values are kept; [ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
+README.md states what keeps an output value (How long records and values are kept; [ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 The backend keeps three things for that rule:
 
 - in each client entry, the IDs of the records the client asked for and has not released;

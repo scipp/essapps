@@ -304,7 +304,7 @@ They are read long after the request ran: a batch's failures are read the next m
 A proposal is idle while none of its clients is open, none of its records is pending, and none of its writes is pending; once it has been idle for a retention period of days to weeks, its records are dropped as a whole.
 A result needed for longer is published (see Provenance and publication).
 
-**Values.** A record and its inputs never change, but its values come and go ([ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
+**Values.** A record and its inputs never change, but its values come and go ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 A value exists while something keeps it:
 
 - **the client that asked for the record**, with `submit`, `compute`, or `freeze` without `persist=`, until it releases the record or ends;

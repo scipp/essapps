@@ -32,7 +32,7 @@ total = client.freeze(volume, persist=True)               # the last state as a 
 The README with ADR 0008 has three problems (Simon, review of #47):
 
 1. **Accumulators differ from other workflows.** ADR 0008 gives the record of a state five rules that no other record has: no client keeps its outputs; only the submission that made it reads it; `client.output` of it copies; on the service, nothing writes it; after a restart, a pending one is computed again as its plain request.
-2. **The service and the user's process keep values by different rules.** The client keeps values in memory in one ([ADR 0002](../adr/0002-the-client-is-the-lifetime.md)); every output is written to a file in the other ([ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md)); both have exceptions for states.
+2. **The service and the user's process keep values by different rules.** The client keeps values in memory in one ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)); every output is written to a file in the other ([ADR 0005](https://github.com/scipp/essapps/blob/699f776/docs/developer/adr/0005-the-service-writes-every-output.md)); both have exceptions for states.
 3. **Overhead nobody asked for.** The service writes and reads back every output: the masked counts of story S3 are written 500 times in a batch of 500, and a volume a web UI only looks at is written whole. Copying the last state of an accumulator (`COPY`) needs a second volume.
 
 The rules in (1) are not about accumulators.

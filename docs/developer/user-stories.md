@@ -37,7 +37,7 @@ A story may add a toy spec to this table; it must take runs directly and be chec
 ## Conventions
 
 Fixtures: `client` is a client for proposal `p1`.
-In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-the-client-is-the-lifetime.md)).
+In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), which is designed and not implemented.
 The story tests make a `Client` of one in-process `Backend` for both, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
