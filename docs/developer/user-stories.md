@@ -38,7 +38,7 @@ A story may add a toy spec to this table; it must take runs directly and be chec
 
 Fixtures: `client` is a client for proposal `p1`.
 In the notebook stories it is `local(proposal='p1', datasets=datasets, bind=...)`, a backend in the user's process ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
-In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)), which is designed and not implemented.
+In the batch and automatic stories, sections D and E, it is `connect(url, proposal='p1')`, a client of the service at `url` ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)), which is designed and not implemented.
 The story tests make a `Client` of one in-process `Backend` for both, with a fake store in memory.
 In the stories, `connect(proposal=..., user=...)` is `connect(url, ...)` to the same service, by default for `client`'s proposal and user; `user=` stands for logging in as another user.
 `other` is a client of a second backend.
@@ -148,7 +148,7 @@ assert client.output(result, 'subtracted').values.tolist() == [1.0, 4.0]  # [2, 
 assert result.request.datasets() == runs + backgrounds
 ```
 
-This is the plain request of "One sum, two ways" in the README: `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
+This is a plain request over tables (README.md, "Combining runs: tables"): `NORMALIZE` takes one table of runs, and `BACKGROUND` two, as `IOFQ_MULTI` does. B2 sums with an accumulator.
 
 ### S7. Reduce each sample with the can measured before it
 
@@ -279,7 +279,7 @@ assert client.records() == [again]
 
 Reading the accumulator makes no record: `first` and `added` are copies, which the next push leaves unchanged.
 The provenance of `total` is that of the plain request over its three rows.
-An accumulator has no `remove` (README.md open question 2), so the user starts over with the plain request over the runs to keep (README.md, "One sum, two ways").
+An accumulator has no `remove` (README.md open question 2), so the user starts over with the plain request over the runs to keep (README.md, "Stages and accumulators").
 That adding 613 costs about one run is system story B2.
 
 ### B4. Explore a 4D volume
@@ -362,7 +362,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its binding is a function, so the held state keeps the rows and stitches them again (README.md, "One sum, two ways").
+The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its binding is a function, so the held state keeps the rows and stitches them again (README.md, "What a binding provides").
 
 ### C5. Vanadium and sample tuned together
 
@@ -508,7 +508,7 @@ assert len(client.records(label='scan')) == 6
 
 The first records keep the default of version 1, so the change of default shows in the records.
 
-`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped ([system.md](system.md), The service).
+`before[0]` was persisted at submission, so its output can be read weeks later, until the proposal's history is dropped (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 
 ### D7. Rotation scan over three hundred angles
 
@@ -571,7 +571,7 @@ assert user.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
-The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve ([system.md](system.md), The service).
+The trigger loop persists what it submits, every output by default, so any client of the proposal reads each curve (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 
 ### E2. Automatic reduction goes quiet
 

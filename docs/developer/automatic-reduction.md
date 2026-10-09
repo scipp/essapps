@@ -14,7 +14,7 @@ requests = apply(Template(IOFQ, blanks=('run',)), samples, client.datasets, memb
 records = client.submit(requests, label='scan', persist=True)
 ```
 
-A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
+A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
@@ -58,7 +58,7 @@ loop.run()                   # steps forever
 ```
 
 The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label names it, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
-This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([system.md](system.md), How long history is kept).
+This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
 A record that a notebook submits under a rule's label stops the rule from reducing the datasets it names, so manual work uses labels of its own.

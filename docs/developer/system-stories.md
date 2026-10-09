@@ -3,7 +3,7 @@
 These stories check what the system must provide beyond the API of [README.md](README.md): cost, placement, persistence, recovery, and operations.
 Each has an actor, a goal, and the property to check.
 Where a story shares a goal with an API story in [user-stories.md](user-stories.md), it has the same identifier.
-[system.md](system.md) describes the part of the system that keeps history and values; the stories get code as the system document grows.
+How the backend keeps history and values is described in the backend's docstrings (`ess.dispatch.backend`).
 
 ## S. Small stories
 
@@ -63,7 +63,7 @@ Property: the vanadium output passes to the sample's stage in memory, within one
 ### D2. Overnight cluster batch
 
 Actor: NMX user. Goal: thirty long runs finish overnight while the laptop is closed.
-Property: requests run to completion with no client connected, in parallel as far as the cluster allows. The batch is persisted at submission, so each record's outputs are written to the store before it completes, and the next day's client reads it ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md)).
+Property: requests run to completion with no client connected, in parallel as far as the cluster allows. The batch is persisted at submission, so each record's outputs are written to the store before it completes, and the next day's client reads it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 ### D3. Cancel and resubmit
 
@@ -75,7 +75,7 @@ Gap: a cancel ends the records, but a workflow that has started runs on and keep
 ### D7. Rotation scan over three hundred angles
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
-Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run and adds it to the held state, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open). A cut copies only its selection and makes no record; a cut kept as a record makes the record of its state too, which history stores as the accumulator and its number of pushes ([system.md](system.md), An example). History therefore grows in proportion to the number of runs. The frozen volume is written once, and no copy of it is made.
+Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run and adds it to the held state, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open). A cut copies only its selection and makes no record; a cut kept as a record makes the record of its state too, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). History therefore grows in proportion to the number of runs. The frozen volume is written once, and no copy of it is made.
 Each cut checks the plain request of its state, which takes time in proportion to the rows so far: about 1.3 ms at 300 rows, so its total over the scan grows with the square of the number of runs ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
 
 Gap: reducing the runs of one scan on several nodes needs a merge of two held states (README.md open question 1).
@@ -109,7 +109,7 @@ Property: stored outputs can be dropped by proposal, label, or age. Every record
 ### H2. Backend upgrade with runs in flight
 
 Actor: DMSC. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade with a persist request finishes without anyone submitting it again, and so do the records it reads. Whether the old instance finishes them before it stops, or the new one runs them again, is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open); a record that reads an accumulator's held state finishes only if the old instance finishes it. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
+Property: every record pending at the upgrade with a persist request finishes without anyone submitting it again, and so do the records it reads. Whether the old instance finishes them before it stops, or the new one runs them again, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open); a record that reads an accumulator's held state finishes only if the old instance finishes it. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
 
 ### H3. History ends when the work does
 
