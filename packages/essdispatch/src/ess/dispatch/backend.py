@@ -8,9 +8,8 @@ What the backend knows of history is its log (see ``log.py``): every
 submission, finished record, opened accumulator, and push is appended as one
 event and then applied to its views (see ``views.py``). A change is checked
 before its event is appended, so the log holds only events that apply. A
-backend given a log that already has events applies them first and runs the
-records left pending, without their stages; a record left pending that reads
-an accumulator fails, since the accumulator is gone.
+backend given a log that already has events applies them first. It has no
+clients, so nothing keeps the records left pending, and they are cancelled.
 
 A client is one entry in the backend, from :meth:`Backend.open_client` to
 :meth:`Backend.close_client`: its proposal, the records whose outputs it keeps,
@@ -20,21 +19,36 @@ what waits for what are not history. This backend keeps them in memory, so a
 backend started from an existing log has no clients and cannot read the
 outputs of the backend that wrote it.
 
-An output value is kept while the client that made its record keeps it, or
-while a pending request or a step of an accumulator that reads it has yet to
-run. Releasing and ending stop no work.
+An output value is kept while the client that made its record keeps it, while
+a stage whose template references it has yet to stage, or while a pending
+request or a step of an accumulator that reads it has yet to run. Once a stage
+has staged, or a step is done, what the binding holds is its own. A pending
+record whose outputs nothing keeps is cancelled, since they would be dropped
+the moment they are computed; cancelling lets go of what it reads, so this
+passes along a chain. A workflow already running is not interrupted: its
+record is cancelled at once, and its outputs are dropped when it returns.
 
-A request waits until every record it references has completed, and the
-state of an accumulator it reads has been reached; an accumulator's steps
-wait as described below. This is the only scheduling there is.
+A client reads, and its requests, stages, and accumulators reference, only the
+outputs of records it keeps, whether they are pending or completed; a request
+through a stage that has yet to stage also those the stage keeps, and one
+through a stage that has staged reads only the values of its blanks. So whether
+a call is accepted does not depend on how far other work has run, and a value
+kept only for another client or for a pending request is refused.
+
+A request waits until every record it references has completed, the record
+of an accumulator's state until the accumulator has reached that state, and
+an accumulator's steps as described below. This is the only scheduling there
+is.
 
 A request runs through its spec's binding. A stage checks its template's
-values as a request's and resolves dataset names when it is made, and a
-request through it must have its values outside the blanks. Such a request
-runs through the callable the binding returned for the stage's first call, so
-a binding that holds values computes only what depends on the blanks. A stage
-lives until its client releases it or ends, and the requests made through it
-have run.
+values as a request's and resolves dataset names when it is made, and keeps
+the outputs they reference until it has staged. A request through it must
+have its values outside the blanks. The first such request to run stages the
+binding with the template's values, and every request through the stage runs
+through the callable the binding returned, so a binding that holds values
+computes only what depends on the blanks. If staging fails, the stage stops:
+the requests through it fail, and later ones are refused. A stage lives until
+its client releases it or ends, and the requests made through it have run.
 
 An accumulator opens from a template whose blanks are table fields, checked
 as a stage's template is. Each other value is typed by its own field. Each
@@ -57,29 +71,43 @@ are dropped, and the requests that wait for a state it will not reach fail.
 A read pins the accumulator's state after the pushes logged so far: a request
 that references the accumulator, when it is submitted; a read of its outputs;
 and its provenance. Pinning never waits for a push to be added. A request
-that reads a state the accumulator has yet to reach waits for it as for an
-input, and a read of its outputs waits for it as ``wait`` waits for a record.
-A request reads at most one accumulator, and a row or a template reads none.
-A state may be read only if its plain request would be accepted. The first
-read of a state validates that request, outside the backend's lock, and a
-read of a state whose request would be refused is refused with that
-request's reason. So rules on a whole table, such as its length, and the
-params model's own validators apply at reads, not at pushes. Validators that
-read more than one value, such as the params model's own or those of a table
-field, must not change a value: the held state got the values typed one by
-one, and nothing checks that the plain request holds the same.
+references an accumulator's output by a placeholder (``AccumulatorRef``). The
+submission makes one record of the plain request of the pinned state for each
+accumulator its requests reference, logs it before them, and the records of
+the requests reference that record's outputs. No client keeps the record of a
+state, so only the requests of that submission read it. A request reads at
+most one accumulator, and a row or a template reads none. A state may be
+read only if its plain request would be accepted. The first read of a state
+validates that request, outside the backend's lock, and a read of a state
+whose request would be refused is refused with that request's reason. So
+rules on a whole table, such as its length, and the params model's own
+validators apply at reads, not at pushes. Validators that read more than one
+value, such as the params model's own or those of a table field, must not
+change a value: the held state got the values typed one by one, and nothing
+checks that the plain request holds the same.
 
 The outputs of a state are computed outside the backend's lock, all at once,
-the first time a request or a read of its outputs reads the state, and kept
-until the next push. A request reads them as the binding returns them, not a
-copy, and a read of the outputs copies them. So the next push waits until the
-readers of the state before it are done: the requests that reference it,
-even those cancelled while they run, and the reads of its outputs in
-progress. A request that names an earlier state is refused. A reader of a
-state waits only for pushes up to that state and for records submitted
-before it, so no wait goes round in a circle. Releasing the accumulator or
-ending its client stops no work: the pushes logged are added, and the held
-state is dropped once its readers are done.
+the first time a record of the state or a read of its outputs reads it, and
+kept until the next push. The record of a state is computed from the held
+state, as a call through a stage is from what the stage holds: its outputs
+are what the binding returns, not a copy, and may share memory with the held
+state, which the next push may change in place. They are kept until the
+requests that read them have run, and the record holds the state as its
+reader until then. Reading the outputs of the accumulator copies them. So the
+next push waits until the readers of the state before it are done, since the
+held state cannot go back to that state and no reader may see its outputs
+change: the records of that state, until the requests that read them have
+run, even those cancelled while they run, and the reads of its outputs in
+progress. Every wait is for work logged before the waiter: a request waits
+for records submitted before it and for pushes logged before its submission,
+and a push waits for the records of the state before it and the requests of
+their submissions, all logged before the push, since only the submission that
+made a record of a state reads it.
+So no wait goes round in a circle.
+Releasing the accumulator or ending its client keeps the pushes up to the last
+state a reader still holds, which are still added, and drops the later ones,
+again each time a reader lets go; the held state is dropped once its readers
+are done.
 """
 
 from __future__ import annotations
@@ -100,7 +128,6 @@ from pydantic_core import (
     PydanticSerializationError,
     from_json,
     to_json,
-    to_jsonable_python,
 )
 
 from ess.spec import (
@@ -245,6 +272,15 @@ def _reading(value: Any) -> list[OutputRef | AccumulatorRef]:
     return [ref for _, ref in walk_refs(value) if not isinstance(ref, DatasetRef)]
 
 
+def _output_reads(values: Any) -> list[tuple[str, str]]:
+    """The outputs of records that ``values`` reference, by record ID and name."""
+    return [
+        (ref.record, ref.output)
+        for _, ref in walk_refs(values)
+        if isinstance(ref, OutputRef)
+    ]
+
+
 def _reads(
     params: type[BaseModel], field: str, value: Any
 ) -> Iterator[tuple[str, OutputRef | AccumulatorRef, DataField | None]]:
@@ -283,13 +319,17 @@ class Entry:
 
 class _Stage:
     """
-    A stage: its spec, its blanks, its fixed values, and the binding's callable.
+    A stage: its spec, its blanks, its fixed values, and the binding's callable
+    once it has staged.
 
     The fixed values are the template's, with dataset names resolved when the
-    stage was made. The first call stages the binding, and so does the call
-    after one that failed to stage. What the callable holds is a cache: the
-    backend may drop it at any time, and the next call stages the binding
-    again and makes the same record.
+    stage was made. ``reads`` are the outputs of records they reference, which
+    the stage keeps as a reader until it has staged, has stopped, or is
+    released; it is empty from then on. The first call to run stages the
+    binding under ``staging``, so that concurrent calls stage it once.
+    ``call``, the callable the binding returned, and ``stopped``, why staging
+    failed, change under the backend's lock. A stage that has stopped takes
+    no more calls.
     """
 
     def __init__(
@@ -298,15 +338,20 @@ class _Stage:
         self.spec = spec
         self.blanks = blanks
         self.fixed = fixed
-        self._lock = threading.Lock()
-        self._call: Function | None = None
+        self.reads = _output_reads(fixed)
+        self.call: Function | None = None
+        self.stopped: str | None = None
+        self.staging = threading.Lock()
 
-    def staged(self, stage: Callable[[], Function]) -> Function:
-        """The binding's callable; ``stage`` makes it if there is none."""
-        with self._lock:
-            if self._call is None:
-                self._call = stage()
-            return self._call
+    def read_part(self, request: Request) -> Request:
+        """
+        The part of a call's ``request`` that the call reads: all of it until
+        the stage has staged, then only its blanks; backend's lock held.
+        """
+        if self.call is None:
+            return request
+        blanks = {k: v for k, v in request.params.items() if k in self.blanks}
+        return Request(request.spec, blanks)
 
 
 class _Accumulator:
@@ -322,11 +367,12 @@ class _Accumulator:
     opens the held state or adds to it, outside the backend's lock.
 
     ``checked`` holds the number of pushes of the last state whose plain
-    request was validated, and why that request would be refused, or ``None``
-    if it would be accepted. Two reads that validate different states at once
-    may overwrite each other's verdict, which costs only another validation.
+    request was validated, and that request as a record holds it, or why it
+    would be refused. Two reads that validate different states at once may
+    overwrite each other's, which costs only another validation.
     ``stopped`` says why the accumulator takes no more pushes or readers, or
-    is ``None``.
+    is ``None``. ``released`` says its client released it or ended: it then
+    keeps only the steps that a reader still needs.
 
     :meth:`outputs` computes every output of the current state the first time
     a reader reads it, and keeps them until :meth:`drop`, which the backend
@@ -345,8 +391,9 @@ class _Accumulator:
         self.added: int | None = None
         self.steps: deque[tuple[dict[str, Any], list[tuple[str, str]]]] = deque()
         self.busy = False
-        self.checked: tuple[int, str | None] | None = None
+        self.checked: tuple[int, Request | str] | None = None
         self.stopped: str | None = None
+        self.released = False
         self._declared = tuple(outputs.model_fields)
         self._required = _required(outputs)
         self._computing = threading.Lock()
@@ -386,14 +433,21 @@ class _Accumulator:
 
 
 def _state_key(accumulator_id: str, upto: int) -> str:
-    """What a request waits for that reads the state after ``upto`` pushes."""
+    """What the record of the state after ``upto`` pushes waits for."""
     return f'{accumulator_id}[:{upto}]'
 
 
+_Pinned = tuple[_Accumulator, int, Request | str]
+"""
+A state a submission pinned: the accumulator, its number of pushes, and the
+plain request of that state, or why that request would be refused.
+"""
+
 _Read = tuple[str, str] | tuple[_Accumulator, int]
 """
-A value a request reads: an output by record ID and name, or an accumulator's
-state by its number of pushes.
+A value that is read: an output by record ID and name, or an accumulator's
+state by its number of pushes. The readers of a state are the records of the
+state and reads of the accumulator's outputs in progress.
 """
 
 
@@ -441,7 +495,8 @@ class Backend:
         # by record ID and name; _OMITTED for an optional output left out
         self._outputs: dict[tuple[str, str], Any] = {}
         # a value, as (record ID, name) or (accumulator, number of pushes), to
-        # the number of pending records, steps, and reads that have yet to read it
+        # the number of pending records, steps, and reads that have yet to read
+        # it, and of records of states that hold it
         self._readers: Counter[_Read] = Counter()
         # the reverse, for the records that have not started
         self._unread: dict[str, list[_Read]] = {}
@@ -450,27 +505,29 @@ class Backend:
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
+        # the record of a state to the state it reads, until it lets go of it:
+        # in _finish if it fails or is cancelled before it runs, in _run if it
+        # does not complete, and in _drop once its outputs are dropped
+        self._state_of: dict[str, tuple[_Accumulator, int]] = {}
+        # values whose last reader let go, for _let_go's loop to work through
+        self._unread_values: deque[_Read] = deque()
+        self._letting_go = False
         self._on_finished: dict[str, list[Callable[[Record], None]]] = {}
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
-            for record in list(self._views.records.values()):
-                if record.id in self._views.finished:
-                    continue
-                if record.request.accumulators():
-                    self._finish(
-                        record.id, Status.FAILED, 'the accumulator ended at a restart'
-                    )
-                else:
-                    self._schedule(record.id, {})
+            for record_id in list(self._views.records):
+                if record_id not in self._views.finished:
+                    self._finish(record_id, Status.CANCELLED, 'the backend restarted')
 
     def close(self) -> None:
         """
         Wait until no record is pending and no accumulator has a step to do,
         then let go of the workers and the log.
 
-        Closing stops no work: a request that waits for an input runs once the
-        input has finished, and its dependents after it.
+        Closing the backend cancels nothing itself: what its clients still
+        keep runs to its end. Ending the clients first (see
+        :meth:`close_client`) cancels the work that nothing else keeps.
         """
         with self._changed:
             self._changed.wait_for(
@@ -504,11 +561,11 @@ class Backend:
         Check every request, then create a record for each.
 
         If one request is refused, none is submitted. Dataset names are
-        resolved before the backend's lock is taken. References to the
-        client's accumulators are pinned to the pushes logged so far, so all
-        references to one accumulator pin the same state, and that state's
-        plain request is checked outside the lock (see :meth:`_check_state`).
-        The records are pending, and the client keeps their outputs.
+        resolved before the backend's lock is taken. The state of each of the
+        client's accumulators that the requests reference is pinned to the
+        pushes logged so far, and its plain request is checked outside the
+        lock (see :meth:`_check_state`). The records are pending, and the
+        client keeps their outputs, but not those of the records of states.
         """
         proposal = self._client(client).proposal
         requests = [self._prepare(e, proposal) for e in entries]
@@ -522,11 +579,10 @@ class Backend:
             }
             with self._changed:
                 caller = self._client(client)
-                requests = [self._pin(r, pinned) for r in requests]
                 for entry, request in zip(entries, requests, strict=True):
-                    self._check_reads(entry, request, caller, states=states)
                     self._check_stage(entry, request, caller)
-                return self._create(entries, requests, caller, pinned)
+                    self._check_reads(entry, request, caller, states)
+                return self._create(entries, requests, caller, states)
         finally:
             with self._changed:
                 self._let_go(pinned.values())
@@ -536,34 +592,51 @@ class Backend:
         entries: list[Entry],
         requests: list[Request],
         caller: _Client,
-        pinned: Mapping[str, tuple[_Accumulator, int]],
+        states: Mapping[str, _Pinned],
     ) -> list[Record]:
-        """Log and schedule the checked requests as the client's records; lock held."""
+        """
+        Log and schedule the checked requests as the client's records; lock held.
+
+        The record of each state in ``states`` is logged and scheduled first,
+        and the references to its accumulator name that record's outputs.
+        """
+        state_ids = {i: uuid.uuid4().hex for i in states}
         ids = [uuid.uuid4().hex for _ in entries]
+
+        def new(record_id: str, request: Request, **given: str | None) -> NewRecord:
+            outputs = tuple(self._specs[request.spec].outputs.model_fields)
+            return NewRecord(id=record_id, request=request, outputs=outputs, **given)
+
+        def state_record(ref: Ref) -> Ref:
+            if isinstance(ref, AccumulatorRef):
+                return OutputRef(record=state_ids[ref.accumulator], output=ref.output)
+            return ref
+
+        requests = [Request(r.spec, map_refs(r.params, state_record)) for r in requests]
         self._append(
             Submitted(
                 time=datetime.now(UTC),
                 proposal=caller.proposal,
                 submitter=caller.submitter,
-                records=tuple(
-                    NewRecord(
-                        id=record_id,
-                        request=request,
-                        outputs=tuple(self._specs[request.spec].outputs.model_fields),
-                        label=entry.label,
-                        member=entry.member,
-                    )
-                    for record_id, entry, request in zip(
-                        ids, entries, requests, strict=True
-                    )
+                records=(
+                    *(new(state_ids[i], plain) for i, (_, _, plain) in states.items()),
+                    *(
+                        new(record_id, request, label=e.label, member=e.member)
+                        for record_id, request, e in zip(
+                            ids, requests, entries, strict=True
+                        )
+                    ),
                 ),
             )
         )
         caller.kept.update(ids)
+        for i, (acc, upto, _) in states.items():
+            self._state_of[state_ids[i]] = (acc, upto)
+            self._schedule(state_ids[i])
         for record_id, entry in zip(ids, entries, strict=True):
             if entry.stage is not None:
                 self._stage_of[record_id] = caller.stages[entry.stage]
-            self._schedule(record_id, pinned)
+            self._schedule(record_id)
         return [self._views.records[i] for i in ids]
 
     def _prepare(self, entry: Entry, proposal: str) -> Request:
@@ -650,51 +723,34 @@ class Backend:
         self._readers.update(pinned.values())
         return pinned
 
-    def _pin(
-        self, request: Request, pinned: Mapping[str, tuple[_Accumulator, int]]
-    ) -> Request:
-        """
-        The request with each reference to an accumulator in ``pinned``
-        pinned to that state, unless it names one; needs no lock.
-        """
-
-        def pin(ref: Ref) -> Ref:
-            if (
-                isinstance(ref, AccumulatorRef)
-                and ref.upto is None
-                and ref.accumulator in pinned
-            ):
-                return ref.model_copy(update={'upto': pinned[ref.accumulator][1]})
-            return ref
-
-        return Request(request.spec, map_refs(request.params, pin))
-
     def _check_reads(
         self,
         entry: Entry,
         request: Request,
         caller: _Client,
-        *,
-        states: Mapping[str, tuple[_Accumulator, int, str | None]] | None = None,
+        states: Mapping[str, _Pinned],
     ) -> None:
         """
         Check the outputs of records and accumulators a request reads; lock held.
 
-        Only a submission reads accumulators, from the ``states`` it pinned,
-        each with why its plain request would be refused, or ``None``. A stage
-        or an accumulator that held a state of an accumulator would hold back
-        its every push for as long as it lives, and a row pushed into one would
-        read another's value while it adds.
+        Only a submission reads accumulators, from the ``states`` it pinned;
+        it reads the records of these states, which it makes in
+        :meth:`_create`, after these checks. A stage, an accumulator, or a
+        push passes no states: a stage or an accumulator that held a state of
+        an accumulator would hold back its every push for as long as it
+        lives, and a row pushed into one would read another's value while it
+        adds. A request through a stage that has yet to stage also reads
+        what the stage keeps, which :meth:`_check_stage` has checked it for;
+        one through a stage that has staged reads only its blanks.
         """
         params = self._specs[request.spec].params
+        stage = caller.stages[entry.stage] if entry.stage is not None else None
+        also = set(stage.reads) if stage is not None else set()
+        read = stage.read_part(request) if stage is not None else request
         try:
-            for field, value in request.params.items():
+            for field, value in read.params.items():
                 for where, ref, target in _reads(params, field, value):
-                    if isinstance(ref, AccumulatorRef) and states is None:
-                        raise SubmitError(
-                            f'{where}: only a request may reference an accumulator'
-                        )
-                    spec_id = self._readable(ref, where, caller, states or {})
+                    spec_id = self._readable(ref, where, caller, states, also)
                     outputs = self._output_fields[spec_id]
                     if ref.output not in outputs:
                         raise SubmitError(
@@ -725,6 +781,8 @@ class Backend:
         stage = caller.stages.get(entry.stage)
         if stage is None:
             raise entry.refused(SubmitError('the stage was released or is unknown'))
+        if stage.stopped is not None:
+            raise entry.refused(SubmitError(stage.stopped))
         if stage.spec != request.spec:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
@@ -747,29 +805,32 @@ class Backend:
         ref: OutputRef | AccumulatorRef,
         field: str,
         caller: _Client,
-        states: Mapping[str, tuple[_Accumulator, int, str | None]],
+        states: Mapping[str, _Pinned],
+        also: Collection[tuple[str, str]],
     ) -> SpecId:
         """
         The spec of a record or accumulator a request may read; lock held.
 
         An accumulator must be the client's own, not stopped, and its state
-        pinned in ``states`` readable, and a reference to it must name that
-        state: an earlier one is gone, since the accumulator keeps one held
-        state.
+        pinned in ``states`` readable. A record must be one whose outputs the
+        client keeps, pending or completed, or its output must be among
+        ``also``, which the request's stage keeps: whether a request is
+        accepted does not depend on how far its inputs have run. So no client
+        reads the record of a state, which only the submission that made it
+        keeps (see the module docstring).
         """
         if isinstance(ref, AccumulatorRef):
             try:
                 acc = self._accumulator(caller, ref.accumulator)
             except SubmitError as error:
                 raise SubmitError(f'{field}: {error}') from None
-            _, pushed, refused = states[ref.accumulator]
-            if refused is not None:
-                raise SubmitError(f'{field}: {refused}')
-            if ref.upto != pushed:
+            if ref.accumulator not in states:
                 raise SubmitError(
-                    f'{field}: {ref}: the accumulator holds only its state '
-                    f'after {pushed} pushes'
+                    f'{field}: only a request may reference an accumulator'
                 )
+            _, _, plain = states[ref.accumulator]
+            if isinstance(plain, str):
+                raise SubmitError(f'{field}: {plain}')
             return acc.template.spec
         record = self._views.records.get(ref.record)
         if record is None:
@@ -781,29 +842,35 @@ class Backend:
         status = self._views.status(ref.record)
         if status in (Status.FAILED, Status.CANCELLED):
             raise SubmitError(f'{field}: record {ref.record} {status}')
+        if ref.record not in caller.kept and (ref.record, ref.output) not in also:
+            raise SubmitError(
+                f'{field}: record {ref.record} is not kept by this client'
+            )
         return record.spec
 
     # Execution
 
-    def _schedule(
-        self, record_id: str, pinned: Mapping[str, tuple[_Accumulator, int]]
-    ) -> None:
+    def _schedule(self, record_id: str) -> None:
         """
-        Start the record, or let it wait for its unfinished inputs and the
-        state of the accumulator it reads; lock held.
+        Start the record, or let it wait for its unfinished inputs; lock held.
 
-        ``pinned`` holds the states the record's submission pinned, by ID.
+        A record of a state reads only the state, which it waits for; the
+        pushes have read the outputs its rows reference. A record through a
+        stage that has staged reads only the outputs its blanks reference.
         """
-        request = self._views.records[record_id].request
-        refs = request.inputs()
-        states = {pinned[ref.accumulator] for ref in request.accumulators()}
-        self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
-        self._unread[record_id].extend(states)
+        state = self._state_of.get(record_id)
+        if state is None:
+            request = self._views.records[record_id].request
+            if (stage := self._stage_of.get(record_id)) is not None:
+                request = stage.read_part(request)
+            refs = request.inputs()
+            self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
+            waiting = {ref.record for ref in refs} - self._views.finished.keys()
+        else:
+            acc, upto = state
+            self._unread[record_id] = [state]
+            waiting = {_state_key(acc.id, upto)} if acc.added != upto else set()
         self._readers.update(self._unread[record_id])
-        waiting = {ref.record for ref in refs} - self._views.finished.keys()
-        waiting.update(
-            _state_key(acc.id, upto) for acc, upto in states if acc.added != upto
-        )
         if not waiting:
             self._executor.submit(self._run, record_id)
             return
@@ -816,18 +883,22 @@ class Backend:
         Run a record's workflow, holding the values it reads until it returns.
 
         It holds them even once the record is cancelled, since the workflow
-        still reads them.
+        still reads them. A record of a state that completes holds the state
+        until its outputs are dropped (see :meth:`_drop`).
         """
         with self._changed:
             if record_id in self._views.finished:
                 return
             record = self._views.records[record_id]
             stage = self._stage_of.get(record_id)
+            state = self._state_of.get(record_id)
             reads = self._unread.pop(record_id)
-        accumulators = {r.id: r for r, _ in reads if isinstance(r, _Accumulator)}
         try:
-            call, blanks = self._call(record.request, stage, accumulators)
-            outputs = dict(call(**blanks))
+            if state is None:
+                call, blanks = self._call(record.request, stage)
+                outputs = dict(call(**blanks))
+            else:
+                outputs = state[0].outputs()
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
                 self._finish(record_id, Status.FAILED, str(error) or repr(error))
@@ -835,28 +906,61 @@ class Backend:
             return
         with self._changed:
             self._complete(record_id, outputs)
-            self._let_go(reads)
+            # A record of a state that completed lets go of the state in
+            # _drop, once its outputs are dropped; any other record here.
+            if state is None or self._views.status(record_id) is not Status.COMPLETED:
+                self._let_go(reads)
 
     def _call(
-        self,
-        request: Request,
-        stage: _Stage | None,
-        accumulators: Mapping[str, _Accumulator],
+        self, request: Request, stage: _Stage | None
     ) -> tuple[Function, dict[str, Any]]:
         """
         The callable that computes a request, through its stage if it has one,
-        and the values of the blanks to call it with; the inputs are read, the
-        accumulators from ``accumulators``.
+        and the values of the blanks to call it with; the inputs are read.
         """
         binding = self._bindings[request.spec]
         values = self._typed(request.spec, request.params)
         if stage is None:
-            return binding.stage(self._read(values, accumulators), ()), {}
+            return binding.stage(self._read(values), ()), {}
         fixed = {k: v for k, v in values.items() if k not in stage.blanks}
-        call = stage.staged(
-            lambda: binding.stage(self._read(fixed, accumulators), stage.blanks)
+        call = self._staged(
+            stage, lambda: binding.stage(self._read(fixed), stage.blanks)
         )
-        return call, self._read({k: values[k] for k in stage.blanks}, accumulators)
+        return call, self._read({k: values[k] for k in stage.blanks})
+
+    def _staged(self, stage: _Stage, make: Callable[[], Function]) -> Function:
+        """
+        The stage's callable; ``make`` stages the binding, outside the
+        backend's lock, if no call has yet.
+
+        Once staged, the binding holds what it needs, and the stage lets go of
+        what its template references. If staging fails, the stage stops, and
+        lets go of them too: the error is that call's failure, and the calls
+        after it fail with the reason.
+        """
+        with stage.staging:
+            with self._changed:
+                if stage.stopped is not None:
+                    raise RuntimeError(stage.stopped)
+                if stage.call is not None:
+                    return stage.call
+            try:
+                call = make()
+            except Exception as error:
+                with self._changed:
+                    reason = str(error) or repr(error)
+                    stage.stopped = f'the stage stopped: staging failed: {reason}'
+                    self._let_go_of_template(stage)
+                raise
+            with self._changed:
+                stage.call = call
+                self._let_go_of_template(stage)
+            return call
+
+    def _let_go_of_template(self, stage: _Stage) -> None:
+        """Let go of what the stage's template references, once; lock held."""
+        reads, stage.reads = stage.reads, []
+        self._let_go(reads)
 
     def _typed(
         self,
@@ -905,73 +1009,88 @@ class Backend:
         )
         return self._typed(spec_id, params, alone)
 
-    def _read(
-        self, values: dict[str, Any], accumulators: Mapping[str, _Accumulator]
-    ) -> dict[str, Any]:
+    def _read(self, values: dict[str, Any]) -> dict[str, Any]:
         """
-        ``values`` with the outputs, accumulators' outputs, and datasets they
-        reference read; ``accumulators`` holds the accumulators by ID.
+        ``values`` with the outputs and datasets they reference read, the
+        datasets outside the backend's lock.
         """
-        ids = {
-            r.accumulator for _, r in walk_refs(values) if isinstance(r, AccumulatorRef)
-        }
-        states = {i: accumulators[i].outputs() for i in ids}
         with self._changed:
-            values = map_refs(values, lambda ref: self._read_output(ref, states))
+            values = map_refs(
+                values,
+                lambda ref: ref if isinstance(ref, DatasetRef) else self._value(ref),
+            )
         return map_refs(values, self._datasets.read)
-
-    def _read_output(self, ref: Ref, states: Mapping[str, Mapping[str, Any]]) -> Any:
-        """
-        The value of an output, or of an accumulator's from ``states``, its
-        computed outputs by accumulator ID; a dataset is read later, outside
-        the lock.
-        """
-        if isinstance(ref, DatasetRef):
-            return ref
-        if isinstance(ref, AccumulatorRef):
-            return _returned(states[ref.accumulator][ref.output], str(ref))
-        return self._value(ref)
 
     def _value(self, ref: OutputRef) -> Any:
         """
-        The value of an output of a completed record, if kept and returned;
-        lock held.
+        The value of an output of a completed record, if returned; lock held.
+
+        The caller reads only what something keeps for it, so the value is
+        there.
         """
         where = f'record {ref.record} output {ref.output}'
-        if (ref.record, ref.output) not in self._outputs:
-            raise LookupError(f'{where}: the value is not kept')
         return _returned(self._outputs[(ref.record, ref.output)], where)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
-        Count one reader less of each value, and drop an output once it is
-        unkept and unread; lock held.
+        Count one reader less of each value; lock held. A record's output that
+        no reader is left for is dropped if no client keeps it (see
+        :meth:`_drop`), and a state of an accumulator lets the accumulator
+        move on.
 
-        An accumulator's state needs no drop: its outputs go at the next push,
-        which may start once the state is unread, and the accumulator goes
-        with the last reference to its ``_Accumulator``.
+        Dropping may cancel a record, which lets go of what it reads in turn.
+        The values left unread are worked through in one loop, not by
+        recursion, so a chain of any length is let go of at once; a call
+        within the loop only adds to it. An accumulator's state needs no
+        drop: its outputs go at the next push, and the accumulator goes with
+        the last reference to its ``_Accumulator``.
         """
         for key in keys:
             self._readers[key] -= 1
             if not self._readers[key]:
                 del self._readers[key]
-                match key:
-                    case (_Accumulator() as acc, _):
-                        self._advance(acc)
-                    case (str() as record_id, str() as name):
-                        self._drop(record_id, name)
+                self._unread_values.append(key)
+        if not self._letting_go:
+            self._letting_go = True
+            try:
+                while self._unread_values:
+                    match self._unread_values.popleft():
+                        case (_Accumulator() as acc, _) if acc.released:
+                            self._unneeded(acc)
+                        case (_Accumulator() as acc, _):
+                            self._advance(acc)
+                        case (str() as record_id, _):
+                            self._drop(record_id)
+            finally:
+                self._letting_go = False
         self._changed.notify_all()
 
-    def _drop(self, record_id: str, *names: str) -> None:
+    def _drop(self, record_id: str) -> None:
         """
-        Drop the record's outputs that no client keeps and no pending record
-        that reads them has yet to run; lock held.
+        Drop the record's outputs that nothing keeps: no client, and no
+        reader (see ``_readers``); lock held.
+
+        A pending record that nothing keeps is cancelled, since its outputs
+        would be dropped the moment they are computed; cancelling lets go of
+        what it reads, so this passes along a chain. A record of a state that
+        has completed lets go of the state once its outputs are dropped.
         """
         if any(record_id in c.kept for c in self._clients.values()):
             return
-        for name in names:
+        record = self._views.records[record_id]
+        if record_id not in self._views.finished:
+            if not any(self._readers[(record_id, n)] for n in record.outputs):
+                self._finish(record_id, Status.CANCELLED, 'nothing keeps its outputs')
+            return
+        for name in record.outputs:
             if not self._readers[(record_id, name)]:
                 self._outputs.pop((record_id, name), None)
+        state = self._state_of.get(record_id)
+        if state is not None and not any(
+            (record_id, n) in self._outputs for n in record.outputs
+        ):
+            del self._state_of[record_id]
+            self._let_go([state])
 
     def _complete(self, record_id: str, outputs: dict[str, Any]) -> None:
         """
@@ -994,8 +1113,8 @@ class Backend:
             return
         for name in fields:
             self._outputs[(record_id, name)] = outputs.get(name, _OMITTED)
-        self._drop(record_id, *fields)
         self._finish(record_id, Status.COMPLETED)
+        self._drop(record_id)
 
     def _finish(
         self, record_id: str, status: Status, failure: str | None = None
@@ -1010,11 +1129,15 @@ class Backend:
             for call in self._on_finished.pop(finished_id, ()):
                 call(self._views.records[finished_id])
             self._let_go(self._unread.pop(finished_id, ()))  # if it never started
-            self._waiting.pop(finished_id, None)
+            for key in self._waiting.pop(finished_id, ()):
+                if (dependents := self._dependents.get(key)) is not None:
+                    dependents.discard(finished_id)
+                    if not dependents:
+                        del self._dependents[key]
             self._stage_of.pop(finished_id, None)
+            if finished is not Status.COMPLETED:  # lets go of the state with its reads
+                self._state_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
-                if dependent not in self._waiting:  # finished meanwhile
-                    continue
                 if finished is not Status.COMPLETED:
                     todo.append(
                         (dependent, Status.FAILED, f'input {finished_id} {finished}')
@@ -1044,7 +1167,8 @@ class Backend:
 
     def close_client(self, client: str) -> None:
         """
-        End the client and release everything it keeps; stops no work.
+        End the client and release everything it keeps, which cancels the
+        work that nothing else keeps (see :meth:`release`).
 
         A client that has ended is ended again without effect.
         """
@@ -1065,32 +1189,60 @@ class Backend:
 
     def release(self, ids: Iterable[str], client: str) -> None:
         """
-        Release records, stages, and accumulators the client keeps; stops no work.
+        Release records, stages, and accumulators the client keeps.
 
-        A released record's outputs are dropped once the pending records that
-        read them have run. A released stage takes no more requests, and those
-        made through it still run through it. A released accumulator takes no
-        more pushes or readers; the pushes logged are still added, and its
+        A released record's outputs are dropped once nothing else keeps
+        them, and a pending record that nothing else keeps is cancelled (see
+        :meth:`_drop`). A released stage takes no more requests, those made
+        through it still run through it, and it lets go of what its template
+        references, if it has not let go already. A released accumulator
+        takes no more pushes or readers; the pushes up to the last state that
+        a reader still holds are added, the later ones are dropped, and its
         held state is dropped once its readers are done. Releasing what the
         client does not keep does nothing.
         """
         with self._changed:
             caller = self._client(client)
             for i in ids:
-                caller.stages.pop(i, None)
-                caller.accumulators.pop(i, None)
+                if (stage := caller.stages.pop(i, None)) is not None:
+                    self._let_go_of_template(stage)
+                if (acc := caller.accumulators.pop(i, None)) is not None:
+                    acc.released = True
+                    self._unneeded(acc)
                 if i in caller.kept:
                     caller.kept.remove(i)
-                    self._drop(i, *self._views.records[i].outputs)
+                    self._drop(i)
             self._changed.notify_all()
+
+    def _unneeded(self, acc: _Accumulator) -> None:
+        """
+        Drop the steps of a released accumulator that no reader needs, and
+        let go of what they read; lock held. Called at release, and again
+        whenever the last reader of one of its states lets go.
+
+        A reader needs the steps up to the state it pinned. The step a worker
+        is doing cannot be stopped, so it stays. The records of states that
+        wait for a dropped step have all been cancelled, since a pending one
+        is a reader.
+        """
+        pinned = [upto for held, upto in self._readers if held is acc]
+        done = -1 if acc.added is None else acc.added  # the opening is step 0
+        needed = max(pinned, default=done) - done
+        dropped = []
+        while len(acc.steps) > max(needed, int(acc.busy)):
+            dropped.append(acc.steps.pop()[1])
+        for reads in dropped:
+            self._let_go(reads)
+        self._advance(acc)
 
     def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
         """
         A stage of the client, and its template as the stage holds it.
 
         The template is checked (see :meth:`_check_template`), and the stage
-        keeps its values; a request through it must have them. Its first call
-        stages the binding.
+        keeps its values; a request through it must have them. The stage
+        keeps the outputs they reference until its first call to run has
+        staged the binding, or it is released.
         """
         spec_id, blanks = template.spec, template.blanks
         fixed = self._check_template(template, self._client(client).proposal)
@@ -1098,8 +1250,9 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             request = Request(spec_id, fixed)
-            self._check_reads(Entry(request), request, caller)
-            caller.stages[stage_id] = _Stage(spec_id, blanks, fixed)
+            self._check_reads(Entry(request), request, caller, {})
+            stage = caller.stages[stage_id] = _Stage(spec_id, blanks, fixed)
+            self._readers.update(stage.reads)
         return stage_id, Template(spec_id, fixed, blanks)
 
     def _check_template(self, template: Template, proposal: str) -> dict[str, Any]:
@@ -1147,7 +1300,7 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             request = Request(spec_id, fixed)
-            self._check_reads(Entry(request), request, caller)
+            self._check_reads(Entry(request), request, caller, {})
             self._append(
                 Opened(
                     accumulator=accumulator_id,
@@ -1174,26 +1327,30 @@ class Backend:
         into one accumulator are added in the order they were logged (see
         :meth:`_advance`).
         """
-        filled = self._pushable(accumulator_id, rows, client)
+        stored, typed = self._pushable(accumulator_id, rows, client)
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
-            request = Request(acc.template.spec, {t: [r] for t, r in filled.items()})
-            self._check_reads(Entry(request), request, caller)
-            self._append(Pushed(accumulator=accumulator_id, rows=filled))
-            self._queue(acc, filled)
+            request = Request(acc.template.spec, {t: [r] for t, r in stored.items()})
+            self._check_reads(Entry(request), request, caller, {})
+            self._append(Pushed(accumulator=accumulator_id, rows=stored))
+            self._queue(acc, typed)
 
     def _pushable(
         self, accumulator_id: str, rows: Mapping[str, Row], client: str
-    ) -> dict[str, Row]:
+    ) -> tuple[dict[str, Row], dict[str, Row]]:
         """
-        The rows, once checked; needs no lock.
+        The rows, once checked, as the log holds them and as the binding gets
+        them; needs no lock.
 
         Each row is checked by its table's row model alone, and refused as the
         request over that one row would refuse it. Rules on the whole table,
         such as its length, and the params model's own validators apply when
         a state is read (see :meth:`_check_state`). A row comes back as that
-        request holds it: names resolved and defaults filled in.
+        request holds it: names resolved and defaults filled in. The binding
+        gets it typed from that form, as the binding of the state's plain
+        request does: a tuple, which JSON keeps as a list, reaches both as a
+        list.
         """
         with self._changed:
             caller = self._client(client)
@@ -1207,15 +1364,16 @@ class Backend:
         alone = {table: [row] for table, row in rows.items()}
         resolved = self._resolve(spec_id, alone, (), caller.proposal)
         row_models = table_fields(self._specs[spec_id].params)
-        filled = {}
+        stored, typed = {}, {}
         for table, (row,) in resolved.items():
+            model = row_models[table]
             try:
-                filled[table] = dict(row_models[table].model_validate(row))
+                stored[table] = _check_storable(table, dict(model.model_validate(row)))
+                typed[table] = dict(model.model_validate(stored[table]))
             except ValidationError as error:
                 problems = '; '.join(_problems(error, at=(table, 0)))
                 raise SubmitError(f'{spec_id}: {problems}') from None
-            _check_storable(table, [filled[table]])
-        return filled
+        return stored, typed
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
@@ -1224,11 +1382,7 @@ class Backend:
 
         The step holds the outputs it reads until it is done.
         """
-        reads = [
-            (ref.record, ref.output)
-            for _, ref in walk_refs(values)
-            if isinstance(ref, OutputRef)
-        ]
+        reads = _output_reads(values)
         self._readers.update(reads)
         acc.steps.append((values, reads))
         self._accumulating.add(acc)
@@ -1270,9 +1424,12 @@ class Backend:
         If the step fails, the accumulator stops, since the binding may hold
         part of the rows.
         """
+        # Read outside the lock: only this worker removes the step it does,
+        # _unneeded keeps a busy step, and _stop runs only when no step is
+        # busy, or on this worker.
         values, reads = acc.steps[0]
         try:
-            read = self._read(values, {})
+            read = self._read(values)
             if acc.added is None:
                 binding = self._bindings[acc.template.spec]
                 acc.state = open_held_state(binding, read, acc.template.blanks)
@@ -1288,14 +1445,14 @@ class Backend:
             acc.busy = False
             self._let_go(reads)
             for record_id in self._dependents.pop(_state_key(acc.id, acc.added), ()):
-                if record_id in self._waiting:  # not cancelled meanwhile
-                    self._satisfied(record_id, _state_key(acc.id, acc.added))
+                self._satisfied(record_id, _state_key(acc.id, acc.added))
             self._advance(acc)
 
     def _stop(self, acc: _Accumulator, failure: str) -> None:
         """
         Stop the accumulator: it takes no more pushes or readers, its steps
-        are dropped, and the requests that wait for its states fail; lock held.
+        are dropped, and the records of its states that wait for them fail;
+        lock held.
         """
         acc.stopped = f'the accumulator stopped: {failure}'
         acc.busy = False
@@ -1309,14 +1466,16 @@ class Backend:
                 self._finish(record_id, Status.FAILED, acc.stopped)
         self._changed.notify_all()
 
-    def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
+    def _check_state(self, acc: _Accumulator, upto: int) -> Request | str:
         """
-        Why the plain request of the accumulator's state after ``upto`` pushes
-        would be refused, or ``None``; needs no lock.
+        The plain request of the accumulator's state after ``upto`` pushes, as
+        its record holds it, or why it would be refused; needs no lock.
 
-        ``acc.checked`` keeps the verdict for the last state validated. The
-        validation takes time in proportion to the rows, so it runs outside
-        the backend's lock, over the rows that the log holds.
+        It is the accumulator's template with each table filled by the rows
+        pushed into it, in push order, and defaults filled in. ``acc.checked``
+        keeps it for the last state validated. The validation takes time in
+        proportion to the rows, so it runs outside the backend's lock, over
+        the rows that the log holds.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
@@ -1324,13 +1483,16 @@ class Backend:
         with self._changed:
             pushed = self._views.pushes.get(acc.id, [])[:upto]
         request = _filled(acc.template, [p.rows for p in pushed])
+        result: Request | str
         try:
-            self._typed(request.spec, request.params)
+            values = self._typed(request.spec, request.params)
+            stored = {f: _check_storable(f, v) for f, v in values.items()}
         except SubmitError as error:
-            acc.checked = (upto, str(error))
+            result = str(error)
         else:
-            acc.checked = (upto, None)
-        return acc.checked[1]
+            result = Request(request.spec, stored)
+        acc.checked = (upto, result)  # another check may overwrite it at once
+        return result
 
     def _accumulator(self, caller: _Client, accumulator_id: str) -> _Accumulator:
         acc = caller.accumulators.get(accumulator_id)
@@ -1342,12 +1504,12 @@ class Backend:
 
     def _current(
         self, accumulator_id: str, client: str, *, reader: bool
-    ) -> tuple[_Accumulator, int]:
+    ) -> tuple[_Accumulator, int, Request]:
         """
-        The accumulator and its number of pushes logged, its current state
-        pinned as a read pins it; held as a reader holds it if ``reader``,
-        until the caller lets go of it. Raises ``LookupError`` if the state
-        may not be read.
+        The accumulator, its number of pushes logged, and the plain request of
+        that state, its current state pinned as a read pins it; held as a
+        reader holds it if ``reader``, until the caller lets go of it. Raises
+        ``LookupError`` if the state may not be read.
         """
         try:
             with self._changed:
@@ -1357,12 +1519,15 @@ class Backend:
                     self._readers[(acc, upto)] += 1
         except SubmitError as error:
             raise LookupError(str(error)) from None
-        if (refused := self._check_state(acc, upto)) is not None:
+        try:
+            if isinstance(plain := self._check_state(acc, upto), str):
+                raise LookupError(plain)
+        except BaseException:  # a validator may raise anything
             if reader:
                 with self._changed:
                     self._let_go([(acc, upto)])
-            raise LookupError(refused)
-        return acc, upto
+            raise
+        return acc, upto, plain
 
     # Queries and control, within the client's proposal
 
@@ -1398,7 +1563,10 @@ class Backend:
             return [self._status(i, proposal) for i in ids]
 
     def failure(self, record_id: str, client: str) -> str | None:
-        """Why a record failed; ``None`` unless it has failed."""
+        """
+        Why a record failed, or why the backend cancelled it; ``None`` for a
+        record pending, completed, or cancelled by a client.
+        """
         with self._changed:
             self._mine(record_id, self._client(client).proposal)
             finished = self._views.finished.get(record_id)
@@ -1425,7 +1593,13 @@ class Backend:
                 self._on_finished.setdefault(record_id, []).append(call)
 
     def cancel(self, ids: Iterable[str], client: str) -> None:
-        """Cancel the unfinished records; a running workflow's outputs are dropped."""
+        """
+        Cancel the unfinished records; a running workflow's outputs are dropped.
+
+        A client may cancel any record of its proposal, not only those it
+        keeps: a batch that persists at submission keeps nothing, and another
+        client may stop it.
+        """
         with self._changed:
             proposal = self._client(client).proposal
             for record_id in ids:
@@ -1436,34 +1610,12 @@ class Backend:
         with self._changed:
             return self._mine(record_id, self._client(client).proposal)
 
-    def accumulated(
-        self, accumulator_id: str, upto: int | None, client: str
-    ) -> Request:
+    def plain_request(self, accumulator_id: str, client: str) -> Request:
         """
-        The plain request of the accumulator's state after ``upto`` pushes, as
-        a reference in a record names it, or of its current state, pinned as
-        a read pins it, if ``upto`` is ``None``. Raises ``LookupError`` if the
-        log lacks these pushes, or the current state may not be read.
-
-        It is the accumulator's template with each table filled by the rows
-        pushed into it, in push order, and defaults filled in, as the record
-        of that request holds it.
+        The plain request of the accumulator's current state, pinned as a
+        read pins it. Raises ``LookupError`` if the state may not be read.
         """
-        if upto is None:
-            upto = self._current(accumulator_id, client, reader=False)[1]
-        with self._changed:
-            proposal = self._client(client).proposal
-            opened = self._views.accumulators.get(accumulator_id)
-            if opened is None or opened.proposal != proposal:
-                raise KeyError(
-                    f'no accumulator {accumulator_id} in proposal {proposal}'
-                )
-            pushed = self._views.pushes.get(accumulator_id, [])[:upto]
-        if len(pushed) != upto:
-            raise LookupError(f'the log lacks pushes of {accumulator_id}[:{upto}]')
-        request = _filled(opened.template, [p.rows for p in pushed])
-        values = to_jsonable_python(self._typed(request.spec, request.params))
-        return Request(request.spec, as_refs(values))
+        return self._current(accumulator_id, client, reader=False)[2]
 
     def records(self, client: str, label: str | None = None) -> list[Record]:
         """The records of the proposal, oldest first, under ``label`` if given."""
@@ -1480,11 +1632,29 @@ class Backend:
         self, record_id: str, names: Sequence[str] | None, client: str
     ) -> dict[str, Any]:
         """
-        Values of a completed record's outputs, if still kept: of ``names``,
-        or of every output the workflow returned if ``names`` is ``None``.
+        Values of a record's outputs, once it has completed: of ``names``, or
+        of every output the workflow returned if ``names`` is ``None``.
+
+        Only a record whose outputs the client keeps is read. Raises
+        ``LookupError`` for any other, also once the client releases a record
+        whose outputs this waits for, and ``RuntimeError`` if the record fails
+        or is cancelled.
         """
         with self._changed:
-            record = self._mine(record_id, self._client(client).proposal)
+            caller = self._client(client)
+            record = self._mine(record_id, caller.proposal)
+            self._changed.wait_for(
+                lambda: (
+                    record_id not in caller.kept or record_id in self._views.finished
+                )
+            )
+            if record_id not in caller.kept:
+                raise LookupError(f'record {record_id} is not kept by this client')
+            finished = self._views.finished[record_id]
+            if finished.status is not Status.COMPLETED:
+                raise RuntimeError(
+                    f'record {record_id} {finished.status}: {finished.failure}'
+                )
             if names is None:
                 names = [
                     n
@@ -1506,7 +1676,7 @@ class Backend:
         accumulator that cannot be read, or stops before it reaches the state,
         raises ``LookupError``.
         """
-        acc, upto = self._current(accumulator_id, client, reader=True)
+        acc, upto, _ = self._current(accumulator_id, client, reader=True)
         try:
             with self._changed:
                 self._changed.wait_for(

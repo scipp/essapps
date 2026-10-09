@@ -18,7 +18,12 @@ import pytest
 import scipp as sc
 
 from ess.spec import Function, HeldState, combine
-from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
+from ess.spec.testing import (
+    assert_close,
+    check_arrival_and_order,
+    check_caching,
+    check_one_row,
+)
 
 Rows = Mapping[str, Mapping[str, Any]]
 
@@ -229,3 +234,65 @@ def test_arrays_are_compared_up_to_rtol(make: Any) -> None:
     check_one_row(
         returning([1.0, 2.0]), returning([1.0, 2.0 + 1e-6]), {}, {}, rtol=1e-5
     )
+
+
+def test_assert_close_compares_up_to_rtol_and_names_where_values_differ() -> None:
+    assert_close({'a': [1.0, np.array([2.0])]}, {'a': [1.0 + 1e-13, np.array([2.0])]})
+    refusals = {
+        r"^out: \['b'\], expected \['a'\]$": ({'b': 1.0}, {'a': 1.0}),
+        r"^out, 'a': \[1.0\], expected": ({'a': [1.0]}, {'a': [1.0, 2.0]}),
+        r"^out\[1\]: 2.1, expected 2.0$": ([1.0, 2.1], [1.0, 2.0]),
+    }
+    for message, (actual, expected) in refusals.items():
+        with pytest.raises(AssertionError, match=message):
+            assert_close(actual, expected, where='out')
+    with pytest.raises(AssertionError, match=r'^out: 1.1, expected 1.0$'):
+        assert_close(1.1, 1.0, rtol=0.01, where='out')
+    assert_close(1.1, 1.0, rtol=0.2)
+
+
+def first_half(data: Any) -> dict[str, Any]:
+    """Breaks the promise on memory: returns a view of the value it reads."""
+    return {'half': data[: len(data) // 2]}
+
+
+def first_half_copied(data: Any) -> dict[str, Any]:
+    return {'half': data[: len(data) // 2].copy()}
+
+
+@pytest.mark.parametrize(
+    'data',
+    [
+        np.array([1.0, 2.0]),
+        sc.array(dims=['q'], values=[1.0, 2.0], variances=[1.0, 1.0]),
+        sc.DataArray(
+            sc.array(dims=['q'], values=[1.0, 2.0]),
+            coords={'q': sc.array(dims=['q'], values=[0.1, 0.2])},
+        ),
+    ],
+)
+def test_one_row_fails_for_an_output_that_shares_memory_with_a_value(
+    data: Any,
+) -> None:
+    check_one_row(first_half_copied, first_half_copied, {'data': data}, {'data': data})
+    with pytest.raises(
+        AssertionError, match=r"^one-row, single-run: output \['half'\]\S* shares"
+    ):
+        check_one_row(first_half, first_half_copied, {'data': data}, {'data': data})
+
+
+def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> None:
+    def masked(data: sc.DataArray, scale: float) -> dict[str, Any]:
+        return {'out': sc.DataArray(data.data * scale, masks=dict(data.masks))}
+
+    class Masking:
+        def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+            return lambda **values: masked(**fixed, **values)
+
+    data = sc.DataArray(
+        sc.array(dims=['q'], values=[1.0, 2.0]),
+        masks={'m': sc.array(dims=['q'], values=[False, True])},
+    )
+    shared = r"(?s)^caching, call 1 .*, plain: output \['out'\]\.masks\['m'\]"
+    with pytest.raises(AssertionError, match=shared):
+        check_caching(Masking(), {'data': data}, [{'scale': 2.0}])

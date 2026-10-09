@@ -62,6 +62,7 @@ Results go to SciCat and must say what produced them, but the framework must not
 - Provenance: every result the framework keeps, not only published ones, can say which raw runs, parameter values, and software versions produced it. *Design README and story S8; ask Simon.*
 - Users find results by what they know, such as sample and temperature, not by an identifier. *Stories D1, D2, D6; ask instrument scientists.*
 - Later: a user can rerun a result in its original software environment after upgrades, or learns before running that this is impossible. *Story F2; ask Simon and DMSC.*
+- Later: after a notebook or an application in the user's own process restarts, the user finds the results they chose to keep, and what produced them. *Simon, 2026-10-07: likely, not for the first release.*
 
 ## Open
 

@@ -11,8 +11,10 @@ It reads metadata through `client.datasets` and builds plain data; it submits no
 
 ```python
 requests = apply(Template(IOFQ, blanks=('run',)), samples, client.datasets, member_field='temperature')
-records = client.submit(requests, label='scan')
+records = client.submit(requests, label='scan', persist=True)
 ```
+
+A batch application submits with `persist=`, so its client keeps nothing, and the results are read later from the store ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
@@ -24,7 +26,8 @@ requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, client.datasets
 
 ## Rules
 
-A rule is plain data: a template, a selector, a label, and optionally a lookup or a series.
+A rule is plain data: a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists, all of them by default.
+A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
@@ -45,7 +48,7 @@ The core keeps no store of them, and records do not name them: a record's reques
 ## The trigger loop
 
 The trigger loop is the driver for rules. It runs in a driving server or a notebook, never in the backend.
-It finds new datasets through `client.datasets`.
+It finds new datasets through `client.datasets`, and submits with `persist=` the outputs each rule names, so its client keeps nothing.
 
 ```python
 loop = TriggerLoop(client, rules=[rule])
@@ -55,7 +58,7 @@ loop.run()                   # steps forever
 ```
 
 The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label names it, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
-This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle ([system.md](system.md), How long history is kept).
+This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 
 The label belongs to the rule: any record under it counts, whoever submitted it and whether or not it failed.
 A record that a notebook submits under a rule's label stops the rule from reducing the datasets it names, so manual work uses labels of its own.
@@ -70,4 +73,4 @@ A rule whose requests are refused, such as for an unknown spec version, submits 
 
 - Adding, replacing, and listing rules in a running driving server.
 - A can measured after the sample, and other lookups than `LastBefore`.
-- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule); the loop's client keeps the accumulator.
+- A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule). The loop's client would keep the accumulator, the only thing it keeps, and freeze it with `persist=` once the sum is complete.
