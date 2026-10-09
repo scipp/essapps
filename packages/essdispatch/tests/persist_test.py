@@ -48,6 +48,11 @@ class ShiftParams(BaseModel):
     value: Array()  # type: ignore[valid-type]
 
 
+class OffsetParams(BaseModel):
+    value: Array()  # type: ignore[valid-type]
+    offset: Array()  # type: ignore[valid-type]
+
+
 class Parts(BaseModel):
     parts: list[Value]
 
@@ -69,6 +74,7 @@ TOTAL = _spec('total', Parts, Value)
 LIST = _spec('list', RunParams, Value)  # a value that can be changed in place
 BOX = _spec('box', RunParams, Value)  # a value that can be referenced weakly
 UNBOX = _spec('unbox', ShiftParams, Value)
+OFFSET = _spec('offset', OffsetParams, Value)
 
 
 class Box:
@@ -141,6 +147,7 @@ def bind(
         LIST: lambda run: {'value': [run]},
         BOX: box,
         UNBOX: lambda value: {'value': value.value},
+        OFFSET: lambda value, offset: {'value': value + offset},
     }
 
 
@@ -555,6 +562,35 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
         'the backend restarted: the held state it reads is gone',
         f'the backend restarted: input {state.id} failed',
     ]
+
+
+def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log')
+    kept = first.compute(LOAD, {'run': dataset(run=1)})
+    stored = first.compute(LOAD, {'run': dataset(run=2)}, persist=('value',))
+    loading.clear()
+    offset = first.submit(LOAD, {'run': dataset(run=2)})
+    calls = []
+    for fixed in (kept, stored):
+        stage = first.stage(
+            Template(OFFSET, params={'value': fixed.ref('value')}, blanks=('offset',))
+        )
+        first.compute(stage, {'offset': kept.ref('extra')})  # stages it
+        calls.append(first.submit(stage, {'offset': offset.ref('value')}, persist=True))
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.wait(calls) == [Status.FAILED, Status.COMPLETED]
+    assert again.failure(calls[0]) == (
+        f'the backend restarted: input {kept.id} output value was not persisted'
+    )
+    assert again.output(calls[1], 'value') == 4.0
 
 
 def test_a_write_that_had_not_ended_at_a_restart_has_failed(
