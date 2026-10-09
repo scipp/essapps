@@ -14,11 +14,14 @@ applies them first. It has no clients, so only persisted work goes on (see
 
 A client is one entry in the backend, from :meth:`Backend.open_client` to
 :meth:`Backend.close_client`: its proposal, the records whose outputs it keeps,
-and its stages and accumulators. Every call names its client, and a call of a
-client that has ended raises :class:`ClientEnded`. Clients, output values, and
-what waits for what are not history. This backend keeps them in memory, so a
-backend started from an existing log has no clients and cannot read the
-outputs of the backend that wrote it.
+and its stages and accumulators. Every call names its client, and the backend
+takes the proposal from the client's entry, so every check and query stays
+within that proposal. A call of a client that has ended raises
+:class:`ClientEnded`, but :meth:`Backend.close_client`, which then does
+nothing; only the backend knows whether a client has ended. Clients, output
+values, and what waits for what are not history. This backend keeps them in
+memory, so a backend started from an existing log has no clients and cannot
+read the outputs of the backend that wrote it.
 
 An output value is kept while the client that made its record keeps it, while
 a stage whose template references it has yet to stage, while a pending
@@ -66,9 +69,14 @@ the outputs they reference until it has staged. A request through it must
 have its values outside the blanks. The first such request to run stages the
 binding with the template's values, and every request through the stage runs
 through the callable the binding returned, so a binding that holds values
-computes only what depends on the blanks. If staging fails, the stage stops:
-the requests through it fail, and later ones are refused. A stage lives until
-its client releases it or ends, and the requests made through it have run.
+computes only what depends on the blanks. The record of a request through a
+stage that has staged still names the template's values, but these
+references are provenance only: they are not checked against what the client
+keeps, waited for, or read, except by a restart, which runs the record as its
+plain request (see :meth:`Backend._restart`). If staging fails, the stage
+stops: the requests through it fail, and later ones are refused. A stage
+lives until its client releases it or ends, and the requests made through it
+have run.
 
 An accumulator opens from a template whose blanks are table fields, checked
 as a stage's template is. Each other value is typed by its own field. Each
@@ -529,8 +537,12 @@ the plain request of that state would be refused, or ``None``.
 _Read = tuple[str, str] | tuple[_Accumulator, int]
 """
 A value that is read: an output by record ID and name, or an accumulator's
-state by its number of pushes. The readers of a state are the records of the
-state and reads of the accumulator's outputs in progress.
+state by its number of pushes. The readers of an output are the pending
+records, steps, and stages that have yet to read it. The readers of a state
+are the records of the state, the reads of the accumulator's outputs in
+progress, and the submissions and freezes being checked, from the pin until
+the records of the states are logged and hold it themselves: otherwise a push
+could move past the pinned state before its record holds it.
 """
 
 
@@ -554,6 +566,19 @@ class _Client:
 
 
 class Backend:
+    """
+    Checks requests, keeps records, and runs requests (see the module docstring).
+
+    ``datasets`` is its dataset source, and ``bind`` maps each spec it runs to
+    the spec's binding. Workflows, the steps of accumulators, and writes share
+    ``workers`` threads. A long step or workflow holds one of them, so other
+    work waits only once every worker is busy; submissions are accepted
+    meanwhile. ``log`` holds history, in memory if not given, and ``store`` is
+    where persisted outputs are written. A backend started on an existing log
+    needs the store the earlier backend wrote to: without one, the persisted
+    work it goes on with fails, since it has no store.
+    """
+
     def __init__(
         self,
         datasets: DatasetSource,
@@ -583,8 +608,7 @@ class Backend:
         # by record ID and name; _OMITTED for an optional output left out
         self._outputs: dict[tuple[str, str], Any] = {}
         # a value, as (record ID, name) or (accumulator, number of pushes), to
-        # the number of pending records, steps, and reads that have yet to read
-        # it, and of records of states that hold it
+        # the number of its readers (see _Read)
         self._readers: Counter[_Read] = Counter()
         # the reverse, for the records that have not started
         self._unread: dict[str, list[_Read]] = {}
@@ -1454,7 +1478,9 @@ class Backend:
         Complete a record with the outputs its workflow returned, once those
         persisted at its submission were written, or fail it with ``failure``
         if their write failed; lock held. Then write the outputs that a
-        persist request made meanwhile names.
+        persist request made meanwhile names, and drop from memory those that
+        nothing keeps (see :meth:`_drop`): no client keeps a record persisted
+        at submission, or one released while it was pending.
 
         Nothing is logged for a record cancelled meanwhile, also if its
         outputs were written.
