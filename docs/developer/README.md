@@ -78,7 +78,7 @@ The terms this document defines, in the order they appear:
 | accumulator | a template whose blanks are tables, which the backend keeps for a client | framework | notebook, app |
 | push | one step that adds one row to each of one or more tables of an accumulator | framework | notebook, app |
 | state | an accumulator after its first n pushes; its outputs are those of its plain request, the template with each table filled by the rows of these pushes | framework | backend, at each push |
-| held state | what an accumulator keeps between pushes to compute the outputs of a state: what the binding accumulates, such as summed numerators and denominators, or else the rows pushed so far; no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
+| held state | the object an accumulator's pushes go into, which its binding makes: what the binding accumulates, such as summed numerators and denominators, or else a list of the rows pushed so far; the framework never looks inside it, and no spec, call, or record names it | workflow author, framework | backend, when the accumulator opens |
 | accumulating binding | a binding that adds each push to a held state of its own, such as a numerator and a denominator; for any other binding, the backend keeps the rows | workflow author | workflow author |
 | read | `client.output` on an accumulator, submitting a request that references one, freezing it, or `client.provenance` of it; a read *pins* the state at that moment, and a submission makes a record of that state | framework | notebook, app |
 | freeze | turning an accumulator's last state into a record, without a copy; the accumulator takes no more pushes | framework | notebook, app |
@@ -86,6 +86,10 @@ The terms this document defines, in the order they appear:
 The terms down to template are enough for most work.
 The term stage follows sciline (scipp/sciline ADR 0003).
 The `Accumulator` class of sciline and of `StreamProcessor`, which holds one key, is part of a binding, not an accumulator in the sense above ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+
+Each push changes what an accumulator holds, in place.
+The outputs of a state may share memory with it, so they stay as they are only until the next push, and the next push waits until nothing reads them.
+So no reader sees a value change (see Adding waits for readers).
 
 ## Client and backend
 
@@ -305,12 +309,13 @@ A value exists while something keeps it:
 
 - **the client that asked for the record**, with `submit`, `compute`, or `freeze` without `persist=`, until it releases the record or ends;
 - **a pending request that reads it**, until it has finished and its workflow has returned;
-- **a pending read of an accumulator**, for the state it pinned and the pushes up to it; a value that is part of a held state, such as an output of the record of a state, keeps that held state until the value is dropped (see Adding waits for readers);
-- **a push whose rows reference it**, until the push is added or dropped; **a stage** whose template references it, until the stage is released; and **an accumulator** whose template references it, until its held state has opened;
-- **an accumulator whose held state keeps the rows pushed into it**, for the values those rows reference, until the held state is dropped (see What a binding provides);
+- **a push whose rows reference it**, until the push is added, or dropped because no read needs it (see Releasing); **a stage** whose template references it, until the stage has staged or is released; and **an accumulator** whose template references it, until it has opened;
 - **a persist request**, until the value is written, and then **the store** (see Persist).
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
+Once a stage has staged, or an accumulator has opened or added a push, what the binding holds is its own: the framework does not look inside it and keeps nothing for it.
+In the user's process, a value the binding still references stays in memory, such as a row that the held state of a binding without `held_state(fixed)` keeps (see What a binding provides).
+An accumulator changes at each push, so its states follow a rule of their own: a push waits for the readers of the state before it (see Adding waits for readers).
 A value that is gone does not come back: running the same request again makes a new record.
 A client also keeps its stages and accumulators until it releases them or ends (see Stages and accumulators).
 
@@ -490,7 +495,9 @@ for bins in (50, 100, 200):
 It resolves dataset names when the stage is made, and `tune.template` holds the values as resolved; a later correction in the dataset source does not change what the stage computes with.
 A call through the stage fills only the blanks.
 A record made through a stage is the record of the plain request with the blanks filled; it does not mention the stage.
-What the stage computed is a cache: the backend may drop it at any time, and the next call computes it again and makes the same record.
+The first call *stages* the binding: the backend gives it the fixed values, with the outputs they reference read, and the binding keeps what it needs of them.
+From then on, the stage keeps nothing its template references (see How long records and values are kept), and a call through it reads only the values of its blanks.
+If staging fails, the stage stops: that call fails with the reason, so do the calls through it that wait to run, and later calls are refused with the reason.
 
 A stage works on a multi-run spec too: with the rows fixed and `bins` a blank, each call rebins the runs it loaded once.
 An accumulator cannot do this.
@@ -512,9 +519,9 @@ client.output(iofq, 'iofq')                              # what the plain reques
 
 The accumulator after its first n pushes is a *state*.
 The plain request of a state is the template with each table filled by the rows of these pushes, in push order.
-Between pushes, an accumulator keeps what it computed once from the fixed values, and its *held state*, such as the numerators and denominators summed so far.
-If the binding does not accumulate, the held state is the list of rows pushed so far (see What a binding provides).
-No spec, call, or record names the held state.
+Between pushes, an accumulator keeps its *held state*: the object its pushes go into, which the binding makes when the accumulator opens, such as the numerators and denominators summed so far.
+If the binding does not accumulate, the held state is a list of the rows pushed so far (see What a binding provides).
+The framework does not look inside the held state, and no spec, call, or record names it.
 
 - `client.accumulator` checks the template as `client.stage` does, with the tables left out, and types each fixed value by its own field and that field's validators. Its blanks must be one or more of the spec's tables. A template with no blank, with a blank that is not a table, or that references an accumulator is refused. A binding may refuse to open too ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). It needs the values read to decide, so it refuses after the call has returned, and the accumulator stops.
 - Opening returns once the backend has checked and logged it, as `client.submit` does. It is refused if a record the template references is not kept for the client, has failed, or was cancelled, and does not wait for one that is pending. The backend reads these records once, when it opens the held state after they have completed. `iofq.template` holds the values as resolved, as a stage's template does.
@@ -572,7 +579,7 @@ A request that reads a state the accumulator has yet to reach waits for it, as i
 
 - `client.output` of an accumulator copies the output, or the part that `select` names, and makes no record. It holds back the next push only while it copies.
 - A submission pins the state of each accumulator its requests reference, and makes a record of that state's plain request, logged with the submission ([ADR 0008](adr/0008-a-read-of-a-state-is-a-record.md)). The records of the requests reference that record's outputs: `exported.request.params['data']` is `OutputRef(record=..., output='iofq')`. A record never names an accumulator.
-- The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state returns, and a request reads them in place, so a read costs no second copy of the held state.
+- The record of a state is computed from the held state, as a call through a stage is from what the stage holds. Its outputs are what the held state's `outputs` returns, not a copy, and a request reads them in place, so a read costs no second copy of the held state. They stay as they are until the next push, which waits for that request (see Adding waits for readers).
 - No client asked for the record of a state, so no client keeps it: its outputs are kept for the requests of its submission until they have run. A later request cannot reference it, and `client.output` of it raises; the accumulator is read instead.
 - A state is counted in pushes, not rows, since a push may add a row to each of several tables. In the first example of this section, the state after 2 pushes is the plain request with sample run 611 and can run 614, and the state after 3 adds sample run 612 and can run 615.
 - A read is refused if the plain request of the state would be refused, with that request's reason, such as no row in a table that needs one; a state with nothing pushed is no exception. The first read of a state validates its plain request, at a cost that grows with the number of rows, so a driver that reads after every push pays it at every push. Only the client that opened an accumulator reads it.
@@ -580,9 +587,42 @@ A request that reads a state the accumulator has yet to reach waits for it, as i
 - `client.submit(iofq)` raises `TypeError`.
 - A request reads at most one accumulator, and a row or a template reads none ([ADR 0003](adr/0003-accumulators-add-in-place.md), which lists the cases). To use an output of a finished accumulator in another, a template or row references the record that `freeze` returns. Sample and background runs that arrive at the same time are two tables of one accumulator.
 
-**Adding waits for readers.** An accumulator keeps one held state, and its binding may add each push to it in place, so that a push needs no second copy of a large volume.
-Since a request reads the outputs of the state itself, a push is added only once nothing keeps the state before it (see How long records and values are kept): no pending read, and no request still running that reads the record of that state, also one that was cancelled.
-Adding it also waits for the records its rows reference to complete.
+**Adding waits for readers.** A notebook that uses an accumulating binding directly (see What a binding provides) reads each state before it pushes the next run:
+
+```python
+held = binding.held_state(fixed)
+for run in runs:
+    held.push({'runs': {'run': run}})
+    counts = held.outputs()['counts']   # may be the array the next push adds into
+    show(counts['q', 0])                # done with it before the next push
+```
+
+The binding adds each push to its held state in place, so that a push needs no second copy of a large volume, and `outputs` may return what it holds instead of a copy.
+The loop is correct because its body is done with `counts` before the next push.
+Keeping `counts` longer, as `snapshots.append(counts)` would, gives a list of one array that changes at every push.
+
+The framework keeps the order of this loop while pushes and reads run on its workers:
+
+```python
+volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+cuts = []
+for run in runs:
+    volume.push({'runs': {'run': run}})                                       # returns at once
+    cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}))  # returns at once
+```
+
+Each cut runs after the push before it and before the push after it, so it reads the state it pinned, as the loop body does.
+No reader keeps the outputs of a state longer: `client.output` of an accumulator copies, and the record of a state is kept only for the requests that read it.
+In Rust's terms, each reader of a state holds a shared borrow of the held state, and a push needs a mutable borrow, so it waits until the shared borrows have ended; Rust checks this when it compiles, the backend waits for it at run time.
+`VOLUME` and `CUT` are toy specs of the stories ([user-stories.md](user-stories.md), Toy specs).
+
+So push n+1 waits for the *readers* of state n: the pending reads pinned at it, and the requests still running that read the record of that state, also one that was cancelled.
+There are two reasons:
+
+- The held state only moves forward. Once push n+1 is added, the outputs of state n cannot be computed again, so the pending reads of state n get them first. This holds whether or not the outputs are copies.
+- The outputs of state n may share memory with the held state, as `counts` does in the loop above, and the next push may change them in place. Waiting for their readers means that no reader sees a value change. The framework cannot tell whether a binding's outputs share memory with what it holds, so it waits for every binding. If outputs were always copied, a read of a large volume would need a second one ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
+
+Adding a push also waits for the records its rows reference to complete.
 The backend adds the pushes of one accumulator on its workers, one at a time, in the order they were logged.
 A long reader holds back the next addition, but not the driver.
 The outputs of a state are computed all at once, the first time the state is read, and kept until the next push is added; no output is computed for a state that no one reads.
@@ -595,7 +635,7 @@ client.output(total, 'iofq')             # read as any record's output
 client.freeze(volume, persist=True)      # the store keeps it, not the client
 ```
 
-- The record's values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
+- The record's values are the outputs of the last state, computed once and not copied. No push follows, so they stay as they are. Once the record has completed, the backend drops the held state; the record's values keep any memory they share with it.
 - The client keeps the record, unless `persist=` hands it to the store, as at submission.
 - A push logged after the freeze is refused. Once the record has completed, a read of the accumulator is refused and names the record. The client keeps the accumulator until it releases it, as any accumulator.
 - The plain request of the last state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
@@ -611,12 +651,12 @@ client.output(exported, 'text')
 ```
 
 Releasing the accumulator, or ending its client, waits for nothing.
-The pinned reads keep their states and the pushes up to them, and the held state is dropped once its readers have run.
+The pushes up to the last pinned state are still added, so that its readers get it, and the held state is dropped once the readers of its states are done.
 Pushes that no pinned read needs are dropped.
 A released accumulator takes no more pushes or reads.
 Work that nothing keeps any more is cancelled: releasing `exported` too would cancel it, and with it the record of the state it reads.
 
-**On the service**, the outputs of the record of a state are part of the held state, held where the held state is.
+**On the service**, the outputs of the record of a state are held where the held state is.
 How the service holds an accumulator's held state, bounds its memory, and ends it is open (open question 5).
 
 ### What a binding provides
@@ -642,7 +682,7 @@ held.outputs()                           # {'normalized': ..., ...}: every outpu
 
 - After rows are pushed, `outputs` gives what the plain request over those rows gives, with the same fixed values. The workflow author promises this, as `StreamProcessor` asks its users to promise that a workflow is linear in its dynamic keys.
 - `push` takes the rows of one push, one per table, so that a binding can add them at once. It may modify the held state in place, but not the rows.
-- `outputs` returns every output, but may leave out one the spec declares optional, and may return part of the held state, not a copy. The backend calls it once for each state that is read, and keeps what it returns until the next push.
+- `outputs` returns every output, but may leave out one the spec declares optional. An output may share memory with the held state, so the next push may change it. The backend calls `outputs` once for each state that is read, keeps what it returns until the next push, and adds that push only once the readers of these outputs are done.
 - The backend calls `push` and `outputs` from one thread at a time, and never `outputs` while a push adds.
 
 `combine(operation)` is such a binding, for a spec whose only parameter is one table and whose outputs are the rows' fields, each combined with `operation`.

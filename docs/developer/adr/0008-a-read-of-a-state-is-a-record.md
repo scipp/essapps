@@ -23,7 +23,7 @@ Everything that follows records would have to handle it apart:
 
 The arrival symmetry already says what a state is: state n gives the outputs of the plain request over the rows of the first n pushes ([README](../README.md), Symmetries; [ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
 
-A record of a state differs from other records in one way: its value is part of the held state, which the next push changes in place.
+A record of a state differs from other records in one way: its value is what the held state returned for the state, not a copy, and the next push may change it in place.
 What may keep and read such a value follows from the rules about values that [ADR 0002](0002-the-client-is-the-lifetime.md) and [ADR 0005](0005-nothing-is-written-unless-persisted.md) state for every record.
 
 ## Decision
@@ -43,7 +43,7 @@ Three things are particular to it:
 
 - **`acc.ref(output)` is replaced at submission** by an output of the record of the pinned state. `acc.ref` is what a caller writes; records hold only outputs of records and datasets, and never name an accumulator or a state.
 - **Each submission makes its own record of the state**, also when an earlier submission pinned the same state. The accumulator computes the outputs of one state once.
-- **Its value is part of the held state.** It is computed from the held state, as a call through a stage is computed from what the stage holds, and its outputs are those of the state, not a copy. It reads the held state, not the values of the records its rows reference, so its edges to them are provenance, not reads, and it does not matter that the client released those records after pushing them. The record that `freeze` returns is computed the same way ([ADR 0003](0003-accumulators-add-in-place.md)).
+- **Its value may share memory with the held state.** It is computed from the held state, as a call through a stage is computed from what the stage holds, and its outputs are what the held state returned for the state, not a copy. They stay as they are only until the next push, which waits until nothing reads them. It reads the held state, not the values of the records its rows reference, so its edges to them are provenance, not reads, and it does not matter that the client released those records after pushing them. The record that `freeze` returns is computed the same way ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 Everything else follows from the rules for every record.
 No client asked for it, so no client keeps it, and nothing writes it.
@@ -70,4 +70,4 @@ A workflow that reads it must neither modify it nor return it or a view of it, a
 - Running a record again submits its request, and the requests of the records it reads whose outputs are gone.
 - Cancelling every reader of a pending record of a state cancels that record too, since nothing else keeps it, and frees the next push once the readers' workflows have returned.
 - A state that its plain request would refuse is refused at the submission that reads it; the record of that request is never made.
-- On the service, the outputs of a record of a state are part of the held state; how the service holds held states is open ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Open).
+- On the service, the outputs of a record of a state are held where the held state is; how the service holds held states is open ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Open).

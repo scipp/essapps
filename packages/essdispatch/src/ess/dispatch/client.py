@@ -351,8 +351,10 @@ class Client:
     def stage(self, template: Template) -> Stage:
         """
         A stage of the template; the client keeps it until it releases it.
-        The stage keeps the outputs its template references until then, so
-        the records they belong to may be released.
+        The stage keeps the outputs its template references until its first
+        call has staged the binding, so the records they belong to may be
+        released. If staging fails, the stage stops: the calls through it
+        fail, and later ones are refused.
 
         A template a request would refuse is refused here. The stage's
         template holds the values as the backend resolved them, so a dataset
@@ -386,7 +388,8 @@ class Client:
         A released record's outputs are dropped once nothing else keeps them,
         such as a pending request that reads them; the record stays. A
         pending record that nothing else keeps is cancelled. A released stage
-        takes no more calls, and lets go of what its template references. A
+        takes no more calls, and lets go of what its template references if
+        it has not staged. A
         released accumulator takes no more pushes or readers; the pushes up
         to the last state a pending read still holds are added, the later
         ones are dropped, and its state is dropped once its readers are done.

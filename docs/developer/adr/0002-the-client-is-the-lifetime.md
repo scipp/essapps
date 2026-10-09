@@ -38,18 +38,25 @@ A value that is gone does not come back: running the same request again makes a 
 |---|---|---|
 | the client that asked for the record (`submit`, `compute`, `freeze`) without `persist=` | the record's values | it releases the record or ends |
 | a pending request | the values it reads | it has finished and its workflow has returned |
-| a pending read of an accumulator: the record of a state, a `freeze`, a `client.output` | the state it pinned, and the pushes up to it | it has finished, or `client.output` has copied |
-| a value that is part of a held state, such as an output of the record of a state | the held state at that state: the next push is not added | the value is dropped |
 | a push | the values its rows reference | it is added or dropped |
-| a stage | the values its template references | it is released |
-| an accumulator's template | the values it references | the held state has opened |
-| a held state that keeps its rows | the values they reference | the held state is dropped |
+| a stage | the values its template references | it has staged, or is released |
+| an accumulator's template | the values it references | the accumulator has opened |
 | a persist request | the values it names | they are written, or the write has failed |
 | the store | written values | the proposal's history is dropped, or a value is dropped earlier |
 
 Nothing else keeps a value: not a record object, not a reference, not a label.
 Keeping is the default for what a client asks for.
-[ADR 0003](0003-accumulators-add-in-place.md) gives the keepers of an accumulator, [ADR 0005](0005-nothing-is-written-unless-persisted.md) the persist request and the store.
+[ADR 0005](0005-nothing-is-written-unless-persisted.md) gives the persist request and the store.
+
+The binding is a black box.
+Once a stage has staged, or an accumulator has opened or added a push, what the binding holds is its own: the framework does not look inside it and keeps nothing for it.
+In the user's process, a value the binding still references stays in memory, as any Python object does.
+
+An accumulator's *held state* is the object its pushes go into, and its *state* n is the accumulator after its first n pushes ([README](../README.md), Terms).
+Each push changes what an accumulator holds, in place.
+The outputs of a state, such as those of the record of a state, may share memory with it, so they stay as they are only until the next push, and the next push waits until nothing reads them.
+So no reader sees a value change.
+A read pinned at a state also keeps the pushes up to it ([ADR 0003](0003-accumulators-add-in-place.md), Adding).
 
 **A submission reads only values kept for it:** values its own client keeps, persisted values ([ADR 0005](0005-nothing-is-written-unless-persisted.md)), datasets, and the current state of its own client's accumulators.
 A request that references any other value is refused at submission, whether that record is pending or completed.
@@ -67,8 +74,9 @@ A workflow that is already running cannot be interrupted: its record is cancelle
 Cancelling frees memory, not CPU.
 
 **Stages and accumulators belong to the client**, and are released the same way.
-A stage keeps the values its template references until it is released, since what it computed from them stays in memory with it.
-What a stage computed is a cache that the backend may drop; its next call computes it again and makes the same record.
+A stage keeps the values its template references until its first call has staged the binding, and an accumulator keeps those of its template until it has opened.
+A stage stages, and an accumulator opens, on a worker after the call that made it has returned, so these values must outlive that call.
+A stage whose staging fails stops: the call that staged it fails, and later calls are refused with the reason, as an accumulator whose held state fails to open stops ([ADR 0003](0003-accumulators-add-in-place.md), Failures).
 
 **A client ends** at `client.close()` or at the end of `with client:`.
 In-process, a client made with `local()` owns its backend: closing the client closes the backend, which first waits until the pending records with a persist request are written, so that a script that persists and exits keeps what it asked for.
@@ -94,10 +102,11 @@ How the service bounds what a client keeps, and notices a client that vanished, 
 
 - **Record handles keep values, as dask futures do.** This frees a loop that waits for each result by itself. But the stories hold many equal copies of a record. D2's dict of records, kept for the morning check, would keep every value, and so would `Out[n]`.
 - **Keep only on request (`keep=True` at submission).** Nothing leaks by default. But the flag must be given at submission: a value dropped when its request finishes cannot be kept afterwards without a race. Almost every interactive call would need it. Forgetting it shows only after the work is done, when a read or a reference is refused, and the result must be computed again. Forgetting `release` under keep-by-default costs memory instead, which the process bounds. The clients that must not keep, the trigger loop and batch applications, are framework code, and they hand their values to the store at submission ([ADR 0005](0005-nothing-is-written-unless-persisted.md)).
-- **Releasing and ending stop no work.** Pending work runs on after its client lets go. Its values are dropped the moment they are computed, unless a pending reader keeps them, and then that reader keeps the work alive anyway. The case this was meant for, a driver that releases an accumulator right after its last read, holds without it: the pinned reads keep their states ([ADR 0003](0003-accumulators-add-in-place.md)).
+- **Releasing and ending stop no work.** Pending work runs on after its client lets go. Its values are dropped the moment they are computed, unless a pending reader keeps them, and then that reader keeps the work alive anyway. The case this was meant for, a driver that releases an accumulator right after its last read, holds without it: the pushes up to each pinned state are still added ([ADR 0003](0003-accumulators-add-in-place.md)).
 - **A submission reads any value that something keeps**, such as a released record that a pending request still reads. Whether the same code is accepted then depends on whether that record has completed and been dropped yet.
 - **Sessions reopened by name from a new kernel.** They are lost at a backend restart and cannot work in-process, so every program still needs a path for "it is gone". They need names, an expiry, a listing, and a rule for two kernels attached at once. dask-gateway clusters left running after kernel restarts, and Ray's detached actors that must be killed by hand, show the leak.
 - **Nested scopes (`with client.scope() as s:`).** At its exit a scope must let pending requests run, so the exit is `release` of everything made in it. A notebook cannot hold a `with` block across cells. Scopes add two errors: reading a value after its block, and submitting through the wrong scope. An implicit current scope does not reach the thread in which `as_completed` consumes a generator. No story needs nesting.
+- **A stage keeps its template's values until it is released**, so that the backend may drop what the stage computed and stage it again, or stage it again after a staging that failed. Nothing drops what a stage computed, and a staging that failed most often fails again, such as on a corrupt file. Keeping the values until the stage has staged is enough, and is what an accumulator does for its template.
 - **Values as a cache over the log**, dropped under memory pressure and recomputed from their records when read. A read could take as long as the first computation. A cut of an earlier state of an accumulator could be recomputed only by reducing again every row pushed before it.
 
 ## Consequences
@@ -109,4 +118,4 @@ How the service bounds what a client keeps, and notices a client that vanished, 
 - Two clients share values only through the store, also two clients in one process.
 - A kernel restart ends the process, and with it the backend and everything it keeps. Continuing a reduction after the user's process crashed is a non-goal ([requirements](../../requirements/README.md)).
 - A backend restarts only on a log file, which in-process only the tests do ([ADR 0004](0004-history-is-append-only-lists.md)). After a restart, no client keeps anything; [ADR 0005](0005-nothing-is-written-unless-persisted.md) (Restart) says what still runs.
-- A stage takes calls for as long as it lives, also after the client released the records its template references.
+- A stage takes calls for as long as it lives, also after the client released the records its template references, unless its staging failed.

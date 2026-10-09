@@ -238,27 +238,28 @@ README.md states what keeps an output value (How long records and values are kep
 The backend keeps three things for that rule:
 
 - in each client entry, the IDs of the records the client asked for and has not released;
-- for each output, how many pending records, pending reads of accumulators, and steps of accumulators reference it and have not yet run, and how many stages reference it;
+- for each output, how many pending records, pending reads of accumulators, and steps of accumulators reference it and have not yet run, and how many stages that have not yet staged reference it;
 - for each output, whether a persist request names it, and whether it has been written.
 
 A pending record holds its inputs from submission until its workflow returns, even if the record is cancelled meanwhile, since the workflow still reads them.
 A step of an accumulator, opening its held state or adding a push, holds the outputs it references from the call that made it until it is done or dropped.
-An output value is dropped from memory once no client entry keeps its record, no stage references it, no pending record or step that reads it has yet to run, and no persist request waits for its write.
+An output value is dropped from memory once no client entry keeps its record, no stage that has not yet staged references it, no pending record or step that reads it has yet to run, and no persist request waits for its write.
 A written value is read from the store.
-The backend checks this when a client releases a record or a stage or ends, when a workflow returns or a record finishes without running, when a step is done or dropped, when a write ends, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
+The backend checks this when a client releases a record or a stage or ends, when a stage has staged or stops, when a workflow returns or a record finishes without running, when a step is done or dropped, when a write ends, and when a record completes, since a record released while pending drops its outputs as soon as it completes.
 
 **What a submission reads.** A submission, a stage, an opening, and a push check each record they reference against what is kept for their client: a record the client entry keeps, or a persisted output.
 Any other reference is refused, also to a record that is still pending and that only another pending request reads.
+A call through a stage that has not yet staged may also reference what the stage keeps; once the stage has staged, a call reads only the values of its blanks, and its record's edges to the template's values are provenance.
 `client.output` reads the same values, waiting for a pending record or write; any other raises.
 
 **Cancelling work that nothing keeps.** When a pending record loses its last keeper, the backend finishes it as `cancelled`, and lets go of what it reads, which may cancel the records that only it read.
 A workflow that is already running cannot be interrupted: its record is cancelled at once, and the workflow runs to its end while its outputs are dropped.
 The backend checks this at the same points at which it drops values.
 
-A stage keeps what it computed from its fixed values and the values its template references, and an accumulator its held state, until the client releases them or ends.
-A held state that keeps the rows (see Accumulators) holds the value of each row, also an output of a record that the client has released.
-What a stage computed is a cache: the backend may drop it at any time, and the next call through the stage computes it again and makes the same record.
-The in-process backend never drops it.
+A stage keeps the values its template references until its first call has staged the binding, and an accumulator those of its template until its held state has opened.
+From then on, what the binding holds is its own, and the backend keeps nothing for it: the stage holds the callable the binding returned, and the accumulator its held state, until the client releases them or ends.
+In the user's process, a value the binding still references stays in memory, such as each row of a held state that keeps the rows (see Accumulators), also an output of a record that the client has released.
+If staging fails, the stage stops: that call fails with the reason, so do the calls through it that wait to run, and later calls are refused with `the stage stopped: staging failed: <reason>`.
 
 A label names records and keeps no values.
 
@@ -267,7 +268,7 @@ How the stories fare, in the user's process and on the service:
 | Story | What keeps the value |
 |---|---|
 | S1, S3, S8: compute, then read the output | the notebook's client |
-| B1, S2: tuning steps | each step: the notebook's client, until the notebook releases it; the loaded run: the stage |
+| B1, S2: tuning steps | each step: the notebook's client, until the notebook releases it; the loaded run: the stage's binding, once staged |
 | B2: a sum read after each run | the sum: the accumulator's held state (`Summing`), to which each push adds one run; each read: a copy, a plain value in the notebook; the request over runs 611 and 613: the notebook's client |
 | B4: cuts through a volume | the volume: the notebook's client; each cut: a copy of the selection, a plain value in the notebook |
 | C5: two stages tuned together, both results read afterwards | the notebook's client |
@@ -347,7 +348,7 @@ Pinning never waits for a push to be added.
 Under the backend's lock, a submission pins the state of each accumulator its requests read, and counts as a reader of these states, so the next push into each is not added while the submission is checked.
 It validates their plain requests outside the lock, then, under the lock, checks the requests, appends a record of each state's plain request and then the records of the requests, and stops counting as a reader.
 The records of the requests reference the outputs of the records of the states.
-A record of a state is computed from the held state: its outputs are what the held state returns, as a call through a stage is computed from what the stage holds.
+A record of a state is computed from the held state: its outputs are what the held state returns, not a copy, as a call through a stage is computed from what the stage holds.
 No client asked for it, so no client entry keeps it: its outputs are kept by the requests of its submission, and dropped once they have run.
 The record is a reader of its state until then.
 A later request, stage call, row, or template that references it is refused by the general check (see Values), so every reader of a state is logged before the next push.
@@ -365,13 +366,13 @@ The record of the state holds them as the binding returns them, and the requests
 **Freeze.** `client.freeze` pins the state after the pushes appended so far, validates its plain request as a read does, and appends the record of that state, with a persist request if `persist=` is given.
 The accumulator then takes no pushes.
 The record is a reader of its state until it has finished.
-Its outputs are those the held state returns, not copied; once the record has completed, the backend drops the rest of the held state, and a read of the accumulator is refused and names the record.
+Its outputs are those the held state returns, not copied; once the record has completed, the backend drops the held state, the outputs keep any memory they share with it, and a read of the accumulator is refused and names the record.
 If the record fails or is cancelled, the accumulator can still be read and frozen again, unless it has stopped.
 
 **Adding.** Each accumulator has a queue of steps, in the order they were appended: opening its held state, then adding each push.
 The backend runs one step of an accumulator at a time, on a worker, outside its lock.
 A step starts once the records it references have completed.
-Adding a push also waits until the readers of the state before it are done.
+Adding a push also waits until the readers of the state before it are done: the held state only moves forward, and the outputs of a state may share memory with it, so the next push may change them in place (README.md, Adding waits for readers).
 A record of a state is done once the requests that read it have run, not only started, since a running workflow holds the value; this includes a cancelled request whose workflow still runs.
 Before a push is added, the outputs computed for the state before it are dropped.
 Once it is added, the records that wait for the state after it start.
@@ -417,7 +418,7 @@ Batch and automatic reduction run on the service, and a client connects with `co
 - **The store** is an area per proposal that the framework owns. It finds a value by the record's ID and the output's name; history names no file. Values are dropped with the proposal's history at the latest. A value dropped earlier, for example to free disk space (system story H1), is read as a value that nothing keeps. `publish` copies a value into the proposal's upload folder and registers it in SciCat.
 - **The store is given to the backend**, not built into it: each deployment configures its own, and tests use a fake. The format of each output type and the layout within a proposal's area are first-release work (scipp/essapps#23).
 - **Values reach other nodes** as the system decides, for example through a scratch file deleted once nothing keeps the value.
-- **Besides history and the store**, the service holds the values its clients keep, caches, which it may drop at any time, such as what a stage computed or a copy of a value it has read, and the held states of accumulators. The outputs of the record of a state are part of the held state. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open). A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
+- **Besides history and the store**, the service holds the values its clients keep, what its stages hold, the held states of accumulators, and caches that it may drop at any time, such as a copy of a value it has read. The outputs of the record of a state are held where the held state is. How it holds a held state, bounds its memory, and ends it is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open). A request reads a held state in place, so it runs where that held state is ([ADR 0003](adr/0003-accumulators-add-in-place.md), What may read an accumulator).
 - **An upgrade** ends every client of the old instance. Whether persisted work running at the upgrade is finished by the old instance or run again by the new one is open ([ADR 0005](adr/0005-nothing-is-written-unless-persisted.md), Open).
 
 ## Open

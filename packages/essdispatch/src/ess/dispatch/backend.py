@@ -20,18 +20,20 @@ backend started from an existing log has no clients and cannot read the
 outputs of the backend that wrote it.
 
 An output value is kept while the client that made its record keeps it, while
-a stage whose template references it lives, or while a pending request or a
-step of an accumulator that reads it has yet to run. A pending record whose
-outputs nothing keeps is cancelled, since they would be dropped the moment
-they are computed; cancelling lets go of what it reads, so this passes along a
-chain. A workflow already running is not interrupted: its record is cancelled
-at once, and its outputs are dropped when it returns.
+a stage whose template references it has yet to stage, or while a pending
+request or a step of an accumulator that reads it has yet to run. Once a stage
+has staged, or a step is done, what the binding holds is its own. A pending
+record whose outputs nothing keeps is cancelled, since they would be dropped
+the moment they are computed; cancelling lets go of what it reads, so this
+passes along a chain. A workflow already running is not interrupted: its
+record is cancelled at once, and its outputs are dropped when it returns.
 
 A client reads, and its requests, stages, and accumulators reference, only the
 outputs of records it keeps, whether they are pending or completed; a request
-through a stage also those the stage keeps. So whether a call is accepted does
-not depend on how far other work has run, and a value kept only for another
-client or for a pending request is refused.
+through a stage that has yet to stage also those the stage keeps, and one
+through a stage that has staged reads only the values of its blanks. So whether
+a call is accepted does not depend on how far other work has run, and a value
+kept only for another client or for a pending request is refused.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
@@ -40,11 +42,13 @@ is.
 
 A request runs through its spec's binding. A stage checks its template's
 values as a request's and resolves dataset names when it is made, and keeps
-the outputs they reference until it is released. A request through it must
-have its values outside the blanks. Such a request runs through the callable
-the binding returned for the stage's first call, so a binding that holds
-values computes only what depends on the blanks. A stage lives until its
-client releases it or ends, and the requests made through it have run.
+the outputs they reference until it has staged. A request through it must
+have its values outside the blanks. The first such request to run stages the
+binding with the template's values, and every request through the stage runs
+through the callable the binding returned, so a binding that holds values
+computes only what depends on the blanks. If staging fails, the stage stops:
+the requests through it fail, and later ones are refused. A stage lives until
+its client releases it or ends, and the requests made through it have run.
 
 An accumulator opens from a template whose blanks are table fields, checked
 as a stage's template is. Each other value is typed by its own field. Each
@@ -86,16 +90,19 @@ The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
 kept until the next push. The record of a state is computed from the held
 state, as a call through a stage is from what the stage holds: its outputs
-are what the binding returns, not a copy. They are kept until the requests
-that read them have run, and the record holds the state as its reader until
-then. Reading the outputs of the accumulator copies them. So the next push
-waits until the readers of the state before it are done: the records of that
-state, until the requests that read them have run, even those cancelled while
-they run, and the reads of its outputs in progress. Every wait is for work
-logged before the waiter: a request waits for records submitted before it and
-for pushes logged before its submission, and a push waits for the records of
-the state before it and the requests of their submissions, all logged before
-the push, since only the submission that made a record of a state reads it.
+are what the binding returns, not a copy, and may share memory with the held
+state, which the next push may change in place. They are kept until the
+requests that read them have run, and the record holds the state as its
+reader until then. Reading the outputs of the accumulator copies them. So the
+next push waits until the readers of the state before it are done, since the
+held state cannot go back to that state and no reader may see its outputs
+change: the records of that state, until the requests that read them have
+run, even those cancelled while they run, and the reads of its outputs in
+progress. Every wait is for work logged before the waiter: a request waits
+for records submitted before it and for pushes logged before its submission,
+and a push waits for the records of the state before it and the requests of
+their submissions, all logged before the push, since only the submission that
+made a record of a state reads it.
 So no wait goes round in a circle.
 Releasing the accumulator or ending its client keeps the pushes up to the last
 state a reader still holds, which are still added, and drops the later ones,
@@ -312,14 +319,17 @@ class Entry:
 
 class _Stage:
     """
-    A stage: its spec, its blanks, its fixed values, and the binding's callable.
+    A stage: its spec, its blanks, its fixed values, and the binding's callable
+    once it has staged.
 
     The fixed values are the template's, with dataset names resolved when the
     stage was made. ``reads`` are the outputs of records they reference, which
-    the stage keeps as a reader until it is released. The first call stages
-    the binding, and so does the call after one that failed to stage. What the
-    callable holds is a cache: the backend may drop it at any time, and the
-    next call stages the binding again and makes the same record.
+    the stage keeps as a reader until it has staged, has stopped, or is
+    released; it is empty from then on. The first call to run stages the
+    binding under ``staging``, so that concurrent calls stage it once.
+    ``call``, the callable the binding returned, and ``stopped``, why staging
+    failed, change under the backend's lock. A stage that has stopped takes
+    no more calls.
     """
 
     def __init__(
@@ -329,15 +339,9 @@ class _Stage:
         self.blanks = blanks
         self.fixed = fixed
         self.reads = _output_reads(fixed)
-        self._lock = threading.Lock()
-        self._call: Function | None = None
-
-    def staged(self, stage: Callable[[], Function]) -> Function:
-        """The binding's callable; ``stage`` makes it if there is none."""
-        with self._lock:
-            if self._call is None:
-                self._call = stage()
-            return self._call
+        self.call: Function | None = None
+        self.stopped: str | None = None
+        self.staging = threading.Lock()
 
 
 class _Accumulator:
@@ -725,14 +729,18 @@ class Backend:
         push passes no states: a stage or an accumulator that held a state of
         an accumulator would hold back its every push for as long as it
         lives, and a row pushed into one would read another's value while it
-        adds. A request through a stage also reads what the stage keeps,
-        which :meth:`_check_stage` has checked it for.
+        adds. A request through a stage that has yet to stage also reads
+        what the stage keeps, which :meth:`_check_stage` has checked it for;
+        one through a stage that has staged reads only its blanks.
         """
         params = self._specs[request.spec].params
         stage = caller.stages[entry.stage] if entry.stage is not None else None
         also = set(stage.reads) if stage is not None else set()
         try:
             for field, value in request.params.items():
+                if stage is not None and stage.call is not None:
+                    if field not in stage.blanks:
+                        continue
                 for where, ref, target in _reads(params, field, value):
                     spec_id = self._readable(ref, where, caller, states, also)
                     outputs = self._output_fields[spec_id]
@@ -765,6 +773,8 @@ class Backend:
         stage = caller.stages.get(entry.stage)
         if stage is None:
             raise entry.refused(SubmitError('the stage was released or is unknown'))
+        if stage.stopped is not None:
+            raise entry.refused(SubmitError(stage.stopped))
         if stage.spec != request.spec:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
@@ -837,11 +847,17 @@ class Backend:
         Start the record, or let it wait for its unfinished inputs; lock held.
 
         A record of a state reads only the state, which it waits for; the
-        pushes have read the outputs its rows reference.
+        pushes have read the outputs its rows reference. A record through a
+        stage that has staged reads only the outputs its blanks reference.
         """
         state = self._state_of.get(record_id)
         if state is None:
-            refs = self._views.records[record_id].request.inputs()
+            request = self._views.records[record_id].request
+            stage = self._stage_of.get(record_id)
+            if stage is not None and stage.call is not None:
+                blanks = {k: v for k, v in request.params.items() if k in stage.blanks}
+                request = Request(request.spec, blanks)
+            refs = request.inputs()
             self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
             waiting = {ref.record for ref in refs} - self._views.finished.keys()
         else:
@@ -901,8 +917,44 @@ class Backend:
         if stage is None:
             return binding.stage(self._read(values), ()), {}
         fixed = {k: v for k, v in values.items() if k not in stage.blanks}
-        call = stage.staged(lambda: binding.stage(self._read(fixed), stage.blanks))
+        call = self._staged(
+            stage, lambda: binding.stage(self._read(fixed), stage.blanks)
+        )
         return call, self._read({k: values[k] for k in stage.blanks})
+
+    def _staged(self, stage: _Stage, make: Callable[[], Function]) -> Function:
+        """
+        The stage's callable; ``make`` stages the binding, outside the
+        backend's lock, if no call has yet.
+
+        Once staged, the binding holds what it needs, and the stage lets go of
+        what its template references. If staging fails, the stage stops, and
+        lets go of them too: the error is that call's failure, and the calls
+        after it fail with the reason.
+        """
+        with stage.staging:
+            with self._changed:
+                if stage.stopped is not None:
+                    raise RuntimeError(stage.stopped)
+                if stage.call is not None:
+                    return stage.call
+            try:
+                call = make()
+            except Exception as error:
+                with self._changed:
+                    reason = str(error) or repr(error)
+                    stage.stopped = f'the stage stopped: staging failed: {reason}'
+                    self._let_go_of_template(stage)
+                raise
+            with self._changed:
+                stage.call = call
+                self._let_go_of_template(stage)
+            return call
+
+    def _let_go_of_template(self, stage: _Stage) -> None:
+        """Let go of what the stage's template references, once; lock held."""
+        reads, stage.reads = stage.reads, []
+        self._let_go(reads)
 
     def _typed(
         self,
@@ -1137,17 +1189,17 @@ class Backend:
         them, and a pending record that nothing else keeps is cancelled (see
         :meth:`_drop`). A released stage takes no more requests, those made
         through it still run through it, and it lets go of what its template
-        references. A released accumulator takes no more pushes or readers;
-        the pushes up to the last state that a reader still holds are added,
-        the later ones are dropped, and its held state is dropped once its
-        readers are done. Releasing what the client does not keep does
-        nothing.
+        references, if it has not let go already. A released accumulator
+        takes no more pushes or readers; the pushes up to the last state that
+        a reader still holds are added, the later ones are dropped, and its
+        held state is dropped once its readers are done. Releasing what the
+        client does not keep does nothing.
         """
         with self._changed:
             caller = self._client(client)
             for i in ids:
                 if (stage := caller.stages.pop(i, None)) is not None:
-                    self._let_go(stage.reads)
+                    self._let_go_of_template(stage)
                 if (acc := caller.accumulators.pop(i, None)) is not None:
                     acc.released = True
                     self._unneeded(acc)
@@ -1183,8 +1235,8 @@ class Backend:
 
         The template is checked (see :meth:`_check_template`), and the stage
         keeps its values; a request through it must have them. The stage
-        keeps the outputs they reference until it is released. Its first call
-        stages the binding.
+        keeps the outputs they reference until its first call to run has
+        staged the binding, or it is released.
         """
         spec_id, blanks = template.spec, template.blanks
         fixed = self._check_template(template, self._client(client).proposal)

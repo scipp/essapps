@@ -7,6 +7,7 @@ import re
 import statistics
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from typing import Any, Self
@@ -470,7 +471,7 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     assert shifting.staged == [('offset',)]
 
 
-def test_a_stage_keeps_what_its_template_references_until_it_is_released(
+def test_a_stage_keeps_what_its_template_references_until_it_has_staged(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
@@ -481,10 +482,40 @@ def test_a_stage_keeps_what_its_template_references_until_it_is_released(
     client.release(load)
     loading.set()
 
-    shifted = client.compute(shift, {'offset': 1.0})
-    assert client.output(shifted, 'value') == 3.0
+    shifted = [client.compute(shift, {'offset': x}) for x in (1.0, 2.0)]
+    assert [client.output(r, 'value') for r in shifted] == [3.0, 4.0]
     with pytest.raises(SubmitError, match='not kept by this client'):
         client.submit(SHIFT, {'value': load.ref('value'), 'offset': 1.0})
+
+
+class KeepsTheSum:
+    """Stages SHIFT keeping only the sum of the value, not the value."""
+
+    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        total = float(np.sum(fixed['value']))
+        return lambda offset: {'value': total + offset}
+
+
+def test_a_stage_lets_go_of_what_its_template_references_once_staged(
+    datasets: FakeDatasets,
+) -> None:
+    def load(run: float) -> dict[str, np.ndarray]:
+        return {'value': np.array([run]), 'extra': np.array([-run])}
+
+    bind = {LOAD: load, SHIFT: KeepsTheSum()}
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        loaded = client.compute(LOAD, {'run': dataset(run=2)})
+        value = weakref.ref(client.output(loaded, 'value'))
+        shift = client.stage(
+            Template(SHIFT, params={'value': loaded.ref('value')}, blanks=('offset',))
+        )
+        client.release(loaded)
+        assert value() is not None
+
+        shifted = client.compute(shift, {'offset': 1.0})
+        assert value() is None
+        again = client.compute(shift, {'offset': 2.0})
+        assert [client.output(r, 'value') for r in (shifted, again)] == [3.0, 4.0]
 
 
 def test_releasing_a_stage_lets_go_of_what_its_template_references(
@@ -519,19 +550,38 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     assert scaling.staged == [('factor',)]
 
 
-def test_a_stage_that_failed_to_stage_is_staged_on_the_next_call(
-    client: Client, scaling: Staging
-) -> None:
+def test_a_stage_whose_staging_fails_stops(client: Client, scaling: Staging) -> None:
     scaling.fail_next = True
     scale = client.stage(
         Template(SCALE, params={'run': dataset(run=2)}, blanks=('factor',))
     )
     failed = client.compute(scale, {'factor': 2.0})
-    scaled = client.compute(scale, {'factor': 2.0})
 
     assert client.status(failed) is Status.FAILED
-    assert 'staging failed' in client.failure(failed)
-    assert client.output(scaled, 'value') == 4.0
+    assert client.failure(failed) == 'staging failed'
+    with pytest.raises(SubmitError, match='the stage stopped: staging failed'):
+        client.submit(scale, {'factor': 2.0})
+    assert scaling.staged == []
+
+
+def test_the_calls_waiting_for_a_stage_whose_staging_fails_fail_with_it(
+    client: Client, shifting: Staging, loading: threading.Event
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, {'run': dataset(run=1)})
+    shift = client.stage(
+        Template(SHIFT, params={'value': load.ref('value')}, blanks=('offset',))
+    )
+    shifting.fail_next = True
+    pending = [client.submit(shift, {'offset': x}) for x in (1.0, 2.0, 3.0)]
+    loading.set()
+    client.wait(pending)
+
+    assert sorted(client.failure(r) for r in pending) == [
+        'staging failed',
+        *['the stage stopped: staging failed: staging failed'] * 2,
+    ]
+    assert shifting.staged == []
 
 
 def test_a_request_through_a_stage_must_have_the_stage_s_values(
@@ -1952,7 +2002,7 @@ def test_a_released_accumulator_still_adds_the_pushes_logged(
     copying.started.wait(timeout=5)
     total.push({'parts': loads[1].refs('value')})  # waits for the first copy
     second = _copy(client, total)
-    client.release(total)  # the copies keep their states
+    client.release(total)  # the copies are still readers of their states
     copying.go.set()
 
     assert [client.output(r, 'value').tolist() for r in (first, second)] == [
@@ -1969,7 +2019,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     total = _total(client)
     total.push({'parts': loads[0].refs('value')})
     copied = _copy(client, total)
-    client.release(total)  # the copy keeps its state
+    client.release(total)  # the copy is still a reader of its state
 
     released = 'the accumulator was released or is unknown'
     with pytest.raises(SubmitError, match=f'^{released}$'):

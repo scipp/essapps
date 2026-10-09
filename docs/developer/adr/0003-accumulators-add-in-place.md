@@ -8,6 +8,7 @@
 
 [ADR 0006](0006-the-unit-is-an-accumulating-workflow.md) makes an accumulator a workflow opened from a template, whose tables grow at each push by one row in each table the push names.
 This ADR decides how such an accumulator keeps its held state, which pushes it accepts, what a read of it means while rows are still being pushed, and how it ends.
+Its *held state* is the object its pushes go into, and its *state* n is the accumulator after its first n pushes ([README](../README.md), Terms).
 A push adds rows one at a time, while a spec's rules apply to whole requests: a table may need a minimum length, and a params validator may read several fields.
 
 Combining many runs is common: SANS sums the runs of a sample ([sans](../../requirements/sans.md)), and spectroscopy adds each run to a fixed 4D grid of up to hundreds of GB ([spectroscopy](../../requirements/spectroscopy.md)).
@@ -43,7 +44,10 @@ Reading data, opening the held state, and adding the rows of each push run on th
 Only the calls that read results wait: `client.wait`, `client.compute`, `client.output`, and `client.as_completed`.
 
 **Held state.** An accumulator keeps one held state and no earlier one.
-Its binding may add each push to it in place ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), and its outputs may be what it holds, not a copy.
+The binding makes it, and the framework does not look inside it.
+Each push changes what the accumulator holds, in place ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)).
+The outputs of a state may share memory with it instead of being copies, so they stay as they are only until the next push, and the next push waits until nothing reads them (Adding).
+So no reader sees a value change.
 
 **Reads.** A *read* is a call that pins the accumulator's state: `client.output`, submitting a request that references the accumulator, `client.freeze`, or `client.provenance`.
 It pins the state at that moment, the state after the pushes logged so far, and gives what the same call gives on the record of the plain request over those rows:
@@ -94,8 +98,13 @@ This is the spec author's promise; it is documented, not checked.
 No output is computed for a state that no one reads.
 Two reads of one state, such as `client.output(acc, 'a')` and then `client.output(acc, 'b')`, compute once.
 
-**Adding.** A push is added once the records its rows reference have completed and nothing keeps the state before it ([ADR 0002](0002-the-client-is-the-lifetime.md), the keepers).
-The state is kept by its pending reads, and by the outputs of a record of the state, which are part of the held state, until they are dropped: once the requests that read them have returned, including those cancelled while they run.
+**Adding.** Push n+1 is added once the records its rows reference have completed and the *readers* of state n are done.
+The readers of a state are its pending reads, and the requests that read the outputs of a record of the state, until they have returned, including those cancelled while they run.
+They hold back the next push for two reasons:
+
+- **Forward only.** The held state cannot go back to state n once push n+1 is added, so a pending read of state n gets its outputs first. This holds whether or not the outputs are copies.
+- **Outputs stay as they are only until the next push.** The binding may return outputs that share memory with the held state, and its next `push` may change them in place ([README](../README.md), What a binding provides). Waiting for their readers means that no reader sees a value change. In Rust's terms, each reader holds a shared borrow of the held state, and a push needs a mutable one. This is the binding's contract, not something the framework sees: it cannot tell whether a binding's outputs share memory with what it holds, so it waits for every binding. With a copy for each read, this reason would go, at the cost of a second volume for each state that is read (Context, the second row of the table).
+
 `client.provenance` reads no output and holds back no push.
 Every wait is for work logged before the waiter: a request waits for records submitted before it and for pushes logged before its submission, and a push waits for the reads of the state before it, all logged before the push, since only the submission that made the record of a state reads it.
 So no wait goes round in a circle.
@@ -122,14 +131,14 @@ client.output(total, 'counts')             # the volume, read as any record's ou
 
 - Freeze and pushes are ordered as they are logged: a push logged after a freeze is refused.
 - The plain request of that state is checked, as a read checks it. If it would be refused, the freeze is refused and the accumulator stays as it was.
-- The record reads the held state: until it has finished, it keeps the held state and the pushes up to its state.
-- Its values are the outputs of the held state, computed once and not copied. The rest of the held state is dropped once the record has completed.
+- The record is a reader of its state: until it has finished, the held state and the pushes up to its state stay, also if the accumulator is released.
+- Its values are the outputs of the last state, computed once and not copied. No push follows, so they stay as they are. Once the record has completed, the backend drops the held state, and the values keep any memory they share with it.
 - A read of the accumulator after that is refused and names the record, which is read instead.
 - If the record fails or is cancelled, the accumulator still takes no pushes, but can be read and frozen again, unless it has stopped (Failures).
 - The client keeps a frozen accumulator until it releases it or ends, as any accumulator; once the record has completed, it holds no value.
 
 **Releasing.** Releasing an accumulator drops the client's hold on it.
-The pinned reads keep their states and the pushes up to them, so a driver may release an accumulator right after its last read:
+The pushes up to each pinned state are still added, so a driver may release an accumulator right after its last read:
 
 ```python
 acc.push(row_1)
@@ -148,7 +157,7 @@ Ending the client releases the accumulator in the same way.
 
 **What may read an accumulator.** A request reads at most one accumulator, and a row or a template reads none: it references the record that `freeze` returns.
 
-- A request reads a state in place, only while it runs, and the next push is added after it. A row or a template's value lives as long as the accumulator or stage that holds it: the held state that keeps the rows stores each row's value, and the framework cannot tell whether a binding's own held state does. Read in place, that value would change at the other accumulator's next push; holding back that push instead would last as long as the holder.
+- What a request reads of a state stays as it is until the next push, which is added once the request has run. A row or a template hands its value to a binding, which may keep it for as long as its accumulator or stage lives: the held state that keeps the rows does, and the framework cannot tell whether another binding does. Read in place, that value would change at the other accumulator's next push; holding back that push instead would last as long as the holder.
 - A request reads a held state in place, so it runs in the process that holds it. A request that read two accumulators would need both held states in one process, or one moved to the other. In the user's process both are in one process; where the service holds held states is open ([ADR 0005](0005-nothing-is-written-unless-persisted.md), Open), and this rule keeps that choice free. Lifting it later breaks no code.
 
 The cases that use an accumulator's outputs together with other values:
@@ -173,7 +182,7 @@ A request that combines them reads a record of a request over one of them that c
 - **A new value per push.** A push needs two values at once.
 - **Add in place, and copy for each request that reads it.** Each read needs a second value for a state no one keeps, and a loop that reads after each push holds one per read until it is released.
 - **Copy-on-write per chunk**, as versioned chunked array stores do, to keep many states of a huge volume cheaply. No earlier state is needed; the cuts that users keep are their own records.
-- **Snapshots as records.** `client.submit(accumulator)` makes a record whose output is the value so far, valid until the next push, and requests reference that record. Such a record is not a request, and it is the one record whose value ends at a push while its client keeps it. The record of the state's plain request ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)) says the same without either.
+- **Snapshots as records.** `client.submit(accumulator)` makes a record whose output is the value so far, which stays as it is only until the next push, and requests reference that record. Such a record is not a request, and it is the one record whose value ends at a push while its client keeps it. The record of the state's plain request ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)) says the same without either.
 - **Copying the last state into a record of its own**, with a spec that returns a copy of what it reads. It needs a second volume in memory until the accumulator is released. `freeze` turns the held state's outputs into the record's values, so a finished accumulator costs no copy.
 - **Requests read only frozen accumulators**, and looks read the growing state. A request that reads the state in place does what a selection does, with more work done in place, and its record is an ordinary one ([ADR 0008](0008-a-read-of-a-state-is-a-record.md)).
 - **A read in the client's own code without a copy** (`with client.borrow(acc, 'counts') as counts:`). Code in the block that waits for a later state of the same accumulator waits for itself, an interactive plot made in the block keeps the data after it, and on the service a borrow is a copy over the network. It may be revisited once requests that read an accumulator run where it is held.
