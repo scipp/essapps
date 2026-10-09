@@ -242,7 +242,12 @@ class MeanSumParams(BaseModel):
         return self
 
 
+class TaggedRun(RunParams):
+    tag: Any = None
+
+
 class TaggedParams(SumParams):
+    runs: list[TaggedRun]
     tags: Any = None
 
 
@@ -252,12 +257,16 @@ TAGGED = _spec('tagged', TaggedParams, Parts)
 
 
 class _ScaledTotal:
+    """``offset`` plus each run times ``scale``; ``rows`` lists the rows pushed."""
+
     def __init__(self, scale: float, offset: float | None) -> None:
         self._scale = scale
         self.total = offset or 0.0
+        self.rows: list[Mapping[str, Any]] = []
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         for row in rows.values():
+            self.rows.append(row)
             self.total += self._scale * row['run']
 
     def outputs(self) -> Mapping[str, Any]:
@@ -1066,6 +1075,19 @@ def test_an_accumulator_s_values_are_typed_as_the_log_holds_them(
     assert client.output(tagged, 'value') == 1.0
     assert tagged.template.params == {'tags': ['a', 'b']}  # JSON has no tuple
     assert scaled_sum.opened == [{'scale': 1.0, 'offset': None, 'tags': ['a', 'b']}]
+
+
+def test_a_pushed_row_reaches_the_held_state_as_the_plain_request_holds_it(
+    client: Client, scaled_sum: ScaledSum
+) -> None:
+    tagged = client.accumulator(Template(TAGGED, blanks=('runs',)))
+    tagged.push({'runs': {'run': dataset(run=1), 'tag': ('a', 'b')}})
+    read = client.compute(SHIFT, {'value': tagged.ref('value')})
+
+    assert client.output(read, 'value') == 1.0
+    (row,) = _state(client, read).request.params['runs']
+    assert row['tag'] == ['a', 'b']  # JSON has no tuple
+    assert [pushed['tag'] for pushed in scaled_sum.held[0].rows] == [row['tag']]
 
 
 def test_an_optional_output_left_out_is_not_read(client: Client) -> None:

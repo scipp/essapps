@@ -1327,26 +1327,30 @@ class Backend:
         into one accumulator are added in the order they were logged (see
         :meth:`_advance`).
         """
-        filled = self._pushable(accumulator_id, rows, client)
+        stored, typed = self._pushable(accumulator_id, rows, client)
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
-            request = Request(acc.template.spec, {t: [r] for t, r in filled.items()})
+            request = Request(acc.template.spec, {t: [r] for t, r in stored.items()})
             self._check_reads(Entry(request), request, caller, {})
-            self._append(Pushed(accumulator=accumulator_id, rows=filled))
-            self._queue(acc, filled)
+            self._append(Pushed(accumulator=accumulator_id, rows=stored))
+            self._queue(acc, typed)
 
     def _pushable(
         self, accumulator_id: str, rows: Mapping[str, Row], client: str
-    ) -> dict[str, Row]:
+    ) -> tuple[dict[str, Row], dict[str, Row]]:
         """
-        The rows, once checked; needs no lock.
+        The rows, once checked, as the log holds them and as the binding gets
+        them; needs no lock.
 
         Each row is checked by its table's row model alone, and refused as the
         request over that one row would refuse it. Rules on the whole table,
         such as its length, and the params model's own validators apply when
         a state is read (see :meth:`_check_state`). A row comes back as that
-        request holds it: names resolved and defaults filled in.
+        request holds it: names resolved and defaults filled in. The binding
+        gets it typed from that form, as the binding of the state's plain
+        request does: a tuple, which JSON keeps as a list, reaches both as a
+        list.
         """
         with self._changed:
             caller = self._client(client)
@@ -1360,15 +1364,16 @@ class Backend:
         alone = {table: [row] for table, row in rows.items()}
         resolved = self._resolve(spec_id, alone, (), caller.proposal)
         row_models = table_fields(self._specs[spec_id].params)
-        filled = {}
+        stored, typed = {}, {}
         for table, (row,) in resolved.items():
+            model = row_models[table]
             try:
-                filled[table] = dict(row_models[table].model_validate(row))
+                stored[table] = _check_storable(table, dict(model.model_validate(row)))
+                typed[table] = dict(model.model_validate(stored[table]))
             except ValidationError as error:
                 problems = '; '.join(_problems(error, at=(table, 0)))
                 raise SubmitError(f'{spec_id}: {problems}') from None
-            _check_storable(table, [filled[table]])
-        return filled
+        return stored, typed
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
