@@ -67,6 +67,7 @@ Each pending record is
 
 - **Record objects keep values, as dask futures do.** `client.records()`, `client.latest()`, and provenance each return a new object for the same record, so no single object could own the value. A dict of records (D2, kept for the morning check) would keep every value, and so would Jupyter's `Out[n]`.
 - **Keep only on request (`keep=True`).** The flag must be given at submission, since a value dropped when its request finishes cannot be kept later without a race. Forgetting it shows only when a later `client.output` or reference is refused.
+- **Views first, and a record made only at persist.** A read returns a view, a handle without a record. It needs a second handle type, records of upstream views that have no values, which a later `persist` cannot complete, and pinned states kept inside views. A record is one entry in history, so making it lazily saves nothing worth that.
 - **Sessions or nested scopes.** A session reopened by name is lost at a backend restart, and needs names and an expiry. A scope is a `with` block, which a notebook cannot hold across cells.
 - **A submission reads any value that something keeps**, such as a released record that a pending request still reads. Whether the same code is refused would depend on whether that record has completed and been dropped yet.
 - **A stage keeps its template's values until it is released**, so that the backend could stage it again. Nothing drops what a stage computed, and a staging that failed most often fails again, such as on a corrupt file.

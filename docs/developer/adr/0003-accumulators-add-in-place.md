@@ -80,6 +80,7 @@ Lifting the first rule later breaks no code.
 - **A push that returns once its rows are added.** A submission that pins the accumulator would wait as long. On the service, each such call would hold an HTTP request open while a run is reduced.
 - **Checking the plain request at each push.** Each push would cost time in proportion to the rows before it. A push that the check refuses could never fill a table that needs two rows.
 - **Computing every output at every push**, as `StreamProcessor` callers do. This costs work at every push, whether or not anyone looks.
+- **Requests read only frozen accumulators**, and only `client.output` reads the growing state. A cut or a fit kept after each push would then need a copy of the state, made by `client.output`. A request that reads the state in place does that work next to the value without a copy, and its record is an ordinary one.
 - **A borrow without a copy in the client's code** (`with client.borrow(acc, 'counts') as counts:`). Code in the block that waits for a later state waits for itself. On the service, a borrow is a copy over the network.
 
 ## Consequences
