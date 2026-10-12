@@ -24,6 +24,11 @@ by its field. A spec whose groups or rows hold a model or a table, or whose
 params model has a field that is neither a group nor a table, is refused at
 construction.
 
+A check that reads several fields of a params model is a model validator, never
+a field validator reading ``info.data``. A consumer may validate some fields
+without the others, such as the fixed values of a template, and then runs only
+the validators of those fields, so another field may be absent.
+
 Two forms exist, related by a one-way projection:
 
 * :class:`WorkflowSpec` is the in-process form. It holds the params and outputs
@@ -105,11 +110,14 @@ class WorkflowSpec[M: BaseModel](_SpecFields, frozen=True):
 
     The spec is generic over its params model ``M``, which a type checker
     infers from ``params=``. So code that takes a spec can offer the params
-    model's signature, as ``Template.from_spec`` in ``ess.dispatch`` does.
+    model's signature, as ``Template.from_spec`` in ``ess.dispatch`` does
+    for pyright; mypy cannot read a signature from ``type[M]``. Code that
+    takes any spec annotates it ``WorkflowSpec[Any]``.
     """
 
-    # Pyright cannot check a default against M, which only params= decides.
-    params: type[M] = Field(  # pyright: ignore[reportAssignmentType]
+    # A type checker cannot check a default against M, which only params=
+    # decides; pyright honours this mypy ignore too.
+    params: type[M] = Field(  # type: ignore[assignment]
         default=NoParams,
         description=(
             "Pydantic model class defining the workflow parameters, each "

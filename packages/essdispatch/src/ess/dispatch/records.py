@@ -130,7 +130,7 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec | SpecId | dict[str, Any]) -> SpecId:
+    def of(cls, spec: WorkflowSpec[Any] | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
         if isinstance(spec, WorkflowSpec):
@@ -154,7 +154,7 @@ class Request(BaseModel, frozen=True):
 
     def __init__(
         self,
-        spec: WorkflowSpec | SpecId,
+        spec: WorkflowSpec[Any] | SpecId,
         params: dict[str, Any] | BaseModel | None = None,
     ) -> None:
         values = {} if params is None else as_values(params)
@@ -231,7 +231,7 @@ class Template:
 
             Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
 
-        So a type checker reports a misspelt or missing parameter and a value
+        So pyright reports a misspelt or missing parameter and a value
         of the wrong type, as it does for the params model. Every keyword is a
         parameter, so this method takes no option of its own. The values
         given are validated by their own fields (see :func:`model_without`); a

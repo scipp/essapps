@@ -227,8 +227,10 @@ A blank is a whole parameter, never a field of a group.
 template = Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
 ```
 
-As with `IofQParams(...)`, an IDE suggests the parameters, and a type checker reports one that is misspelt, missing, or of the wrong type.
+As with `IofQParams(...)`, an IDE suggests the parameters, and pyright (which Pylance uses) reports one that is misspelt, missing, or of the wrong type.
+mypy does not, since it cannot read the signature through the spec.
 `Template.from_spec` validates each value given by its own field, and a required parameter may be a blank.
+A check that reads several parameters is therefore a model validator, never a field validator reading `info.data`.
 The params model's own validators, which read several parameters, run on each request made from the template.
 
 A template can also be made from any request's values.

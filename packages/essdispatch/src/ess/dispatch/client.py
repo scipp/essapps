@@ -566,7 +566,7 @@ def local(
     *,
     proposal: str,
     datasets: DatasetSource,
-    bind: Mapping[WorkflowSpec, Binding | Function],
+    bind: Mapping[WorkflowSpec[Any], Binding | Function],
     submitter: str = 'user',
     store: Store | None = None,
 ) -> Client:

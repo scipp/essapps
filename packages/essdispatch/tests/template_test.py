@@ -174,16 +174,16 @@ def test_a_misspelt_parameter_is_refused() -> None:
     with pytest.raises(
         ValueError, match='samples: not a parameter; sample: Field required'
     ):
-        Template.from_spec(SCALE, samples=BLANK)  # type: ignore[call-arg]
+        Template.from_spec(SCALE, samples=BLANK)  # pyright: ignore[reportCallIssue]
 
 
 def test_a_value_of_the_wrong_type_is_refused() -> None:
     with pytest.raises(
         ValueError, match=r'scaling\.factor: Input should be a valid number'
     ):
-        Template.from_spec(SCALE, sample=BLANK, scaling={'factor': 'x'})  # type: ignore[arg-type]
+        Template.from_spec(SCALE, sample=BLANK, scaling={'factor': 'x'})  # pyright: ignore[reportArgumentType]
 
 
 def test_parameters_given_by_position_are_refused() -> None:
     with pytest.raises(TypeError, match='by name'):
-        Template.from_spec(SCALE, BLANK)  # type: ignore[call-arg]
+        Template.from_spec(SCALE, BLANK)  # pyright: ignore[reportCallIssue]

@@ -560,7 +560,7 @@ class Backend:
     def __init__(
         self,
         datasets: DatasetSource,
-        bind: Mapping[WorkflowSpec, Binding | Function],
+        bind: Mapping[WorkflowSpec[Any], Binding | Function],
         *,
         workers: int = 4,
         log: Log | None = None,
@@ -568,7 +568,7 @@ class Backend:
     ) -> None:
         self._datasets = datasets
         self._store = store
-        self._specs: dict[SpecId, WorkflowSpec] = {}
+        self._specs: dict[SpecId, WorkflowSpec[Any]] = {}
         for spec in bind:
             if (spec_id := SpecId.of(spec)) in self._specs:
                 raise ValueError(f'two specs are bound as {spec_id}')
@@ -703,7 +703,7 @@ class Backend:
                 return f'{where} was not persisted'
         return None
 
-    def spec(self, spec_id: SpecId) -> WorkflowSpec:
+    def spec(self, spec_id: SpecId) -> WorkflowSpec[Any]:
         try:
             return self._specs[spec_id]
         except KeyError:
