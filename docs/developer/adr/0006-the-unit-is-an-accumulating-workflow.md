@@ -59,8 +59,8 @@ Two aligned tables could be paired wrongly.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs',)))  # can runs in shared
-iofq.push({'sample_runs': {'run': dataset(run=611), 'transmission': dataset(run=610)}})
-iofq.push({'sample_runs': {'run': dataset(run=613), 'transmission': dataset(run=612)}})
+iofq.push({'sample_runs': SampleRun(run=dataset(run=611), transmission=dataset(run=610))})
+iofq.push({'sample_runs': SampleRun(run=dataset(run=613), transmission=dataset(run=612))})
 ```
 
 *Two independent tables.*
@@ -73,14 +73,14 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
-iofq.push({'sample_runs': {'run': dataset(run=611)}})
-iofq.push({'can_runs': {'run': dataset(run=614)}})
-iofq.push({'sample_runs': {'run': dataset(run=613)}, 'can_runs': {'run': dataset(run=615)}})  # one push, one state
+iofq.push({'sample_runs': SampleRun(run=dataset(run=611))})
+iofq.push({'can_runs': Run(run=dataset(run=614))})
+iofq.push({'sample_runs': SampleRun(run=dataset(run=613)), 'can_runs': Run(run=dataset(run=615))})  # one push, one state
 ```
 
 ## Alternatives considered
 
-- **Combining the outputs of requests**, with a per-run spec, a sum, and a finalizing spec. Each partial sum becomes a record. Two tables of runs, shared parameters next to per-run ones, and the finalizing step would each need a mechanism of their own.
+- **Combining the outputs of requests**, with a per-run spec, a sum, and a finalizing spec. Each partial sum becomes a record. Two tables of runs, shared groups next to per-run tables, and the finalizing step would each need a mechanism of their own.
 - **List parameters, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record would not mean the sum of its runs, and a growing total is copied at every step.
 - **Only specs whose binding makes a held state can be accumulated.** The caller would have to know which specs accumulate.
@@ -92,5 +92,5 @@ iofq.push({'sample_runs': {'run': dataset(run=613)}, 'can_runs': {'run': dataset
 - A package may also offer a single-run spec, which agrees with the multi-run spec at one row per table (README, [Combining runs: tables](../README.md#combining-runs-tables)). It does not output partial sums, because that would split the reduction into per-run and summing specs again.
 - What the binding sums must add over runs, such as a numerator and a denominator, not a normalized curve.
 - Each sum the binding holds must depend only on the fixed values and one table's fields, or the binding refuses to open.
-- An accumulator cannot tune a fixed value used before the sum, such as `bins`. Changing it opens a new accumulator, and every row is pushed again. Tuning over a fixed set of runs is a stage's job.
+- An accumulator cannot tune a fixed group used before the sum, such as `reduction`. Changing it opens a new accumulator, and every row is pushed again. Tuning over a fixed set of runs is a stage's job.
 - Spreading one accumulator over nodes needs a merge of two held states, which the binding protocol does not offer (README, [Open questions](../README.md#open-questions), Grouping).

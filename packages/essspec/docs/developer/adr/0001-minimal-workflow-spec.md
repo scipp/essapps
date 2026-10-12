@@ -138,7 +138,7 @@ accumulator's state. A field may be a union of a literal and a reference,
 for values a user may type in or take from a previous run. Collections,
 `list[...]` and `dict[str, ...]` of one declared type, are allowed on both
 sides, and a reference may name one element of a collection output, but not a
-row or cell of a table (next section).
+field of a group, a row, or a cell of a table (next section).
 
 The identity string is opaque to the spec and interpreted only by the framework
 that minted it. The spec has no use for the kind of identity, a catalogue PID,
@@ -178,11 +178,14 @@ annotation's meaning. The structural check of a scipp object against its
 `ArraySpec` needs scipp and lives in `ess.spec.conversions`, called by
 whoever runs the workflow on the outputs it returns.
 
-### Tables: a list of a flat model
+### Params are groups and tables of flat models
 
-A field may be a **table**: `list[Row]`, where `Row` is a pydantic model. A sum
-over runs of numerator and denominator pairs, or SANS sample runs each paired
-with its transmission run, is one table field:
+Each field of a params model is a **group**, a flat pydantic model, or a
+**table**, `list[Row]` with `Row` a flat model. A flat model's fields hold
+literals or data fields, collections of them included, but never a model and
+never a table. Settings that belong together, such as the edges of a Q
+histogram, are one group; a sum over runs of numerator and denominator pairs,
+or SANS sample runs each paired with its transmission run, is one table:
 
 ```python
 class SampleRun(BaseModel):
@@ -192,32 +195,47 @@ class SampleRun(BaseModel):
 
 class Params(BaseModel):
     runs: list[SampleRun]
+    q_edges: QEdges
 ```
 
-The alternative, one list per quantity (`samples: list[NexusFile]`,
-`transmissions: list[NexusFile]`), forces callers to transpose and lets the
-lists misalign by position. A UI shows a table as rows and columns: one row per
-element, one column per field of `Row`, with a picker in each data-field cell.
-A UI can also fill a row from one earlier record by matching output names to
-column names.
+A group and a row are the same kind of model, and differ only in how many a
+field holds. A single-run spec takes `sample: SampleRun` where a multi-run spec
+of the same reduction takes `samples: list[SampleRun]`, and an optional run,
+`can: SampleRun | None = None`, corresponds to a table that may be empty. The
+models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
+groups that specs share.
 
-Rows are flat: a field of `Row` holds a literal or a data field, collections of
-them included, but never a model and never another table. A table with nested
-rows is one no generic UI can show as rows and columns, so `WorkflowSpec`
-refuses it when it is constructed. The rule constrains rows only; a field
-holding a model elsewhere is not affected by it. Tables are allowed in both
-params and outputs.
+A form has one shape to handle: a section per group with a widget per field,
+and a table per table field with one row per element, one column per field of
+`Row`, and a picker in each data-field cell. A UI can fill a row from one
+earlier record by matching output names to column names. A model nested any
+deeper is one no generic form can show, and a field at the root that is neither
+a group nor a table would need a section of its own; `WorkflowSpec` refuses both
+when it is constructed. This is the shape esslivedata's forms already require of
+its params models. The alternative to a table, one list per quantity
+(`samples: list[NexusFile]`, `transmissions: list[NexusFile]`), forces callers
+to transpose and lets the lists misalign by position.
 
-Units belong to the column, not to each row. A data-field column constrains
-the unit through its `ArraySpec`, and each cell's data carries its own unit. A
-`Quantity` holds its unit in its value, so it is a model and cannot be a cell;
-a column of plain numbers states its unit in its declaration. A row that needs
+An outputs model is not constrained at its root, since a reference names an
+output by its field: a field may be a data field, a literal, a flat model such
+as a `Quantity`, or a table. Its groups and rows are flat, as those of a params
+model are.
+
+Units belong to the column, not to each row, and likewise to the field of a
+group. A data field constrains the unit through its `ArraySpec`, and its data
+carries its own unit. A `Quantity` holds its unit in its value, so it is a model
+and cannot be a field of a group or a row; a field of plain numbers states its
+unit in its declaration or in a unit field beside it, as the edges models do. A
+`Quantity` at the root of a params model is a group of its own. A row that needs
 a computed value with a unit, such as the beam centre of each sample run,
-references a 0-d data field. A table is not a data field: `table_fields` finds the
-table fields of a model with their row model, and `data_fields` of the row
-model gives the data fields of its cells. In JSON Schema a table is an array
-whose items refer to the row model under `$defs`, where the cells carry their
-`dataField` key. A reference names a whole table field, never a row or a cell.
+references a 0-d data field.
+
+Neither a group nor a table is a data field: `group_fields` and `table_fields`
+find them with their model, and `data_fields` of that model gives the data
+fields inside. In JSON Schema a group refers (`$ref`) to its model under
+`$defs`, and a table is an array whose items refer to the row model; the fields
+inside carry their `dataField` key. A reference names a whole field of a params
+or outputs model, never a field of a group, a row, or a cell.
 
 ### Two forms, one-way projection
 

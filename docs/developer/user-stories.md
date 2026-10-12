@@ -14,19 +14,21 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `run`, `bins=2`, `threshold=0.0`, `can=None`, `beam_centre=None`, `normalization=None` | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
-| `BEAM_CENTRE` | `run` | `centre` | the mean of the counts | beam-centre finding |
-| `VANADIUM` | `run`, `scale=1.0` | `normalization` | the sum of the counts times `scale` | vanadium processing |
-| `NORMALIZE` | `runs`: a table of rows with a field `run`; `scale=1.0` | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
-| `BACKGROUND` | `sample_runs`, `background_runs`: tables of rows with a field `run` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `run` | `numerator`, `denominator`, `transmission` | a copy of the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
-| `PARTS_SUM` | `parts`: a table of `NormalizationParts` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
-| `ANGLE` | `run` | `counts` | a copy of the counts | a reduction of one run into a volume |
-| `CUT` | `data`, `index` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `VOLUME` | `runs`: a table of rows with a field `run` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
-| `STITCH` | `runs`: a table of rows with a field `run`; `reference` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
-| `EXPORT` | `data` | `text` | the values, separated by commas | writing a file for another program |
-| `IOFQ_V2` | as `IOFQ`, with `threshold` renamed `mask_below`, and `bins=4` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
+| `IOFQ` | `sample: Run`, `can: Run \| None`, `reduction: Reduction` (`bins=2`, `threshold=0.0`), `corrections: Corrections` (`beam_centre=None`, `normalization=None`) | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
+| `BEAM_CENTRE` | `direct_beam: Run` | `centre` | the mean of the counts | beam-centre finding |
+| `VANADIUM` | `vanadium: Run`, `scaling: Scaling` (`scale=1.0`) | `normalization` | the sum of the counts times `scale` | vanadium processing |
+| `NORMALIZE` | `runs: list[Run]`, `scaling: Scaling` | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
+| `BACKGROUND` | `sample_runs: list[Run]`, `background_runs: list[Run]` | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
+| `CONTRIBUTE` | `sample: Run` | `numerator`, `denominator`, `transmission` | a copy of the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `PARTS_SUM` | `parts: list[NormalizationParts]` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
+| `ANGLE` | `sample: Run` | `counts` | a copy of the counts | a reduction of one run into a volume |
+| `CUT` | `source: Data` (`data`), `position: Position` (`index`) | `cut` | the value at `index` | a cut through a volume, from another package |
+| `VOLUME` | `runs: list[Run]` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
+| `STITCH` | `runs: list[Run]`, `reference: Run` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
+| `EXPORT` | `source: Data` | `text` | the values, separated by commas | writing a file for another program |
+| `IOFQ_V2` | as `IOFQ`, with `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`) | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
+
+Each param is a group (a flat model) or a table (a list of one); `Run` (a field `run`) serves as both.
 
 The binding of `IOFQ` is the function `iofq`.
 `NORMALIZE`, `BACKGROUND`, and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so a push into an accumulator adds to the sums instead of keeping the rows.
@@ -77,10 +79,10 @@ Actor: user in a notebook. Goal: reduce one run with one parameter changed from 
 
 ```python
 run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-result = client.compute(IOFQ, {'run': run, 'threshold': 1.5})
+result = client.compute(IOFQ, IofQParams(sample=Run(run=run), reduction=Reduction(threshold=1.5)))
 
 assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]   # [0, 2, 3, 4] in 2 groups
-assert result.request.params['bins'] == 2                            # default, recorded
+assert result.request.params['reduction']['bins'] == 2                # default, recorded
 assert result.request.datasets() == [run]
 ```
 
@@ -90,9 +92,9 @@ Actor: user in a notebook. Goal: change the binning several times, looking at th
 
 ```python
 run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins',)))
+tune = client.stage(Template(IOFQ, params={'sample': Run(run=run)}, blanks=('reduction',)))
 for bins in (1, 2, 4):
-    result = client.compute(tune, {'bins': bins}, label='tuning')
+    result = client.compute(tune, {'reduction': Reduction(bins=bins)}, label='tuning')
 
 assert client.latest('tuning') == result
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
@@ -108,7 +110,7 @@ Actor: user in a notebook. Goal: see an intermediate value, the counts after mas
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-result = client.compute(IOFQ, {'run': run, 'threshold': 2.5})
+result = client.compute(IOFQ, IofQParams(sample=Run(run=run), reduction=Reduction(threshold=2.5)))
 
 assert client.output(result, 'masked').values.tolist() == [0.0, 0.0, 3.0, 4.0]
 assert client.output(result, 'iofq').values.tolist() == [0.0, 7.0]
@@ -122,7 +124,7 @@ Actor: user in a notebook. Goal: submit two reductions and a third request that 
 
 ```python
 r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
-parts = client.submit([Request(CONTRIBUTE, {'run': run}) for run in (r611, r612)])  # pending
+parts = client.submit([Request(CONTRIBUTE, ContributeParams(sample=Run(run=run))) for run in (r611, r612)])  # pending
 summed = client.submit(PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]})
 
 assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
@@ -136,11 +138,11 @@ Actor: user in a notebook. Goal: reduce three runs of one sample as one measurem
 
 ```python
 runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
-rows = [{'run': run} for run in runs]
-total = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
+rows = [Run(run=run) for run in runs]
+total = client.compute(NORMALIZE, NormalizeParams(runs=rows, scaling=Scaling(scale=2.0)))
 backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
-result = client.compute(BACKGROUND, {'sample_runs': rows,
-                                     'background_runs': [{'run': r} for r in backgrounds]})
+result = client.compute(BACKGROUND, BackgroundParams(sample_runs=rows,
+                                                     background_runs=[Run(run=r) for r in backgrounds]))
 
 assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]   # [2, 6] / 8 * 2
 assert total.request.datasets() == runs
@@ -159,7 +161,7 @@ can_1 = measure(1, [1.0, 1.0], role='can')
 first = measure(2, [5.0, 6.0], role='sample')
 can_3 = measure(3, [2.0, 2.0], role='can')
 second = measure(4, [6.0, 9.0], role='sample')
-template = Template(IOFQ, blanks=('run', 'can'))
+template = Template(IOFQ, blanks=('sample', 'can'))
 cans = Lookup(can=LastBefore(Selector(role='can')))    # the latest can measured before the run
 
 requests = apply(template, [first, second], client.datasets, member_field='run', lookup=cans)
@@ -177,13 +179,14 @@ Actor: user. Goal: learn which raw runs and parameter values a two-step result c
 
 ```python
 vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
-vanadium = client.compute(VANADIUM, {'run': vanadium_run, 'scale': 2.0})
-result = client.compute(IOFQ, {'run': sample, 'normalization': vanadium.ref('normalization')})
+vanadium = client.compute(VANADIUM, VanadiumParams(vanadium=Run(run=vanadium_run), scaling=Scaling(scale=2.0)))
+result = client.compute(IOFQ, IofQParams(sample=Run(run=sample),
+                                         corrections=Corrections(normalization=vanadium.ref('normalization'))))
 
 provenance = client.provenance(result)
 assert set(provenance.datasets()) == {sample, vanadium_run}
 (upstream,) = provenance.records()             # the records `result` reads, through all its inputs
-assert upstream.request.params['scale'] == 2.0
+assert upstream.request.params['scaling'] == {'scale': 2.0}
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]   # [4, 8] / ((1 + 1) * 2)
 ```
 
@@ -197,7 +200,7 @@ Actor: user of a local application. Goal: list the files in a folder, add a refe
 files = sorted(folder.glob('*.h5'))                      # two files, counts [1, 2] and [3, 4]
 vanadium = measure(9, [5.0, 6.0], pid='20.500.12269/vanadium')
 named = [dataset(path=f) for f in files] + [dataset(pid='20.500.12269/vanadium')]
-plots = [client.compute(IOFQ, {'run': d}) for d in named]
+plots = [client.compute(IOFQ, IofQParams(sample=Run(run=d))) for d in named]
 
 assert [client.output(p, 'iofq').values.tolist() for p in plots] == [
     [1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
@@ -212,11 +215,11 @@ Actor: user at the instrument. Goal: type a run number and get the dataset.
 
 ```python
 run = measure(4711, [1.0, 2.0])
-result = client.compute(IOFQ, {'run': dataset(run=4711)})
+result = client.compute(IOFQ, IofQParams(sample=Run(run=dataset(run=4711))))
 
 assert result.request.datasets() == [run]              # the dataset itself, not the number
 with pytest.raises(SubmitError):                        # no run 4712 exists
-    client.compute(IOFQ, {'run': dataset(run=4712)})
+    client.compute(IOFQ, IofQParams(sample=Run(run=dataset(run=4712))))
 assert client.records() == [result]
 ```
 
@@ -236,18 +239,19 @@ Actor: user in a notebook. Goal: change binning and mask several times, looking 
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-tune = client.stage(Template(IOFQ, params={'run': run}, blanks=('bins', 'threshold')))
+tune = client.stage(Template(IOFQ, params=IofQParams(sample=Run(run=run)), blanks=('reduction',)))
 for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
-    client.compute(tune, {'bins': bins, 'threshold': threshold}, label='tuning')
+    reduction = Reduction(bins=bins, threshold=threshold)
+    client.compute(tune, {'reduction': reduction}, label='tuning')
 
 final = client.latest('tuning')
-beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))
+beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))
 new = measure(2, [2.0, 1.0, 4.0, 3.0])
 requests = apply(beamtime, [new], client.datasets, member_field='run')
 (reduced,) = client.compute(requests, label='iofq-beamtime').values()
 
 assert len(client.records(label='tuning')) == 4
-assert (beamtime.params['bins'], beamtime.params['threshold']) == (2, 1.5)
+assert beamtime.params['reduction'] == {'bins': 2, 'threshold': 1.5}
 assert client.output(reduced, 'iofq').values.tolist() == [2.0, 7.0]    # [2, 0, 4, 3] in 2 groups
 ```
 
@@ -259,16 +263,16 @@ Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and i
 
 ```python
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
-total = client.accumulator(Template(NORMALIZE, params={'scale': 2.0}, blanks=('runs',)))
+total = client.accumulator(Template(NORMALIZE, params={'scaling': Scaling(scale=2.0)}, blanks=('runs',)))
 for run in (r611, r612):
-    total.push({'runs': {'run': run}})
+    total.push({'runs': Run(run=run)})
 first = client.output(total, 'normalized')                # runs 611 and 612
 
-total.push({'runs': {'run': r613}})                       # 611 and 612 are not reduced again
+total.push({'runs': Run(run=r613)})                       # 611 and 612 are not reduced again
 added = client.output(total, 'normalized')                # all three
 
-rows = [{'run': run} for run in (r611, r613)]
-again = client.compute(NORMALIZE, {'runs': rows, 'scale': 2.0})
+rows = [Run(run=run) for run in (r611, r613)]
+again = client.compute(NORMALIZE, NormalizeParams(runs=rows, scaling=Scaling(scale=2.0)))
 
 assert [value.values.tolist() for value in (first, added, client.output(again, 'normalized'))] == [
     [0.5, 1.5], [0.75, 1.25], [1.0, 1.0]]      # [3, 9] / 12 * 2; [6, 10] / 16 * 2; [4, 4] / 8 * 2
@@ -288,9 +292,10 @@ Actor: spectroscopy user in the web UI. Goal: drag through cuts of a Q-E volume,
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-volume = client.compute(ANGLE, {'run': run})                 # stands in for a Q-E volume
+volume = client.compute(ANGLE, AngleParams(sample=Run(run=run)))                 # stands in for a Q-E volume
 cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]   # dragging a slider
-fit = client.compute(CUT, {'data': volume.ref('counts'), 'index': 2})
+fit = client.compute(CUT, CutParams(source=Data(data=volume.ref('counts')),
+                                position=Position(index=2)))
 
 assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
 assert client.output(fit, 'cut').value == 3.0
@@ -312,10 +317,12 @@ Actor: user. Goal: use the beam centre as an input of every sample reduction; pr
 
 ```python
 centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
-centre = client.compute(BEAM_CENTRE, {'run': centre_run}, label='beam-centre')
+centre = client.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=centre_run)),
+                        label='beam-centre')
 samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
            measure(3, [5.0, 4.0, 3.0, 2.0], role='sample')]
-template = Template(IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('run',))
+template = Template(IOFQ, params={'corrections': Corrections(beam_centre=centre.ref('centre'))},
+                    blanks=('sample',))
 
 requests = apply(template, samples, client.datasets, member_field='run')
 reduced = list(client.compute(requests, label='iofq').values())
@@ -331,12 +338,14 @@ A beam centre found again later is a new record under `beam-centre`; the templat
 Actor: user. Goal: use a vanadium result that another backend published to SciCat.
 
 ```python
-vanadium = other.compute(VANADIUM, {'run': measure(1, [1.0, 1.0]), 'scale': 2.0})
+vanadium = other.compute(VANADIUM, VanadiumParams(vanadium=Run(run=measure(1, [1.0, 1.0])),
+                                                  scaling=Scaling(scale=2.0)))
 pid = other.publish(vanadium.ref('normalization'), 'scicat')
 published = datasets.add_published(scicat.entries[pid])
 
 sample = measure(2, [4.0, 8.0])
-result = client.compute(IOFQ, {'run': sample, 'normalization': dataset(pid=pid)})
+result = client.compute(IOFQ, IofQParams(sample=Run(run=sample),
+                                         corrections=Corrections(normalization=dataset(pid=pid))))
 
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
 assert set(client.provenance(result).datasets()) == {sample, published}
@@ -354,9 +363,9 @@ Actor: reflectometry user. Goal: reduce four angles against a reference, stitch 
 reference = measure(10, [2.0, 2.0], role='reference')
 angles = [measure(11, [8.0, 4.0], angle=0.5), measure(12, [2.0, 1.0], angle=1.0),
           measure(13, [4.0, 2.0], angle=2.0), measure(14, [2.0, 0.5], angle=4.0)]
-rows = [{'run': angle} for angle in angles]
-stitched = client.submit(STITCH, {'runs': rows, 'reference': reference})
-exported = client.compute(EXPORT, {'data': stitched.ref('stitched')})
+rows = [Run(run=angle) for angle in angles]
+stitched = client.submit(STITCH, StitchParams(runs=rows, reference=Run(run=reference)))
+exported = client.compute(EXPORT, ExportParams(source=Data(data=stitched.ref('stitched'))))
 
 assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
@@ -370,18 +379,20 @@ Actor: instrument scientist in a notebook. Goal: adjust the vanadium processing 
 
 ```python
 vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
-vanadium = client.stage(Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',)))
-reduce = client.stage(Template(IOFQ, params={'run': sample}, blanks=('normalization',)))
+vanadium = client.stage(Template(VANADIUM, params={'vanadium': Run(run=vanadium_run)},
+                                 blanks=('scaling',)))
+reduce = client.stage(Template(IOFQ, params={'sample': Run(run=sample)}, blanks=('corrections',)))
 reduced = []
 for scale in (1.0, 2.0):
-    processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
-    reduced.append(client.compute(reduce, {'normalization': processed.ref('normalization')},
-                                  label='iofq'))
+    processed = client.compute(vanadium, {'scaling': Scaling(scale=scale)}, label='vanadium')
+    normalization = Corrections(normalization=processed.ref('normalization'))
+    reduced.append(client.compute(reduce, {'corrections': normalization}, label='iofq'))
 
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
     [2.0, 4.0], [1.0, 2.0]]                      # [4, 8] divided by 2, then by 4
 assert client.records(label='iofq') == reduced
-assert reduced[-1].request.params['normalization'] == client.latest('vanadium').ref('normalization')
+assert reduced[-1].request.params['corrections'] == {
+    'beam_centre': None, 'normalization': client.latest('vanadium').ref('normalization')}
 ```
 
 The notebook is the driver: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
@@ -396,7 +407,7 @@ Actor: instrument scientist. Goal: reduce a scan with one template, one temperat
 temperatures = ['250K', '260K', '270K', '280K', '290K']
 runs = [measure(n, [float(n)] * 4, temperature=t) for n, t in enumerate(temperatures, start=1)]
 corrupt(runs[1])                                                     # 260K
-template = Template(IOFQ, params={'bins': 1}, blanks=('run',))
+template = Template(IOFQ, params={'reduction': Reduction(bins=1)}, blanks=('sample',))
 requests = apply(template, runs, client.datasets, member_field='temperature')
 scan = client.compute(requests, label='scan', persist=True)         # keyed by temperature
 
@@ -419,7 +430,8 @@ Actor: NMX user. Goal: submit thirty long runs, close the laptop, and the next d
 runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
 corrupt(runs['7'])                                                   # the transfer was cut short
 for member, run in runs.items():
-    client.submit(IOFQ, {'run': run}, label='night', member=member, persist=True)
+    client.submit(IOFQ, IofQParams(sample=Run(run=run)), label='night', member=member,
+                  persist=True)
 client.close()                                                       # the laptop is closed
 
 morning = connect()                                                  # the next day, a new client
@@ -452,11 +464,11 @@ Actor: user of the shared service. Goal: cancel a running batch of 500 with a wr
 
 ```python
 runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
-wrong = Template(IOFQ, params={'threshold': 20.0}, blanks=('run',))
+wrong = Template(IOFQ, params={'reduction': Reduction(threshold=20.0)}, blanks=('sample',))
 first = client.submit(apply(wrong, runs, client.datasets, member_field='run'), label='scan',
                       persist=True)
 client.cancel(first)
-fixed = replace(wrong, params={'threshold': 0.5})
+fixed = replace(wrong, params={'reduction': Reduction(threshold=0.5)})
 second = client.compute(apply(fixed, runs, client.datasets, member_field='run'), label='scan',
                         persist=True)
 
@@ -473,10 +485,10 @@ Actor: user filling in a batch form. Goal: a parameter the params model rejects 
 
 ```python
 runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
-typo = Template(IOFQ, params={'threshold': '2,5'}, blanks=('run',))
+typo = Template(IOFQ, params={'reduction': {'threshold': '2,5'}}, blanks=('sample',))
 requests = apply(typo, runs, client.datasets, member_field='run')
 
-with pytest.raises(SubmitError, match='threshold'):
+with pytest.raises(SubmitError, match=r'reduction\.threshold'):
     client.submit(requests, label='scan')
 assert client.records() == []
 ```
@@ -486,23 +498,23 @@ assert client.records() == []
 Actor: instrument scientist. Goal: reduce an earlier batch of the proposal again with a new spec version, keeping the first results.
 
 ```python
-template = Template(IOFQ, params={'threshold': 1.5}, blanks=('run',))
+template = Template(IOFQ, params={'reduction': Reduction(threshold=1.5)}, blanks=('sample',))
 runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
 client.compute(apply(template, runs, client.datasets, member_field='run'), label='scan', persist=True)
 
 # weeks later, version 2 of the spec is released
 before = client.records(label='scan')
-runs = [r.request.params['run'] for r in before]
+runs = [r.request.params['sample']['run'] for r in before]
 renamed = apply(replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run')
-with pytest.raises(SubmitError, match='threshold'):
+with pytest.raises(SubmitError, match=r"reduction: \['threshold'\]"):
     client.submit(renamed, label='scan')
-moved = replace(template, spec=IOFQ_V2, params={'mask_below': 1.5})
+moved = replace(template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5)})
 requests = apply(moved, runs, client.datasets, member_field='run')
 after = list(client.compute(requests, label='scan', persist=True).values())
 
 assert [client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])] == [
     [2.0, 7.0], [0.0, 2.0, 3.0, 4.0]]
-assert [r.request.params['bins'] for r in (before[0], after[0])] == [2, 4]   # defaults
+assert [r.request.params['reduction']['bins'] for r in (before[0], after[0])] == [2, 4]   # defaults
 assert len(client.records(label='scan')) == 6
 ```
 
@@ -523,14 +535,14 @@ for n in range(1, 301):
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-    volume.push({'runs': {'run': run}})                        # added once the previous cut is copied
+    volume.push({'runs': Run(run=run)})                        # added once the previous cut is copied
     pushed.append(run)
     cuts.append(client.output(volume, 'counts', select={'q': 0}))   # a copy of the cut; no record
 total = client.freeze(volume, persist=True)                    # the last state, written once
 
 assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
-assert total.request == Request(VOLUME, {'runs': [{'run': run} for run in pushed]})   # push order
+assert total.request == Request(VOLUME, {'runs': [Run(run=run) for run in pushed]})   # push order
 assert client.records() == [total]                             # the cuts made no record
 assert len(client.provenance(total).datasets()) == 300         # run 5, measured again, once
 ```
@@ -550,7 +562,7 @@ Actor: reflectometry user during a beamtime. Goal: after each angle, the stitche
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
-template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
+template = Template(STITCH, params={'reference': Run(run=reference)}, blanks=('runs',))
 rule = Rule('reflectivity', template, selector=Selector(role='sample'), series='sample',
             label='reflectivity')
 loop = TriggerLoop(client, rules=[rule])
@@ -578,7 +590,7 @@ The trigger loop persists what it submits, every output by default, so any clien
 Actor: instrument scientist. Goal: after an upgrade removed the template's spec version, see why nothing is reduced.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
+rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
             label='iofq')
 upgraded = upgrade(specs=[IOFQ_V2])                            # version 1 is gone
 loop = TriggerLoop(upgraded, rules=[rule])
@@ -593,7 +605,7 @@ assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'   # member 1
 Actor: none; a failure mode. Goal: a published result that SciCat lists as a dataset does not trigger the rule.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(),   # every raw dataset
+rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(),   # every raw dataset
             label='iofq')
 loop = TriggerLoop(client, rules=[rule])
 measure(1, [1.0, 2.0, 3.0, 4.0])
@@ -611,12 +623,12 @@ A published entry is a derived dataset, and a selector matches only raw datasets
 Actor: instrument scientist. Goal: new runs use the improved template; earlier results stay; the results made before the improvement can be found.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
+rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
             label='iofq')
 first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
 (before,) = TriggerLoop(client, rules=[rule]).step()
 
-improved = replace(rule, template=replace(rule.template, params={'threshold': 1.5}))
+improved = replace(rule, template=replace(rule.template, params={'reduction': Reduction(threshold=1.5)}))
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
 (after,) = TriggerLoop(client, rules=[improved]).step()
 
@@ -624,7 +636,7 @@ user = connect()                                                # any client of 
 assert after.request.datasets() == [second]                     # run 1 is not reduced again
 assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
     [3.0, 7.0], [2.0, 7.0]]
-stale = [r for r in user.records(label='iofq') if r.request.params['threshold'] != 1.5]
+stale = [r for r in user.records(label='iofq') if r.request.params['reduction']['threshold'] != 1.5]
 assert [r.request.datasets() for r in stale] == [[first]]       # to reprocess, if the user wants
 ```
 
@@ -638,10 +650,11 @@ Actor: user, then a colleague. Goal: the SciCat entry alone answers what raw fil
 
 ```python
 centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-centre = client.compute(BEAM_CENTRE, {'run': centre_run})
-tune = client.stage(Template(IOFQ, params={'run': run, 'beam_centre': centre.ref('centre')},
-                             blanks=('threshold',)))
-result = client.compute(tune, {'threshold': 1.5})               # tuned before publishing
+centre = client.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=centre_run)))
+tune = client.stage(Template(IOFQ, params=IofQParams(sample=Run(run=run),
+                                                     corrections=Corrections(beam_centre=centre.ref('centre'))),
+                             blanks=('reduction',)))
+result = client.compute(tune, {'reduction': Reduction(threshold=1.5)})               # tuned before publishing
 pid = client.publish(result.ref('iofq'), 'scicat')
 plain = client.compute(IOFQ, result.request.params)             # the same request, without a stage
 
@@ -659,7 +672,8 @@ The entry carries what lasts. The history behind it is dropped once the proposal
 Actor: user. Goal: learn before anything runs that the exact result is not reproducible in the current environment; a rerun is an honestly labelled new record.
 
 ```python
-result = client.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0]), 'threshold': 1.5})
+result = client.compute(IOFQ, IofQParams(sample=Run(run=measure(1, [1.0, 2.0, 3.0, 4.0])),
+                                         reduction=Reduction(threshold=1.5)))
 upgraded = upgrade(versions={'scipp': '99.0'})                 # ends client
 
 with pytest.raises(SubmitError, match='scipp'):
@@ -683,7 +697,7 @@ Actor: workflow developer. Goal: run a workflow defined in a notebook without in
 ```python
 draft = iofq                                                  # IOFQ's binding, being edited
 dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})   # a backend in this process
-result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
+result = dev.compute(IOFQ, IofQParams(sample=Run(run=measure(1, [1.0, 2.0, 3.0, 4.0]))))
 pid = dev.publish(result.ref('iofq'), 'scicat')               # publishing is not refused
 
 assert dev.provenance(result).software['sans-iofq'] == 'bound in notebook'
@@ -698,11 +712,12 @@ Actor: external user. Goal: a reference to another proposal's record is refused 
 
 ```python
 theirs, mine = connect(proposal='p1', user='anna'), connect(proposal='p2', user='eve')
-centre = theirs.compute(BEAM_CENTRE, {'run': measure(1, [1.0, 1.0], proposal='p1')})
+centre = theirs.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))))
 sample = measure(2, [2.0, 2.0], proposal='p2')
 
 with pytest.raises(SubmitError, match='p1'):
-    mine.compute(IOFQ, {'run': sample, 'beam_centre': centre.ref('centre')})
+    mine.compute(IOFQ, IofQParams(sample=Run(run=sample),
+                                  corrections=Corrections(beam_centre=centre.ref('centre'))))
 assert mine.records() == []
 ```
 
