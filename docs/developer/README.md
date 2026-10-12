@@ -177,7 +177,6 @@ On the service, only that part leaves the backend.
 | `client.wait(records)` | blocks until all have finished, and does not raise failures |
 | `client.failure(records)` | why each record failed, or `None` |
 | `client.cancel(records)` | cancels unfinished records of the proposal, including those of other clients |
-| `client.as_completed(records)` | yields the records as they finish |
 | `client.release(records)` | drops the client's hold on their outputs |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
@@ -549,13 +548,11 @@ total = client.freeze(volume)
 The binding of `VOLUME` accumulates, so the loop holds one volume and keeps one record, from `freeze`.
 
 **A loop over records** reduces each dataset in a request of its own.
-`client.as_completed` consumes a generator of records in a thread, and yields each record once it has finished:
+`client.output` waits for its record, so the loop shows each result before it takes the next dataset:
 
 ```python
-def submissions():
-    for run in client.datasets.watch(Selector(role='sample')):
-        yield client.submit(IOFQ, IofQParams(sample=Run(file=run)))
-for record in client.as_completed(submissions()):
+for run in client.datasets.watch(Selector(role='sample')):
+    record = client.submit(IOFQ, IofQParams(sample=Run(file=run)))
     show(client.output(record, 'iofq'))
 ```
 
