@@ -18,6 +18,7 @@ from ess.spec import (
     Quantity,
     as_ref,
     data_fields,
+    group_fields,
     ref_fields,
     table_fields,
     walk_refs,
@@ -55,6 +56,14 @@ class Settings(BaseModel):
     weight: float = 1.0
 
 
+class GroupParams(BaseModel):
+    sample: SampleRun
+    can: SampleRun | None = None
+    settings: Settings
+    centre: Quantity
+    parts: list[Parts] = []
+
+
 OUTPUT_REF = {'record': 'r1', 'output': 'data'}
 DATASET_REF = {'dataset': 'pid-1'}
 ACCUMULATOR_REF = {'accumulator': 'a1', 'output': 'data'}
@@ -72,6 +81,41 @@ class TestFieldIntrospection:
 
     def test_ref_fields_include_literal_or_reference_unions(self) -> None:
         assert ref_fields(Params) == {'data', 'background', 'runs', 'banks', 'centre'}
+
+
+class TestGroupFields:
+    def test_finds_models_with_their_model(self) -> None:
+        assert group_fields(GroupParams) == {
+            'sample': SampleRun,
+            'can': SampleRun,
+            'settings': Settings,
+            'centre': Quantity,
+        }
+
+    def test_a_literal_or_reference_union_is_not_a_group(self) -> None:
+        assert group_fields(Params) == {}
+
+    def test_a_group_is_not_a_data_field(self) -> None:
+        assert data_fields(GroupParams) == {}
+        cells = data_fields(group_fields(GroupParams)['sample'])
+        assert set(cells) == {'sample', 'transmission'}
+
+    def test_a_group_with_reference_fields_is_a_ref_field(self) -> None:
+        assert ref_fields(GroupParams) == {'sample', 'can', 'parts'}
+
+    @pytest.mark.parametrize(
+        'field', [Settings, Settings | None, list[Settings], dict[str, Settings]]
+    )
+    def test_refuses_a_group_holding_a_model_or_a_table(self, field: object) -> None:
+        class Group(BaseModel):
+            data: Array()
+            nested: field
+
+        class Nested(BaseModel):
+            group: Group | None = None
+
+        with pytest.raises(ValueError, match=r'Nested\.group: .* Group\.nested holds'):
+            group_fields(Nested)
 
 
 class TestTableFields:

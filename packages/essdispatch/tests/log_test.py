@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.dispatch import (
     Accumulator,
@@ -46,9 +46,17 @@ from ess.spec import (
 )
 
 
-class LoadParams(BaseModel):
+class Run(BaseModel):
     run: NexusFile
+
+
+class Selection(BaseModel):
     window: tuple[float, float] = (0.0, 1.0)
+
+
+class LoadParams(BaseModel):
+    sample: Run
+    selection: Selection = Field(default_factory=Selection)
 
 
 class Value(BaseModel):
@@ -109,7 +117,10 @@ def start(
     """A client of a new backend over the log at a path."""
     backends: list[Backend] = []
 
-    def load(run: float, window: tuple[float, float]) -> dict[str, float]:
+    def load(
+        sample: dict[str, float], selection: dict[str, tuple[float, float]]
+    ) -> dict[str, float]:
+        run, window = sample['run'], selection['window']
         windows.append(window)
         loading.wait(timeout=5)
         return {'value': run * (window[1] - window[0])}
@@ -178,7 +189,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     first = start(tmp_path / 'log')
     loads = {
         str(n): first.compute(
-            LOAD, {'run': dataset(run=n)}, label='loads', member=str(n)
+            LOAD, {'sample': {'run': dataset(run=n)}}, label='loads', member=str(n)
         )
         for n in (1, 2, 3)
     }
@@ -203,13 +214,16 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     windows: list[Any],
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=3), 'window': (1.0, 2.0)})
+    load = first.compute(
+        LOAD,
+        {'sample': {'run': dataset(run=3)}, 'selection': {'window': (1.0, 2.0)}},
+    )
 
     again = restart(tmp_path / 'log')
     rerun = again.compute(LOAD, load.request.params)
 
     assert again.records()[0] == load
-    assert load.request.params['window'] == [1.0, 2.0]  # as JSON holds it
+    assert load.request.params['selection']['window'] == [1.0, 2.0]  # as JSON holds it
     assert windows == [(1.0, 2.0), (1.0, 2.0)]  # as the params model declares it
     assert again.output(rerun, 'value') == 3.0
 
@@ -218,7 +232,9 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    loads = [client.compute(LOAD, {'run': dataset(run=n)}) for n in (1, 2, 3)]
+    loads = [
+        client.compute(LOAD, {'sample': {'run': dataset(run=n)}}) for n in (1, 2, 3)
+    ]
     total = _total(client)
     for load in loads:
         total.push({'values': load.refs('value')})
@@ -254,7 +270,7 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
 ) -> None:
     first = start(tmp_path / 'log')
     loading.clear()
-    pending = first.submit(LOAD, {'run': dataset(run=2)})
+    pending = first.submit(LOAD, {'sample': {'run': dataset(run=2)}})
     total = _total(first)
     total.push({'values': {'value': dataset(run=1)}})
     total.push({'values': pending.refs('value')})  # waits for ``pending``
@@ -278,7 +294,7 @@ def test_outputs_are_not_in_the_log(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, {'run': dataset(run=1)})
+    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
 
     again = restart(tmp_path / 'log')
 
@@ -292,7 +308,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, {'run': dataset(run=1)})
+    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
 
     again = restart(tmp_path / 'log')
 
@@ -305,9 +321,19 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    client.stage(Template(LOAD, params={'run': dataset(run=1)}, blanks=('window',)))
+    client.stage(
+        Template(
+            LOAD, params={'sample': {'run': dataset(run=1)}}, blanks=('selection',)
+        )
+    )
     total = _total(client)
-    total.push({'values': client.compute(LOAD, {'run': dataset(run=1)}).refs('value')})
+    total.push(
+        {
+            'values': client.compute(LOAD, {'sample': {'run': dataset(run=1)}}).refs(
+                'value'
+            )
+        }
+    )
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Opened,
@@ -321,11 +347,11 @@ def test_a_refused_call_writes_nothing_to_the_log(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'run': dataset(run=1)}})
     written = len(Log.read(tmp_path / 'log'))
 
     with pytest.raises(SubmitError, match='not parameters'):
-        client.submit(LOAD, {'run': dataset(run=1), 'bins': 2})
+        client.submit(LOAD, {'sample': {'run': dataset(run=1)}, 'bins': 2})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))
     total = _total(client)
@@ -347,13 +373,13 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
     path = tmp_path / 'log'
     run = datasets.resolve(dataset(run=1))
     with Log(path) as log:
-        log.append(_submitted('load', Request(LOAD, {'run': run})))
+        log.append(_submitted('load', Request(LOAD, {'sample': {'run': run}})))
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
         # A file limit that a second event exceeds, as a full disk would.
         resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 10, hard))
         try:
             with pytest.raises(OSError, match='too large'):
-                log.append(_submitted('again', Request(LOAD, {'run': run})))
+                log.append(_submitted('again', Request(LOAD, {'sample': {'run': run}})))
         finally:
             resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
         log.append(Finished(record='load', status=Status.COMPLETED))
@@ -373,7 +399,7 @@ def test_a_last_line_cut_short_is_dropped(
 ) -> None:
     path = tmp_path / 'log'
     run = datasets.resolve(dataset(run=1))
-    _write(path, _submitted('load', Request(LOAD, {'run': run})))
+    _write(path, _submitted('load', Request(LOAD, {'sample': {'run': run}})))
     with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing
 
@@ -385,7 +411,7 @@ def test_a_last_line_cut_short_is_dropped(
 def test_a_line_that_is_not_an_event_is_refused(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
-    start(tmp_path / 'log').compute(LOAD, {'run': dataset(run=1)})
+    start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
     lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
     (tmp_path / 'log').write_bytes(b''.join([lines[0], b'{}\n', *lines[1:]]))
 

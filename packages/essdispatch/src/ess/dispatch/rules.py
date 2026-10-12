@@ -36,8 +36,8 @@ class Rule:
 
     With ``series``, a request instead takes every dataset with the same value
     of that metadata field so far, in run order, and that value is its member.
-    The blank is then a table, and each dataset is a row of it, in the row's
-    field ``row_field``.
+    The blank is then a table, and each dataset is a row of it. A dataset goes
+    in the field ``dataset_field`` of the group or the row it fills.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
@@ -51,7 +51,7 @@ class Rule:
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
-    row_field: str = 'run'
+    dataset_field: str = 'run'
     persist: tuple[str, ...] | None = None
 
 
@@ -131,6 +131,7 @@ class TriggerLoop:
                 new,
                 self._source,
                 member_field=rule.member_field,
+                dataset_field=rule.dataset_field,
                 lookup=rule.lookup,
             )
         return self._series_requests(rule, matching, new), {}
@@ -143,7 +144,7 @@ class TriggerLoop:
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         blank = dataset_blank(rule.template, None)
         return {
-            value: rule.template.fill({blank: [{rule.row_field: r} for r in refs]})
+            value: rule.template.fill({blank: [{rule.dataset_field: r} for r in refs]})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }

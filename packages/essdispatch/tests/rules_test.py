@@ -22,13 +22,17 @@ from ess.dispatch.testing import FakeDatasets, FakeStore
 from ess.spec import Array, NexusFile, WorkflowSpec
 
 
-class RunParams(BaseModel):
+class Run(BaseModel):
     run: NexusFile
+
+
+class LoadParams(BaseModel):
+    sample: Run
 
 
 class SubtractParams(BaseModel):
-    run: NexusFile
-    can: NexusFile
+    sample: Run
+    can: Run
 
 
 class ValueOutputs(BaseModel):
@@ -46,7 +50,7 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
     )
 
 
-LOAD = _spec('load', RunParams)
+LOAD = _spec('load', LoadParams)
 SUBTRACT = _spec('subtract', SubtractParams)
 
 
@@ -60,8 +64,8 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
     backend = Backend(
         datasets,
         {
-            LOAD: lambda run: {'value': run},
-            SUBTRACT: lambda run, can: {'value': run - can},
+            LOAD: lambda sample: {'value': sample['run']},
+            SUBTRACT: lambda sample, can: {'value': sample['run'] - can['run']},
         },
         store=FakeStore(),
     )
@@ -74,7 +78,7 @@ def test_a_dataset_whose_lookup_finds_nothing_is_skipped_until_it_does(
 ) -> None:
     subtract = Rule(
         'subtract',
-        Template(SUBTRACT, blanks=('run', 'can')),
+        Template(SUBTRACT, blanks=('sample', 'can')),
         selector=Selector(role='sample'),
         label='subtracted',
         lookup=Lookup(can=LastBefore(Selector(role='can'))),
@@ -102,7 +106,7 @@ def test_apply_raises_for_a_dataset_whose_lookup_finds_nothing(
     client: Client, datasets: FakeDatasets
 ) -> None:
     sample = datasets.measure(2, 5.0, role='sample')
-    template = Template(SUBTRACT, blanks=('run', 'can'))
+    template = Template(SUBTRACT, blanks=('sample', 'can'))
     cans = Lookup(can=LastBefore(Selector(role='can')))
 
     with pytest.raises(LookupError, match='before run 2'):
@@ -114,13 +118,13 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
 ) -> None:
     no_lookup = Rule(
         'no-lookup',
-        Template(SUBTRACT, blanks=('run', 'can')),  # a dataset fills only one
+        Template(SUBTRACT, blanks=('sample', 'can')),  # a dataset fills only one
         selector=Selector(role='sample'),
         label='subtracted',
     )
     load = Rule(
         'load',
-        Template(LOAD, blanks=('run',)),
+        Template(LOAD, blanks=('sample',)),
         selector=Selector(role='sample'),
         label='loaded',
     )
@@ -131,6 +135,6 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
 
     assert loaded.label == 'loaded'
     assert loop.status(no_lookup).reason == (
-        "a dataset fills one blank; ('run', 'can') leave ['run', 'can']"
+        "a dataset fills one blank; ('sample', 'can') leave ['sample', 'can']"
     )
     assert loop.status(load).reason is None

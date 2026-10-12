@@ -15,16 +15,24 @@ from ess.spec import (
 )
 
 
-class Params(pydantic.BaseModel):
-    sample: NexusFile
+class Sample(pydantic.BaseModel):
+    run: NexusFile
+
+
+class Limits(pydantic.BaseModel):
     lower: float
     upper: float
 
     @pydantic.model_validator(mode='after')
-    def upper_greater_than_lower(self) -> 'Params':
+    def upper_greater_than_lower(self) -> 'Limits':
         if self.upper <= self.lower:
             raise ValueError('upper must be greater than lower')
         return self
+
+
+class Params(pydantic.BaseModel):
+    sample: Sample
+    limits: Limits
 
 
 IOFQ = ArraySpec(dims=('Q',), unit='counts', coords={'Q': '1/Å'})
@@ -67,8 +75,23 @@ class ModelInRow(pydantic.BaseModel):
     rows: list[ModelRow]
 
 
-class Grouped(pydantic.BaseModel):
-    limits: Params
+class TableInGroup(pydantic.BaseModel):
+    group: NestedRow
+
+
+class ModelInGroup(pydantic.BaseModel):
+    group: ModelRow
+
+
+class Loose(pydantic.BaseModel):
+    sample: Sample
+    bins: int = 2
+
+
+class OptionalGroups(pydantic.BaseModel):
+    sample: Sample
+    can: Sample | None = None
+    centre: Quantity
 
 
 @pytest.fixture
@@ -123,7 +146,9 @@ class TestWorkflowSpec:
 
     def test_params_model_validates_in_process(self, spec: WorkflowSpec) -> None:
         with pytest.raises(pydantic.ValidationError):
-            spec.params(sample={'dataset': 'pid'}, lower=2.0, upper=1.0)
+            spec.params(
+                sample={'run': {'dataset': 'pid'}}, limits={'lower': 2.0, 'upper': 1.0}
+            )
 
     @pytest.mark.parametrize('side', ['params', 'outputs'])
     def test_tables_allowed_on_both_sides(self, side: str) -> None:
@@ -134,27 +159,41 @@ class TestWorkflowSpec:
     @pytest.mark.parametrize('side', ['params', 'outputs'])
     @pytest.mark.parametrize(
         ('model', 'cell'),
-        [(TableInRow, 'NestedRow.parts'), (ModelInRow, 'ModelRow.centre')],
+        [
+            (TableInRow, 'NestedRow.parts'),
+            (ModelInRow, 'ModelRow.centre'),
+            (TableInGroup, 'NestedRow.parts'),
+            (ModelInGroup, 'ModelRow.centre'),
+        ],
     )
-    def test_table_row_holding_a_model_or_a_table_rejected(
+    def test_group_or_row_holding_a_model_or_a_table_rejected(
         self, side: str, model: type[pydantic.BaseModel], cell: str
     ) -> None:
         fields = {'params': Params, 'outputs': Result, side: model}
         with pytest.raises(pydantic.ValidationError, match=f'{cell} holds a model'):
             WorkflowSpec(name='wf', version=1, title='W', description='D', **fields)
 
-    def test_model_field_outside_a_table_allowed(self) -> None:
-        # The one-level rule is about table rows only; a field holding a model,
-        # shown by a UI as a group of fields, is not constrained by it.
+    def test_params_field_neither_group_nor_table_rejected(self) -> None:
+        with pytest.raises(pydantic.ValidationError, match=r"Loose: \['bins'\]"):
+            WorkflowSpec(
+                name='wf',
+                version=1,
+                title='W',
+                description='D',
+                params=Loose,
+                outputs=Result,
+            )
+
+    def test_groups_may_be_optional_and_a_quantity_is_a_group(self) -> None:
         spec = WorkflowSpec(
             name='wf',
             version=1,
             title='W',
             description='D',
-            params=Grouped,
+            params=OptionalGroups,
             outputs=Result,
         )
-        assert spec.params is Grouped
+        assert spec.params is OptionalGroups
 
     def test_output_metadata_is_field_metadata(self, spec: WorkflowSpec) -> None:
         fields = spec.outputs.model_fields

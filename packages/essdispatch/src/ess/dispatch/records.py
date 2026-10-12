@@ -23,6 +23,7 @@ from ess.spec import (
     AccumulatorRef,
     DatasetRef,
     OutputRef,
+    Ref,
     WorkflowSpec,
     as_ref,
     walk_refs,
@@ -41,6 +42,22 @@ def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
         return {k: map_refs(v, fn) for k, v in value.items()}
     if isinstance(value, list):
         return [map_refs(v, fn) for v in value]
+    return value
+
+
+def as_values(value: Any) -> Any:
+    """
+    ``value`` with each model in it, but a reference, as a dict of its fields.
+
+    So a request, a template, and a push take a params model, a group, or a
+    row as a model or as a dict alike.
+    """
+    if isinstance(value, BaseModel) and not isinstance(value, Ref):
+        return {f: as_values(getattr(value, f)) for f in type(value).model_fields}
+    if isinstance(value, dict):
+        return {k: as_values(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [as_values(v) for v in value]
     return value
 
 
@@ -68,7 +85,10 @@ class SpecId(BaseModel, frozen=True):
 
 
 class Request(BaseModel, frozen=True):
-    """A spec and its parameter values."""
+    """
+    A spec and its parameter values, given as a params model or as a dict of
+    its fields, each a group or a table as a model or a dict.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -76,9 +96,12 @@ class Request(BaseModel, frozen=True):
     params: dict[str, Any] = Field(default_factory=dict)
 
     def __init__(
-        self, spec: WorkflowSpec | SpecId, params: dict[str, Any] | None = None
+        self,
+        spec: WorkflowSpec | SpecId,
+        params: dict[str, Any] | BaseModel | None = None,
     ) -> None:
-        super().__init__(spec=SpecId.of(spec), params=params or {})
+        values = {} if params is None else as_values(params)
+        super().__init__(spec=SpecId.of(spec), params=values)
 
     def inputs(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
@@ -105,8 +128,8 @@ class Template:
     A spec, some values, and blanks that each use fills.
 
     Naming a field as a blank drops the value given for it, so a template can
-    be made from any request's values. Change a template with
-    ``dataclasses.replace``.
+    be made from any request's values or a whole params model, which it keeps
+    as a dict. Change a template with ``dataclasses.replace``.
     """
 
     spec: SpecId
@@ -114,12 +137,14 @@ class Template:
     blanks: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        kept = {k: v for k, v in self.params.items() if k not in self.blanks}
+        values = as_values(self.params)
+        kept = {k: v for k, v in values.items() if k not in self.blanks}
         object.__setattr__(self, 'spec', SpecId.of(self.spec))
         object.__setattr__(self, 'params', kept)
 
     def fill(self, values: dict[str, Any]) -> Request:
         """The request with the blanks filled by ``values``."""
+        values = as_values(values)
         if set(values) != set(self.blanks):
             raise ValueError(f'fill the blanks {self.blanks}, got {tuple(values)}')
         return Request(self.spec, {**self.params, **values})

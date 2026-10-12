@@ -12,7 +12,7 @@ import pytest
 from ess.dispatch import Client, Rule, Selector, Template, TriggerLoop
 from ess.dispatch.testing import FakeDatasets
 
-from .conftest import IOFQ, IOFQ_V2, STITCH, Measure
+from .conftest import IOFQ, IOFQ_V2, STITCH, Measure, Reduction, Run
 
 NO_PUBLISH = 'publication is not implemented'
 
@@ -21,7 +21,9 @@ def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-    template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
+    template = Template(
+        STITCH, params={'reference': Run(run=reference)}, blanks=('runs',)
+    )
     rule = Rule(
         'reflectivity',
         template,
@@ -57,7 +59,7 @@ def test_e2_automatic_reduction_goes_quiet(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('run',)),
+        Template(IOFQ, blanks=('sample',)),
         selector=Selector(role='sample'),
         label='iofq',
     )
@@ -75,7 +77,7 @@ def test_e3_reduction_of_our_own_output(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('run',)),
+        Template(IOFQ, blanks=('sample',)),
         selector=Selector(),
         label='iofq',
     )
@@ -93,14 +95,17 @@ def test_e4_template_improved_during_a_beamtime(
 ) -> None:
     rule = Rule(
         'auto-iofq',
-        Template(IOFQ, blanks=('run',)),
+        Template(IOFQ, blanks=('sample',)),
         selector=Selector(role='sample'),
         label='iofq',
     )
     first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
     (before,) = TriggerLoop(client, rules=[rule]).step()
 
-    improved = replace(rule, template=replace(rule.template, params={'threshold': 1.5}))
+    improved = replace(
+        rule,
+        template=replace(rule.template, params={'reduction': Reduction(threshold=1.5)}),
+    )
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
     (after,) = TriggerLoop(client, rules=[improved]).step()
 
@@ -111,6 +116,8 @@ def test_e4_template_improved_during_a_beamtime(
         [2.0, 7.0],
     ]
     stale = [
-        r for r in user.records(label='iofq') if r.request.params['threshold'] != 1.5
+        r
+        for r in user.records(label='iofq')
+        if r.request.params['reduction']['threshold'] != 1.5
     ]
     assert [r.request.datasets() for r in stale] == [[first]]

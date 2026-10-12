@@ -11,7 +11,16 @@ import pytest
 from ess.dispatch import Client, SubmitError, local
 from ess.dispatch.testing import FakeDatasets
 
-from .conftest import BEAM_CENTRE, IOFQ, Measure, iofq
+from .conftest import (
+    BEAM_CENTRE,
+    IOFQ,
+    Corrections,
+    DirectBeamParams,
+    IofQParams,
+    Measure,
+    Run,
+    iofq,
+)
 
 
 @pytest.mark.xfail(
@@ -22,7 +31,9 @@ def test_g2_developer_iterates_on_a_workflow(
 ) -> None:
     draft = iofq
     dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})
-    result = dev.compute(IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0])})
+    result = dev.compute(
+        IOFQ, IofQParams(sample=Run(run=measure(1, [1.0, 2.0, 3.0, 4.0])))
+    )
     pid = dev.publish(result.ref('iofq'), 'scicat')
 
     assert dev.provenance(result).software['sans-iofq'] == 'bound in notebook'
@@ -34,9 +45,18 @@ def test_g5_reference_across_proposals_refused(
 ) -> None:
     theirs = connect(proposal='p1', user='anna')
     mine = connect(proposal='p2', user='eve')
-    centre = theirs.compute(BEAM_CENTRE, {'run': measure(1, [1.0, 1.0], proposal='p1')})
+    centre = theirs.compute(
+        BEAM_CENTRE,
+        DirectBeamParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))),
+    )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 
     with pytest.raises(SubmitError, match='p1'):
-        mine.compute(IOFQ, {'run': sample, 'beam_centre': centre.ref('centre')})
+        mine.compute(
+            IOFQ,
+            IofQParams(
+                sample=Run(run=sample),
+                corrections=Corrections(beam_centre=centre.ref('centre')),
+            ),
+        )
     assert mine.records() == []

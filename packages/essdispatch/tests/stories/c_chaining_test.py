@@ -10,20 +10,42 @@ import scipp as sc
 from ess.dispatch import Client, Template, apply, dataset
 from ess.dispatch.testing import FakeDatasets
 
-from .conftest import BEAM_CENTRE, EXPORT, IOFQ, STITCH, VANADIUM, Measure
+from .conftest import (
+    BEAM_CENTRE,
+    EXPORT,
+    IOFQ,
+    STITCH,
+    VANADIUM,
+    Corrections,
+    Data,
+    DirectBeamParams,
+    ExportParams,
+    IofQParams,
+    Measure,
+    Run,
+    Scaling,
+    StitchParams,
+    VanadiumParams,
+)
 
 
 def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     client: Client, measure: Measure
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
-    centre = client.compute(BEAM_CENTRE, {'run': centre_run}, label='beam-centre')
+    centre = client.compute(
+        BEAM_CENTRE,
+        DirectBeamParams(direct_beam=Run(run=centre_run)),
+        label='beam-centre',
+    )
     samples = [
         measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
         measure(3, [5.0, 4.0, 3.0, 2.0], role='sample'),
     ]
     template = Template(
-        IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('run',)
+        IOFQ,
+        params={'corrections': Corrections(beam_centre=centre.ref('centre'))},
+        blanks=('sample',),
     )
 
     requests = apply(template, samples, client.datasets, member_field='run')
@@ -42,12 +64,23 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 def test_c2_vanadium_from_the_catalogue(
     client: Client, measure: Measure, datasets: FakeDatasets
 ) -> None:
-    vanadium = other.compute(VANADIUM, {'run': measure(1, [1.0, 1.0]), 'scale': 2.0})
+    vanadium = other.compute(
+        VANADIUM,
+        VanadiumParams(
+            vanadium=Run(run=measure(1, [1.0, 1.0])), scaling=Scaling(scale=2.0)
+        ),
+    )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
     published = datasets.add_published(scicat.entries[pid])
 
     sample = measure(2, [4.0, 8.0])
-    result = client.compute(IOFQ, {'run': sample, 'normalization': dataset(pid=pid)})
+    result = client.compute(
+        IOFQ,
+        IofQParams(
+            sample=Run(run=sample),
+            corrections=Corrections(normalization=dataset(pid=pid)),
+        ),
+    )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
     assert set(client.provenance(result).datasets()) == {sample, published}
@@ -62,9 +95,13 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(13, [4.0, 2.0], angle=2.0),
         measure(14, [2.0, 0.5], angle=4.0),
     ]
-    rows = [{'run': angle} for angle in angles]
-    stitched = client.submit(STITCH, {'runs': rows, 'reference': reference})
-    exported = client.compute(EXPORT, {'data': stitched.ref('stitched')})
+    rows = [Run(run=angle) for angle in angles]
+    stitched = client.submit(
+        STITCH, StitchParams(runs=rows, reference=Run(run=reference))
+    )
+    exported = client.compute(
+        EXPORT, ExportParams(source=Data(data=stitched.ref('stitched')))
+    )
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
     assert set(client.provenance(exported).datasets()) == {reference, *angles}
@@ -75,16 +112,18 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
 ) -> None:
     reference = measure(10, [2.0, 2.0], role='reference')
     rows = [
-        {'run': measure(n, counts)}
+        Run(run=measure(n, counts))
         for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
     ]
     series = client.accumulator(
-        Template(STITCH, params={'reference': reference}, blanks=('runs',))
+        Template(STITCH, params={'reference': Run(run=reference)}, blanks=('runs',))
     )
     reads, plains = [], []
     for n, row in enumerate(rows, start=1):
         series.push({'runs': row})  # STITCH keeps the rows and stitches at each read
-        plain = client.compute(STITCH, {'runs': rows[:n], 'reference': reference})
+        plain = client.compute(
+            STITCH, StitchParams(runs=rows[:n], reference=Run(run=reference))
+        )
         reads.append(client.output(series, 'stitched'))
         plains.append(client.output(plain, 'stitched'))
 
@@ -97,18 +136,26 @@ def test_c5_vanadium_and_sample_tuned_together(
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.stage(
-        Template(VANADIUM, params={'run': vanadium_run}, blanks=('scale',))
+        Template(
+            VANADIUM, params={'vanadium': Run(run=vanadium_run)}, blanks=('scaling',)
+        )
     )
     reduce = client.stage(
-        Template(IOFQ, params={'run': sample}, blanks=('normalization',))
+        Template(IOFQ, params={'sample': Run(run=sample)}, blanks=('corrections',))
     )
     reduced = []
     for scale in (1.0, 2.0):
-        processed = client.compute(vanadium, {'scale': scale}, label='vanadium')
+        processed = client.compute(
+            vanadium, {'scaling': Scaling(scale=scale)}, label='vanadium'
+        )
         reduced.append(
             client.compute(
                 reduce,
-                {'normalization': processed.ref('normalization')},
+                {
+                    'corrections': Corrections(
+                        normalization=processed.ref('normalization')
+                    )
+                },
                 label='iofq',
             )
         )
@@ -118,6 +165,7 @@ def test_c5_vanadium_and_sample_tuned_together(
         [1.0, 2.0],
     ]  # [4, 8] divided by 2, then by 4
     assert client.records(label='iofq') == reduced
-    assert reduced[-1].request.params['normalization'] == client.latest('vanadium').ref(
-        'normalization'
-    )
+    assert reduced[-1].request.params['corrections'] == {
+        'beam_centre': None,
+        'normalization': client.latest('vanadium').ref('normalization'),
+    }

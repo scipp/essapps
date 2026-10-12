@@ -23,12 +23,14 @@ class PipelineBinding:
     """
     A sciline pipeline behind a spec.
 
-    ``params`` maps each params field to the sciline key it sets, and
-    ``outputs`` each output field to the key that computes it. A stage sets the
-    fixed values on a copy of the pipeline and cuts it at the blanks with
-    ``sciline.Stage``, which computes what does not depend on the blanks on the
-    first call and holds it. A blank that no output depends on is not fed:
-    its value cannot change the outputs, and the plain request succeeds too.
+    ``params`` maps each params field to the sciline key it sets: a group or a
+    table as a whole by its name, or a field of a group by its path, such as
+    ``'sample.run'``. ``outputs`` maps each output field to the key that
+    computes it. A stage sets the fixed values on a copy of the pipeline and
+    cuts it at the keys of the blanks with ``sciline.Stage``, which computes
+    what does not depend on them on the first call and holds it. A key that no
+    output depends on is not fed: its value cannot change the outputs, and the
+    plain request succeeds too.
     """
 
     def __init__(
@@ -43,21 +45,41 @@ class PipelineBinding:
         self._outputs = dict(outputs)
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        unknown = (fixed.keys() | set(blanks)) - self._params.keys()
-        if unknown:
-            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
         pipeline = self._pipeline.copy()
-        for name, value in fixed.items():
-            pipeline[self._params[name]] = value
+        for key, value in self._by_key(fixed).items():
+            pipeline[key] = value
+        blank_keys = {
+            path: key
+            for path, key in self._params.items()
+            if path.split('.')[0] in blanks
+        }
+        if unknown := set(blanks) - {path.split('.')[0] for path in blank_keys}:
+            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
         targets = tuple(self._outputs.values())
-        fed: dict[str, Key] = {}
+        fed: tuple[Key, ...] = ()
         if blanks:
             used = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
-            fed = {n: self._params[n] for n in blanks if self._params[n] in used}
-        stage = sciline.Stage(pipeline, outputs=targets, inputs=tuple(fed.values()))
+            fed = tuple(key for key in blank_keys.values() if key in used)
+        stage = sciline.Stage(pipeline, outputs=targets, inputs=fed)
 
         def call(**values: Any) -> dict[str, Any]:
-            results = stage.compute({key: values[n] for n, key in fed.items()})
+            by_key = self._by_key(values)
+            results = stage.compute({key: by_key[key] for key in fed})
             return {name: results[key] for name, key in self._outputs.items()}
 
         return call
+
+    def _by_key(self, values: Mapping[str, Any]) -> dict[Key, Any]:
+        """
+        ``values`` by the sciline key each sets: a field mapped as a whole,
+        or each field of a group mapped by its path.
+        """
+        paths: dict[str, Any] = {}
+        for name, value in values.items():
+            if name not in self._params and isinstance(value, Mapping):
+                paths.update({f'{name}.{field}': v for field, v in value.items()})
+            else:
+                paths[name] = value
+        if unknown := paths.keys() - self._params.keys():
+            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
+        return {self._params[path]: value for path, value in paths.items()}
