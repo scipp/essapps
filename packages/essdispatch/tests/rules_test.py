@@ -23,7 +23,7 @@ from ess.spec import Array, NexusFile, WorkflowSpec
 
 
 class Run(BaseModel):
-    run: NexusFile
+    file: NexusFile
 
 
 class LoadParams(BaseModel):
@@ -36,7 +36,7 @@ class SubtractParams(BaseModel):
 
 
 class Measurement(BaseModel):
-    file: NexusFile
+    nexus: NexusFile
 
 
 class MeasureParams(BaseModel):
@@ -74,9 +74,9 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
     backend = Backend(
         datasets,
         {
-            LOAD: lambda sample: {'value': sample['run']},
-            SUBTRACT: lambda sample, can: {'value': sample['run'] - can['run']},
-            MEASURE: lambda sample, can: {'value': sample['file'] - can['file']},
+            LOAD: lambda sample: {'value': sample['file']},
+            SUBTRACT: lambda sample, can: {'value': sample['file'] - can['file']},
+            MEASURE: lambda sample, can: {'value': sample['nexus'] - can['nexus']},
         },
         store=FakeStore(),
     )
@@ -159,7 +159,7 @@ def test_a_dataset_goes_in_the_field_of_its_group_that_dataset_field_names(
     cans = Lookup(can=LastBefore(Selector(role='can')))
     template = Template(MEASURE, blanks=('sample', 'can'))
     requests = apply(
-        template, [sample], client.datasets, dataset_field='file', lookup=cans
+        template, [sample], client.datasets, dataset_field='nexus', lookup=cans
     )
 
     assert client.output(client.compute(requests['2']), 'value') == 4.0

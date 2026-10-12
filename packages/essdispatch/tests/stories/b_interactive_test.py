@@ -27,7 +27,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     tune = client.stage(
-        Template(IOFQ, params=IofQParams(sample=Run(run=run)), blanks=('reduction',))
+        Template(IOFQ, params=IofQParams(sample=Run(file=run)), blanks=('reduction',))
     )
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
         reduction = Reduction(bins=bins, threshold=threshold)
@@ -58,13 +58,13 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
         Template(NORMALIZE, params={'scaling': Scaling(scale=2.0)}, blanks=('runs',))
     )
     for run in (r611, r612):
-        total.push({'runs': Run(run=run)})
+        total.push({'runs': Run(file=run)})
     first = client.output(total, 'normalized')  # runs 611 and 612
 
-    total.push({'runs': Run(run=r613)})  # 611 and 612 are not reduced again
+    total.push({'runs': Run(file=r613)})  # 611 and 612 are not reduced again
     added = client.output(total, 'normalized')  # all three
 
-    rows = [Run(run=run) for run in (r611, r613)]
+    rows = [Run(file=run) for run in (r611, r613)]
     again = client.compute(
         NORMALIZE, NormalizeParams(runs=rows, scaling=Scaling(scale=2.0))
     )
@@ -80,7 +80,7 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
 
 def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    volume = client.compute(ANGLE, AngleParams(sample=Run(run=run)))
+    volume = client.compute(ANGLE, AngleParams(sample=Run(file=run)))
     cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]
     fit = client.compute(
         CUT,

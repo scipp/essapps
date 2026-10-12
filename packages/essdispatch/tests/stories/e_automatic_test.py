@@ -22,7 +22,7 @@ def test_e1_series_grows_reduction_follows(
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
     template = Template(
-        STITCH, params={'reference': Run(run=reference)}, blanks=('runs',)
+        STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)
     )
     rule = Rule(
         'reflectivity',
@@ -43,7 +43,7 @@ def test_e1_series_grows_reduction_follows(
     user = connect()  # any client of the proposal
     curve = user.latest('reflectivity', member='si')
     assert len(user.records(label='reflectivity')) == 2
-    assert curve.request.params['runs'] == [{'run': r} for r in (r2, r3, r4)]
+    assert curve.request.params['runs'] == [{'file': r} for r in (r2, r3, r4)]
     assert user.output(curve, 'stitched').values.tolist() == [
         1.0,
         2.0,

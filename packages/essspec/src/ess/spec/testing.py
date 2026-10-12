@@ -11,12 +11,12 @@ binding ``multi`` of one reduction::
     check_one_row(
         single,
         multi,
-        {'sample': {'run': run_611}, 'can': None, **binning},
-        {'sample_runs': [{'run': run_611}], 'can_runs': [], **binning},
+        {'sample': {'file': run_611}, 'can': None, **binning},
+        {'sample_runs': [{'file': run_611}], 'can_runs': [], **binning},
     )
     tables = {
-        'sample_runs': [{'run': run_611}, {'run': run_612}],
-        'can_runs': [{'run': run_614}],
+        'sample_runs': [{'file': run_611}, {'file': run_612}],
+        'can_runs': [{'file': run_614}],
     }
     calls = [{'binning': {'bins': n}} for n in (50, 100, 50)]
     check_caching(multi, tables, calls)

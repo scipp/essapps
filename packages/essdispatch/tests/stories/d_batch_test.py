@@ -64,7 +64,7 @@ def test_d2_overnight_cluster_batch(
     for member, run in runs.items():
         client.submit(
             IOFQ,
-            IofQParams(sample=Run(run=run)),
+            IofQParams(sample=Run(file=run)),
             label='night',
             member=member,
             persist=True,
@@ -149,7 +149,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
 
     before = client.records(label='scan')
-    runs = [r.request.params['sample']['run'] for r in before]
+    runs = [r.request.params['sample']['file'] for r in before]
     renamed = apply(
         replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
     )
@@ -185,7 +185,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        volume.push({'runs': Run(run=run)})  # added once the previous cut is copied
+        volume.push({'runs': Run(file=run)})  # added once the previous cut is copied
         pushed.append(run)
         cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
     total = client.freeze(volume, persist=True)
@@ -193,7 +193,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
     assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
     assert total.request == Request(  # push order
-        VOLUME, {'runs': [Run(run=run) for run in pushed]}
+        VOLUME, {'runs': [Run(file=run) for run in pushed]}
     )
     assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)

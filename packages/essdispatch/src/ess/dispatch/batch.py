@@ -69,7 +69,7 @@ def apply(
     source: Datasets,
     *,
     member_field: str = 'run',
-    dataset_field: str = 'run',
+    dataset_field: str = 'file',
     lookup: Lookup | None = None,
 ) -> dict[str, Request]:
     """
@@ -101,7 +101,7 @@ def try_apply(
     source: Datasets,
     *,
     member_field: str = 'run',
-    dataset_field: str = 'run',
+    dataset_field: str = 'file',
     lookup: Lookup | None = None,
 ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
     """

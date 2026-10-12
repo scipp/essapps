@@ -18,7 +18,7 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
-A blank a dataset fills is a group, such as `sample: Run`, and the dataset goes in its field `dataset_field`, by default `run`, which `apply` and `Rule` take.
+A blank a dataset fills is a group, such as `sample: Run`, and the dataset goes in its field `dataset_field`, by default `file`, which `apply` and `Rule` take.
 A blank is a whole group, so the template cannot fix the other fields of a group that a dataset fills.
 A spec that batch reduction fills therefore gives each dataset that a rule or a lookup finds a group of its own, such as `sample: Run` and `can: Run`.
 
@@ -41,7 +41,7 @@ With `series='sample'`, a request takes every matching dataset with the same `sa
 Each dataset is a row of the template's table blank, in the row's field `dataset_field`, and each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(run=reference)}, blanks=('runs',)),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 

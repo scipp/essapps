@@ -59,8 +59,8 @@ Two aligned tables could be paired wrongly.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs',)))  # can runs in shared
-iofq.push({'sample_runs': Sample(run=dataset(run=611), transmission=dataset(run=610))})
-iofq.push({'sample_runs': Sample(run=dataset(run=613), transmission=dataset(run=612))})
+iofq.push({'sample_runs': Sample(file=dataset(run=611), transmission=dataset(run=610))})
+iofq.push({'sample_runs': Sample(file=dataset(run=613), transmission=dataset(run=612))})
 ```
 
 *Two independent tables.*
@@ -73,9 +73,9 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
-iofq.push({'sample_runs': Sample(run=dataset(run=611))})
-iofq.push({'can_runs': Run(run=dataset(run=614))})
-iofq.push({'sample_runs': Sample(run=dataset(run=613)), 'can_runs': Run(run=dataset(run=615))})  # one push, one state
+iofq.push({'sample_runs': Sample(file=dataset(run=611))})
+iofq.push({'can_runs': Run(file=dataset(run=614))})
+iofq.push({'sample_runs': Sample(file=dataset(run=613)), 'can_runs': Run(file=dataset(run=615))})  # one push, one state
 ```
 
 ## Alternatives considered

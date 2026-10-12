@@ -22,7 +22,7 @@ tables it fills. A binding of a spec with table fields may make held states,
 like ``ess.reduce.streaming.StreamProcessor``::
 
     held = binding.held_state({'scaling': {'scale': 2.0}})  # what depends on it
-    held.push({'runs': {'run': run_611}})   # a row per named table, data read
+    held.push({'runs': {'file': run_611}})   # a row per named table, data read
     held.outputs()                          # {'normalized': ...}, every output
 
 Its outputs after rows are pushed in order are those of the plain request

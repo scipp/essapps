@@ -47,7 +47,7 @@ from ess.spec import (
 
 
 class Run(BaseModel):
-    run: NexusFile
+    file: NexusFile
 
 
 class Selection(BaseModel):
@@ -120,7 +120,7 @@ def start(
     def load(
         sample: dict[str, float], selection: dict[str, tuple[float, float]]
     ) -> dict[str, float]:
-        run, window = sample['run'], selection['window']
+        run, window = sample['file'], selection['window']
         windows.append(window)
         loading.wait(timeout=5)
         return {'value': run * (window[1] - window[0])}
@@ -189,7 +189,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     first = start(tmp_path / 'log')
     loads = {
         str(n): first.compute(
-            LOAD, {'sample': {'run': dataset(run=n)}}, label='loads', member=str(n)
+            LOAD, {'sample': {'file': dataset(run=n)}}, label='loads', member=str(n)
         )
         for n in (1, 2, 3)
     }
@@ -216,7 +216,7 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     first = start(tmp_path / 'log')
     load = first.compute(
         LOAD,
-        {'sample': {'run': dataset(run=3)}, 'selection': {'window': (1.0, 2.0)}},
+        {'sample': {'file': dataset(run=3)}, 'selection': {'window': (1.0, 2.0)}},
     )
 
     again = restart(tmp_path / 'log')
@@ -233,7 +233,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
 ) -> None:
     client = start(tmp_path / 'log')
     loads = [
-        client.compute(LOAD, {'sample': {'run': dataset(run=n)}}) for n in (1, 2, 3)
+        client.compute(LOAD, {'sample': {'file': dataset(run=n)}}) for n in (1, 2, 3)
     ]
     total = _total(client)
     for load in loads:
@@ -270,7 +270,7 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
 ) -> None:
     first = start(tmp_path / 'log')
     loading.clear()
-    pending = first.submit(LOAD, {'sample': {'run': dataset(run=2)}})
+    pending = first.submit(LOAD, {'sample': {'file': dataset(run=2)}})
     total = _total(first)
     total.push({'values': {'value': dataset(run=1)}})
     total.push({'values': pending.refs('value')})  # waits for ``pending``
@@ -294,7 +294,7 @@ def test_outputs_are_not_in_the_log(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
+    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'file': dataset(run=1)}})
 
     again = restart(tmp_path / 'log')
 
@@ -308,7 +308,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
+    load = start(tmp_path / 'log').compute(LOAD, {'sample': {'file': dataset(run=1)}})
 
     again = restart(tmp_path / 'log')
 
@@ -323,13 +323,13 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     client = start(tmp_path / 'log')
     client.stage(
         Template(
-            LOAD, params={'sample': {'run': dataset(run=1)}}, blanks=('selection',)
+            LOAD, params={'sample': {'file': dataset(run=1)}}, blanks=('selection',)
         )
     )
     total = _total(client)
     total.push(
         {
-            'values': client.compute(LOAD, {'sample': {'run': dataset(run=1)}}).refs(
+            'values': client.compute(LOAD, {'sample': {'file': dataset(run=1)}}).refs(
                 'value'
             )
         }
@@ -347,11 +347,11 @@ def test_a_refused_call_writes_nothing_to_the_log(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    load = client.compute(LOAD, {'sample': {'run': dataset(run=1)}})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     written = len(Log.read(tmp_path / 'log'))
 
     with pytest.raises(SubmitError, match='not parameters'):
-        client.submit(LOAD, {'sample': {'run': dataset(run=1)}, 'bins': 2})
+        client.submit(LOAD, {'sample': {'file': dataset(run=1)}, 'bins': 2})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))
     total = _total(client)
@@ -373,13 +373,15 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
     path = tmp_path / 'log'
     run = datasets.resolve(dataset(run=1))
     with Log(path) as log:
-        log.append(_submitted('load', Request(LOAD, {'sample': {'run': run}})))
+        log.append(_submitted('load', Request(LOAD, {'sample': {'file': run}})))
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
         # A file limit that a second event exceeds, as a full disk would.
         resource.setrlimit(resource.RLIMIT_FSIZE, (path.stat().st_size + 10, hard))
         try:
             with pytest.raises(OSError, match='too large'):
-                log.append(_submitted('again', Request(LOAD, {'sample': {'run': run}})))
+                log.append(
+                    _submitted('again', Request(LOAD, {'sample': {'file': run}}))
+                )
         finally:
             resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
         log.append(Finished(record='load', status=Status.COMPLETED))
@@ -399,7 +401,7 @@ def test_a_last_line_cut_short_is_dropped(
 ) -> None:
     path = tmp_path / 'log'
     run = datasets.resolve(dataset(run=1))
-    _write(path, _submitted('load', Request(LOAD, {'sample': {'run': run}})))
+    _write(path, _submitted('load', Request(LOAD, {'sample': {'file': run}})))
     with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing
 
@@ -411,7 +413,7 @@ def test_a_last_line_cut_short_is_dropped(
 def test_a_line_that_is_not_an_event_is_refused(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
-    start(tmp_path / 'log').compute(LOAD, {'sample': {'run': dataset(run=1)}})
+    start(tmp_path / 'log').compute(LOAD, {'sample': {'file': dataset(run=1)}})
     lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
     (tmp_path / 'log').write_bytes(b''.join([lines[0], b'{}\n', *lines[1:]]))
 

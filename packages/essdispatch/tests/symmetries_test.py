@@ -36,11 +36,11 @@ from ess.spec.testing import check_arrival_and_order, check_caching, check_one_r
 class SampleRow(BaseModel):
     """A group of the single-run spec, and a row of the multi-run spec."""
 
-    run: NexusFile
+    file: NexusFile
 
 
 class CanRow(BaseModel):
-    run: NexusFile
+    file: NexusFile
 
 
 class Reduction(BaseModel):
@@ -98,7 +98,7 @@ def iofq(
 ) -> dict[str, sc.Variable]:
     bins = reduction['bins']
     return _iofq(
-        _parts(sample['run'], bins), None if can is None else _parts(can['run'], bins)
+        _parts(sample['file'], bins), None if can is None else _parts(can['file'], bins)
     )
 
 
@@ -109,7 +109,7 @@ class Sums:
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         for table, row in rows.items():
-            parts = _parts(row['run'], self._bins)
+            parts = _parts(row['file'], self._bins)
             if table in self._sums:
                 self._sums[table] += parts
             else:
@@ -140,15 +140,15 @@ class MultiIofQ:
 def test_the_multi_run_binding_keeps_the_symmetries_its_author_promises() -> None:
     sample, can = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]], [[1.0, 1.0, 1.0, 1.0]]
     tables = {
-        'sample_runs': [{'run': run} for run in sample],
-        'can_runs': [{'run': run} for run in can],
+        'sample_runs': [{'file': run} for run in sample],
+        'can_runs': [{'file': run} for run in can],
     }
     check_one_row(
         iofq,
         MultiIofQ(),
         {
-            'sample': {'run': sample[0]},
-            'can': {'run': can[0]},
+            'sample': {'file': sample[0]},
+            'can': {'file': can[0]},
             'reduction': {'bins': 2},
         },
         {
@@ -185,13 +185,13 @@ SAMPLE, CAN = dataset(run=611), dataset(run=614)
 
 def _single(client: Client) -> sc.Variable:
     return client.output(
-        client.compute(IOFQ, {'sample': {'run': SAMPLE}, 'can': {'run': CAN}}),
+        client.compute(IOFQ, {'sample': {'file': SAMPLE}, 'can': {'file': CAN}}),
         'iofq',
     )
 
 
 def _one_row(client: Client) -> sc.Variable:
-    tables = {'sample_runs': [{'run': SAMPLE}], 'can_runs': [{'run': CAN}]}
+    tables = {'sample_runs': [{'file': SAMPLE}], 'can_runs': [{'file': CAN}]}
     return client.output(client.compute(IOFQ_MULTI, tables), 'iofq')
 
 
@@ -199,7 +199,7 @@ def _through_a_stage(client: Client) -> sc.Variable:
     stage = client.stage(
         Template(
             IOFQ,
-            params={'sample': {'run': SAMPLE}, 'can': {'run': CAN}},
+            params={'sample': {'file': SAMPLE}, 'can': {'file': CAN}},
             blanks=('reduction',),
         )
     )
@@ -222,12 +222,12 @@ def _pushed(*pushes: Mapping[str, Any]) -> Callable[[Client], sc.Variable]:
 WAYS = {
     'one-row': _one_row,
     'caching': _through_a_stage,
-    'arrival': _pushed({'sample_runs': {'run': SAMPLE}, 'can_runs': {'run': CAN}}),
+    'arrival': _pushed({'sample_runs': {'file': SAMPLE}, 'can_runs': {'file': CAN}}),
     'order, sample first': _pushed(
-        {'sample_runs': {'run': SAMPLE}}, {'can_runs': {'run': CAN}}
+        {'sample_runs': {'file': SAMPLE}}, {'can_runs': {'file': CAN}}
     ),
     'order, can first': _pushed(
-        {'can_runs': {'run': CAN}}, {'sample_runs': {'run': SAMPLE}}
+        {'can_runs': {'file': CAN}}, {'sample_runs': {'file': SAMPLE}}
     ),
 }
 
@@ -248,22 +248,22 @@ def test_a_call_through_a_stage_makes_the_record_of_the_plain_request(
     client: Client,
 ) -> None:
     stage = client.stage(
-        Template(IOFQ, params={'sample': {'run': SAMPLE}}, blanks=('can',))
+        Template(IOFQ, params={'sample': {'file': SAMPLE}}, blanks=('can',))
     )
-    staged = client.compute(stage, {'can': {'run': CAN}})
-    plain = client.compute(IOFQ, {'sample': {'run': SAMPLE}, 'can': {'run': CAN}})
+    staged = client.compute(stage, {'can': {'file': CAN}})
+    plain = client.compute(IOFQ, {'sample': {'file': SAMPLE}, 'can': {'file': CAN}})
 
     assert staged.request == plain.request
     assert staged.id != plain.id
 
 
 def test_pushes_and_reads_of_an_accumulator_make_no_record(client: Client) -> None:
-    _pushed({'sample_runs': {'run': SAMPLE}}, {'can_runs': {'run': CAN}})(client)
+    _pushed({'sample_runs': {'file': SAMPLE}}, {'can_runs': {'file': CAN}})(client)
     assert client.records() == []
 
 
 def test_a_single_run_spec_has_no_table_for_an_accumulator(client: Client) -> None:
     with pytest.raises(SubmitError, match='table fields'):
         client.accumulator(
-            Template(IOFQ, params={'can': {'run': CAN}}, blanks=('sample',))
+            Template(IOFQ, params={'can': {'file': CAN}}, blanks=('sample',))
         )

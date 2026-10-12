@@ -64,7 +64,7 @@ def _array(values: Any) -> sc.Variable:
 class Run(BaseModel):
     """A group of a single-run spec, and a row of a table."""
 
-    run: NexusFile
+    file: NexusFile
 
 
 class Reduction(BaseModel):
@@ -100,7 +100,7 @@ def iofq(
 ) -> dict[str, sc.Variable]:
     beam_centre = corrections['beam_centre']
     normalization = corrections['normalization']
-    counts = _counts(sample['run']) - (0.0 if can is None else _counts(can['run']))
+    counts = _counts(sample['file']) - (0.0 if can is None else _counts(can['file']))
     masked = np.where(counts < reduction['threshold'], 0.0, counts)
     reduced = masked - (0.0 if beam_centre is None else beam_centre.value)
     reduced = reduced / (1.0 if normalization is None else normalization.value)
@@ -149,7 +149,7 @@ BEAM_CENTRE = _spec('beam-centre', BeamCentreParams, CentreOutputs)
 
 
 def beam_centre(direct_beam: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    return {'centre': sc.scalar(float(_counts(direct_beam['run']).mean()))}
+    return {'centre': sc.scalar(float(_counts(direct_beam['file']).mean()))}
 
 
 class Scaling(BaseModel):
@@ -173,7 +173,7 @@ VANADIUM = _spec('vanadium', VanadiumParams, VanadiumOutputs)
 def vanadium(
     vanadium: Mapping[str, Any], scaling: Mapping[str, Any]
 ) -> dict[str, sc.Variable]:
-    total = float(_counts(vanadium['run']).sum())
+    total = float(_counts(vanadium['file']).sum())
     return {'normalization': sc.scalar(total * scaling['scale'])}
 
 
@@ -229,7 +229,7 @@ CONTRIBUTE = _spec('sans-contribute', ContributeParams, ContributeOutputs)
 
 
 def contribute(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    counts = _counts(sample['run'])
+    counts = _counts(sample['file'])
     return {
         'numerator': _array(counts),
         'denominator': sc.scalar(float(counts.sum())),
@@ -262,7 +262,7 @@ class _Sums:
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         for table, row in rows.items():
-            self._sums[table] += _counts(row['run'])  # in place from the second row
+            self._sums[table] += _counts(row['file'])  # in place from the second row
 
     def outputs(self) -> Mapping[str, Any]:
         return self._finalize(**self._sums, **self._fixed)
@@ -283,7 +283,7 @@ class Summing:
         def compute(**values: Any) -> Mapping[str, Any]:
             params = {**fixed, **values}
             sums = {
-                t: sum((_counts(row['run']) for row in params.pop(t)), 0.0)
+                t: sum((_counts(row['file']) for row in params.pop(t)), 0.0)
                 for t in self._tables
             }
             return self._finalize(**sums, **params)
@@ -307,7 +307,7 @@ VOLUME = _spec('volume', RunsParams, Counts)
 
 
 def angle(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    return {'counts': _array(sample['run'])}
+    return {'counts': _array(sample['file'])}
 
 
 def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
@@ -355,7 +355,7 @@ STITCH = _spec('stitch', StitchParams, StitchOutputs)
 def stitch(
     runs: list[dict[str, Any]], reference: Mapping[str, Any]
 ) -> dict[str, sc.Variable]:
-    curves = [_counts(row['run']) / _counts(reference['run']) for row in runs]
+    curves = [_counts(row['file']) / _counts(reference['file']) for row in runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])

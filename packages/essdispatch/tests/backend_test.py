@@ -25,7 +25,7 @@ from ess.spec import Array, NexusFile, WorkflowSpec
 
 
 class Run(BaseModel):
-    run: NexusFile
+    file: NexusFile
 
 
 class LoadParams(BaseModel):
@@ -73,7 +73,7 @@ class Gate:
         self.open = threading.Event()
 
     def load(self, sample: dict[str, float]) -> dict[str, Any]:
-        run = sample['run']
+        run = sample['file']
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
@@ -115,7 +115,7 @@ def client(backend: Backend) -> Client:
 
 
 def load(n: int) -> Request:
-    return Request(LOAD, {'sample': {'run': dataset(run=n)}})
+    return Request(LOAD, {'sample': {'file': dataset(run=n)}})
 
 
 def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> None:
@@ -284,11 +284,11 @@ def test_reading_an_output_of_a_failed_record_raises(
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match="'scale'"):
-        client.submit(LOAD, {'sample': {'run': dataset(run=1)}, 'scale': 2.0})
+        client.submit(LOAD, {'sample': {'file': dataset(run=1)}, 'scale': 2.0})
 
 
 def test_a_workflow_that_leaves_out_an_output_fails(client: Client) -> None:
-    nothing = client.compute(NOTHING, {'sample': {'run': dataset(run=1)}})
+    nothing = client.compute(NOTHING, {'sample': {'file': dataset(run=1)}})
 
     assert "missing ['value']" in client.failure(nothing)
 

@@ -51,7 +51,7 @@ class Rule:
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
-    dataset_field: str = 'run'
+    dataset_field: str = 'file'
     persist: tuple[str, ...] | None = None
 
 

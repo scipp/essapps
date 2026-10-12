@@ -26,7 +26,7 @@ class PipelineBinding:
 
     ``params`` maps each parameter to the sciline key it sets: a group or a
     table as a whole by its name, or each field of a group by its path, such as
-    ``'sample.run'``. A group set to ``None`` sets each key of its paths to
+    ``'sample.file'``. A group set to ``None`` sets each key of its paths to
     ``None``. ``outputs`` maps each output field to the key that computes it. A
     stage sets the fixed values on a copy of the pipeline and cuts it at the
     keys of the blanks with ``sciline.Stage``, which computes what does not

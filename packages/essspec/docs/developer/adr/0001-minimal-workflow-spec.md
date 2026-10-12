@@ -189,7 +189,7 @@ or SANS sample runs each paired with its transmission run, is one table:
 
 ```python
 class Sample(BaseModel):
-    run: NexusFile
+    file: NexusFile
     transmission: NexusFile
 
 

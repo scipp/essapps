@@ -16,7 +16,7 @@ from ess.spec import (
 
 
 class Sample(pydantic.BaseModel):
-    run: NexusFile
+    file: NexusFile
 
 
 class Limits(pydantic.BaseModel):
@@ -147,7 +147,7 @@ class TestWorkflowSpec:
     def test_params_model_validates_in_process(self, spec: WorkflowSpec) -> None:
         with pytest.raises(pydantic.ValidationError):
             spec.params(
-                sample={'run': {'dataset': 'pid'}}, limits={'lower': 2.0, 'upper': 1.0}
+                sample={'file': {'dataset': 'pid'}}, limits={'lower': 2.0, 'upper': 1.0}
             )
 
     @pytest.mark.parametrize('side', ['params', 'outputs'])
@@ -262,7 +262,7 @@ class TestSerialization:
         ]
         for ref in refs:
             group = schema['$defs'][ref.removeprefix('#/$defs/')]
-            assert group['properties']['run']['dataField'] == {'format': 'nexus'}
+            assert group['properties']['file']['dataField'] == {'format': 'nexus'}
 
     def test_table_rows_keep_data_fields_in_schema(self) -> None:
         spec = WorkflowSpec(

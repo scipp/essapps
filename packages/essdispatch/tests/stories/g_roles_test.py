@@ -32,7 +32,7 @@ def test_g2_developer_iterates_on_a_workflow(
     draft = iofq
     dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})
     result = dev.compute(
-        IOFQ, IofQParams(sample=Run(run=measure(1, [1.0, 2.0, 3.0, 4.0])))
+        IOFQ, IofQParams(sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0])))
     )
     pid = dev.publish(result.ref('iofq'), 'scicat')
 
@@ -47,7 +47,7 @@ def test_g5_reference_across_proposals_refused(
     mine = connect(proposal='p2', user='eve')
     centre = theirs.compute(
         BEAM_CENTRE,
-        BeamCentreParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))),
+        BeamCentreParams(direct_beam=Run(file=measure(1, [1.0, 1.0], proposal='p1'))),
     )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 
@@ -55,7 +55,7 @@ def test_g5_reference_across_proposals_refused(
         mine.compute(
             IOFQ,
             IofQParams(
-                sample=Run(run=sample),
+                sample=Run(file=sample),
                 corrections=Corrections(beam_centre=centre.ref('centre')),
             ),
         )
