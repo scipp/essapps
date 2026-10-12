@@ -1,7 +1,7 @@
 # Tensions between needs
 
 Some needs pull against each other, and how each pull is settled shapes the framework more than any single need does.
-Settled: results kept in memory only in interactive work, a large volume held once, the technique deciding where runs are summed, applications pairing runs, only parameters stored as values, a simple system, and results kept only while users work with them.
+Settled: results kept in memory while users work with them and written only when someone asks, a large volume held once, the technique deciding where runs are summed, applications pairing runs, only parameters stored as values, a simple system, and results that someone asked to keep found again for days to weeks, not longer.
 Open: whether one reduction may use data of several proposals, where large results are cut down for a web interface, whether data must be erasable when no run may be reduced twice, and whether results reach SciCat automatically.
 
 Each tension has a line with its resolution or question, and one sub-bullet for each side.
@@ -9,7 +9,7 @@ A settled tension names the decision that settles it; the decision itself lives 
 
 ## Settled
 
-- **Fast interactive work versus bounded memory.** Interactive work, such as a notebook, runs in the user's own process, which keeps results in memory and frees them when it ends; batch and automatic reduction write each result to a file as soon as it is computed, and keep in memory only what runs are still being added to, such as a growing volume (next tension), with its memory bounded by how the service works. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-the-client-is-the-lifetime.md), [ADR 0005](../developer/adr/0005-the-service-writes-every-output.md)*
+- **Fast interactive work versus bounded memory.** Results stay in memory while a user works with them: in the user's own process for interactive work, such as a notebook, and on the service under a limit for each notebook or application connected to it. A result is written to a file only when someone asks to keep it. Batch and automatic reduction ask for the results they keep as they submit, so they keep nothing in memory but what runs are still being added to, such as a growing volume (next tension), with its memory bounded by how the service works. *Simon, 2026-10-02 and 2026-10-05; [ADR 0002](../developer/adr/0002-a-value-lives-while-something-keeps-it.md)*
   - A user looks at the results of a reduction while deciding what to do next ([users](users.md)). *Simon, 2026-09-04*
   - Batch and automatic reduction must bound leaks and peak memory by how the services work ([users](users.md)). *Simon, 2026-10-02*
 - **A large volume held once versus looking at it while it grows.** Hold one copy and add each run in place; a cut through the volume can be made at any time without racing the addition, and no earlier state of the volume is kept. *Simon, 2026-10-02 and 2026-10-05; [ADR 0003](../developer/adr/0003-accumulators-add-in-place.md)*
@@ -27,7 +27,7 @@ A settled tension names the decision that settles it; the decision itself lives 
 - **A simple system versus every technique's way of working.** Keep only what a stated need forces, and trace each mechanism to an item on these pages. *Simon, 2026-09-30*
   - The goal is a simple system with predictable behaviour; anything not bound by a strict requirement goes. *Simon, 2026-09-30*
   - The framework must serve all cases: some runs merged and others not, per-run parameters in a sum, a series reduced again at each new run but not only that. *Simon, 2026-09-28*
-- **Finding results again versus a second catalogue.** The framework keeps results for as long as users consider their work ongoing, as with an application they leave open; for batch and automatic reduction that means days to weeks. A limit is acceptable, and a result needed for longer goes to SciCat. *Simon, 2026-10-05; [ADR 0004](../developer/adr/0004-history-is-append-only-lists.md)*
+- **Finding results again versus a second catalogue.** The framework keeps the results someone asked to keep for as long as users consider their work ongoing, as with an application they leave open; for batch and automatic reduction that means days to weeks. Other results are kept only while a user works with them. A limit is acceptable, and a result needed for longer goes to SciCat. *Simon, 2026-10-05; [ADR 0004](../developer/adr/0004-history-is-append-only-lists.md)*
   - Reductions can take hours or read data arriving over days, users must find the results of a batch reduction started the day before, and they process their data at ESS and after they leave ([users](users.md)). *Simon, 2026-10-05*
   - The framework must not replicate SciCat, through which alone results and their provenance are found in the long term, and should keep as little bookkeeping as it can ([users](users.md)). *Simon, 2026-09-30 and 2026-10-05*
 

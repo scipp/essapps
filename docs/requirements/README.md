@@ -26,7 +26,7 @@ Terms such as VISA, DMSC, can, or transmission run are explained in the [glossar
 - "Combining runs" means a different operation per technique: summing the counts and, separately, the normalisation of all runs, then dividing once (SANS); binning into one fixed 4D grid (spectroscopy); concatenating events (reflectometry, runs at one angle); a joint fit (reflectometry angles, NMX scaling); or nothing yet (powder, imaging). A sum grows run by run only if counts and normalisation are kept apart until the division, and a joint fit needs all inputs at once.
 - A run is one file, but not always one angle, one role, or one result: one file may hold a whole BIFROST angle scan, the sample, open-beam and dark frames of ODIN, or FREIA's up to three angles interleaved in time, and splitting a run by time or by a sample-environment log adds a dimension to its result.
 - Results can be large: a spectroscopy grid up to hundreds of GB, an imaging stack 12 GB, and a Horace file at ISIS, which lists every observation, up to 500 GB.
-- The framework keeps results for days to weeks, while users work with them; only results registered in SciCat are found later, and SciCat holds their metadata and file paths, not the files. Instrument and run number are assumed to name a run.
+- The framework keeps the results someone asked to keep for days to weeks, while users work with them, and writes no other; only results registered in SciCat are found later, and SciCat holds their metadata and file paths, not the files. Instrument and run number are assumed to name a run.
 
 ## Numbers
 

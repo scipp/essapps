@@ -182,8 +182,9 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
 
     assert again.records() == first.records()
     assert again.records(label='loads') == list(loads.values())
+    state = _record(again, read.request.params['values'][0]['value'].record)
     assert again.provenance(read) == first.provenance(read)
-    assert again.provenance(read).records() == list(loads.values())
+    assert again.provenance(read).records() == [state, *loads.values()]
 
 
 def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
@@ -204,7 +205,7 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.output(rerun, 'value') == 3.0
 
 
-def test_an_accumulator_is_logged_as_its_template_and_a_reference_with_a_count(
+def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_record(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -215,59 +216,47 @@ def test_an_accumulator_is_logged_as_its_template_and_a_reference_with_a_count(
     read = client.compute(TOTAL, _read(total))
 
     template = Template(TOTAL, blanks=('values',))
-    assert Log.read(tmp_path / 'log')[6:10] == [
+    events = Log.read(tmp_path / 'log')
+    assert events[6:10] == [
         Opened(accumulator=total.id, proposal='p1', template=template),
         *(
             Pushed(accumulator=total.id, rows={'values': load.refs('value')})
             for load in loads
         ),
     ]
-    pinned = AccumulatorRef(accumulator=total.id, output='value', upto=3)
-    assert read.request.params == {'values': [{'value': pinned}]}
+    state, reader = events[10].records  # the record of the state, then its reader
+    assert state.request == Request(TOTAL, {'values': [x.refs('value') for x in loads]})
+    assert reader.id == read.id
+    read_state = OutputRef(record=state.id, output='value')
+    assert read.request.params == {'values': [{'value': read_state}]}
     assert client.output(read, 'value') == 6.0
 
 
-def test_a_record_pending_in_the_log_runs_after_a_restart(
-    tmp_path: Path,
-    start: Callable[[Path], Client],
-    restart: Callable[[Path], Client],
-    loading: threading.Event,
-) -> None:
-    loading.clear()
-    pending = start(tmp_path / 'log').submit(LOAD, {'run': dataset(run=2)})
-
-    again = restart(tmp_path / 'log')
-    total = again.submit(TOTAL, {'values': [pending.refs('value')]})
-    loading.set()
-
-    assert again.wait(pending) == Status.COMPLETED
-    assert again.output(total, 'value') == 2.0
-    with pytest.raises(LookupError, match='not kept'):  # its client is gone
-        again.output(pending, 'value')
-
-
-def test_accumulators_do_not_survive_a_restart(
+def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     tmp_path: Path,
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    total = _total(first)
-    total.push({'values': first.compute(LOAD, {'run': dataset(run=1)}).refs('value')})
     loading.clear()
     pending = first.submit(LOAD, {'run': dataset(run=2)})
-    params = {'values': [{'value': total.ref('value')}, pending.refs('value')]}
-    holding = first.submit(TOTAL, params)  # holds the state until ``pending`` is done
+    total = _total(first)
+    total.push({'values': {'value': dataset(run=1)}})
+    total.push({'values': pending.refs('value')})  # waits for ``pending``
+    read = first.submit(TOTAL, _read(total))
+    state = _record(first, read.request.params['values'][0]['value'].record)
 
     again = restart(tmp_path / 'log')
     loading.set()
 
-    assert again.wait(holding) == Status.FAILED
-    assert again.failure(holding) == 'the accumulator ended at a restart'
+    records = [pending, state, read]
+    assert again.status(records) == [Status.CANCELLED] * 3  # no client keeps them
+    assert again.failure(records) == ['the backend restarted'] * 3
+    with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
+        again.submit(TOTAL, {'values': [pending.refs('value')]})
     with pytest.raises(SubmitError, match='released or is unknown'):
-        again.submit(TOTAL, _read(total))
-    assert again.wait(pending) == Status.COMPLETED
+        again.submit(TOTAL, _read(total))  # the accumulator did not survive
 
 
 def test_outputs_are_not_in_the_log(
@@ -280,7 +269,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(LookupError, match='the value is not kept'):
+    with pytest.raises(LookupError, match='not kept by this client'):
         again.output(load, 'value')
 
 
@@ -294,32 +283,8 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     again = restart(tmp_path / 'log')
 
     total = _total(again)
-    with pytest.raises(SubmitError, match='the value is not kept'):
+    with pytest.raises(SubmitError, match='not kept by this client'):
         total.push({'values': load.refs('value')})
-
-
-def test_provenance_refuses_a_state_whose_rows_the_log_lacks(
-    tmp_path: Path, start: Callable[[Path], Client], datasets: FakeDatasets
-) -> None:
-    run = datasets.resolve(dataset(run=1))
-    load = OutputRef(record='load', output='value')
-    state = AccumulatorRef(accumulator='a', output='value', upto=2)
-    _write(
-        tmp_path / 'log',
-        _submitted('load', Request(LOAD, {'run': run, 'window': [0.0, 1.0]})),
-        Finished(record='load', status=Status.COMPLETED),
-        Opened(
-            accumulator='a', proposal='p1', template=Template(TOTAL, blanks=('values',))
-        ),
-        Pushed(accumulator='a', rows={'values': {'value': load}}),
-        _submitted('read', Request(TOTAL, {'values': [{'value': state}]})),
-        Finished(record='read', status=Status.COMPLETED),
-    )
-
-    client = start(tmp_path / 'log')
-
-    with pytest.raises(LookupError, match=r'the log lacks pushes of a\[:2\]'):
-        client.provenance(_record(client, 'read'))
 
 
 def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only(
@@ -355,9 +320,6 @@ def test_a_refused_call_writes_nothing_to_the_log(
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, {'values': [{'value': other}]})
-    earlier = AccumulatorRef(accumulator=total.id, output='value', upto=0)
-    with pytest.raises(SubmitError, match='only its state after 1 pushes'):
-        client.submit(TOTAL, {'values': [{'value': earlier}]})
     with pytest.raises(SubmitError, match='fields'):
         total.push({'values': {'other': load.ref('value')}})
 

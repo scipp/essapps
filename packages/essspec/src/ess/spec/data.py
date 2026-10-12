@@ -5,8 +5,8 @@ Data fields: parameters and outputs that hold data rather than literals.
 
 A data field is a parameter or output field whose value is a file or an array.
 Its type is a :data:`Ref`, a reference to data that exists elsewhere: an output
-of an earlier run, a dataset the framework did not compute, or the state of an
-accumulator that the framework holds. A
+of an earlier run, a dataset the framework did not compute, or, in a request
+not yet accepted, an output of an accumulator that the framework holds. A
 :class:`DataField` annotation on the field says what the bytes are, its
 :class:`Format`, and for scipp data its :class:`ArraySpec`, so that an output
 field of one spec can feed a parameter field of another when the two agree, and
@@ -113,23 +113,27 @@ class DatasetRef(BaseModel, frozen=True):
 
 class AccumulatorRef(BaseModel, frozen=True):
     """
-    Output ``output`` of accumulator ``accumulator`` after its first ``upto`` pushes.
+    Output ``output`` of accumulator ``accumulator``, in a request.
 
-    ``upto`` is ``None`` until the framework binds the reference, when it accepts
-    the request that holds it, so that a record names the state it read.
+    The framework replaces it when it accepts the request, by the same output of
+    a record of the accumulator's state at that moment, so a record never holds
+    one.
     """
 
     accumulator: str = Field(min_length=1)
     output: str = Field(min_length=1)
-    upto: int | None = Field(default=None, ge=0)
 
     def __str__(self) -> str:
-        upto = f'[:{self.upto}]' if self.upto is not None else ''
-        return f'{self.accumulator}{upto}.{self.output}'
+        return f'{self.accumulator}.{self.output}'
 
 
 Ref = OutputRef | DatasetRef | AccumulatorRef
-"""A reference: the value of a data field."""
+"""
+A reference: the value of a data field.
+
+An ``AccumulatorRef`` is only a placeholder in a request before it is
+submitted; no record holds one.
+"""
 
 
 @dataclass(frozen=True)
@@ -291,7 +295,7 @@ def as_ref(value: Any) -> Ref | None:
             return OutputRef.model_validate(value)
         if keys == {'dataset'}:
             return DatasetRef.model_validate(value)
-        if {'accumulator', 'output'} <= keys <= _ACCUMULATOR_REF_KEYS:
+        if keys == _ACCUMULATOR_REF_KEYS:
             return AccumulatorRef.model_validate(value)
     return None
 

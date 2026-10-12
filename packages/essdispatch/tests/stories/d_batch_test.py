@@ -160,7 +160,9 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     ]
     assert client.output(total, 'data').values.tolist() == [300.0, 45150.0]
     provenance = client.provenance(total)
-    assert provenance.accumulated == (  # the runs, in push order
+    assert [r.request for r in provenance.records()] == [  # the runs, in push order
         Request(VOLUME, {'runs': [{'run': run} for run in pushed]}),
-    )
+    ]
+    states = [r for r in client.records() if r.spec.name == VOLUME.name]
+    assert [len(r.request.params['runs']) for r in states] == [*range(1, 301), 300]
     assert len(provenance.datasets()) == 300  # run 5, measured again, once

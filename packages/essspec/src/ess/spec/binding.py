@@ -26,8 +26,8 @@ like ``ess.reduce.streaming.StreamProcessor``::
 
 Its outputs after rows are pushed in order are those of the plain request
 whose tables hold these rows, with the same other values. It may add each push
-in place, and its outputs may be what it holds, not a copy: the caller is done
-with the outputs of a state before it pushes the next rows (see
+in place, and its outputs may share memory with what it holds: the caller is
+done with the outputs of a state before it pushes the next rows (see
 :meth:`HeldState.outputs`). A binding without ``held_state`` works in an
 accumulator too: the framework keeps the rows and computes the plain request
 over them when a state is read.
@@ -78,8 +78,8 @@ class HeldState(Protocol):
         """
         Every output of the spec over the rows pushed so far.
 
-        They may be what the held state holds, not a copy. An output the spec
-        declares optional may be left out. The caller calls this once per
+        They may share memory with what the held state holds. An output the
+        spec declares optional may be left out. The caller calls this once per
         state that is read, keeps what it returns until the next push, and
         pushes only once every reader of these outputs is done.
         """

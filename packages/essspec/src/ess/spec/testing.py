@@ -22,15 +22,18 @@ binding ``multi`` of one reduction::
 
 Values are those the binding receives: data read and defaults filled in.
 Outputs are compared up to ``rtol``, since adding in another order rounds
-differently. A failed check raises ``AssertionError`` naming the symmetry and
-the call. The symmetries are those of docs/developer/README.md (Symmetries).
+differently, with :func:`assert_close`. :func:`check_one_row` and
+:func:`check_caching` also check that no output shares memory with a value
+the workflow was given. A failed check raises ``AssertionError`` naming the
+symmetry and the call. The symmetries are those
+of docs/developer/README.md (Symmetries).
 """
 
 from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from .binding import Binding, Function, HeldStateBinding
@@ -53,9 +56,11 @@ def check_one_row(
     ``multi_values`` are ``single_values`` with each run in a table of one row,
     and a run left out (``None``) as an empty table.
     """
-    _assert_close(
-        _plain(multi, multi_values), _plain(single, single_values), rtol, 'one-row'
-    )
+    expected = _plain(single, single_values)
+    actual = _plain(multi, multi_values)
+    _check_no_shared_memory(expected, single_values, where='one-row, single-run')
+    _check_no_shared_memory(actual, multi_values, where='one-row, multi-run')
+    assert_close(actual, expected, rtol=rtol, where='one-row')
 
 
 def check_caching(
@@ -76,8 +81,13 @@ def check_caching(
     """
     call = binding.stage(fixed, tuple(calls[0]))
     for n, values in enumerate(calls, start=1):
-        expected = binding.stage({**fixed, **values}, ())()
-        _assert_close(call(**values), expected, rtol, f'caching, call {n} {values}')
+        given = {**fixed, **values}
+        expected = binding.stage(given, ())()
+        actual = call(**values)
+        where = f'caching, call {n} {values}'
+        _check_no_shared_memory(expected, given, where=f'{where}, plain')
+        _check_no_shared_memory(actual, given, where=f'{where}, staged')
+        assert_close(actual, expected, rtol=rtol, where=where)
 
 
 def check_arrival_and_order(
@@ -118,8 +128,10 @@ def check_arrival_and_order(
                     raise
                 continue
             where = f'arrival, {name}, state {n} of pushes {schedule[:n]}'
-            _assert_close(held.outputs(), expected, rtol, where)
-        _assert_close(tables, pristine, 0.0, f'rows after pushing them, {name}')
+            assert_close(held.outputs(), expected, rtol=rtol, where=where)
+        assert_close(
+            tables, pristine, rtol=0.0, where=f'rows after pushing them, {name}'
+        )
 
 
 def _schedules(
@@ -152,25 +164,90 @@ def _schedules(
     return list(unique.values())
 
 
+def _check_no_shared_memory(outputs: Any, values: Any, *, where: str) -> None:
+    """
+    Raise ``AssertionError`` if an output shares memory with one of ``values``.
+
+    A workflow returns no output that shares memory with a value it reads,
+    such as a slice that is a view of it: the framework passes the values it
+    keeps, so changing one would change the other. Only arrays that numpy
+    holds are compared: numpy arrays, and the data, variances, coords, and
+    masks of scipp objects.
+    """
+    given = [array for _, array in _arrays(values, '')]
+    if not given:
+        return
+    import numpy as np
+
+    for at, array in _arrays(outputs, ''):
+        if any(np.shares_memory(array, g) for g in given):
+            raise AssertionError(f'{where}: output {at} shares memory with a value')
+
+
+def _arrays(value: Any, at: str) -> Iterator[tuple[str, Any]]:
+    """The numpy arrays that hold ``value``, recursively, each with its place."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            yield from _arrays(item, f'{at}[{key!r}]')
+    elif isinstance(value, list | tuple):
+        for i, item in enumerate(value):
+            yield from _arrays(item, f'{at}[{i}]')
+    elif type(value).__module__.partition('.')[0] == 'scipp':
+        yield from _scipp_arrays(value, at)
+    elif type(value).__module__ == 'numpy':
+        import numpy as np
+
+        if isinstance(value, np.ndarray):
+            yield at, value
+
+
+def _scipp_arrays(value: Any, at: str) -> Iterator[tuple[str, Any]]:
+    import scipp as sc
+
+    if isinstance(value, sc.Variable):
+        if value.bins is not None:
+            yield from _arrays(value.bins.constituents['data'], f'{at}.bins')
+            return
+        yield from _arrays(value.values, f'{at}.values')
+        yield from _arrays(value.variances, f'{at}.variances')
+    elif isinstance(value, sc.DataArray):
+        yield from _arrays(value.data, f'{at}.data')
+        yield from _arrays(dict(value.coords), f'{at}.coords')
+        yield from _arrays(dict(value.masks), f'{at}.masks')
+    elif isinstance(value, sc.Dataset):
+        yield from _arrays(dict(value.items()), at)
+
+
 def _plain(code: Binding | Function, values: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(code, Binding):
         return code.stage(values, ())()
     return code(**values)
 
 
-def _assert_close(actual: Any, expected: Any, rtol: float, where: str) -> None:
-    """Raise ``AssertionError`` unless the values agree to ``rtol``, recursively."""
+def assert_close(
+    actual: Any, expected: Any, *, rtol: float = 1e-12, where: str = ''
+) -> None:
+    """
+    Raise ``AssertionError`` unless the values agree to ``rtol``, recursively.
+
+    Mappings, lists, and tuples are compared element by element, scipp objects
+    and arrays up to ``rtol``, floats too, and other values by equality. The
+    message starts with ``where``, followed by the keys and indices of the
+    value that differs.
+    """
     if isinstance(expected, Mapping):
         if not isinstance(actual, Mapping) or actual.keys() != expected.keys():
             got = sorted(actual) if isinstance(actual, Mapping) else actual
             raise AssertionError(f'{where}: {got!r}, expected {sorted(expected)!r}')
         for key in expected:
-            _assert_close(actual[key], expected[key], rtol, f'{where}, {key!r}')
+            assert_close(
+                actual[key], expected[key], rtol=rtol, where=f'{where}, {key!r}'
+            )
     elif isinstance(expected, list | tuple):
         if not isinstance(actual, list | tuple) or len(actual) != len(expected):
             raise AssertionError(f'{where}: {actual!r}, expected {expected!r}')
         for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
-            _assert_close(a, e, rtol, f'{where}[{i}]')
+            assert_close(a, e, rtol=rtol, where=f'{where}[{i}]')
     elif type(expected).__module__.partition('.')[0] == 'scipp':
         import scipp as sc
         import scipp.testing

@@ -130,13 +130,8 @@ class TestValidation:
             accumulator='a1', output='data'
         )
 
-    def test_an_accumulator_reference_is_bound_to_a_count_of_pushes(self) -> None:
-        bound = Params(data={**ACCUMULATOR_REF, 'upto': 3}).data
-        assert bound == AccumulatorRef(accumulator='a1', output='data', upto=3)
-        assert str(bound) == 'a1[:3].data'
+    def test_an_accumulator_reference_names_an_output(self) -> None:
         assert str(AccumulatorRef(accumulator='a1', output='data')) == 'a1.data'
-        with pytest.raises(ValidationError):
-            Params(data={**ACCUMULATOR_REF, 'upto': -1})
 
     @pytest.mark.parametrize(
         'bad',
@@ -210,14 +205,14 @@ class TestReferences:
             'runs': [DATASET_REF, {'record': 'f2', 'output': 'file'}],
             'banks': {'a': {'record': 'r2', 'output': 'banks', 'key': 'a'}},
             'centre': {'value': 1.0, 'unit': 'm'},
-            'sum': {**ACCUMULATOR_REF, 'upto': 2},
+            'sum': ACCUMULATOR_REF,
         }
         assert [(p, str(r)) for p, r in walk_refs(params)] == [
             ('data', 'r1.data'),
             ('runs[0]', 'pid-1'),
             ('runs[1]', 'f2.file'),
             ('banks.a', 'r2.banks[a]'),
-            ('sum', 'a1[:2].data'),
+            ('sum', 'a1.data'),
         ]
 
     def test_walk_refs_finds_references_in_table_rows(self) -> None:
@@ -248,6 +243,7 @@ class TestReferences:
         )
         assert as_ref({'record': 'r1', 'output': 'o', 'extra': 1}) is None
         assert as_ref({'dataset': 'pid', 'extra': 1}) is None
+        assert as_ref({**ACCUMULATOR_REF, 'upto': 2}) is None
         assert as_ref({**ACCUMULATOR_REF, 'record': 'r1'}) is None
         assert as_ref({'value': 1.0}) is None
         assert as_ref('r1.data') is None
