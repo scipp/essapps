@@ -10,7 +10,10 @@ write that ended is appended as one event and then applied to its views (see
 ``views.py``). A change is checked before its event is appended, so the log
 holds only events that apply. A backend given a log that already has events
 applies them first. It has no clients, so only persisted work goes on (see
-:meth:`Backend._restart`).
+:meth:`Backend._restart`). The log is the backend's only record of history,
+so if an append fails, for example on a full disk, the backend no longer
+knows its own state and stops: every call waiting in it, and every later
+call, raises ``RuntimeError`` from the append's error.
 
 A client is one entry in the backend, from :meth:`Backend.open_client` to
 :meth:`Backend.close_client`: its proposal, the records whose outputs it keeps,
@@ -614,6 +617,7 @@ class Backend:
         self._changed = threading.Condition()
         self._log = Log() if log is None else log
         self._views = Views()
+        self._stopped: Exception | None = None  # why an append failed
         # Not history
         self._clients: dict[str, _Client] = {}  # by client ID, until it ends
         # by record ID and name; _OMITTED for an optional output left out
@@ -645,7 +649,8 @@ class Backend:
         """
         Wait until no record is pending, no write is pending, and no
         accumulator has a step to do, then let go of the workers and the log.
-        Closing again does nothing more.
+        Closing again does nothing more. A backend that has stopped lets go
+        without waiting, drops the work not yet started, and raises.
 
         Closing the backend cancels nothing itself: what its clients still
         keep runs to its end, and what is persisted is written. Ending the
@@ -655,13 +660,17 @@ class Backend:
         with self._changed:
             self._changed.wait_for(
                 lambda: (
-                    self._views.records.keys() <= self._views.finished.keys()
-                    and PENDING not in self._views.writes.values()
-                    and not self._accumulating
+                    self._stopped is not None
+                    or (
+                        self._views.records.keys() <= self._views.finished.keys()
+                        and PENDING not in self._views.writes.values()
+                        and not self._accumulating
+                    )
                 )
             )
-        self._executor.shutdown(wait=True)
+        self._executor.shutdown(wait=True, cancel_futures=self._stopped is not None)
         self._log.close()
+        self._check_running()
 
     def _restart(self) -> None:
         """
@@ -747,8 +756,27 @@ class Backend:
 
         The caller has checked that the event applies. What is applied is the
         event as the log holds it, as it would be when the log is read again.
+        If the append fails, the backend stops (see the module docstring).
         """
-        self._views.apply(self._log.append(event))
+        try:
+            stored = self._log.append(event)
+        except Exception as error:
+            self._stopped = error
+            self._changed.notify_all()
+            raise
+        self._views.apply(stored)
+
+    def _check_running(self) -> None:
+        """Raise if the backend has stopped."""
+        if self._stopped is not None:
+            raise RuntimeError(
+                f'the backend stopped: appending to its log failed: {self._stopped}'
+            ) from self._stopped
+
+    def _wait_for(self, predicate: Callable[[], bool]) -> None:
+        """Wait until ``predicate`` holds; lock held. Raises if the backend stops."""
+        self._changed.wait_for(lambda: self._stopped is not None or predicate())
+        self._check_running()
 
     # Submission
 
@@ -1635,7 +1663,7 @@ class Backend:
             if caller is None:
                 return
             self.release([*caller.kept, *caller.stages, *caller.accumulators], client)
-            self._changed.wait_for(
+            self._wait_for(
                 lambda: all(views.write(key) != PENDING for key in caller.persisted)
             )
             del self._clients[client]
@@ -1648,8 +1676,9 @@ class Backend:
             raise RuntimeError(f'writes failed: {"; ".join(failed)}')
 
     def _client(self, client: str) -> _Client:
-        """The client, unless it has ended."""
+        """The client, unless it has ended or the backend has stopped."""
         with self._changed:
+            self._check_running()
             caller = self._clients.get(client)
         if caller is None:
             raise ClientEnded(f'client {client} has ended')
@@ -2144,7 +2173,7 @@ class Backend:
             proposal = self._client(client).proposal
             for record_id in ids:
                 self._mine(record_id, proposal)
-            self._changed.wait_for(lambda: not self._pending(ids, proposal))
+            self._wait_for(lambda: not self._pending(ids, proposal))
             return [self._status(i, proposal) for i in ids]
 
     def failure(self, record_id: str, client: str) -> str | None:
@@ -2236,7 +2265,7 @@ class Backend:
                     return record_id in views.finished
                 return all(views.write((record_id, n)) != PENDING for n in wanted)
 
-            self._changed.wait_for(ready)
+            self._wait_for(ready)
             kept = record_id in caller.kept
             every = names is None
             if names is None:
@@ -2312,9 +2341,7 @@ class Backend:
             if select is not None:
                 self._check_select(acc.template.spec, names)
             with self._changed:
-                self._changed.wait_for(
-                    lambda: acc.added == upto or acc.stopped is not None
-                )
+                self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
                 if acc.added != upto:
                     raise LookupError(acc.stopped)
             declared = list(self._specs[acc.template.spec].outputs.model_fields)

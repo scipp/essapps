@@ -19,6 +19,7 @@ from ess.dispatch import (
     SubmitError,
     dataset,
 )
+from ess.dispatch.log import Event, Log
 from ess.dispatch.testing import FakeDatasets
 from ess.spec import Array, NexusFile, WorkflowSpec
 
@@ -135,6 +136,35 @@ def test_closing_waits_until_no_record_is_pending(
     backend.close()
 
     assert client.status([a, total]) == [Status.COMPLETED, Status.COMPLETED]
+
+
+class FullDisk(Log):
+    """A log in memory whose appends fail once the disk is full."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.full = False
+
+    def append(self, event: Event) -> Event:
+        if self.full:
+            raise OSError('no space left on device')
+        return super().append(event)
+
+
+def test_a_failed_append_stops_the_backend(datasets: FakeDatasets, gate: Gate) -> None:
+    log = FullDisk()
+    backend = Backend(datasets, {LOAD: gate.load}, log=log)
+    client = Client(backend, proposal='p1', submitter='anna')
+    record = client.submit(load(1))
+    log.full = True
+    threading.Timer(0.05, gate.open.set).start()  # once the wait below has started
+
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        client.wait(record)  # its Finished event was not appended
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        client.submit(load(2))
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        backend.close()
 
 
 def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) -> None:
