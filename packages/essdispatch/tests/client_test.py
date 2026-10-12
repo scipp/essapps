@@ -2732,6 +2732,24 @@ def test_a_frozen_held_state_is_dropped_once_its_readers_are_done(
     assert client.output(total, 'difference').tolist() == [1.0]
 
 
+def test_a_stopped_held_state_is_dropped_before_the_accumulator_is_released(
+    in_place: Client,
+    loads: list[Record],
+    datasets: FakeDatasets,
+    subtracting: Subtracting,
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    sides.push({'samples': loads[0].refs('value')})
+    datasets.corrupt(datasets.resolve(dataset(run=2)))
+    sides.push({'samples': {'value': dataset(run=2)}})  # fails to add
+
+    with pytest.raises(LookupError, match='push 1 failed'):
+        client.output(sides, 'difference')
+    gc.collect()
+    assert subtracting.held[0]() is None  # nothing reads it any more
+
+
 # Selections
 
 

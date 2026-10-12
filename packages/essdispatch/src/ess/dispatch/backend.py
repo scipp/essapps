@@ -95,6 +95,8 @@ have completed, and a push once the readers of the state before it are done.
 If a step fails, or a record it references has not completed, the
 accumulator stops: it takes no more pushes or readers, the steps after it
 are dropped, and the requests that wait for a state it will not reach fail.
+Its held state is dropped once no reader holds its current state, without
+waiting for its client to release it.
 
 A read pins the accumulator's state after the pushes logged so far: a request
 that references the accumulator, when it is submitted; a read of its outputs;
@@ -2021,7 +2023,8 @@ class Backend:
         """
         Stop the accumulator: it takes no more pushes or readers, its steps
         are dropped, and the records of its states that wait for them fail;
-        lock held.
+        lock held. The held state is dropped now if no reader holds its
+        current state, and otherwise once the last one is done.
         """
         acc.stopped = f'the accumulator stopped: {failure}'
         acc.busy = False
@@ -2033,6 +2036,8 @@ class Backend:
         for upto in range(len(self._views.pushes.get(acc.id, ())) + 1):
             for record_id in self._dependents.pop(_state_key(acc.id, upto), ()):
                 self._finish(record_id, Status.FAILED, acc.stopped)
+        if not self._readers[(acc, acc.added)]:
+            acc.end()
         self._changed.notify_all()
 
     def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
