@@ -636,7 +636,6 @@ class Backend:
         # values whose last reader let go, for _let_go's loop to work through
         self._unread_values: deque[_Read] = deque()
         self._letting_go = False
-        self._on_finished: dict[str, list[Callable[[Record], None]]] = {}
         with self._changed:
             for event in self._log:
                 self._views.apply(event)
@@ -1578,8 +1577,6 @@ class Backend:
                     omitted=left_out,
                 )
             )
-            for call in self._on_finished.pop(finished_id, ()):
-                call(self._views.records[finished_id])
             self._let_go(self._unread.pop(finished_id, ()))  # if it never started
             for key in self._waiting.pop(finished_id, ()):
                 if (dependents := self._dependents.get(key)) is not None:
@@ -2163,22 +2160,6 @@ class Backend:
     def _status(self, record_id: str, proposal: str) -> Status:
         self._mine(record_id, proposal)
         return self._views.status(record_id)
-
-    def when_finished(
-        self, record_id: str, client: str, call: Callable[[Record], None]
-    ) -> None:
-        """
-        Call ``call`` with the record once it has finished, or now if it has.
-
-        ``call`` runs under the backend's lock, so it must return at once,
-        raise nothing, and not call the backend, as ``queue.SimpleQueue.put``.
-        """
-        with self._changed:
-            record = self._mine(record_id, self._client(client).proposal)
-            if record_id in self._views.finished:
-                call(record)
-            else:
-                self._on_finished.setdefault(record_id, []).append(call)
 
     def cancel(self, ids: Iterable[str], client: str) -> None:
         """

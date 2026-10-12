@@ -14,9 +14,9 @@ A call that starts work returns once the backend has checked and logged it:
 and :meth:`Client.freeze`. It checks models and the references it names
 against what the backend knows now, and leaves reading data and computing to
 the backend's workers. Only the calls that read results wait for that work:
-:meth:`Client.wait`, :meth:`Client.compute`, :meth:`Client.output`, and
-:meth:`Client.as_completed`; and :meth:`Datasets.watch` waits for new
-datasets. So a GUI application can make every other call from its UI thread.
+:meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Client.output`; and
+:meth:`Datasets.watch` waits for new datasets. So a GUI application can make
+every other call from its UI thread.
 
 A client is the lifetime of what it keeps: the outputs of the records it
 makes, its stages, and its accumulators. It keeps each until it releases it or
@@ -32,10 +32,8 @@ value another client holds.
 from __future__ import annotations
 
 import functools
-import queue
-import threading
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -348,47 +346,6 @@ class Client:
         """Why each record failed; ``None`` for a record that has not failed."""
         failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
         return _reshape(records, failures)
-
-    def as_completed(self, records: Iterable[Record]) -> Iterator[Record]:
-        """
-        The records as they finish, each once, in the order they finish.
-
-        A thread consumes ``records``, so it may be a generator that blocks,
-        such as one that submits a request per dataset as it arrives: records
-        that finish meanwhile are yielded. An error it raises is raised here.
-        Closing the iterator stops consuming ``records`` after the next one.
-        """
-        finished: queue.SimpleQueue[Record | Exception | int] = queue.SimpleQueue()
-        stop = threading.Event()
-
-        def consume() -> None:
-            seen: set[str] = set()
-            try:
-                for record in records:
-                    if record.id not in seen:
-                        seen.add(record.id)
-                        self._backend.when_finished(record.id, self._id, finished.put)
-                    if stop.is_set():
-                        return
-            except Exception as error:  # raised in the caller's thread
-                finished.put(error)
-            else:
-                finished.put(len(seen))
-
-        threading.Thread(target=consume, daemon=True).start()
-        yielded, total = 0, None
-        try:
-            while yielded != total:
-                item = finished.get()
-                if isinstance(item, Exception):
-                    raise item
-                if isinstance(item, int):
-                    total = item
-                else:
-                    yielded += 1
-                    yield item
-        finally:
-            stop.set()
 
     def cancel(self, records: Any) -> None:
         """End the unfinished records as cancelled."""
