@@ -188,22 +188,29 @@ histogram, are one group; a sum over runs of numerator and denominator pairs,
 or SANS sample runs each paired with its transmission run, is one table:
 
 ```python
-class SampleRun(BaseModel):
-    sample: NexusFile
+class Sample(BaseModel):
+    run: NexusFile
     transmission: NexusFile
 
 
 class Params(BaseModel):
-    runs: list[SampleRun]
+    samples: list[Sample]
     q_edges: QEdges
 ```
 
 A group and a row are the same kind of model, and differ only in how many a
-field holds. A single-run spec takes `sample: SampleRun` where a multi-run spec
-of the same reduction takes `samples: list[SampleRun]`, and an optional run,
-`can: SampleRun | None = None`, corresponds to a table that may be empty. The
+field holds. A single-run spec takes `sample: Sample` where a multi-run spec
+of the same reduction takes `samples: list[Sample]`, and an optional run,
+`can: Run | None = None`, corresponds to a table that may be empty,
+`cans: list[Run] = []`. The
 models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
 groups that specs share.
+
+A binding gets a group, like a row, as a dict of its fields, with data read in
+place of each reference (`ess.spec.binding`). A model instance would hold data
+in fields declared as references. A binding that wants the model, such as a
+`QEdges` for `edges_to_variable`, validates the dict again:
+`QEdges.model_validate(values['q_edges'])`.
 
 A form has one shape to handle: a section per group with a widget per field,
 and a table per table field with one row per element, one column per field of
@@ -234,8 +241,8 @@ Neither a group nor a table is a data field: `group_fields` and `table_fields`
 find them with their model, and `data_fields` of that model gives the data
 fields inside. In JSON Schema a group refers (`$ref`) to its model under
 `$defs`, and a table is an array whose items refer to the row model; the fields
-inside carry their `dataField` key. A reference names a whole field of a params
-or outputs model, never a field of a group, a row, or a cell.
+inside carry their `dataField` key. A reference names a whole output field,
+never a field of a group, a row, or a cell.
 
 ### Two forms, one-way projection
 

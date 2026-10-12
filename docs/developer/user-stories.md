@@ -22,11 +22,11 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `CONTRIBUTE` | `sample: Run` | `numerator`, `denominator`, `transmission` | a copy of the counts; their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts: list[NormalizationParts]` (`numerator`, `denominator`) | `numerator`, `denominator` | each field summed over the rows | a sum of outputs of other records |
 | `ANGLE` | `sample: Run` | `counts` | a copy of the counts | a reduction of one run into a volume |
-| `CUT` | `source: Data` (`data`), `position: Position` (`index`) | `cut` | the value at `index` | a cut through a volume, from another package |
+| `CUT` | `volume: Volume` (`data`), `position: Position` (`index`) | `cut` | the value at `index` | a cut through a volume, from another package |
 | `VOLUME` | `runs: list[Run]` | `counts` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
 | `STITCH` | `runs: list[Run]`, `reference: Run` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
-| `EXPORT` | `source: Data` | `text` | the values, separated by commas | writing a file for another program |
-| `IOFQ_V2` | as `IOFQ`, with `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`) | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed parameter and a new default |
+| `EXPORT` | `result: Result` (`data`) | `text` | the values, separated by commas | writing a file for another program |
+| `IOFQ_V2` | as `IOFQ`, with `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`) | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
 
 Each param is a group (a flat model) or a table (a list of one); `Run` (a field `run`) serves as both.
 
@@ -294,7 +294,7 @@ Actor: spectroscopy user in the web UI. Goal: drag through cuts of a Q-E volume,
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
 volume = client.compute(ANGLE, AngleParams(sample=Run(run=run)))                 # stands in for a Q-E volume
 cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]   # dragging a slider
-fit = client.compute(CUT, CutParams(source=Data(data=volume.ref('counts')),
+fit = client.compute(CUT, CutParams(volume=Volume(data=volume.ref('counts')),
                                 position=Position(index=2)))
 
 assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
@@ -317,7 +317,7 @@ Actor: user. Goal: use the beam centre as an input of every sample reduction; pr
 
 ```python
 centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
-centre = client.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=centre_run)),
+centre = client.compute(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=centre_run)),
                         label='beam-centre')
 samples = [measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
            measure(3, [5.0, 4.0, 3.0, 2.0], role='sample')]
@@ -365,7 +365,7 @@ angles = [measure(11, [8.0, 4.0], angle=0.5), measure(12, [2.0, 1.0], angle=1.0)
           measure(13, [4.0, 2.0], angle=2.0), measure(14, [2.0, 0.5], angle=4.0)]
 rows = [Run(run=angle) for angle in angles]
 stitched = client.submit(STITCH, StitchParams(runs=rows, reference=Run(run=reference)))
-exported = client.compute(EXPORT, ExportParams(source=Data(data=stitched.ref('stitched'))))
+exported = client.compute(EXPORT, ExportParams(result=Result(data=stitched.ref('stitched'))))
 
 assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
@@ -391,8 +391,8 @@ for scale in (1.0, 2.0):
 assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
     [2.0, 4.0], [1.0, 2.0]]                      # [4, 8] divided by 2, then by 4
 assert client.records(label='iofq') == reduced
-assert reduced[-1].request.params['corrections'] == {
-    'beam_centre': None, 'normalization': client.latest('vanadium').ref('normalization')}
+normalization = reduced[-1].request.params['corrections']['normalization']
+assert normalization == client.latest('vanadium').ref('normalization')
 ```
 
 The notebook is the driver: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
@@ -650,7 +650,7 @@ Actor: user, then a colleague. Goal: the SciCat entry alone answers what raw fil
 
 ```python
 centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-centre = client.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=centre_run)))
+centre = client.compute(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=centre_run)))
 tune = client.stage(Template(IOFQ, params=IofQParams(sample=Run(run=run),
                                                      corrections=Corrections(beam_centre=centre.ref('centre'))),
                              blanks=('reduction',)))
@@ -712,7 +712,7 @@ Actor: external user. Goal: a reference to another proposal's record is refused 
 
 ```python
 theirs, mine = connect(proposal='p1', user='anna'), connect(proposal='p2', user='eve')
-centre = theirs.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))))
+centre = theirs.compute(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))))
 sample = measure(2, [2.0, 2.0], proposal='p2')
 
 with pytest.raises(SubmitError, match='p1'):

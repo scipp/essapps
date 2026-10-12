@@ -138,7 +138,7 @@ Defaults belong in the params model only.
 A binding must not modify its inputs or return an output that shares memory with an input.
 `ess.spec.testing` checks this for values backed by numpy.
 
-A sciline pipeline becomes a binding by naming the key that each parameter sets and the key that computes each output:
+A sciline pipeline becomes a binding by naming the key that each parameter, or each field of a group, sets and the key that computes each output:
 
 ```python
 PipelineBinding(pipeline,       # from ess.spec.pipeline
@@ -193,14 +193,14 @@ An input is given by *reference*: to an output of a record, to a dataset, or to 
 A reference to a pending record is allowed, so a chain is submitted without waiting:
 
 ```python
-centre = client.submit(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=dataset(run=60330))))   # pending
+centre = client.submit(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=dataset(run=60330))))   # pending
 result = client.submit(IOFQ, IofQParams(sample=Run(run=dataset(run=60339)),
                                         corrections=Corrections(beam_centre=centre.ref('centre'))))
 ```
 
 The backend runs the second request once the first has completed.
 A request never references another request of the same `submit` call.
-An output fits a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the two are equal.
+An output fits a field of a group or a row if both are data fields of the same format and, where both declare an `ArraySpec`, the two are equal.
 
 ## Labels and members
 
@@ -265,7 +265,7 @@ Any other reference is refused, even to a record that is still pending.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
-centre = client.compute(BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=dataset(run=60330))))
+centre = client.compute(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=dataset(run=60330))))
 result = client.submit(IOFQ, IofQParams(sample=Run(run=dataset(run=60339)),
                                         corrections=Corrections(beam_centre=centre.ref('centre'))))
 client.release(centre)              # the pending request keeps the centre until it has run
@@ -331,18 +331,10 @@ Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the parameters that all runs share.
 A table is a list of *rows*.
 A row is a *flat* model, whose fields are never another model or table, as a group is.
-The single-run spec takes `sample: Run` where the multi-run spec takes `sample_runs: list[Run]`.
 
 ```python
-class Run(BaseModel):
-    run: NexusFile
-
-class SampleRun(BaseModel):
-    run: NexusFile
-    transmission: NexusFile | None = None   # hypothetical: esssans takes one transmission run for all runs of a sample
-
 class MultiIofQParams(BaseModel):
-    sample_runs: list[SampleRun] = Field(min_length=1)   # a table, with at least one row
+    sample_runs: list[Run] = Field(min_length=1)   # a table, with at least one row
     can_runs: list[Run] = []                # a table; empty if there is no can run
     reduction: Reduction = Field(default_factory=Reduction)   # a group, shared by all runs
     corrections: Corrections = Field(default_factory=Corrections)
@@ -355,8 +347,8 @@ A request that gives every row is a plain request:
 
 ```python
 result = client.compute(IOFQ_MULTI, MultiIofQParams(can_runs=[Run(run=dataset(run=614))],
-                                                    sample_runs=[SampleRun(run=dataset(run=611)),
-                                                                 SampleRun(run=dataset(run=612))]))
+                                                    sample_runs=[Run(run=dataset(run=611)),
+                                                                 Run(run=dataset(run=612))]))
 ```
 
 A row is what the reduction repeats per run, such as a run and its own transmission run.
@@ -400,8 +392,8 @@ The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulati
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100)},
                                    blanks=('sample_runs', 'can_runs')))
-iofq.push({'sample_runs': SampleRun(run=dataset(run=611))})   # one row
-iofq.push({'sample_runs': SampleRun(run=dataset(run=612)),    # one row in each of two tables
+iofq.push({'sample_runs': Run(run=dataset(run=611))})   # one row
+iofq.push({'sample_runs': Run(run=dataset(run=612)),    # one row in each of two tables
            'can_runs': Run(run=dataset(run=614))})
 client.output(iofq, 'iofq')                              # the output of state 2
 ```
@@ -418,7 +410,7 @@ Pinning does not wait for these pushes to be added.
 | Call | Returns | Holds back push n+1 |
 |---|---|---|
 | `client.output(acc, 'iofq')` | a copy of the output of state n, or of the part `select=` names, and makes no record | while it waits for state n and copies |
-| `client.submit(EXPORT, ExportParams(source=Data(data=acc.ref('iofq'))))` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
+| `client.submit(EXPORT, ExportParams(result=Result(data=acc.ref('iofq'))))` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
 | `client.freeze(acc)` | the record of state n (see Freeze) | no push follows |
 | `client.provenance(acc)` | the provenance of the plain request of state n, at once | no |
 
@@ -444,7 +436,7 @@ Later pushes and pins are refused with the reason, and the records of states it 
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in runs:
     volume.push({'runs': Run(run=run)})   # returns once logged; the backend adds it later
-    cut = client.submit(CUT, CutParams(source=Data(data=volume.ref('counts')), position=Position(index=0)))
+    cut = client.submit(CUT, CutParams(volume=Volume(data=volume.ref('counts')), position=Position(index=0)))
                                           # pins this state; CUT reads it in place
     show(client.output(volume, 'counts', select={'q': 0}))
                                           # pins this state, waits for it, copies the slice
@@ -481,8 +473,8 @@ The client can keep it, persist it, or reference it from another template.
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
 ```python
-iofq.push({'sample_runs': SampleRun(run=dataset(run=613))})
-exported = client.submit(EXPORT, ExportParams(source=Data(data=iofq.ref('iofq'))))   # pins the state after this push
+iofq.push({'sample_runs': Run(run=dataset(run=613))})
+exported = client.submit(EXPORT, ExportParams(result=Result(data=iofq.ref('iofq'))))   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
 
