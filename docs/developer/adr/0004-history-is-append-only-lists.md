@@ -60,7 +60,7 @@ History is six lists, each only appended to:
 - Dropping a proposal's history leaves no dangling reference. No other proposal reads its records (system story G5), and an idle proposal has no open client and no pending record.
 - A running trigger loop keeps a client of its proposal open, so the proposal is not idle. A loop started for a proposal whose history was dropped reduces its datasets again.
 - A proposal that is never idle, such as one whose automatic reduction runs all year, keeps all its history.
-- A client whose process ended without closing it keeps its proposal from being idle until the backend closes it (scipp/essapps#34).
+- A client whose process ended without closing it keeps its proposal from being idle until its lease runs out ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md)).
 - A backend that restarts does not know when its earlier clients ended, so it counts idle time from its start.
 - The in-process backend never drops history.
 - Its log appends one line per change, so a submission is stored whole or not at all. A line cut short by a crash is dropped when the file is read.

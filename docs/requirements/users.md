@@ -66,4 +66,4 @@ Results go to SciCat and must say what produced them, but the framework must not
 
 ## Open
 
-- Nothing at present.
+- Is automatic reduction set up once per instrument, as an instrument scientist's default for every proposal, or again for each experiment? *Decides whether one automatic reduction serves a new proposal every few days. Ask: instrument scientists.*

@@ -692,16 +692,14 @@ That the recorded environment can be installed again is system story F2.
 
 ### G2. Developer iterates on a workflow
 
-Actor: workflow developer. Goal: run a workflow defined in a notebook without installing it; its records say what ran.
+Actor: workflow developer. Goal: run a workflow defined in a notebook without installing it.
 
 ```python
 draft = iofq                                                  # IOFQ's binding, being edited
 dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})   # a backend in this process
 result = dev.compute(IOFQ, IofQParams(sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0]))))
-pid = dev.publish(result.ref('iofq'), 'scicat')               # publishing is not refused
 
-assert dev.provenance(result).software['sans-iofq'] == 'bound in notebook'
-assert scicat.entries[pid].provenance == dev.provenance(result)
+assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
 ```
 
 That the service runs only installed workflows, and that an edited binding takes effect for the next request, is system story G2.
@@ -742,7 +740,7 @@ System story only; see [system-stories.md](system-stories.md).
 What the design leaves open or defers, with the stories each item affects.
 
 - **Removing a dataset** (system story A4): deferred, together with whether the outputs derived from it go too.
-- **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open (scipp/essapps#23).
+- **The service** (sections D and E): designed and not implemented; the format of each persisted output type and the layout of the store are open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md)).
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.

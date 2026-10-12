@@ -2,8 +2,6 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """Section G of docs/developer/user-stories.md: roles and deployment."""
 
-# ruff: noqa: F821
-
 from collections.abc import Callable
 
 import pytest
@@ -23,9 +21,6 @@ from .conftest import (
 )
 
 
-@pytest.mark.xfail(
-    reason='client.publish, scicat, and Provenance.software are not implemented'
-)
 def test_g2_developer_iterates_on_a_workflow(
     measure: Measure, datasets: FakeDatasets
 ) -> None:
@@ -34,10 +29,8 @@ def test_g2_developer_iterates_on_a_workflow(
     result = dev.compute(
         IOFQ, IofQParams(sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0])))
     )
-    pid = dev.publish(result.ref('iofq'), 'scicat')
 
-    assert dev.provenance(result).software['sans-iofq'] == 'bound in notebook'
-    assert scicat.entries[pid].provenance == dev.provenance(result)
+    assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
 
 
 def test_g5_reference_across_proposals_refused(

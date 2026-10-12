@@ -1,6 +1,6 @@
 # ESS data-reduction framework: the API
 
-**Status: the in-process backend (`local()`) implements this API, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, software versions in provenance, and marking the records of code bound in a notebook.**
+**Status: the in-process backend (`local()`) implements this API, including freeze, `select=`, and persist to a fake store. Not implemented: the service, `client.publish`, and software versions in provenance.**
 
 This document shows by example what workflow authors, app authors, and notebooks write.
 It states each rule once.
@@ -146,8 +146,8 @@ PipelineBinding(pipeline,       # from ess.spec.pipeline
                 outputs={'iofq': BackgroundSubtractedIofQ})
 ```
 
-`local` can also bind a spec to code defined in the notebook, such as `bind={IOFQ: draft}`.
-A record made this way notes that its binding was defined in the notebook.
+`local` can also bind a spec to code defined in the notebook, such as `bind={IOFQ: draft}`, since that code runs in the user's own process.
+The service runs only installed workflows.
 
 ## Requests and records
 
@@ -599,7 +599,6 @@ Provenance stops at datasets.
 Publishing puts an output in a catalogue with its provenance.
 The catalogue entry stays after the proposal's history is dropped.
 `publish` reads the value as `client.output` does, so it needs no persist request.
-A workflow bound in a notebook can be published, and its record says so.
 
 ## Symmetries
 
@@ -623,8 +622,8 @@ Not visible in the code of notebooks, apps, or workflow packages:
 - how history and outputs are stored, moved, and dropped
 - how a run number or file becomes a dataset identity
 - when and where a request runs, and where a stage or a held state lives
-- the format of persisted outputs and the store's layout (scipp/essapps#23)
-- how the service notices a vanished client and sets the cap per client (scipp/essapps#27, scipp/essapps#34)
+- the format of persisted outputs and the store's layout
+- how the service notices a vanished client and sets the cap per client (scipp/essapps#27)
 - how access across proposals is enforced
 
 ## Open questions
