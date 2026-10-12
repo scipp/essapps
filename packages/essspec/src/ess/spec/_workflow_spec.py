@@ -92,7 +92,7 @@ class _SpecFields(BaseModel, frozen=True):
     )
 
 
-class WorkflowSpec(_SpecFields, frozen=True):
+class WorkflowSpec[M: BaseModel](_SpecFields, frozen=True):
     """
     Implementation-independent specification of a workflow's user interface.
 
@@ -102,9 +102,14 @@ class WorkflowSpec(_SpecFields, frozen=True):
     that computes it is a separate mechanism. The module defining a spec must
     therefore be importable without importing the workflow code, so that a
     service can load and validate every spec it knows without that code.
+
+    The spec is generic over its params model ``M``, which a type checker
+    infers from ``params=``. So code that takes a spec can offer the params
+    model's signature, as ``Template.of`` in ``ess.dispatch`` does.
     """
 
-    params: type[BaseModel] = Field(
+    # Pyright cannot check a default against M, which only params= decides.
+    params: type[M] = Field(  # pyright: ignore[reportAssignmentType]
         default=NoParams,
         description=(
             "Pydantic model class defining the workflow parameters, each "

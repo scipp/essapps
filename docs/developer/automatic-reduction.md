@@ -10,7 +10,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 It reads metadata through `client.datasets` and builds plain data; it submits nothing.
 
 ```python
-requests = apply(Template(IOFQ, blanks=('sample',)), samples, client.datasets, member_field='temperature')
+requests = apply(Template.of(IOFQ)(sample=BLANK), samples, client.datasets, member_field='temperature')
 records = client.submit(requests, label='scan', persist=True)
 ```
 
@@ -24,7 +24,7 @@ A spec that batch reduction fills therefore gives each dataset that a rule or a 
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets, lookup=cans)
+requests = apply(Template.of(IOFQ)(sample=BLANK, can=BLANK), samples, client.datasets, lookup=cans)
 ```
 
 ## Rules
@@ -33,7 +33,7 @@ A rule is plain data: a template, a selector, a label, and optionally a lookup, 
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
+rule = Rule('auto-iofq', Template.of(IOFQ)(sample=BLANK), selector=Selector(role='sample'),
             label='iofq')
 ```
 
@@ -41,7 +41,7 @@ With `series='sample'`, a request takes every matching dataset with the same `sa
 Each dataset is a row of the template's table blank, in the row's field `dataset_field`, and each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)),
+rule = Rule('reflectivity', Template.of(STITCH)(reference=Run(file=reference), runs=BLANK),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 
