@@ -10,7 +10,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 It reads metadata through `client.datasets` and builds plain data; it submits nothing.
 
 ```python
-requests = apply(Template(IOFQ, blanks=('run',)), samples, client.datasets, member_field='temperature')
+requests = apply(Template(IOFQ, blanks=('sample',)), samples, client.datasets, member_field='temperature')
 records = client.submit(requests, label='scan', persist=True)
 ```
 
@@ -18,10 +18,13 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
+A blank a dataset fills is a group, such as `sample: Run`, and the dataset goes in its field `dataset_field`, by default `file`, which `apply` and `Rule` take.
+A blank is a whole group, so the template cannot fix the other fields of a group that a dataset fills.
+A spec that batch reduction fills therefore gives each dataset that a rule or a lookup finds a group of its own, such as `sample: Run` and `can: Run`.
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, client.datasets, lookup=cans)
+requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets, lookup=cans)
 ```
 
 ## Rules
@@ -30,15 +33,15 @@ A rule is plain data: a template, a selector, a label, and optionally a lookup, 
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
-rule = Rule('auto-iofq', Template(IOFQ, blanks=('run',)), selector=Selector(role='sample'),
+rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
             label='iofq')
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each dataset is a row `{'run': dataset}` of the template's table blank, and each arrival of an angle submits one plain request that stitches all angles of that sample so far.
+Each dataset is a row of the template's table blank, in the row's field `dataset_field`, and each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 

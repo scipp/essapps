@@ -8,7 +8,7 @@ from itertools import islice
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.dispatch import (
     Backend,
@@ -24,18 +24,30 @@ from ess.dispatch.testing import FakeDatasets
 from ess.spec import Array, NexusFile, WorkflowSpec
 
 
-class RunParams(BaseModel):
-    run: NexusFile
+class Run(BaseModel):
+    file: NexusFile
+
+
+class LoadParams(BaseModel):
+    sample: Run
 
 
 class ValueOutputs(BaseModel):
     value: Array()  # type: ignore[valid-type]
 
 
-class AddParams(BaseModel):
+class Operands(BaseModel):
     a: Array()  # type: ignore[valid-type]
     b: Array()  # type: ignore[valid-type]
+
+
+class Shift(BaseModel):
     offset: float = 0.0
+
+
+class AddParams(BaseModel):
+    operands: Operands
+    shift: Shift = Field(default_factory=Shift)
 
 
 def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
@@ -49,9 +61,9 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
     )
 
 
-LOAD = _spec('load', RunParams)
+LOAD = _spec('load', LoadParams)
 ADD = _spec('add', AddParams)
-NOTHING = _spec('nothing', RunParams)  # its workflow returns no outputs
+NOTHING = _spec('nothing', LoadParams)  # its workflow returns no outputs
 
 
 class Gate:
@@ -60,15 +72,20 @@ class Gate:
     def __init__(self) -> None:
         self.open = threading.Event()
 
-    def load(self, run: float) -> dict[str, Any]:
+    def load(self, sample: dict[str, float]) -> dict[str, Any]:
+        run = sample['file']
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
         return {'value': run}
 
 
-def add(a: float, b: float, offset: float) -> dict[str, Any]:
-    return {'value': a + b + offset}
+def add(operands: dict[str, float], shift: dict[str, float]) -> dict[str, Any]:
+    return {'value': operands['a'] + operands['b'] + shift['offset']}
+
+
+def operands(a: Any, b: Any) -> dict[str, Any]:
+    return {'operands': {'a': a, 'b': b}}
 
 
 @pytest.fixture
@@ -86,7 +103,7 @@ def datasets() -> FakeDatasets:
 
 @pytest.fixture
 def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
-    backend = Backend(datasets, {LOAD: gate.load, ADD: add, NOTHING: lambda run: {}})
+    backend = Backend(datasets, {LOAD: gate.load, ADD: add, NOTHING: lambda sample: {}})
     yield backend
     gate.open.set()
     backend.close()
@@ -98,12 +115,12 @@ def client(backend: Backend) -> Client:
 
 
 def load(n: int) -> Request:
-    return Request(LOAD, {'run': dataset(run=n)})
+    return Request(LOAD, {'sample': {'file': dataset(run=n)}})
 
 
 def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> None:
     a, b = client.submit([load(1), load(2)])
-    total = client.submit(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
+    total = client.submit(ADD, operands(a.ref('value'), b.ref('value')))
 
     assert client.status(total) is Status.PENDING
     gate.open.set()
@@ -114,7 +131,7 @@ def test_closing_waits_until_no_record_is_pending(
     backend: Backend, client: Client, gate: Gate
 ) -> None:
     a = client.submit(load(1))
-    total = client.submit(ADD, {'a': a.ref('value'), 'b': a.ref('value')})  # waits
+    total = client.submit(ADD, operands(a.ref('value'), a.ref('value')))  # waits
     threading.Timer(0.05, gate.open.set).start()
     backend.close()
 
@@ -123,8 +140,8 @@ def test_closing_waits_until_no_record_is_pending(
 
 def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) -> None:
     bad, good = client.submit([load(3), load(1)])
-    first = client.submit(ADD, {'a': bad.ref('value'), 'b': good.ref('value')})
-    second = client.submit(ADD, {'a': first.ref('value'), 'b': good.ref('value')})
+    first = client.submit(ADD, operands(bad.ref('value'), good.ref('value')))
+    second = client.submit(ADD, operands(first.ref('value'), good.ref('value')))
     gate.open.set()
 
     assert client.wait([bad, good, first, second]) == [
@@ -140,7 +157,7 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
 
 def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
     a, b = client.submit([load(1), load(2)])
-    total = client.submit(ADD, {'a': a.ref('value'), 'b': b.ref('value')})
+    total = client.submit(ADD, operands(a.ref('value'), b.ref('value')))
     client.cancel(total)
     gate.open.set()
 
@@ -149,7 +166,9 @@ def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
 
 def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     a = client.submit(load(1))
-    typo = Request(ADD, {'a': a.ref('value'), 'b': a.ref('value'), 'offset': 'x'})
+    typo = Request(
+        ADD, {**operands(a.ref('value'), a.ref('value')), 'shift': {'offset': 'x'}}
+    )
 
     with pytest.raises(SubmitError, match='offset'):
         client.submit([load(2), typo])
@@ -157,18 +176,21 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(datasets: FakeDatasets) -> None:
-    class AnyParams(BaseModel):
+    class Item(BaseModel):
         value: Any
 
+    class AnyParams(BaseModel):
+        item: Item
+
     spec = _spec('anything', AnyParams)
-    backend = Backend(datasets, {spec: lambda value: {}})
+    backend = Backend(datasets, {spec: lambda item: {}})
     client = Client(backend, proposal='p1', submitter='anna')
     try:
-        with pytest.raises(SubmitError, match=r'^second: value: cannot be stored'):
+        with pytest.raises(SubmitError, match=r'^second: item: cannot be stored'):
             client.submit(
                 {
-                    'first': Request(spec, {'value': 1}),
-                    'second': Request(spec, {'value': len}),
+                    'first': Request(spec, {'item': {'value': 1}}),
+                    'second': Request(spec, {'item': {'value': len}}),
                 }
             )
         assert client.records() == []
@@ -180,7 +202,7 @@ def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
     missing = {'record': 'missing', 'output': 'value'}
 
     with pytest.raises(SubmitError, match='unknown record missing'):
-        client.submit(ADD, {'a': missing, 'b': missing})
+        client.submit(ADD, operands(missing, missing))
 
 
 def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
@@ -190,7 +212,7 @@ def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) 
     with pytest.raises(SubmitError, match="no output 'total'"):
         client.submit(
             ADD,
-            {'a': loaded.ref('value'), 'b': {'record': loaded.id, 'output': 'total'}},
+            operands(loaded.ref('value'), {'record': loaded.id, 'output': 'total'}),
         )
 
 
@@ -203,7 +225,7 @@ def test_a_reference_to_another_proposal_is_refused(
     loaded = mine.compute(load(1))
 
     with pytest.raises(SubmitError, match='belongs to proposal p1'):
-        theirs.submit(ADD, {'a': loaded.ref('value'), 'b': loaded.ref('value')})
+        theirs.submit(ADD, operands(loaded.ref('value'), loaded.ref('value')))
 
 
 def test_an_unknown_dataset_is_refused(client: Client) -> None:
@@ -262,11 +284,11 @@ def test_reading_an_output_of_a_failed_record_raises(
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match="'scale'"):
-        client.submit(LOAD, {'run': dataset(run=1), 'scale': 2.0})
+        client.submit(LOAD, {'sample': {'file': dataset(run=1)}, 'scale': 2.0})
 
 
 def test_a_workflow_that_leaves_out_an_output_fails(client: Client) -> None:
-    nothing = client.compute(NOTHING, {'run': dataset(run=1)})
+    nothing = client.compute(NOTHING, {'sample': {'file': dataset(run=1)}})
 
     assert "missing ['value']" in client.failure(nothing)
 
@@ -275,7 +297,7 @@ def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
     chain = [client.submit(load(3))]
     for _ in range(1500):
         a, b = chain[-1].ref('value'), chain[0].ref('value')
-        chain.append(client.submit(ADD, {'a': a, 'b': b}))
+        chain.append(client.submit(ADD, operands(a, b)))
     gate.open.set()
 
     assert set(client.wait(chain)) == {Status.FAILED}
@@ -296,7 +318,7 @@ def test_a_reference_to_an_element_of_an_output_is_refused(client: Client) -> No
     element = {'record': a.id, 'output': 'value', 'key': '0'}
 
     with pytest.raises(SubmitError, match='element'):
-        client.submit(ADD, {'a': element, 'b': a.ref('value')})
+        client.submit(ADD, operands(element, a.ref('value')))
 
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
@@ -314,11 +336,11 @@ def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -
     failed = client.compute(load(3))
 
     with pytest.raises(SubmitError, match=f'a: record {failed.id} failed'):
-        client.submit(ADD, {'a': failed.ref('value'), 'b': failed.ref('value')})
+        client.submit(ADD, operands(failed.ref('value'), failed.ref('value')))
 
 
 def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^second: run: unknown dataset run:9$'):
+    with pytest.raises(SubmitError, match=r'^second: sample: unknown dataset run:9$'):
         client.submit({'first': load(1), 'second': load(9)})
 
 

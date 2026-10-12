@@ -4,13 +4,14 @@
 The binding protocol: the code behind a spec.
 
 A binding is staged with the values that stay fixed and returns a callable
-over the rest, the blanks. It may compute what depends only on the fixed
+over the rest, the blanks, each a field of the params model: a group or a
+table. It may compute what depends only on the fixed
 values when staged or on the first call, and hold it; a request outside a
 stage is staged with no blanks and called once::
 
     binding.stage(values, ())()                      # a plain request
-    call = binding.stage(fixed, ('bins',))           # a stage
-    call(bins=100)
+    call = binding.stage(fixed, ('binning',))        # a stage
+    call(binning={'bins': 100})
 
 How a binding computes is invisible in the records: a call through a stage
 returns what the plain request returns. A framework accepts a plain
@@ -20,9 +21,9 @@ An accumulator keeps a held state, made for the values of every field but the
 tables it fills. A binding of a spec with table fields may make held states,
 like ``ess.reduce.streaming.StreamProcessor``::
 
-    held = binding.held_state({'scale': 2.0})    # what depends on them, once
-    held.push({'runs': {'run': run_611}})        # a row per named table, data read
-    held.outputs()                               # {'normalized': ...}, every output
+    held = binding.held_state({'scaling': {'scale': 2.0}})  # what depends on it
+    held.push({'runs': {'file': run_611}})   # a row per named table, data read
+    held.outputs()                          # {'normalized': ...}, every output
 
 Its outputs after rows are pushed in order are those of the plain request
 whose tables hold these rows, with the same other values. It may add each push
@@ -43,7 +44,8 @@ Function = Callable[..., Mapping[str, Any]]
 Takes parameter values by field name, with data read, and returns the outputs.
 
 It gets every field of the params model, defaults filled in, so it declares no
-defaults of its own.
+defaults of its own. A group comes as a dict of its fields and a table as a
+list of such dicts, so that read data takes the place of each reference.
 """
 
 

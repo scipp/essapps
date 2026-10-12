@@ -12,9 +12,17 @@ executor is a separate, parallel mechanism deliberately not defined here.
 Parameters and outputs are both pydantic model classes over one vocabulary
 (:mod:`ess.spec.parameters` for literals, :mod:`ess.spec.data`
 for files and arrays), so an output field of one workflow can feed a parameter
-field of another when their types match. On either side a field may be a table,
-a list of a flat model (see :func:`~ess.spec.data.table_fields`); a spec
-whose table rows hold a model or another table is refused at construction.
+field of another when their types match.
+
+Each field of a params model is a *group*, a flat model, or a *table*, a list of
+a flat model (see :func:`~ess.spec.data.group_fields` and
+:func:`~ess.spec.data.table_fields`); a flat model holds literals and data
+fields only. A UI shows a group as a section of a form and a table as rows and
+columns, so this one shape is all a form needs to handle. A field of an outputs
+model may also be a literal or a data field, since a reference names an output
+by its field. A spec whose groups or rows hold a model or a table, or whose
+params model has a field that is neither a group nor a table, is refused at
+construction.
 
 Two forms exist, related by a one-way projection:
 
@@ -33,9 +41,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from .data import table_fields
+from .data import group_fields, table_fields
 
 
 class NoParams(BaseModel):
@@ -99,8 +107,9 @@ class WorkflowSpec(_SpecFields, frozen=True):
     params: type[BaseModel] = Field(
         default=NoParams,
         description=(
-            "Pydantic model class defining the workflow parameters. Defaults "
-            "to :class:`NoParams` for workflows that take no configuration."
+            "Pydantic model class defining the workflow parameters, each "
+            "field a group or a table. Defaults to :class:`NoParams` for "
+            "workflows that take no configuration."
         ),
     )
     outputs: type[BaseModel] = Field(
@@ -116,8 +125,17 @@ class WorkflowSpec(_SpecFields, frozen=True):
 
     @field_validator('params', 'outputs')
     @classmethod
-    def _table_rows_are_flat(cls, model: type[BaseModel]) -> type[BaseModel]:
-        table_fields(model)  # raises if a row holds a model or a table
+    def _check_shape(
+        cls, model: type[BaseModel], info: ValidationInfo
+    ) -> type[BaseModel]:
+        # group_fields and table_fields raise if a group or a row is not flat
+        flat = group_fields(model).keys() | table_fields(model).keys()
+        loose = [name for name in model.model_fields if name not in flat]
+        if info.field_name == 'params' and loose:
+            raise ValueError(
+                f'{model.__name__}: {loose}: each field of a params model is a '
+                'group (a flat model) or a table (a list of a flat model)'
+            )
         return model
 
     def serialize(self) -> SerializedWorkflowSpec:
@@ -147,9 +165,11 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     and outputs are represented as JSON Schema, sufficient for form generation
     and optimistic validation but not for authoritative validation — that
     remains with the process owning the model classes. Data fields carry a
-    ``dataField`` key with their format and array structure. A table field is an
-    array whose ``items`` refer (``$ref``) to the row model under ``$defs``; the
-    row's properties carry the ``dataField`` key of its data fields.
+    ``dataField`` key with their format and array structure. A group refers
+    (``$ref``) to its model under ``$defs``, through ``anyOf`` with ``null`` if
+    it is optional; a table field is an array whose ``items`` refer to the row
+    model. The model's properties carry the ``dataField`` key of its data
+    fields.
     """
 
     params_schema: dict[str, Any] = Field(

@@ -10,7 +10,7 @@ How the backend keeps history and values is described in the backend's docstring
 ### S2. Tune one parameter
 
 Actor: user in a notebook. Goal: a new binning comes back in a second or two, and so does each change of binning and mask in user story B1.
-Property: a call through a stage does not load the run again, with one blank such as `bins` or with several such as `bins` and `threshold`.
+Property: a call through a stage does not load the run again, whether it changes one value such as `bins` or several such as `bins` and `threshold`.
 
 ## A. Getting data in
 

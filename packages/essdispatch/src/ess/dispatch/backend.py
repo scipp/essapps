@@ -183,6 +183,7 @@ from ess.spec import (
     Ref,
     WorkflowSpec,
     data_fields,
+    group_fields,
     table_fields,
     walk_refs,
 )
@@ -228,13 +229,11 @@ def _agree(output: DataField, param: DataField) -> bool:
 
 
 def _values(model: BaseModel) -> dict[str, Any]:
-    """The values of a params model by field, the rows of a table as dicts."""
-    tables = table_fields(type(model))
-    values = {f: getattr(model, f) for f in type(model).model_fields}
-    return {
-        f: [dict(row) for row in v] if f in tables and v is not None else v
-        for f, v in values.items()
-    }
+    """
+    The values of a params model by field, a group and each row of a table as
+    a dict, so that the data its references name can take their place.
+    """
+    return as_refs(model.model_dump())
 
 
 def _required(outputs: type[BaseModel]) -> frozenset[str]:
@@ -322,11 +321,18 @@ def _selected(value: Any, select: Selection) -> Any:
 
 def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
     """
-    Refuse a row of a table with a field its row model lacks.
+    Refuse a group, or a row of a table, with a field its model lacks.
 
-    Validating the row would drop such a field silently; it is refused
-    instead, as a parameter the spec lacks is.
+    Validating it would drop such a field silently; it is refused instead, as
+    a parameter the spec lacks is.
     """
+    for field, group in group_fields(params).items():
+        cells = values.get(field)
+        extra = set(cells) - set(group.model_fields) if isinstance(cells, dict) else ()
+        if extra:
+            raise SubmitError(
+                f'{field}: {sorted(extra)}: not fields of {group.__name__}'
+            )
     for field, row in table_fields(params).items():
         rows = values.get(field)
         for i, cells in enumerate(rows if isinstance(rows, list) else []):
@@ -355,14 +361,18 @@ def _output_reads(values: Any) -> list[tuple[str, str]]:
 def _reads(
     params: type[BaseModel], field: str, value: Any
 ) -> Iterator[tuple[str, OutputRef | AccumulatorRef, DataField | None]]:
-    """Each value a param's value reads, with its place and the field it fills."""
-    row = table_fields(params).get(field)
-    if row is None:
-        target = data_fields(params).get(field)
-        yield from ((field, ref, target) for ref in _reading(value))
+    """
+    Each value a param's value reads, with its place and the field it fills;
+    a param is a group or a table.
+    """
+    if (group := group_fields(params).get(field)) is not None:
+        cells = data_fields(group)
+        for cell, cell_value in (value or {}).items():
+            for ref in _reading(cell_value):
+                yield f'{field}.{cell}', ref, cells.get(cell)
         return
-    cells = data_fields(row)
-    for i, cell_values in enumerate(value):
+    cells = data_fields(table_fields(params)[field])
+    for i, cell_values in enumerate(value or []):
         for cell, cell_value in cell_values.items():
             for ref in _reading(cell_value):
                 yield f'{field}[{i}].{cell}', ref, cells.get(cell)

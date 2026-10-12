@@ -25,13 +25,14 @@ The same with the framework:
 ```python
 records = {}
 for run in (60339, 60340, 60341):
-    records[run] = client.submit(IOFQ, {'run': dataset(run=run), 'bins': 100})
+    params = IofQParams(sample=Run(file=dataset(run=run)), reduction=Reduction(bins=100))
+    records[run] = client.submit(IOFQ, params)
 client.wait(records)
 client.output(records[60339], 'iofq')
 ```
 
 `client` connects to the framework (see Client and backend).
-`IOFQ` is the spec of the I(Q) reduction, which names its parameters and outputs.
+`IOFQ` is the spec of the I(Q) reduction, which names its parameters and outputs, and `IofQParams` is its params model (see Specs and bindings).
 `dataset(run=run)` names the raw data of a run (see Datasets).
 `client.submit` returns a *record* at once.
 The three reductions run in parallel, possibly on another machine.
@@ -62,6 +63,7 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | template | a spec with *fixed values* for some parameters and *blanks* for the others |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
 | dataset source | where a backend finds datasets |
+| group | a parameter that holds a flat model, such as the settings of one reduction step, or one run |
 | table, row | a parameter that holds a list of rows. A row is one run, or the runs that belong together. |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
@@ -93,13 +95,25 @@ A *workflow* is a computation that a package offers.
 **Spec.** A workflow package declares a spec (`ess.spec.WorkflowSpec`) for each workflow.
 Its params and outputs are pydantic models with field types from `ess.spec`.
 A *data field* holds data, such as an array or a file, and a request gives its value by reference (see References).
+Each parameter, a field of the params model, is a *group* or a *table*.
+A group holds a flat model, one whose fields are never another model or table, and a table holds a list of them (see Combining runs: tables).
+So a group and a row of a table are the same kind of model, and the single-run spec takes `sample: Run` where the multi-run spec takes `sample_runs: list[Run]`.
 
 ```python
-class IofQParams(BaseModel):
-    run: NexusFile                          # a data field: a raw NeXus file
+class Run(BaseModel):                       # a group of IOFQ, and a row of a table
+    file: NexusFile                          # a data field: a raw NeXus file
+
+class Reduction(BaseModel):
     bins: int = 100
-    can: NexusFile | None = None            # the empty-can run, if any
+
+class Corrections(BaseModel):
     beam_centre: Array() | None = None      # a data field: a scipp array
+
+class IofQParams(BaseModel):
+    sample: Run
+    can: Run | None = None                  # the empty-can run, if any
+    reduction: Reduction = Field(default_factory=Reduction)
+    corrections: Corrections = Field(default_factory=Corrections)
 
 class IofQOutputs(BaseModel):
     iofq: Array(ArraySpec(dims=('Q',), unit='dimensionless'))
@@ -110,11 +124,12 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
 
 A request computes every output its spec declares.
 
-**Binding.** The simplest binding is a function that takes the parameters by name and returns the outputs by name:
+**Binding.** The simplest binding is a function that takes the parameters by name and returns the outputs by name.
+It gets a group as a dict of its fields, as it gets each row of a table:
 
 ```python
-def iofq(run, bins, can, beam_centre) -> dict:
-    ...
+def iofq(sample, can, reduction, corrections) -> dict:
+    ...                                     # reduction['bins'], corrections['beam_centre']
     return {'iofq': result}
 ```
 
@@ -123,11 +138,11 @@ Defaults belong in the params model only.
 A binding must not modify its inputs or return an output that shares memory with an input.
 `ess.spec.testing` checks this for values backed by numpy.
 
-A sciline pipeline becomes a binding by naming the key that each parameter sets and the key that computes each output:
+A sciline pipeline becomes a binding by naming the key that each parameter, or each field of a group, sets and the key that computes each output:
 
 ```python
 PipelineBinding(pipeline,       # from ess.spec.pipeline
-                params={'run': Filename[SampleRun], 'bins': QBins, ...},
+                params={'sample.file': Filename[SampleRun], 'reduction.bins': QBins, ...},
                 outputs={'iofq': BackgroundSubtractedIofQ})
 ```
 
@@ -143,7 +158,8 @@ Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
 
 ```python
-result = client.compute(IOFQ, {'run': dataset(run=60339), 'bins': 100})   # submit, then wait
+params = IofQParams(sample=Run(file=dataset(run=60339)), reduction=Reduction(bins=100))
+result = client.compute(IOFQ, params)    # submit, then wait
 client.output(result, 'iofq')            # raises if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
@@ -165,6 +181,7 @@ On the service, only that part leaves the backend.
 | `client.release(records)` | drops the client's hold on their outputs |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
+Wherever the client takes values, it takes models or dicts of their fields: `IofQParams(...)` and `{'sample': {'file': ...}}` give the same request.
 `Request(IOFQ, params)` makes a request without submitting it.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
@@ -176,13 +193,14 @@ An input is given by *reference*: to an output of a record, to a dataset, or to 
 A reference to a pending record is allowed, so a chain is submitted without waiting:
 
 ```python
-centre = client.submit(BEAM_CENTRE, {'run': dataset(run=60330)})   # pending
-result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.ref('centre')})
+centre = client.submit(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(file=dataset(run=60330))))   # pending
+result = client.submit(IOFQ, IofQParams(sample=Run(file=dataset(run=60339)),
+                                        corrections=Corrections(beam_centre=centre.ref('centre'))))
 ```
 
 The backend runs the second request once the first has completed.
 A request never references another request of the same `submit` call.
-An output fits a parameter if both are data fields of the same format and, where both declare an `ArraySpec`, the two are equal.
+An output fits a field of a group or a row if both are data fields of the same format and, where both declare an `ArraySpec`, the two are equal.
 
 ## Labels and members
 
@@ -191,7 +209,7 @@ A *member* names one part of a label, such as one sample or one temperature.
 Both are optional and given at submission, not in the request.
 
 ```python
-client.compute(IOFQ, {'run': run, 'bins': 50}, label='iofq', member='250K')
+client.compute(IOFQ, IofQParams(sample=Run(file=run), reduction=Reduction(bins=50)), label='iofq', member='250K')
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # dict keys become the members
 client.latest('iofq', member='250K')                  # the newest record of this member
 client.records(label='iofq')                          # oldest first; without label=, every record of the proposal
@@ -203,12 +221,13 @@ client.records(label='iofq')                          # oldest first; without la
 A *template* is a spec, its fixed values, and its blanks, the names of the parameters left open.
 Stages, accumulators, and automatic reduction are built from templates.
 A template can be made from any request's values.
+A blank is a whole parameter, never a field of a group.
 A name in `blanks` drops the value given for it:
 
 ```python
-template = Template(IOFQ, params={'bins': 100}, blanks=('run',))
+template = Template(IOFQ, params={'reduction': Reduction(bins=100)}, blanks=('sample',))
 final = client.latest('iofq', member='250K')    # the final reduction of one sample
-beamtime = Template(final.request.spec, params=final.request.params, blanks=('run',))   # its run left open
+beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))   # its sample left open
 ```
 
 ## How long records and values are kept
@@ -246,8 +265,9 @@ Any other reference is refused, even to a record that is still pending.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
-centre = client.compute(BEAM_CENTRE, {'run': dataset(run=60330)})
-result = client.submit(IOFQ, {'run': dataset(run=60339), 'beam_centre': centre.ref('centre')})
+centre = client.compute(BEAM_CENTRE, BeamCentreParams(direct_beam=Run(file=dataset(run=60330))))
+result = client.submit(IOFQ, IofQParams(sample=Run(file=dataset(run=60339)),
+                                        corrections=Corrections(beam_centre=centre.ref('centre'))))
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
 client.output(centre, 'centre')     # raises: this client released it
@@ -267,7 +287,7 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, {'run': dataset(run=60341)}, label='night', persist=('iofq',))   # only the store keeps iofq
+client.submit(IOFQ, IofQParams(sample=Run(file=dataset(run=60341))), label='night', persist=('iofq',))   # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
 morning.output(morning.records(label='night')[0], 'iofq')   # read from the store
 ```
@@ -310,31 +330,25 @@ client.datasets.metadata(run)['sample']                       # the source's cur
 Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the parameters that all runs share.
 A table is a list of *rows*.
-A row is a *flat* model, whose fields are never another model or table.
+A row is a *flat* model, whose fields are never another model or table, as a group is.
 
 ```python
-class SampleRow(BaseModel):
-    run: NexusFile
-    transmission: NexusFile | None = None   # hypothetical: esssans takes one transmission run for all runs of a sample
-
-class CanRow(BaseModel):
-    run: NexusFile
-
 class MultiIofQParams(BaseModel):
-    sample_runs: list[SampleRow] = Field(min_length=1)   # a table, with at least one row
-    can_runs: list[CanRow] = []             # a table; empty if there is no can run
-    bins: int = 100                         # shared by all runs
-    beam_centre: Array() | None = None
+    sample_runs: list[Run] = Field(min_length=1)   # a table, with at least one row
+    can_runs: list[Run] = []                # a table; empty if there is no can run
+    reduction: Reduction = Field(default_factory=Reduction)   # a group, shared by all runs
+    corrections: Corrections = Field(default_factory=Corrections)
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, ..., params=MultiIofQParams, outputs=IofQOutputs)
 ```
 
-Each row of a request is a dict of values or references, one per field.
+Each row of a request is a model or a dict of values or references, one per field.
 A request that gives every row is a plain request:
 
 ```python
-result = client.compute(IOFQ_MULTI, {'can_runs': [{'run': dataset(run=614)}],
-                                     'sample_runs': [{'run': dataset(run=611)}, {'run': dataset(run=612)}]})
+result = client.compute(IOFQ_MULTI, MultiIofQParams(can_runs=[Run(file=dataset(run=614))],
+                                                    sample_runs=[Run(file=dataset(run=611)),
+                                                                 Run(file=dataset(run=612))]))
 ```
 
 A row is what the reduction repeats per run, such as a run and its own transmission run.
@@ -346,11 +360,11 @@ The binding handles structure below a row, such as detector banks, and decides w
 `IOFQ` is the *single-run spec* of the same reduction, with one run of each kind.
 A package may offer both, and they declare the same outputs model.
 With one row in each table, the multi-run spec gives the same outputs as the single-run spec.
-An empty table stands for an optional run left out: `'can_runs': []` matches `'can': None`.
+An empty table stands for an optional run left out: `can_runs=[]` matches `can=None`.
 
 ## Stages and accumulators
 
-A plain request loads the run again for each value of `bins`.
+A plain request loads the run again for each value of `reduction.bins`.
 Adding a run to a sum of a hundred runs reduces all hundred again.
 Stages and accumulators keep what such work computes in memory between requests.
 The savings depend on the binding (see What a binding provides).
@@ -361,9 +375,9 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'run': dataset(run=60339)}, blanks=('bins',)))
+tune = client.stage(Template(IOFQ, params={'sample': Run(file=dataset(run=60339))}, blanks=('reduction',)))
 for bins in (50, 100, 200):
-    client.compute(tune, {'bins': bins}, label='iofq')   # the first call loads the run
+    client.compute(tune, {'reduction': Reduction(bins=bins)}, label='iofq')   # the first call loads the run
 ```
 
 A call through the stage fills the blanks and makes the record of the plain request.
@@ -376,10 +390,11 @@ The first call and the calls waiting to run fail, and later calls are refused, e
 The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)):
 
 ```python
-iofq = client.accumulator(Template(IOFQ_MULTI, params={'bins': 100}, blanks=('sample_runs', 'can_runs')))
-iofq.push({'sample_runs': {'run': dataset(run=611)}})   # one row
-iofq.push({'sample_runs': {'run': dataset(run=612)},    # one row in each of two tables
-           'can_runs': {'run': dataset(run=614)}})
+iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100)},
+                                   blanks=('sample_runs', 'can_runs')))
+iofq.push({'sample_runs': Run(file=dataset(run=611))})   # one row
+iofq.push({'sample_runs': Run(file=dataset(run=612)),    # one row in each of two tables
+           'can_runs': Run(file=dataset(run=614))})
 client.output(iofq, 'iofq')                              # the output of state 2
 ```
 
@@ -395,7 +410,7 @@ Pinning does not wait for these pushes to be added.
 | Call | Returns | Holds back push n+1 |
 |---|---|---|
 | `client.output(acc, 'iofq')` | a copy of the output of state n, or of the part `select=` names, and makes no record | while it waits for state n and copies |
-| `client.submit(EXPORT, {'data': acc.ref('iofq')})` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
+| `client.submit(EXPORT, ExportParams(result=Result(data=acc.ref('iofq'))))` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
 | `client.freeze(acc)` | the record of state n (see Freeze) | no push follows |
 | `client.provenance(acc)` | the provenance of the plain request of state n, at once | no |
 
@@ -415,13 +430,13 @@ The accumulator *stops* if
 
 Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
 
-**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over a table of runs, and `CUT`, which takes the value at `index` ([user-stories.md](user-stories.md)):
+**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over a table of runs, and `CUT`, which takes the value at `position.index` ([user-stories.md](user-stories.md)):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in runs:
-    volume.push({'runs': {'run': run}})   # returns once logged; the backend adds it later
-    cut = client.submit(CUT, {'data': volume.ref('counts'), 'index': 0})
+    volume.push({'runs': Run(file=run)})   # returns once logged; the backend adds it later
+    cut = client.submit(CUT, CutParams(volume=Volume(data=volume.ref('counts')), position=Position(index=0)))
                                           # pins this state; CUT reads it in place
     show(client.output(volume, 'counts', select={'q': 0}))
                                           # pins this state, waits for it, copies the slice
@@ -458,8 +473,8 @@ The client can keep it, persist it, or reference it from another template.
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
 ```python
-iofq.push({'sample_runs': {'run': dataset(run=613)}})
-exported = client.submit(EXPORT, {'data': iofq.ref('iofq')})   # pins the state after this push
+iofq.push({'sample_runs': Run(file=dataset(run=613))})
+exported = client.submit(EXPORT, ExportParams(result=Result(data=iofq.ref('iofq'))))   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
 
@@ -472,7 +487,7 @@ The backend calls a binding in two steps:
 
 ```python
 call = binding.stage(fixed, blanks)   # fixed: {name: value}; blanks: the names left open
-call(bins=50)                         # values for the blanks; once per call through the stage
+call(reduction={'bins': 50})          # values for the blanks; once per call through the stage
 ```
 
 A plain request is the case with no blanks.
@@ -483,7 +498,7 @@ Such a binding *accumulates*:
 
 ```python
 held = binding.held_state(fixed)         # every value but the tables, data fields loaded
-held.push({'runs': {'run': run_611}})    # one row per named table, data fields loaded
+held.push({'runs': {'file': run_611}})    # one row (a dict) per named table, data fields loaded
 held.outputs()                           # every output
 ```
 
@@ -501,7 +516,7 @@ Since `push` may change the held state in place, code that calls a held state it
 ```python
 held = binding.held_state(fixed)
 for run in runs:
-    held.push({'runs': {'run': run}})
+    held.push({'runs': {'file': run}})
     counts = held.outputs()['counts']   # may be the array the next push adds into
     show(counts['q', 0])                # done with it before the next push
 ```
@@ -526,7 +541,7 @@ This one adds each run of a rotation scan to a volume as it arrives, and cuts th
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):   # the scan's 300 runs
-    volume.push({'runs': {'run': run}})                    # added once the previous cut is copied
+    volume.push({'runs': Run(file=run)})                    # added once the previous cut is copied
     show(client.output(volume, 'counts', select={'q': 0}))
 total = client.freeze(volume)
 ```
@@ -539,7 +554,7 @@ The binding of `VOLUME` accumulates, so the loop holds one volume and keeps one 
 ```python
 def submissions():
     for run in client.datasets.watch(Selector(role='sample')):
-        yield client.submit(IOFQ, {'run': run})
+        yield client.submit(IOFQ, IofQParams(sample=Run(file=run)))
 for record in client.as_completed(submissions()):
     show(client.output(record, 'iofq'))
 ```
@@ -553,7 +568,7 @@ A *lookup* fills further blanks, such as the latest can run before each sample r
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('run', 'can')), samples, client.datasets,
+requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets,
                  member_field='temperature', lookup=cans)
 client.submit(requests, label='iofq', persist=True)
 ```
@@ -564,7 +579,7 @@ With a *series*, one request takes all matching datasets so far with the same va
 An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches:
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()
 ```

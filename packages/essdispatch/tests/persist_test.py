@@ -30,8 +30,12 @@ from ess.dispatch.testing import FakeDatasets, FakeStore
 from ess.spec import Array, NexusFile, WorkflowSpec, combine
 
 
+class Run(BaseModel):
+    file: NexusFile
+
+
 class RunParams(BaseModel):
-    run: NexusFile
+    sample: Run
 
 
 class Loaded(BaseModel):
@@ -44,13 +48,21 @@ class Value(BaseModel):
     value: Array()  # type: ignore[valid-type]
 
 
-class ShiftParams(BaseModel):
+class Source(BaseModel):
     value: Array()  # type: ignore[valid-type]
+
+
+class Shift(BaseModel):
+    offset: Array()  # type: ignore[valid-type]
+
+
+class ShiftParams(BaseModel):
+    source: Source
 
 
 class OffsetParams(BaseModel):
-    value: Array()  # type: ignore[valid-type]
-    offset: Array()  # type: ignore[valid-type]
+    source: Source
+    shift: Shift
 
 
 class Parts(BaseModel):
@@ -132,22 +144,23 @@ def boxes() -> list[weakref.ref[Box]]:
 def bind(
     loading: threading.Event, boxes: list[weakref.ref[Box]]
 ) -> dict[WorkflowSpec, Any]:
-    def load(run: float) -> dict[str, float]:
+    def load(sample: dict[str, float]) -> dict[str, float]:
+        run = sample['file']
         loading.wait(timeout=5)
         return {'value': run, 'extra': -run}
 
-    def box(run: float) -> dict[str, Box]:
-        boxes.append(weakref.ref(value := Box(run)))
+    def box(sample: dict[str, float]) -> dict[str, Box]:
+        boxes.append(weakref.ref(value := Box(sample['file'])))
         return {'value': value}
 
     return {
         LOAD: load,
-        SHIFT: lambda value: {'value': value + 10.0},
+        SHIFT: lambda source: {'value': source['value'] + 10.0},
         TOTAL: combine(operator.add),
-        LIST: lambda run: {'value': [run]},
+        LIST: lambda sample: {'value': [sample['file']]},
         BOX: box,
-        UNBOX: lambda value: {'value': value.value},
-        OFFSET: lambda value, offset: {'value': value + offset},
+        UNBOX: lambda source: {'value': source['value'].value},
+        OFFSET: lambda source, shift: {'value': source['value'] + shift['offset']},
     }
 
 
@@ -182,7 +195,9 @@ def client(connect: Callable[[], Client]) -> Client:
 def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)}, persist=('value',))
+    load = client.compute(
+        LOAD, {'sample': {'file': dataset(run=1)}}, persist=('value',)
+    )
 
     other = connect()
     assert other.output(load, 'value') == 1.0
@@ -191,8 +206,8 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     with pytest.raises(LookupError, match='not kept by this client'):
         client.output(load, 'extra')  # dropped once the record completed
     with pytest.raises(SubmitError, match='not kept by this client'):
-        client.submit(SHIFT, {'value': load.ref('extra')})
-    shift = other.compute(SHIFT, {'value': load.ref('value')})
+        client.submit(SHIFT, {'source': {'value': load.ref('extra')}})
+    shift = other.compute(SHIFT, {'source': {'value': load.ref('value')}})
     assert other.output(shift, 'value') == 11.0
 
 
@@ -200,7 +215,7 @@ def test_a_record_persisted_at_submission_completes_once_written(
     client: Client, store: GatedStore
 ) -> None:
     store.gate.clear()
-    load = client.submit(LOAD, {'run': dataset(run=1)}, persist=True)
+    load = client.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
 
     assert client.status(load) is Status.PENDING
     store.gate.set()
@@ -212,22 +227,22 @@ def test_a_failed_write_fails_a_record_persisted_at_submission(
     client: Client, store: GatedStore
 ) -> None:
     store.fill()
-    load = client.submit(LOAD, {'run': dataset(run=1)}, persist=True)
+    load = client.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
 
     assert client.wait(load) is Status.FAILED
     assert client.failure(load) == 'the write failed: no space left on device'
     with pytest.raises(RuntimeError, match='no space left'):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match='failed'):
-        client.submit(SHIFT, {'value': load.ref('value')})
+        client.submit(SHIFT, {'source': {'value': load.ref('value')}})
 
 
 def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
     client: Client, store: GatedStore
 ) -> None:
     store.gate.clear()
-    load = client.submit(LOAD, {'run': dataset(run=1)}, persist=True)
-    shift = client.submit(SHIFT, {'value': load.ref('value')})
+    load = client.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
+    shift = client.submit(SHIFT, {'source': {'value': load.ref('value')}})
     store.fill()
     store.gate.set()
 
@@ -241,14 +256,16 @@ def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
 def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     other = connect()
     with pytest.raises(SubmitError, match='not kept by this client'):
-        other.submit(SHIFT, {'value': load.ref('value')})
+        other.submit(SHIFT, {'source': {'value': load.ref('value')}})
 
     store.gate.clear()
     client.persist(load, 'value')
-    shift = other.submit(SHIFT, {'value': load.ref('value')})  # waits for the write
+    shift = other.submit(
+        SHIFT, {'source': {'value': load.ref('value')}}
+    )  # waits for the write
     assert client.output(load, 'value') == 1.0  # from memory meanwhile
     assert other.status(shift) is Status.PENDING
     store.gate.set()
@@ -264,11 +281,11 @@ def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
 def test_a_failed_write_of_persist_fails_only_the_persist_request(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.gate.clear()
     client.persist(load)
     other = connect()
-    shift = other.submit(SHIFT, {'value': load.ref('value')})
+    shift = other.submit(SHIFT, {'source': {'value': load.ref('value')}})
     store.fill()
     store.gate.set()
 
@@ -279,7 +296,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     with pytest.raises(LookupError, match='the write failed: no space left'):
         other.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: no space left'):
-        other.submit(SHIFT, {'value': load.ref('value')})
+        other.submit(SHIFT, {'source': {'value': load.ref('value')}})
 
     store.free()
     client.persist(load)  # ask again
@@ -287,7 +304,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
 
 
 def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     client.persist(load, 'value')
     client.persist([load, load], 'value', 'extra')
     client.release(load)
@@ -300,23 +317,25 @@ def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> 
 def test_persist_is_refused_for_what_the_client_cannot_persist(
     client: Client, connect: Callable[[], Client], datasets: FakeDatasets
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
 
     with pytest.raises(SubmitError, match='not kept by this client'):
         connect().persist(load)
     with pytest.raises(SubmitError, match=r"no outputs \['other'\]"):
         client.persist(load, 'other')
     with pytest.raises(SubmitError, match=r"no outputs \['other'\] to persist"):
-        client.submit(LOAD, {'run': dataset(run=1)}, persist=('other',))
-    with local(proposal='p1', datasets=datasets, bind={LOAD: lambda run: {}}) as alone:
+        client.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=('other',))
+    with local(
+        proposal='p1', datasets=datasets, bind={LOAD: lambda sample: {}}
+    ) as alone:
         with pytest.raises(SubmitError, match='needs a store'):
-            alone.submit(LOAD, {'run': dataset(run=1)}, persist=True)
+            alone.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
 
 
 def test_an_output_the_workflow_did_not_return_is_persisted_as_not_returned(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)}, persist=True)
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
 
     with pytest.raises(LookupError, match='did not return it'):
         connect().output(load, 'note')
@@ -327,7 +346,7 @@ def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
     client: Client, connect: Callable[[], Client], loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(LOAD, {'run': dataset(run=1)})
+    load = client.submit(LOAD, {'sample': {'file': dataset(run=1)}})
     client.persist(load, 'value')
     client.release(load)  # the persist request keeps it
     loading.set()
@@ -338,7 +357,7 @@ def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
 def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     total = client.accumulator(Template(TOTAL, blanks=('parts',)))
     total.push({'parts': load.refs('value')})
     frozen = client.freeze(total, persist=True)
@@ -353,7 +372,7 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     datasets: FakeDatasets, bind: dict[WorkflowSpec, Any], store: GatedStore
 ) -> None:
     client = local(proposal='p1', datasets=datasets, bind=bind, store=store)
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.gate.clear()
     client.persist(load)
     closing = threading.Thread(target=client.close)
@@ -370,7 +389,7 @@ def test_persisting_a_pending_record_does_not_delay_its_completion(
     client: Client, store: GatedStore, loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(LOAD, {'run': dataset(run=1)})
+    load = client.submit(LOAD, {'sample': {'file': dataset(run=1)}})
     client.persist(load, 'value')
     store.gate.clear()
     loading.set()
@@ -383,9 +402,9 @@ def test_persisting_a_pending_record_does_not_delay_its_completion(
 def test_a_record_lets_go_of_its_inputs_before_its_write(
     client: Client, store: GatedStore, boxes: list[weakref.ref[Box]]
 ) -> None:
-    box = client.submit(BOX, {'run': dataset(run=1)})
+    box = client.submit(BOX, {'sample': {'file': dataset(run=1)}})
     store.gate.clear()
-    unbox = client.submit(UNBOX, {'value': box.ref('value')}, persist=True)
+    unbox = client.submit(UNBOX, {'source': {'value': box.ref('value')}}, persist=True)
     client.release(box)  # only ``unbox`` reads it
     assert store.entered.wait(timeout=5)
 
@@ -399,7 +418,7 @@ def test_a_record_lets_go_of_its_inputs_before_its_write(
 def test_another_client_reads_a_persisted_value_from_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    listed = client.compute(LIST, {'run': dataset(run=1)})
+    listed = client.compute(LIST, {'sample': {'file': dataset(run=1)}})
     client.persist(listed)
     other = connect()
 
@@ -411,7 +430,7 @@ def test_another_client_reads_a_persisted_value_from_the_store(
 def test_reading_every_output_raises_if_a_write_failed(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.fill()
     client.persist(load, 'value')
 
@@ -425,8 +444,8 @@ def test_reading_every_output_raises_if_a_write_failed(
 def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
     client: Client, store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
-    shift = client.compute(SHIFT, {'value': load.ref('value')})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    shift = client.compute(SHIFT, {'source': {'value': load.ref('value')}})
     store.fill()
     client.persist(load, 'value')
     client.persist(shift)
@@ -442,7 +461,7 @@ def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
 def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.fill()
     client.persist(load, 'value')
     with pytest.raises(LookupError, match='the write failed'):
@@ -456,7 +475,7 @@ def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
 def test_a_frozen_record_kept_by_the_client_is_persisted_later(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, {'run': dataset(run=1)})
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     total = client.accumulator(Template(TOTAL, blanks=('parts',)))
     total.push({'parts': load.refs('value')})
     frozen = client.freeze(total)
@@ -506,10 +525,14 @@ def test_a_restart_runs_pending_persisted_work_and_cancels_the_rest(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    done = first.compute(LOAD, {'run': dataset(run=2)}, persist=('value',))
+    done = first.compute(LOAD, {'sample': {'file': dataset(run=2)}}, persist=('value',))
     loading.clear()
-    load = first.submit(LOAD, {'run': dataset(run=1)})  # read by persisted work
-    alone = first.submit(LOAD, {'run': dataset(run=2)})  # read by nothing persisted
+    load = first.submit(
+        LOAD, {'sample': {'file': dataset(run=1)}}
+    )  # read by persisted work
+    alone = first.submit(
+        LOAD, {'sample': {'file': dataset(run=2)}}
+    )  # read by nothing persisted
     total = first.submit(
         TOTAL, {'parts': [load.refs('value'), done.refs('value')]}, persist=True
     )
@@ -533,18 +556,22 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    kept = first.compute(LOAD, {'run': dataset(run=1)})
+    kept = first.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     loading.clear()
-    pending = first.submit(LOAD, {'run': dataset(run=2)})
+    pending = first.submit(LOAD, {'sample': {'file': dataset(run=2)}})
     total = first.accumulator(Template(TOTAL, blanks=('parts',)))
     total.push({'parts': pending.refs('value')})  # its state waits for ``pending``
     unpersisted = first.submit(
         TOTAL, {'parts': [kept.refs('value'), pending.refs('value')]}, persist=True
     )
-    of_state = first.submit(SHIFT, {'value': total.ref('value')}, persist=True)
+    of_state = first.submit(
+        SHIFT, {'source': {'value': total.ref('value')}}, persist=True
+    )
     (input_,) = of_state.request.inputs()
     state = next(r for r in first.records() if r.id == input_.record)
-    downstream = first.submit(SHIFT, {'value': pending.ref('value')}, persist=True)
+    downstream = first.submit(
+        SHIFT, {'source': {'value': pending.ref('value')}}, persist=True
+    )
 
     again = restart(tmp_path / 'log')
     loading.set()
@@ -571,17 +598,27 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    kept = first.compute(LOAD, {'run': dataset(run=1)})
-    stored = first.compute(LOAD, {'run': dataset(run=2)}, persist=('value',))
+    kept = first.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    stored = first.compute(
+        LOAD, {'sample': {'file': dataset(run=2)}}, persist=('value',)
+    )
     loading.clear()
-    offset = first.submit(LOAD, {'run': dataset(run=2)})
+    offset = first.submit(LOAD, {'sample': {'file': dataset(run=2)}})
     calls = []
     for fixed in (kept, stored):
         stage = first.stage(
-            Template(OFFSET, params={'value': fixed.ref('value')}, blanks=('offset',))
+            Template(
+                OFFSET,
+                params={'source': {'value': fixed.ref('value')}},
+                blanks=('shift',),
+            )
         )
-        first.compute(stage, {'offset': kept.ref('extra')})  # stages it
-        calls.append(first.submit(stage, {'offset': offset.ref('value')}, persist=True))
+        first.compute(stage, {'shift': {'offset': kept.ref('extra')}})  # stages it
+        calls.append(
+            first.submit(
+                stage, {'shift': {'offset': offset.ref('value')}}, persist=True
+            )
+        )
 
     again = restart(tmp_path / 'log')
     loading.set()
@@ -600,7 +637,7 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
     store: GatedStore,
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=1)})
+    load = first.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.gate.clear()
     first.persist(load, 'value')
 
@@ -609,14 +646,14 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
     with pytest.raises(LookupError, match='the write failed: the backend restarted'):
         again.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: the backend restarted'):
-        again.submit(SHIFT, {'value': load.ref('value')})
+        again.submit(SHIFT, {'source': {'value': load.ref('value')}})
 
 
 def test_a_restart_runs_again_a_record_written_but_not_finished(
     tmp_path: Path, start: Callable[[Path], Client], store: GatedStore
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=1)}, persist=('value',))
+    load = first.compute(LOAD, {'sample': {'file': dataset(run=1)}}, persist=('value',))
     lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
     assert isinstance(Log.read(tmp_path / 'log')[-1], Finished)
     (tmp_path / 'crashed').write_bytes(b''.join(lines[:-1]))  # before it finished
@@ -635,7 +672,7 @@ def test_a_restart_runs_a_pending_record_that_the_client_persisted(
 ) -> None:
     first = start(tmp_path / 'log')
     loading.clear()
-    load = first.submit(LOAD, {'run': dataset(run=1)})
+    load = first.submit(LOAD, {'sample': {'file': dataset(run=1)}})
     first.persist(load, 'value')
 
     again = restart(tmp_path / 'log')
@@ -652,10 +689,10 @@ def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
     store: GatedStore,
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, {'run': dataset(run=1)})
+    load = first.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     store.gate.clear()
     first.persist(load, 'value')
-    shift = first.submit(SHIFT, {'value': load.ref('value')}, persist=True)
+    shift = first.submit(SHIFT, {'source': {'value': load.ref('value')}}, persist=True)
 
     again = restart(tmp_path / 'log')
 

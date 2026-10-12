@@ -20,12 +20,17 @@ asks for the form it wants. Collections of data fields, ``list[...]`` and
 ``dict[str, ...]`` of one declared type, are allowed and a reference may name one
 element of a collection output.
 
-A field may also be a *table*, ``list[Row]`` with ``Row`` a flat pydantic model
-whose fields are literals and data fields (collections included) but never a
-model or another table. A UI shows it as a table, one row per element and one
-column per field, so related inputs such as a sample run and its transmission
-run stay paired. A reference names a whole table field, never a row or a cell.
-See :func:`table_fields`.
+Data fields sit in *groups* and *tables*. Each field of a params model is a
+group, a flat pydantic model, or a table, ``list[Row]`` with ``Row`` a flat
+model; an outputs model may hold them next to data fields. A flat model's
+fields are literals and data fields (collections included) but never a model
+or a table. A UI shows a group as a section of a form, and a table as rows and
+columns, one row per element and one column per field, so related inputs such
+as a sample run and its transmission run stay paired. A group and a row are the
+same kind of model: a single-run spec takes ``sample: Sample`` where a
+multi-run spec takes ``samples: list[Sample]``. A reference names a whole
+output field, never a field of a group, a row, or a cell. See
+:func:`group_fields` and :func:`table_fields`.
 
 This module imports no scipp; the structural check of a scipp object against its
 :class:`ArraySpec` lives in :mod:`ess.spec.conversions`.
@@ -33,7 +38,7 @@ This module imports no scipp; the structural check of a scipp object against its
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from types import UnionType
@@ -196,8 +201,9 @@ def data_fields(model: type[BaseModel]) -> dict[str, DataField]:
     Data fields of a params or outputs model, by name.
 
     Optional fields and collections count; every element of a collection shares
-    the annotation. A table field is not a data field: the data fields of its
-    rows are ``data_fields(table_fields(model)[name])``.
+    the annotation. A group or a table is not a data field: the data fields of
+    a group are ``data_fields(group_fields(model)[name])``, and those of the
+    rows of a table ``data_fields(table_fields(model)[name])``.
     """
     fields = {}
     for name, field in model.model_fields.items():
@@ -213,17 +219,17 @@ def ref_fields(model: type[BaseModel]) -> set[str]:
     """
     Fields that may hold a reference.
 
-    These are data fields, literal-or-reference unions, and table fields whose
-    rows have such fields.
+    These are data fields, literal-or-reference unions, and groups and tables
+    with such fields.
     """
     data = data_fields(model)
-    tables = table_fields(model)
+    flat = {**group_fields(model), **table_fields(model)}
     return {
         name
         for name, field in model.model_fields.items()
         if name in data
         or any(m in get_args(Ref) for m in _members(field.annotation))
-        or (name in tables and ref_fields(tables[name]))
+        or (name in flat and ref_fields(flat[name]))
     }
 
 
@@ -237,18 +243,67 @@ def _is_model(annotation: Any) -> bool:
     )
 
 
-def _row_model(annotation: Any) -> type[BaseModel] | None:
-    """``Row`` if ``annotation`` is ``list[Row]``, possibly optional or annotated."""
+def _optional(annotation: Any) -> Any:
+    """``annotation`` without ``Annotated`` and without ``| None``."""
     origin = get_origin(annotation)
     if origin is Annotated:
-        return _row_model(get_args(annotation)[0])
+        return _optional(get_args(annotation)[0])
     if origin in (Union, UnionType):
         args = [arg for arg in get_args(annotation) if arg is not type(None)]
-        return _row_model(args[0]) if len(args) == 1 else None
-    if origin is list:
+        return _optional(args[0]) if len(args) == 1 else annotation
+    return annotation
+
+
+def _row_model(annotation: Any) -> type[BaseModel] | None:
+    """``Row`` if ``annotation`` is ``list[Row]``, possibly optional or annotated."""
+    annotation = _optional(annotation)
+    if get_origin(annotation) is list:
         (item,) = get_args(annotation)
         return item if _is_model(item) else None
     return None
+
+
+def _group_model(annotation: Any) -> type[BaseModel] | None:
+    """The model if ``annotation`` is one, possibly optional or annotated."""
+    annotation = _optional(annotation)
+    return annotation if _is_model(annotation) else None
+
+
+def _flat_fields(
+    model: type[BaseModel], find: Callable[[Any], type[BaseModel] | None]
+) -> dict[str, type[BaseModel]]:
+    """The models that ``find`` finds in the fields of ``model``; each is flat."""
+    found = {}
+    for name, field in model.model_fields.items():
+        inner = find(field.annotation)
+        if inner is None:
+            continue
+        for cell, cell_field in inner.model_fields.items():
+            if any(_is_model(m) for m in _members(cell_field.annotation)):
+                raise ValueError(
+                    f'{model.__name__}.{name}: groups and rows hold only literals '
+                    f'and data fields, but {inner.__name__}.{cell} holds a model '
+                    'or a table'
+                )
+        found[name] = inner
+    return found
+
+
+def group_fields(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
+    """
+    Group fields of a params or outputs model, by name, with their model.
+
+    A group field holds a pydantic model, possibly optional, other than a
+    reference. Groups must be flat, as rows are: a field of a group holds
+    literals or data fields, collections of them included, but no model and
+    no table.
+
+    Raises
+    ------
+    ValueError
+        If a group has a field holding a model or a table.
+    """
+    return _flat_fields(model, _group_model)
 
 
 def table_fields(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
@@ -265,20 +320,7 @@ def table_fields(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
     ValueError
         If a row model has a field holding a model or a table.
     """
-    tables = {}
-    for name, field in model.model_fields.items():
-        row = _row_model(field.annotation)
-        if row is None:
-            continue
-        for cell, cell_field in row.model_fields.items():
-            if any(_is_model(m) for m in _members(cell_field.annotation)):
-                raise ValueError(
-                    f'{model.__name__}.{name}: rows of a table hold only literals '
-                    f'and data fields, but {row.__name__}.{cell} holds a model '
-                    'or a table'
-                )
-        tables[name] = row
-    return tables
+    return _flat_fields(model, _row_model)
 
 
 _OUTPUT_REF_KEYS = frozenset(OutputRef.model_fields)

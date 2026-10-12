@@ -8,7 +8,7 @@ import pytest
 
 from ess.dispatch import Client, SubmitError, dataset
 
-from .conftest import IOFQ, Measure
+from .conftest import IOFQ, IofQParams, Measure, Run
 
 
 @pytest.mark.xfail(reason='dataset(path=...) with a folder is not implemented')
@@ -18,7 +18,7 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
     files = sorted(folder.glob('*.h5'))
     vanadium = measure(9, [5.0, 6.0], pid='20.500.12269/vanadium')
     named = [dataset(path=f) for f in files] + [dataset(pid='20.500.12269/vanadium')]
-    plots = [client.compute(IOFQ, {'run': d}) for d in named]
+    plots = [client.compute(IOFQ, IofQParams(sample=Run(file=d))) for d in named]
 
     assert [client.output(p, 'iofq').values.tolist() for p in plots] == [
         [1.0, 2.0],
@@ -30,9 +30,9 @@ def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
 
 def test_a2_run_number_instead_of_file(client: Client, measure: Measure) -> None:
     run = measure(4711, [1.0, 2.0])
-    result = client.compute(IOFQ, {'run': dataset(run=4711)})
+    result = client.compute(IOFQ, IofQParams(sample=Run(file=dataset(run=4711))))
 
     assert result.request.datasets() == [run]
     with pytest.raises(SubmitError):
-        client.compute(IOFQ, {'run': dataset(run=4712)})
+        client.compute(IOFQ, IofQParams(sample=Run(file=dataset(run=4712))))
     assert client.records() == [result]

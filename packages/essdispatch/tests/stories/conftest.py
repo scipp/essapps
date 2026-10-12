@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.dispatch import Backend, Client, ClientEnded, Record, Status
 from ess.dispatch.log import Log
@@ -61,13 +61,27 @@ def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=_counts(values))
 
 
-class IofQParams(BaseModel):
-    run: NexusFile
+class Run(BaseModel):
+    """A group of a single-run spec, and a row of a table."""
+
+    file: NexusFile
+
+
+class Reduction(BaseModel):
     bins: int = 2
     threshold: float = 0.0
-    can: NexusFile | None = None
+
+
+class Corrections(BaseModel):
     beam_centre: Array() | None = None  # type: ignore[valid-type]
     normalization: Array() | None = None  # type: ignore[valid-type]
+
+
+class IofQParams(BaseModel):
+    sample: Run
+    can: Run | None = None
+    reduction: Reduction = Field(default_factory=Reduction)
+    corrections: Corrections = Field(default_factory=Corrections)
 
 
 class IofQOutputs(BaseModel):
@@ -79,30 +93,33 @@ IOFQ = _spec('sans-iofq', IofQParams, IofQOutputs)
 
 
 def iofq(
-    run: Any,
-    bins: int,
-    threshold: float,
-    can: Any,
-    beam_centre: sc.Variable | None,
-    normalization: sc.Variable | None,
+    sample: Mapping[str, Any],
+    can: Mapping[str, Any] | None,
+    reduction: Mapping[str, Any],
+    corrections: Mapping[str, Any],
 ) -> dict[str, sc.Variable]:
-    counts = _counts(run) - (0.0 if can is None else _counts(can))
-    masked = np.where(counts < threshold, 0.0, counts)
+    beam_centre = corrections['beam_centre']
+    normalization = corrections['normalization']
+    counts = _counts(sample['file']) - (0.0 if can is None else _counts(can['file']))
+    masked = np.where(counts < reduction['threshold'], 0.0, counts)
     reduced = masked - (0.0 if beam_centre is None else beam_centre.value)
     reduced = reduced / (1.0 if normalization is None else normalization.value)
     return {
-        'iofq': _array(reduced.reshape(bins, -1).sum(axis=1)),
+        'iofq': _array(reduced.reshape(reduction['bins'], -1).sum(axis=1)),
         'masked': _array(masked),
     }
 
 
-class IofQV2Params(BaseModel):
-    run: NexusFile
+class ReductionV2(BaseModel):
     bins: int = 4
     mask_below: float = 0.0
-    can: NexusFile | None = None
-    beam_centre: Array() | None = None  # type: ignore[valid-type]
-    normalization: Array() | None = None  # type: ignore[valid-type]
+
+
+class IofQV2Params(BaseModel):
+    sample: Run
+    can: Run | None = None
+    reduction: ReductionV2 = Field(default_factory=ReductionV2)
+    corrections: Corrections = Field(default_factory=Corrections)
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -115,28 +132,35 @@ IOFQ_V2 = WorkflowSpec(
 )
 
 
-def iofq_v2(mask_below: float, **values: Any) -> dict[str, sc.Variable]:
-    return iofq(threshold=mask_below, **values)
+def iofq_v2(reduction: Mapping[str, Any], **groups: Any) -> dict[str, sc.Variable]:
+    renamed = {'bins': reduction['bins'], 'threshold': reduction['mask_below']}
+    return iofq(reduction=renamed, **groups)
 
 
-class RunParams(BaseModel):
-    run: NexusFile
+class BeamCentreParams(BaseModel):
+    direct_beam: Run
 
 
 class CentreOutputs(BaseModel):
     centre: Array()  # type: ignore[valid-type]
 
 
-BEAM_CENTRE = _spec('beam-centre', RunParams, CentreOutputs)
+BEAM_CENTRE = _spec('beam-centre', BeamCentreParams, CentreOutputs)
 
 
-def beam_centre(run: Any) -> dict[str, sc.Variable]:
-    return {'centre': sc.scalar(float(_counts(run).mean()))}
+def beam_centre(direct_beam: Mapping[str, Any]) -> dict[str, sc.Variable]:
+    return {'centre': sc.scalar(float(_counts(direct_beam['file']).mean()))}
+
+
+class Scaling(BaseModel):
+    """Shared by VANADIUM and NORMALIZE."""
+
+    scale: float = 1.0
 
 
 class VanadiumParams(BaseModel):
-    run: NexusFile
-    scale: float = 1.0
+    vanadium: Run
+    scaling: Scaling = Field(default_factory=Scaling)
 
 
 class VanadiumOutputs(BaseModel):
@@ -146,17 +170,20 @@ class VanadiumOutputs(BaseModel):
 VANADIUM = _spec('vanadium', VanadiumParams, VanadiumOutputs)
 
 
-def vanadium(run: Any, scale: float) -> dict[str, sc.Variable]:
-    return {'normalization': sc.scalar(float(_counts(run).sum()) * scale)}
+def vanadium(
+    vanadium: Mapping[str, Any], scaling: Mapping[str, Any]
+) -> dict[str, sc.Variable]:
+    total = float(_counts(vanadium['file']).sum())
+    return {'normalization': sc.scalar(total * scaling['scale'])}
 
 
 class RunsParams(BaseModel):
-    runs: list[RunParams]
+    runs: list[Run]
 
 
 class NormalizeParams(BaseModel):
-    runs: list[RunParams]
-    scale: float = 1.0
+    runs: list[Run]
+    scaling: Scaling = Field(default_factory=Scaling)
 
 
 class NormalizedOutputs(BaseModel):
@@ -166,13 +193,13 @@ class NormalizedOutputs(BaseModel):
 NORMALIZE = _spec('normalize', NormalizeParams, NormalizedOutputs)
 
 
-def normalize(runs: np.ndarray, scale: float) -> dict[str, sc.Variable]:
-    return {'normalized': _array(runs / runs.sum() * scale)}
+def normalize(runs: np.ndarray, scaling: Mapping[str, Any]) -> dict[str, sc.Variable]:
+    return {'normalized': _array(runs / runs.sum() * scaling['scale'])}
 
 
 class BackgroundParams(BaseModel):
-    sample_runs: list[RunParams]
-    background_runs: list[RunParams]
+    sample_runs: list[Run]
+    background_runs: list[Run]
 
 
 class BackgroundOutputs(BaseModel):
@@ -188,17 +215,21 @@ def background(
     return {'subtracted': _array(sample_runs - background_runs)}
 
 
+class ContributeParams(BaseModel):
+    sample: Run
+
+
 class ContributeOutputs(BaseModel):
     numerator: Array()  # type: ignore[valid-type]
     denominator: Array()  # type: ignore[valid-type]
     transmission: Array()  # type: ignore[valid-type]
 
 
-CONTRIBUTE = _spec('sans-contribute', RunParams, ContributeOutputs)
+CONTRIBUTE = _spec('sans-contribute', ContributeParams, ContributeOutputs)
 
 
-def contribute(run: Any) -> dict[str, sc.Variable]:
-    counts = _counts(run)
+def contribute(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
+    counts = _counts(sample['file'])
     return {
         'numerator': _array(counts),
         'denominator': sc.scalar(float(counts.sum())),
@@ -231,7 +262,7 @@ class _Sums:
 
     def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
         for table, row in rows.items():
-            self._sums[table] += _counts(row['run'])  # in place from the second row
+            self._sums[table] += _counts(row['file'])  # in place from the second row
 
     def outputs(self) -> Mapping[str, Any]:
         return self._finalize(**self._sums, **self._fixed)
@@ -252,7 +283,7 @@ class Summing:
         def compute(**values: Any) -> Mapping[str, Any]:
             params = {**fixed, **values}
             sums = {
-                t: sum((_counts(row['run']) for row in params.pop(t)), 0.0)
+                t: sum((_counts(row['file']) for row in params.pop(t)), 0.0)
                 for t in self._tables
             }
             return self._finalize(**sums, **params)
@@ -267,21 +298,33 @@ class Counts(BaseModel):
     counts: Array()  # type: ignore[valid-type]
 
 
-ANGLE = _spec('angle', RunParams, Counts)
+class AngleParams(BaseModel):
+    sample: Run
+
+
+ANGLE = _spec('angle', AngleParams, Counts)
 VOLUME = _spec('volume', RunsParams, Counts)
 
 
-def angle(run: Any) -> dict[str, sc.Variable]:
-    return {'counts': _array(run)}
+def angle(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
+    return {'counts': _array(sample['file'])}
 
 
 def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
     return {'counts': _array(runs)}
 
 
-class CutParams(BaseModel):
+class Volume(BaseModel):
     data: Array()  # type: ignore[valid-type]
+
+
+class Position(BaseModel):
     index: int
+
+
+class CutParams(BaseModel):
+    volume: Volume
+    position: Position
 
 
 class CutOutputs(BaseModel):
@@ -291,13 +334,15 @@ class CutOutputs(BaseModel):
 CUT = _spec('cut', CutParams, CutOutputs)
 
 
-def cut(data: sc.Variable, index: int) -> dict[str, sc.Variable]:
-    return {'cut': data[index].copy()}
+def cut(
+    volume: Mapping[str, Any], position: Mapping[str, Any]
+) -> dict[str, sc.Variable]:
+    return {'cut': volume['data'][position['index']].copy()}
 
 
 class StitchParams(BaseModel):
-    runs: list[RunParams]
-    reference: NexusFile
+    runs: list[Run]
+    reference: Run
 
 
 class StitchOutputs(BaseModel):
@@ -307,16 +352,22 @@ class StitchOutputs(BaseModel):
 STITCH = _spec('stitch', StitchParams, StitchOutputs)
 
 
-def stitch(runs: list[dict[str, Any]], reference: Any) -> dict[str, sc.Variable]:
-    curves = [_counts(row['run']) / _counts(reference) for row in runs]
+def stitch(
+    runs: list[dict[str, Any]], reference: Mapping[str, Any]
+) -> dict[str, sc.Variable]:
+    curves = [_counts(row['file']) / _counts(reference['file']) for row in runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
     return {'stitched': _array(np.concatenate(scaled))}
 
 
-class ExportParams(BaseModel):
+class Result(BaseModel):
     data: Array()  # type: ignore[valid-type]
+
+
+class ExportParams(BaseModel):
+    result: Result
 
 
 class ExportOutputs(BaseModel):
@@ -326,8 +377,8 @@ class ExportOutputs(BaseModel):
 EXPORT = _spec('export', ExportParams, ExportOutputs)
 
 
-def export(data: sc.Variable) -> dict[str, str]:
-    return {'text': ','.join(str(v) for v in data.values)}
+def export(result: Mapping[str, Any]) -> dict[str, str]:
+    return {'text': ','.join(str(v) for v in result['data'].values)}
 
 
 TOYS = {

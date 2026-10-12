@@ -10,7 +10,16 @@ import pytest
 
 from ess.dispatch import Client, SubmitError, Template
 
-from .conftest import BEAM_CENTRE, IOFQ, Measure
+from .conftest import (
+    BEAM_CENTRE,
+    IOFQ,
+    BeamCentreParams,
+    Corrections,
+    IofQParams,
+    Measure,
+    Reduction,
+    Run,
+)
 
 
 @pytest.mark.xfail(
@@ -20,15 +29,20 @@ def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-    centre = client.compute(BEAM_CENTRE, {'run': centre_run})
+    centre = client.compute(
+        BEAM_CENTRE, BeamCentreParams(direct_beam=Run(file=centre_run))
+    )
     tune = client.stage(
         Template(
             IOFQ,
-            params={'run': run, 'beam_centre': centre.ref('centre')},
-            blanks=('threshold',),
+            params=IofQParams(
+                sample=Run(file=run),
+                corrections=Corrections(beam_centre=centre.ref('centre')),
+            ),
+            blanks=('reduction',),
         )
     )
-    result = client.compute(tune, {'threshold': 1.5})
+    result = client.compute(tune, {'reduction': Reduction(threshold=1.5)})
     pid = client.publish(result.ref('iofq'), 'scicat')
     plain = client.compute(IOFQ, result.request.params)
 
@@ -47,7 +61,11 @@ def test_f2_reproduce_after_two_upgrades(
     client: Client, measure: Measure, upgrade: Callable[..., Client]
 ) -> None:
     result = client.compute(
-        IOFQ, {'run': measure(1, [1.0, 2.0, 3.0, 4.0]), 'threshold': 1.5}
+        IOFQ,
+        IofQParams(
+            sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0])),
+            reduction=Reduction(threshold=1.5),
+        ),
     )
     upgraded = upgrade(versions={'scipp': '99.0'})
 

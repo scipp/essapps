@@ -45,7 +45,7 @@ from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
-from .records import Record, Request, Row, SpecId, Template
+from .records import Record, Request, Row, SpecId, Template, as_values
 from .store import Store
 
 
@@ -171,11 +171,11 @@ class Accumulator:
         self.outputs = outputs
         self._push = push
 
-    def push(self, rows: Mapping[str, Row]) -> None:
+    def push(self, rows: Mapping[str, Row | BaseModel]) -> None:
         """
         Add one row to each named table of the template, as a request over the
-        table takes it; the rows enter one state. A name that is not one of
-        the template's blanks is refused.
+        table takes it, a row model or a dict; the rows enter one state. A name
+        that is not one of the template's blanks is refused.
 
         A row names datasets or references outputs of records, never an
         accumulator. It is checked by its table's row model; rules on a whole
@@ -195,7 +195,7 @@ class Accumulator:
         that should skip a run whose reduction failed waits for that record
         before it pushes.
         """
-        self._push(rows)
+        self._push(as_values(dict(rows)))
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -273,7 +273,7 @@ class Client:
     def submit(
         self,
         what: Any,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | BaseModel | None = None,
         *,
         label: str | None = None,
         member: str | None = None,

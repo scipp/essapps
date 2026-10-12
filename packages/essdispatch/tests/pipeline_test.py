@@ -10,7 +10,7 @@ from typing import NewType
 
 import pytest
 import sciline
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.dispatch import Backend, Client, Status, Template, dataset
 from ess.dispatch.testing import FakeDatasets
@@ -34,10 +34,22 @@ def total(loaded: Loaded, offsets: Offsets) -> Total:
     return Total(sum(loaded + row['offset'] for row in offsets))
 
 
-class ShiftParams(BaseModel):
-    run: NexusFile
+class Sample(BaseModel):
+    file: NexusFile
+
+
+class Shift(BaseModel):
     offset: float = 0.0
+
+
+class Annotation(BaseModel):
     note: str = ''  # set on the pipeline, but no output depends on it
+
+
+class ShiftParams(BaseModel):
+    sample: Sample
+    shift: Shift = Field(default_factory=Shift)
+    annotation: Annotation = Field(default_factory=Annotation)
 
 
 class ShiftOutputs(BaseModel):
@@ -59,7 +71,7 @@ class OffsetRow(BaseModel):
 
 
 class TotalParams(BaseModel):
-    run: NexusFile
+    sample: Sample
     offsets: list[OffsetRow]
 
 
@@ -98,11 +110,13 @@ def client(pipeline: sciline.Pipeline) -> Iterator[Client]:
     datasets.measure(1, 1.0)
     binding = PipelineBinding(
         pipeline,
-        params={'run': Run, 'offset': Offset, 'note': Note},
+        params={'sample.file': Run, 'shift.offset': Offset, 'annotation.note': Note},
         outputs={'value': Shifted},
     )
     summing = PipelineBinding(
-        pipeline, params={'run': Run, 'offsets': Offsets}, outputs={'total': Total}
+        pipeline,
+        params={'sample.file': Run, 'offsets': Offsets},
+        outputs={'total': Total},
     )
     backend = Backend(datasets, {SHIFT: binding, TOTAL: summing})
     yield Client(backend, proposal='p1', submitter='anna')
@@ -111,10 +125,12 @@ def client(pipeline: sciline.Pipeline) -> Iterator[Client]:
 
 def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None:
     tune = client.stage(
-        Template(SHIFT, params={'run': dataset(run=1)}, blanks=('offset',))
+        Template(SHIFT, params={'sample': {'file': dataset(run=1)}}, blanks=('shift',))
     )
-    tuned = [client.compute(tune, {'offset': x}) for x in (0.5, 1.5, 2.5)]
-    plain = client.compute(SHIFT, {'run': dataset(run=1), 'offset': 1.5})
+    tuned = [client.compute(tune, {'shift': {'offset': x}}) for x in (0.5, 1.5, 2.5)]
+    plain = client.compute(
+        SHIFT, {'sample': {'file': dataset(run=1)}, 'shift': {'offset': 1.5}}
+    )
 
     assert [client.output(r, 'value') for r in tuned] == [10.5, 11.5, 12.5]
     assert client.output(plain, 'value') == 11.5
@@ -126,14 +142,18 @@ def test_an_accumulator_loads_its_run_once_across_reads(
     client: Client, loaded: list[float]
 ) -> None:
     summed = client.accumulator(
-        Template(TOTAL, params={'run': dataset(run=1)}, blanks=('offsets',))
+        Template(
+            TOTAL, params={'sample': {'file': dataset(run=1)}}, blanks=('offsets',)
+        )
     )
     reads = []
     for offset in (0.5, 1.5, 2.5):
         summed.push({'offsets': {'offset': offset}})
         reads.append(client.output(summed, 'total'))
     offsets = [{'offset': x} for x in (0.5, 1.5, 2.5)]
-    plain = client.compute(TOTAL, {'run': dataset(run=1), 'offsets': offsets})
+    plain = client.compute(
+        TOTAL, {'sample': {'file': dataset(run=1)}, 'offsets': offsets}
+    )
 
     assert reads == [10.5, 22.0, 34.5]
     assert client.output(plain, 'total') == 34.5
@@ -142,9 +162,11 @@ def test_an_accumulator_loads_its_run_once_across_reads(
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
     annotate = client.stage(
-        Template(SHIFT, params={'run': dataset(run=1)}, blanks=('note',))
+        Template(
+            SHIFT, params={'sample': {'file': dataset(run=1)}}, blanks=('annotation',)
+        )
     )
-    noted = client.compute(annotate, {'note': 'first try'})
+    noted = client.compute(annotate, {'annotation': {'note': 'first try'}})
 
     assert client.output(noted, 'value') == 10.0
 
@@ -155,14 +177,16 @@ def test_a_parameter_without_a_sciline_key_fails_the_record(
     datasets = FakeDatasets(proposal='p1')
     datasets.measure(1, 1.0)
     binding = PipelineBinding(
-        pipeline, params={'run': Run, 'offset': Offset}, outputs={'value': Shifted}
+        pipeline,
+        params={'sample.file': Run, 'shift.offset': Offset},
+        outputs={'value': Shifted},
     )
     backend = Backend(datasets, {SHIFT: binding})
     client = Client(backend, proposal='p1', submitter='anna')
 
-    record = client.compute(SHIFT, {'run': dataset(run=1)})
+    record = client.compute(SHIFT, {'sample': {'file': dataset(run=1)}})
     backend.close()
 
     assert client.status(record) is Status.FAILED
     assert 'no sciline key' in client.failure(record)
-    assert 'note' in client.failure(record)
+    assert 'annotation' in client.failure(record)
