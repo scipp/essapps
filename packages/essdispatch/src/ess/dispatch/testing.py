@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""Fakes for tests: a dataset source whose datasets a test makes appear."""
+"""
+Fakes for tests: a dataset source whose datasets a test makes appear, and a
+store held in memory.
+"""
 
 from __future__ import annotations
 
+import copy
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -78,3 +82,38 @@ class FakeDatasets:
                 fresh = [r for r in self.list(selector) if r not in seen]
             seen.update(fresh)
             yield from fresh
+
+
+class FakeStore:
+    """
+    A store held in memory.
+
+    It keeps a copy of each value written and returns a copy of it, as a
+    store that writes files reads back a new value each time. ``fill`` makes
+    every write fail, as a full disk does, until ``free``.
+    """
+
+    def __init__(self) -> None:
+        self._values: dict[tuple[str, str], Any] = {}
+        self._full = False
+        self._lock = threading.Lock()
+
+    def fill(self) -> None:
+        self._full = True
+
+    def free(self) -> None:
+        self._full = False
+
+    def write(self, record: str, output: str, value: Any) -> None:
+        if self._full:
+            raise OSError('no space left on device')
+        with self._lock:
+            self._values[(record, output)] = copy.deepcopy(value)
+
+    def read(self, record: str, output: str) -> Any:
+        with self._lock:
+            return copy.deepcopy(self._values[(record, output)])
+
+    def __contains__(self, key: tuple[str, str]) -> bool:
+        with self._lock:
+            return key in self._values

@@ -64,7 +64,7 @@ class DatasetSource(Protocol):
     A backend has one. It resolves names and reads datasets through it, and
     answers through it the queries of its clients: listing datasets, waiting
     for new ones, and reading their metadata. A client sees only the datasets
-    its proposal may read.
+    its proposal may read. Tests use a fake (``testing.FakeDatasets``).
     """
 
     def resolve(self, name: DatasetRef) -> DatasetRef:
