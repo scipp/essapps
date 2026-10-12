@@ -89,4 +89,4 @@ Lifting the first rule later breaks no code.
 - A failure to add reaches the driver at its next push or pin, not from `push` itself.
 - A binding must not return an output that shares memory with an input, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
 - The first pin of each state checks its plain request, about 1.3 ms at 300 rows and 4 ms at 1000. Story D7 pins after every push, so its total grows with the square of the pushes, to 0.2 s for 300 and 2 s for 1000.
-- Two accumulators that both still grow cannot meet in one request. A finished one is used through the record that `freeze` returns.
+- A request that reads two accumulators holds back the next push of both until it has run.
