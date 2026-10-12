@@ -10,8 +10,8 @@ A record never changes; its status changes once, from pending to finished,
 and is asked with :meth:`Client.status` or :meth:`Client.wait`.
 
 A call that starts work returns once the backend has checked and logged it:
-:meth:`Client.submit`, :meth:`Client.accumulator`, and
-:meth:`Accumulator.push`. It checks models and the references it names
+:meth:`Client.submit`, :meth:`Client.accumulator`, :meth:`Accumulator.push`,
+and :meth:`Client.freeze`. It checks models and the references it names
 against what the backend knows now, and leaves reading data and computing to
 the backend's workers. Only the calls that read results wait for that work:
 :meth:`Client.wait`, :meth:`Client.compute`, :meth:`Client.output`, and
@@ -40,7 +40,7 @@ from pydantic import BaseModel
 
 from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
 
-from .backend import Backend, Entry
+from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
 from .records import Record, Request, Row, SpecId, Template
 
@@ -381,6 +381,22 @@ class Client:
         push = functools.partial(self._backend.push, accumulator_id, client=self._id)
         return Accumulator(resolved, accumulator_id, outputs, push)
 
+    def freeze(self, accumulator: Accumulator) -> Record:
+        """
+        The record of the accumulator's last state, the state after the pushes
+        so far; the client keeps it, and the accumulator takes no more pushes.
+
+        The record's outputs are what the held state returns, computed once
+        and not copied. Once the record has completed, the accumulator is
+        read through it: a read of the accumulator is refused and names the
+        record, and the held state is dropped once its readers are done. A
+        freeze is refused, and the accumulator takes pushes again, if the
+        plain request of the state would be refused; a push made meanwhile
+        waits for that answer. If the record fails or is cancelled, the
+        accumulator can be read and frozen again.
+        """
+        return self._backend.freeze(accumulator.id, client=self._id)
+
     def release(self, what: Any) -> None:
         """
         Release records, stages, or accumulators: one, a list, or a dict.
@@ -398,7 +414,13 @@ class Client:
 
     # Reading
 
-    def output(self, what: Record | Accumulator, name: str | None = None) -> Any:
+    def output(
+        self,
+        what: Record | Accumulator,
+        name: str | None = None,
+        *,
+        select: Selection | None = None,
+    ) -> Any:
         """
         The value of an output, or every output returned, by name, if ``name``
         is None; an optional output that was not returned is left out.
@@ -408,12 +430,23 @@ class Client:
         for one that fails or is cancelled. An accumulator's are those of its
         state after the pushes so far, once they are added, copied, so that
         like a record's they do not change.
+
+        ``select`` picks part of the named array output by dimension name, an
+        index or a slice for each dimension it names, such as
+        ``{'q': slice(0, 10)}``, and copies only that part; it makes no
+        record. It is refused for an output not declared as an array; a
+        dimension the output lacks, or an index out of range, raises what the
+        slice raises. A read of an accumulator holds back its next push while
+        the state is checked, its outputs are computed if no reader has yet,
+        and the part is copied.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
-            values = self._backend.accumulator_outputs(what.id, names, self._id)
+            values = self._backend.accumulator_outputs(
+                what.id, names, self._id, select=select
+            )
         else:
-            values = self._backend.outputs(what.id, names, self._id)
+            values = self._backend.outputs(what.id, names, self._id, select=select)
         return values if name is None else values[name]
 
     def records(self, *, label: str | None = None) -> list[Record]:
