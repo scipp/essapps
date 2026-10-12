@@ -41,6 +41,7 @@ A client chooses per output.
 `persist=` at submission or at `client.freeze` keeps it only in the store, as batch reduction and the trigger loop need.
 A failed write fails a record that was persisted at submission, so a driver sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
+A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history.
 
 **The same rules hold in the user's process and on the service.** What differs:
 
@@ -83,7 +84,7 @@ Each pending record is
 
 ## Open
 
-To be designed with the service (scipp/essapps#23, scipp/essapps#27, scipp/essapps#34):
+To be designed with the service (scipp/essapps#27):
 
 - How the cap per client is set, where a client's values are held when its work spreads over nodes, and how the service notices a client whose process ended.
 - How the service holds an accumulator's held state. One cluster job per accumulator, with a memory size and deadline that its client declares, fits a spectroscopy volume of hundreds of GB. That rests on items Assumed or Open in [spectroscopy](../../requirements/spectroscopy.md), and on whether the service may submit cluster jobs ([systems](../../requirements/systems.md)). Most held states are small, such as 0.34 MB for LoKI's I(Q).
