@@ -60,10 +60,10 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | record | a request as the backend logged it. A record never changes, only its status. |
 | reference | an input that points to an output or a dataset |
 | label, member | names under which records are found later |
-| template | a spec with *fixed values* for some groups and tables and *blanks* for the others |
+| template | a spec with *fixed values* for some parameters and *blanks* for the others |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
 | dataset source | where a backend finds datasets |
-| group | a parameter that holds a flat model, such as the settings of one reduction step or one run |
+| group | a parameter that holds a flat model, such as the settings of one reduction step, or one run |
 | table, row | a parameter that holds a list of rows. A row is one run, or the runs that belong together. |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
@@ -95,10 +95,9 @@ A *workflow* is a computation that a package offers.
 **Spec.** A workflow package declares a spec (`ess.spec.WorkflowSpec`) for each workflow.
 Its params and outputs are pydantic models with field types from `ess.spec`.
 A *data field* holds data, such as an array or a file, and a request gives its value by reference (see References).
-Each field of a params model is a *group* or a *table*.
-A group is a flat model, one whose fields are never another model or table, and a table is a list of a flat model (see Combining runs: tables).
-A group and a row of a table are the same kind of model.
-So the single-run spec takes `sample: Run` where the multi-run spec takes `sample_runs: list[Run]`.
+Each parameter, a field of the params model, is a *group* or a *table*.
+A group holds a flat model, one whose fields are never another model or table, and a table holds a list of them (see Combining runs: tables).
+So a group and a row of a table are the same kind of model, and the single-run spec takes `sample: Run` where the multi-run spec takes `sample_runs: list[Run]`.
 
 ```python
 class Run(BaseModel):                       # a group of IOFQ, and a row of a table
@@ -125,7 +124,7 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
 
 A request computes every output its spec declares.
 
-**Binding.** The simplest binding is a function that takes the groups and tables by name and returns the outputs by name.
+**Binding.** The simplest binding is a function that takes the parameters by name and returns the outputs by name.
 It gets a group as a dict of its fields, as it gets each row of a table:
 
 ```python
@@ -134,7 +133,7 @@ def iofq(sample, can, reduction, corrections) -> dict:
     return {'iofq': result}
 ```
 
-The backend passes every group and table, with the defaults of the params model filled in.
+The backend passes every parameter, with the defaults of the params model filled in.
 Defaults belong in the params model only.
 A binding must not modify its inputs or return an output that shares memory with an input.
 `ess.spec.testing` checks this for values backed by numpy.
@@ -219,10 +218,10 @@ client.records(label='iofq')                          # oldest first; without la
 
 ## Templates
 
-A *template* is a spec, its fixed values, and its blanks, the names of the groups and tables left open.
+A *template* is a spec, its fixed values, and its blanks, the names of the parameters left open.
 Stages, accumulators, and automatic reduction are built from templates.
 A template can be made from any request's values.
-A blank is a whole group or table, never a field inside one.
+A blank is a whole parameter, never a field of a group.
 A name in `blanks` drops the value given for it:
 
 ```python
@@ -329,13 +328,10 @@ client.datasets.metadata(run)['sample']                       # the source's cur
 ## Combining runs: tables
 
 Many reductions combine several runs, such as the sample and can runs of SANS.
-A spec takes them as *tables*, next to the groups that all runs share.
+A spec takes them as *tables*, next to the parameters that all runs share.
 A table is a list of *rows*.
-A row is a *flat* model, whose fields are never another model or table.
-A group is a flat model too, so a group and a row are the same kind of model.
+A row is a *flat* model, whose fields are never another model or table, as a group is.
 The single-run spec takes `sample: Run` where the multi-run spec takes `sample_runs: list[Run]`.
-A blank is a whole group or table, and a binding gets a group, like a row, as a dict of its fields.
-The client takes models or dicts for groups and rows alike.
 
 ```python
 class Run(BaseModel):
@@ -498,7 +494,7 @@ The held state is dropped once the readers of its states are done.
 The backend calls a binding in two steps:
 
 ```python
-call = binding.stage(fixed, blanks)   # fixed: {name: group or table as dicts}; blanks: the names left open
+call = binding.stage(fixed, blanks)   # fixed: {name: value}; blanks: the names left open
 call(reduction={'bins': 50})          # values for the blanks; once per call through the stage
 ```
 
