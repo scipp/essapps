@@ -273,7 +273,7 @@ class Client:
     def submit(
         self,
         what: Any,
-        params: dict[str, Any] | None = None,
+        params: dict[str, Any] | BaseModel | None = None,
         *,
         label: str | None = None,
         member: str | None = None,

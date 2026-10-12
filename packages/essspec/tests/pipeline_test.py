@@ -56,6 +56,33 @@ def test_a_group_mapped_as_a_whole_sets_its_values() -> None:
     assert binding.stage(values, ())() == {'value': 10.5}
 
 
+def test_an_optional_group_mapped_by_paths_sets_its_keys_to_none() -> None:
+    def shift_or_not(loaded: Loaded, offset: Offset) -> Shifted:
+        return Shifted(loaded + (offset or 0.0))
+
+    binding = PipelineBinding(
+        sciline.Pipeline([shift_or_not]),
+        params={'run.loaded': Loaded, 'shift.offset': Offset},
+        outputs={'value': Shifted},
+    )
+    staged = binding.stage({'run': {'loaded': 10.0}}, ('shift',))
+
+    assert binding.stage({'run': {'loaded': 10.0}, 'shift': None}, ())() == {
+        'value': 10.0
+    }
+    assert staged(shift=None) == {'value': 10.0}
+    assert staged(shift={'offset': 0.5}) == {'value': 10.5}
+
+
+def test_a_group_mapped_as_a_whole_and_by_paths_is_refused() -> None:
+    with pytest.raises(ValueError, match='as a whole and by paths'):
+        PipelineBinding(
+            sciline.Pipeline([shift]),
+            params={'shift': Offset, 'shift.offset': Offset},
+            outputs={'value': Shifted},
+        )
+
+
 @pytest.mark.parametrize(
     ('fixed', 'blanks'),
     [

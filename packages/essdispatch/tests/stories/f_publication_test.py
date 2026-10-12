@@ -13,8 +13,8 @@ from ess.dispatch import Client, SubmitError, Template
 from .conftest import (
     BEAM_CENTRE,
     IOFQ,
+    BeamCentreParams,
     Corrections,
-    DirectBeamParams,
     IofQParams,
     Measure,
     Reduction,
@@ -30,7 +30,7 @@ def test_f1_publish_then_trace_six_months_later(
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
     centre = client.compute(
-        BEAM_CENTRE, DirectBeamParams(direct_beam=Run(run=centre_run))
+        BEAM_CENTRE, BeamCentreParams(direct_beam=Run(run=centre_run))
     )
     tune = client.stage(
         Template(

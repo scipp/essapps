@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from .data import group_fields, table_fields
 
@@ -125,16 +125,13 @@ class WorkflowSpec(_SpecFields, frozen=True):
 
     @field_validator('params', 'outputs')
     @classmethod
-    def _groups_and_rows_are_flat(cls, model: type[BaseModel]) -> type[BaseModel]:
-        group_fields(model)  # raises if a group holds a model or a table
-        table_fields(model)  # raises if a row holds a model or a table
-        return model
-
-    @field_validator('params')
-    @classmethod
-    def _params_are_groups_and_tables(cls, model: type[BaseModel]) -> type[BaseModel]:
+    def _check_shape(
+        cls, model: type[BaseModel], info: ValidationInfo
+    ) -> type[BaseModel]:
+        # group_fields and table_fields raise if a group or a row is not flat
         flat = group_fields(model).keys() | table_fields(model).keys()
-        if loose := [name for name in model.model_fields if name not in flat]:
+        loose = [name for name in model.model_fields if name not in flat]
+        if info.field_name == 'params' and loose:
             raise ValueError(
                 f'{model.__name__}: {loose}: each field of a params model is a '
                 'group (a flat model) or a table (a list of a flat model)'
@@ -168,9 +165,11 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     and outputs are represented as JSON Schema, sufficient for form generation
     and optimistic validation but not for authoritative validation — that
     remains with the process owning the model classes. Data fields carry a
-    ``dataField`` key with their format and array structure. A table field is an
-    array whose ``items`` refer (``$ref``) to the row model under ``$defs``; the
-    row's properties carry the ``dataField`` key of its data fields.
+    ``dataField`` key with their format and array structure. A group refers
+    (``$ref``) to its model under ``$defs``, through ``anyOf`` with ``null`` if
+    it is optional; a table field is an array whose ``items`` refer to the row
+    model. The model's properties carry the ``dataField`` key of its data
+    fields.
     """
 
     params_schema: dict[str, Any] = Field(

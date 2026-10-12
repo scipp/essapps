@@ -137,7 +137,7 @@ def iofq_v2(reduction: Mapping[str, Any], **groups: Any) -> dict[str, sc.Variabl
     return iofq(reduction=renamed, **groups)
 
 
-class DirectBeamParams(BaseModel):
+class BeamCentreParams(BaseModel):
     direct_beam: Run
 
 
@@ -145,7 +145,7 @@ class CentreOutputs(BaseModel):
     centre: Array()  # type: ignore[valid-type]
 
 
-BEAM_CENTRE = _spec('beam-centre', DirectBeamParams, CentreOutputs)
+BEAM_CENTRE = _spec('beam-centre', BeamCentreParams, CentreOutputs)
 
 
 def beam_centre(direct_beam: Mapping[str, Any]) -> dict[str, sc.Variable]:
@@ -314,7 +314,7 @@ def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
     return {'counts': _array(runs)}
 
 
-class Data(BaseModel):
+class Volume(BaseModel):
     data: Array()  # type: ignore[valid-type]
 
 
@@ -323,7 +323,7 @@ class Position(BaseModel):
 
 
 class CutParams(BaseModel):
-    source: Data
+    volume: Volume
     position: Position
 
 
@@ -335,9 +335,9 @@ CUT = _spec('cut', CutParams, CutOutputs)
 
 
 def cut(
-    source: Mapping[str, Any], position: Mapping[str, Any]
+    volume: Mapping[str, Any], position: Mapping[str, Any]
 ) -> dict[str, sc.Variable]:
-    return {'cut': source['data'][position['index']].copy()}
+    return {'cut': volume['data'][position['index']].copy()}
 
 
 class StitchParams(BaseModel):
@@ -362,8 +362,12 @@ def stitch(
     return {'stitched': _array(np.concatenate(scaled))}
 
 
+class Result(BaseModel):
+    data: Array()  # type: ignore[valid-type]
+
+
 class ExportParams(BaseModel):
-    source: Data
+    result: Result
 
 
 class ExportOutputs(BaseModel):
@@ -373,8 +377,8 @@ class ExportOutputs(BaseModel):
 EXPORT = _spec('export', ExportParams, ExportOutputs)
 
 
-def export(source: Mapping[str, Any]) -> dict[str, str]:
-    return {'text': ','.join(str(v) for v in source['data'].values)}
+def export(result: Mapping[str, Any]) -> dict[str, str]:
+    return {'text': ','.join(str(v) for v in result['data'].values)}
 
 
 TOYS = {

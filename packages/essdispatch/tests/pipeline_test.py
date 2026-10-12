@@ -187,4 +187,4 @@ def test_a_parameter_without_a_sciline_key_fails_the_record(
 
     assert client.status(record) is Status.FAILED
     assert 'no sciline key' in client.failure(record)
-    assert 'note' in client.failure(record)
+    assert 'annotation' in client.failure(record)

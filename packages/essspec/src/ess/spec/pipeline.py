@@ -9,6 +9,7 @@ This is the only module of ``ess.spec`` that imports sciline (extra
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -23,14 +24,15 @@ class PipelineBinding:
     """
     A sciline pipeline behind a spec.
 
-    ``params`` maps each params field to the sciline key it sets: a group or a
-    table as a whole by its name, or a field of a group by its path, such as
-    ``'sample.run'``. ``outputs`` maps each output field to the key that
-    computes it. A stage sets the fixed values on a copy of the pipeline and
-    cuts it at the keys of the blanks with ``sciline.Stage``, which computes
-    what does not depend on them on the first call and holds it. A key that no
-    output depends on is not fed: its value cannot change the outputs, and the
-    plain request succeeds too.
+    ``params`` maps each parameter to the sciline key it sets: a group or a
+    table as a whole by its name, or each field of a group by its path, such as
+    ``'sample.run'``. A group set to ``None`` sets each key of its paths to
+    ``None``. ``outputs`` maps each output field to the key that computes it. A
+    stage sets the fixed values on a copy of the pipeline and cuts it at the
+    keys of the blanks with ``sciline.Stage``, which computes what does not
+    depend on them on the first call and holds it. A key that no output depends
+    on is not fed: its value cannot change the outputs, and the plain request
+    succeeds too.
     """
 
     def __init__(
@@ -41,25 +43,25 @@ class PipelineBinding:
         outputs: Mapping[str, Key],
     ) -> None:
         self._pipeline = pipeline
-        self._params = dict(params)
+        self._keys: dict[str, dict[str, Key]] = defaultdict(dict)
+        for path, key in params.items():
+            self._keys[path.split('.')[0]][path] = key
+        if both := [n for n, keys in self._keys.items() if n in keys and len(keys) > 1]:
+            raise ValueError(f'{both}: mapped as a whole and by paths')
         self._outputs = dict(outputs)
 
     def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
+        if unknown := set(blanks) - self._keys.keys():
+            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
         pipeline = self._pipeline.copy()
         for key, value in self._by_key(fixed).items():
             pipeline[key] = value
-        blank_keys = {
-            path: key
-            for path, key in self._params.items()
-            if path.split('.')[0] in blanks
-        }
-        if unknown := set(blanks) - {path.split('.')[0] for path in blank_keys}:
-            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
         targets = tuple(self._outputs.values())
         fed: tuple[Key, ...] = ()
         if blanks:
             used = sciline.Stage(pipeline, outputs=targets, inputs=()).keys
-            fed = tuple(key for key in blank_keys.values() if key in used)
+            blank_keys = (key for name in blanks for key in self._keys[name].values())
+            fed = tuple(key for key in blank_keys if key in used)
         stage = sciline.Stage(pipeline, outputs=targets, inputs=fed)
 
         def call(**values: Any) -> dict[str, Any]:
@@ -70,16 +72,24 @@ class PipelineBinding:
         return call
 
     def _by_key(self, values: Mapping[str, Any]) -> dict[Key, Any]:
-        """
-        ``values`` by the sciline key each sets: a field mapped as a whole,
-        or each field of a group mapped by its path.
-        """
-        paths: dict[str, Any] = {}
+        """``values`` by the sciline key each sets."""
+        by_key: dict[Key, Any] = {}
+        unknown: list[str] = []
         for name, value in values.items():
-            if name not in self._params and isinstance(value, Mapping):
-                paths.update({f'{name}.{field}': v for field, v in value.items()})
+            keys = self._keys.get(name, {})
+            if name in keys:
+                by_key[keys[name]] = value
+            elif keys and value is None:
+                by_key.update(dict.fromkeys(keys.values()))
+            elif keys and isinstance(value, Mapping):
+                for field, v in value.items():
+                    path = f'{name}.{field}'
+                    if path in keys:
+                        by_key[keys[path]] = v
+                    else:
+                        unknown.append(path)
             else:
-                paths[name] = value
-        if unknown := paths.keys() - self._params.keys():
+                unknown.append(name)
+        if unknown:
             raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
-        return {self._params[path]: value for path, value in paths.items()}
+        return by_key

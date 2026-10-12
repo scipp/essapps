@@ -47,13 +47,15 @@ def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
 
 def as_values(value: Any) -> Any:
     """
-    ``value`` with each model in it, but a reference, as a dict of its fields.
+    ``value`` with each model in it, but a reference, as a dict of the fields
+    that were given.
 
     So a request, a template, and a push take a params model, a group, or a
-    row as a model or as a dict alike.
+    row as a model or as a dict alike. Defaults are left out, as they are of a
+    dict, so that the backend fills in those of its own spec.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        return {f: as_values(getattr(value, f)) for f in type(value).model_fields}
+        return as_refs(value.model_dump(exclude_unset=True))
     if isinstance(value, dict):
         return {k: as_values(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -142,7 +144,7 @@ class Template:
         object.__setattr__(self, 'spec', SpecId.of(self.spec))
         object.__setattr__(self, 'params', kept)
 
-    def fill(self, values: dict[str, Any]) -> Request:
+    def fill(self, values: dict[str, Any] | BaseModel) -> Request:
         """The request with the blanks filled by ``values``."""
         values = as_values(values)
         if set(values) != set(self.blanks):

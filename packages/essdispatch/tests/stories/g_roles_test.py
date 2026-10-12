@@ -14,8 +14,8 @@ from ess.dispatch.testing import FakeDatasets
 from .conftest import (
     BEAM_CENTRE,
     IOFQ,
+    BeamCentreParams,
     Corrections,
-    DirectBeamParams,
     IofQParams,
     Measure,
     Run,
@@ -47,7 +47,7 @@ def test_g5_reference_across_proposals_refused(
     mine = connect(proposal='p2', user='eve')
     centre = theirs.compute(
         BEAM_CENTRE,
-        DirectBeamParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))),
+        BeamCentreParams(direct_beam=Run(run=measure(1, [1.0, 1.0], proposal='p1'))),
     )
     sample = measure(2, [2.0, 2.0], proposal='p2')
 

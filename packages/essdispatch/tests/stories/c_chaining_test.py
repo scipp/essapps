@@ -16,12 +16,12 @@ from .conftest import (
     IOFQ,
     STITCH,
     VANADIUM,
+    BeamCentreParams,
     Corrections,
-    Data,
-    DirectBeamParams,
     ExportParams,
     IofQParams,
     Measure,
+    Result,
     Run,
     Scaling,
     StitchParams,
@@ -35,7 +35,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(
         BEAM_CENTRE,
-        DirectBeamParams(direct_beam=Run(run=centre_run)),
+        BeamCentreParams(direct_beam=Run(run=centre_run)),
         label='beam-centre',
     )
     samples = [
@@ -100,7 +100,7 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         STITCH, StitchParams(runs=rows, reference=Run(run=reference))
     )
     exported = client.compute(
-        EXPORT, ExportParams(source=Data(data=stitched.ref('stitched')))
+        EXPORT, ExportParams(result=Result(data=stitched.ref('stitched')))
     )
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
@@ -165,7 +165,5 @@ def test_c5_vanadium_and_sample_tuned_together(
         [1.0, 2.0],
     ]  # [4, 8] divided by 2, then by 4
     assert client.records(label='iofq') == reduced
-    assert reduced[-1].request.params['corrections'] == {
-        'beam_centre': None,
-        'normalization': client.latest('vanadium').ref('normalization'),
-    }
+    normalization = reduced[-1].request.params['corrections']['normalization']
+    assert normalization == client.latest('vanadium').ref('normalization')

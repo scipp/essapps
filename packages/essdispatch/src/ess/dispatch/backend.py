@@ -233,16 +233,7 @@ def _values(model: BaseModel) -> dict[str, Any]:
     The values of a params model by field, a group and each row of a table as
     a dict, so that the data its references name can take their place.
     """
-    groups, tables = group_fields(type(model)), table_fields(type(model))
-    values = {f: getattr(model, f) for f in type(model).model_fields}
-    return {
-        f: dict(v)
-        if f in groups and v is not None
-        else [dict(row) for row in v]
-        if f in tables and v is not None
-        else v
-        for f, v in values.items()
-    }
+    return as_refs(model.model_dump())
 
 
 def _required(outputs: type[BaseModel]) -> frozenset[str]:

@@ -35,6 +35,15 @@ class SubtractParams(BaseModel):
     can: Run
 
 
+class Measurement(BaseModel):
+    file: NexusFile
+
+
+class MeasureParams(BaseModel):
+    sample: Measurement
+    can: Measurement
+
+
 class ValueOutputs(BaseModel):
     value: Array()  # type: ignore[valid-type]
 
@@ -52,6 +61,7 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
 
 LOAD = _spec('load', LoadParams)
 SUBTRACT = _spec('subtract', SubtractParams)
+MEASURE = _spec('measure', MeasureParams)
 
 
 @pytest.fixture
@@ -66,6 +76,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
         {
             LOAD: lambda sample: {'value': sample['run']},
             SUBTRACT: lambda sample, can: {'value': sample['run'] - can['run']},
+            MEASURE: lambda sample, can: {'value': sample['file'] - can['file']},
         },
         store=FakeStore(),
     )
@@ -138,3 +149,17 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
         "a dataset fills one blank; ('sample', 'can') leave ['sample', 'can']"
     )
     assert loop.status(load).reason is None
+
+
+def test_a_dataset_goes_in_the_field_of_its_group_that_dataset_field_names(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    datasets.measure(1, 1.0, role='can')
+    sample = datasets.measure(2, 5.0, role='sample')
+    cans = Lookup(can=LastBefore(Selector(role='can')))
+    template = Template(MEASURE, blanks=('sample', 'can'))
+    requests = apply(
+        template, [sample], client.datasets, dataset_field='file', lookup=cans
+    )
+
+    assert client.output(client.compute(requests['2']), 'value') == 4.0

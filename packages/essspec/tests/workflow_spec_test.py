@@ -243,6 +243,27 @@ class TestSerialization:
         iofq = restored.outputs_schema['properties']['iofq']
         assert ArraySpec.model_validate(iofq['dataField']['array']) == IOFQ
 
+    def test_groups_keep_data_fields_in_schema(self) -> None:
+        spec = WorkflowSpec(
+            name='wf',
+            version=1,
+            title='W',
+            description='D',
+            params=OptionalGroups,
+            outputs=Result,
+        )
+        schema = SerializedWorkflowSpec.model_validate_json(
+            spec.serialize().model_dump_json()
+        ).params_schema
+        properties = schema['properties']
+        refs = [
+            properties['sample']['$ref'],
+            *(m['$ref'] for m in properties['can']['anyOf'] if '$ref' in m),
+        ]
+        for ref in refs:
+            group = schema['$defs'][ref.removeprefix('#/$defs/')]
+            assert group['properties']['run']['dataField'] == {'format': 'nexus'}
+
     def test_table_rows_keep_data_fields_in_schema(self) -> None:
         spec = WorkflowSpec(
             name='wf', version=1, title='W', description='D', outputs=PartsTable

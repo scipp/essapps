@@ -20,15 +20,16 @@ asks for the form it wants. Collections of data fields, ``list[...]`` and
 ``dict[str, ...]`` of one declared type, are allowed and a reference may name one
 element of a collection output.
 
-A field may also be a *group*, a flat pydantic model, or a *table*, ``list[Row]``
-with ``Row`` a flat model. A flat model's fields are literals and data fields
-(collections included) but never a model or a table. A UI shows a group as a
-section of a form, and a table as rows and columns, one row per element and
-one column per field, so related inputs such as a sample run and its
-transmission run stay paired. A group and a row are the same kind of model: a
-single-run spec takes ``sample: SampleRun`` where a multi-run spec takes
-``samples: list[SampleRun]``. A reference names a whole field of a params or
-outputs model, never a field of a group, a row, or a cell. See
+Data fields sit in *groups* and *tables*. Each field of a params model is a
+group, a flat pydantic model, or a table, ``list[Row]`` with ``Row`` a flat
+model; an outputs model may hold them next to data fields. A flat model's
+fields are literals and data fields (collections included) but never a model
+or a table. A UI shows a group as a section of a form, and a table as rows and
+columns, one row per element and one column per field, so related inputs such
+as a sample run and its transmission run stay paired. A group and a row are the
+same kind of model: a single-run spec takes ``sample: Sample`` where a
+multi-run spec takes ``samples: list[Sample]``. A reference names a whole
+output field, never a field of a group, a row, or a cell. See
 :func:`group_fields` and :func:`table_fields`.
 
 This module imports no scipp; the structural check of a scipp object against its

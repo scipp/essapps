@@ -11,7 +11,6 @@ from .conftest import (
     NORMALIZE,
     AngleParams,
     CutParams,
-    Data,
     IofQParams,
     Measure,
     NormalizeParams,
@@ -19,6 +18,7 @@ from .conftest import (
     Reduction,
     Run,
     Scaling,
+    Volume,
 )
 
 
@@ -84,7 +84,7 @@ def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]
     fit = client.compute(
         CUT,
-        CutParams(source=Data(data=volume.ref('counts')), position=Position(index=2)),
+        CutParams(volume=Volume(data=volume.ref('counts')), position=Position(index=2)),
     )
 
     assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]

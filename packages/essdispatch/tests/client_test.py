@@ -47,7 +47,7 @@ from ess.spec import (
 )
 
 
-class RunParams(BaseModel):
+class Run(BaseModel):
     run: NexusFile
 
 
@@ -61,7 +61,7 @@ class LoadOutputs(BaseModel):
 
 
 class LoadParams(BaseModel):
-    sample: RunParams
+    sample: Run
 
 
 class Shift(BaseModel):
@@ -78,7 +78,7 @@ class Factor(BaseModel):
 
 
 class ScaleParams(BaseModel):
-    sample: RunParams
+    sample: Run
     scaling: Factor = Field(default_factory=Factor)
 
 
@@ -230,7 +230,7 @@ class Scale(BaseModel):
 
 
 class SumParams(BaseModel):
-    runs: list[RunParams]
+    runs: list[Run]
     scale: Scale = Field(default_factory=Scale)
     offset: Parts | None = None
 
@@ -259,7 +259,7 @@ class MeanScale(BaseModel):
 
 
 class MeanSumParams(BaseModel):
-    runs: list[RunParams]
+    runs: list[Run]
     scale: MeanScale = Field(default_factory=MeanScale)
     offset: Parts | None = None
 
@@ -273,7 +273,7 @@ class MeanSumParams(BaseModel):
         return self
 
 
-class TaggedRun(RunParams):
+class TaggedRun(Run):
     tag: Any = None
 
 
@@ -1386,6 +1386,13 @@ def test_a_reference_in_a_row_must_fit_its_field(client: Client) -> None:
         client.submit(FILES_SUM, {'files': [{'value': load.ref('value')}]})
 
 
+def test_a_reference_in_a_group_must_fit_its_field(client: Client) -> None:
+    files = client.submit(FILES_SUM, {'files': [{'value': dataset(run=1)}]})
+
+    with pytest.raises(SubmitError, match=r'^source\.value: .* does not fit'):
+        client.submit(SHIFT, {'source': {'value': files.ref('value')}})
+
+
 def test_each_row_of_a_table_needs_every_field(client: Client) -> None:
     loads = [
         client.submit(LOAD, {'sample': {'run': {'dataset': f'run:{n}'}}})
@@ -1396,16 +1403,15 @@ def test_each_row_of_a_table_needs_every_field(client: Client) -> None:
         client.submit(PAIRS, {'pairs': [loads[0].refs(), loads[1].refs('value')]})
 
 
-def test_a_params_model_makes_the_request_of_its_dict(client: Client) -> None:
-    by_model = client.compute(LOAD, LoadParams(sample=RunParams(run=dataset(run=1))))
-    by_dict = client.compute(LOAD, {'sample': {'run': dataset(run=1)}})
+def test_a_params_model_makes_the_request_of_its_dict() -> None:
+    by_model = Request(SCALE, ScaleParams(sample=Run(run=dataset(run=1))))
+    by_dict = Request(SCALE, {'sample': {'run': dataset(run=1)}})
 
-    assert by_model.request == by_dict.request
-    assert client.output(by_model, 'value') == client.output(by_dict, 'value')
+    assert by_model == by_dict  # defaults left to the backend's spec
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:
-    load = client.submit(LOAD, LoadParams(sample=RunParams(run=dataset(run=1))))
+    load = client.submit(LOAD, LoadParams(sample=Run(run=dataset(run=1))))
     params = ShiftParams(source=Parts(value=load.ref('value')))
     stage = client.stage(Template(SHIFT, params=params, blanks=('shift',)))
     shifted = client.compute(stage, {'shift': Shift(offset=0.5)})

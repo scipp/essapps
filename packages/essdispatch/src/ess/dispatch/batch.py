@@ -77,10 +77,10 @@ def apply(
 
     ``source`` answers metadata queries, such as ``client.datasets``. Each
     dataset fills the one blank the lookup leaves, a group, in its field
-    ``dataset_field``. The requests are keyed
-    by member: the value of the metadata field ``member_field`` of each
-    dataset. Submitting them under a label makes the keys the members of their
-    records. Raises ``LookupError`` if the request of a dataset cannot be made.
+    ``dataset_field``. The requests are keyed by member: the value of the
+    metadata field ``member_field`` of each dataset. Submitting them under a
+    label makes the keys the members of their records. Raises ``LookupError``
+    if the request of a dataset cannot be made.
     """
     requests, failed = try_apply(
         template,
