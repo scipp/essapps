@@ -186,8 +186,8 @@ class _Blank:
 
 BLANK: Any = _Blank()
 """
-A parameter left open in a template made by :meth:`Template.of`; typed ``Any``
-so that a type checker accepts it for any parameter.
+A parameter left open in a template made by :meth:`Template.from_spec`; typed
+``Any`` so that a type checker accepts it for any parameter.
 """
 
 
@@ -203,7 +203,7 @@ class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    :meth:`of` writes a template with the params model's signature. The
+    :meth:`from_spec` writes a template with the params model's signature. The
     constructor makes one from values in hand: naming a field as a blank drops
     the value given for it, so a template can be made from any request's
     values or a whole params model, which it keeps as a dict. Change a template
@@ -221,39 +221,39 @@ class Template:
         object.__setattr__(self, 'params', kept)
 
     @classmethod
-    def of[**P](cls, spec: _HasParams[P]) -> Callable[P, Template]:
+    def from_spec[**P](
+        cls, spec: _HasParams[P], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Template:
         """
-        A function with the signature of the spec's params model that makes a
-        template; each parameter given as ``BLANK`` is a blank::
+        A template of ``spec`` from the parameters of its params model, given
+        as the params model takes them; each parameter given as ``BLANK`` is a
+        blank::
 
-            Template.of(IOFQ)(sample=BLANK, reduction=Reduction(bins=100))
+            Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
 
         So a type checker reports a misspelt or missing parameter and a value
-        of the wrong type, as it does for the params model. The values given
-        are validated by their own fields (see :func:`model_without`); a
+        of the wrong type, as it does for the params model. Every keyword is a
+        parameter, so this method takes no option of its own. The values
+        given are validated by their own fields (see :func:`model_without`); a
         required parameter may be a blank. Raises ``ValueError`` with what is
         wrong, and ``TypeError`` for a parameter given by position.
         """
         if not isinstance(spec, WorkflowSpec):
             raise TypeError(f'{spec!r}: not a WorkflowSpec')
         spec_id, model = SpecId.of(spec), spec.params
-
-        def make(*args: P.args, **kwargs: P.kwargs) -> Template:
-            if args:
-                raise TypeError(f'{spec_id}: give the parameters by name')
-            fields = model.model_fields
-            blanks = tuple(name for name in fields if kwargs.get(name) is BLANK)
-            given = {k: v for k, v in kwargs.items() if k not in blanks}
-            problems = [f'{k}: not a parameter' for k in given if k not in fields]
-            try:
-                model_without(model, blanks).model_validate(given)
-            except ValidationError as error:
-                problems += validation_problems(error)
-            if problems:
-                raise ValueError(f'{spec_id}: {"; ".join(problems)}')
-            return cls(spec_id, given, blanks)
-
-        return make
+        if args:
+            raise TypeError(f'{spec_id}: give the parameters by name')
+        fields = model.model_fields
+        blanks = tuple(name for name in fields if kwargs.get(name) is BLANK)
+        given = {k: v for k, v in kwargs.items() if k not in blanks}
+        problems = [f'{k}: not a parameter' for k in given if k not in fields]
+        try:
+            model_without(model, blanks).model_validate(given)
+        except ValidationError as error:
+            problems += validation_problems(error)
+        if problems:
+            raise ValueError(f'{spec_id}: {"; ".join(problems)}')
+        return cls(spec_id, given, blanks)
 
     def fill(self, values: dict[str, Any] | BaseModel) -> Request:
         """The request with the blanks filled by ``values``."""

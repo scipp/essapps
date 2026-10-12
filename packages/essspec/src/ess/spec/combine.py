@@ -11,7 +11,7 @@ both combine the rows in the same order::
 
     rows = [c.refs('numerator', 'denominator') for c in contributions]
     client.submit(PARTS_SUM, {'parts': rows})
-    total = client.accumulator(Template.of(PARTS_SUM)(parts=BLANK))
+    total = client.accumulator(Template.from_spec(PARTS_SUM, parts=BLANK))
     total.push({'parts': rows[0]})                   # one row, the same shape
 """
 

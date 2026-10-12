@@ -105,7 +105,7 @@ class WorkflowSpec[M: BaseModel](_SpecFields, frozen=True):
 
     The spec is generic over its params model ``M``, which a type checker
     infers from ``params=``. So code that takes a spec can offer the params
-    model's signature, as ``Template.of`` in ``ess.dispatch`` does.
+    model's signature, as ``Template.from_spec`` in ``ess.dispatch`` does.
     """
 
     # Pyright cannot check a default against M, which only params= decides.
