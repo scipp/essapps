@@ -75,10 +75,10 @@ references an accumulator's output by a placeholder (``AccumulatorRef``). The
 submission makes one record of the plain request of the pinned state for each
 accumulator its requests reference, logs it before them, and the records of
 the requests reference that record's outputs. No client keeps the record of a
-state, so only the requests of that submission read it. A request reads at
-most one accumulator, and a row or a template reads none. A state may be
-read only if its plain request would be accepted. The first read of a state
-validates that request, outside the backend's lock, and a read of a state
+state, so only the requests of that submission read it. A row or a
+template reads no accumulator. A state may be read only if its plain request
+would be accepted. The first read of a state validates that request, outside
+the backend's lock, and a read of a state
 whose request would be refused is refused with that request's reason. So
 rules on a whole table, such as its length, and the params model's own
 validators apply at reads, not at pushes. Validators that read more than one
@@ -642,9 +642,6 @@ class Backend:
     def _prepare(self, entry: Entry, proposal: str) -> Request:
         """
         The request with names resolved and defaults filled; needs no lock.
-
-        A request reads at most one accumulator: it reads a held state in
-        place, so it runs where that held state is (ADR 0003).
         """
         request = entry.request
         try:
@@ -653,11 +650,6 @@ class Backend:
             for field, value in values.items():
                 _check_storable(field, value)
             prepared = Request(request.spec, values)
-            if len(read := {ref.accumulator for ref in prepared.accumulators()}) > 1:
-                raise SubmitError(
-                    f'{request.spec}: a request reads at most one accumulator, '
-                    f'not {len(read)}'
-                )
         except SubmitError as error:
             raise entry.refused(error) from None
         return prepared

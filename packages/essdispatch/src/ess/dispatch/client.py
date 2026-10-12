@@ -181,8 +181,8 @@ class Accumulator:
 
         Submitting the request pins the state after the rows pushed so far,
         makes a record of that state's plain request, and replaces the
-        reference by the same output of that record. A request references at
-        most one accumulator; a row or a template references none.
+        reference by the same output of that record. A row or a template
+        references no accumulator.
         """
         if output not in self.outputs:
             raise KeyError(f'{self.template.spec} has no output {output!r}')

@@ -400,8 +400,7 @@ Pinning does not wait for these pushes to be added.
 | `client.provenance(acc)` | the provenance of the plain request of state n, at once | no |
 
 No client keeps the record of a state that a submission makes ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)), and `client.output` of it raises.
-A request may reference at most one accumulator.
-A row or a template may reference none ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
+A row or a template may reference no accumulator ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
 Only the client that made an accumulator pins it.
 
 A push validates each row against its table's row model.

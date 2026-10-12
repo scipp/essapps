@@ -70,9 +70,9 @@ The pushes up to each pinned state are still added, so a driver may release an a
 **What may pin an accumulator.**
 
 - A row or a template pins none. Its binding could keep the pinned output as long as its own accumulator or stage lives, and the pinned accumulator's next push would wait that long.
-- A request pins at most one. It reads a held state in place, so two would need both held states in one process, which the service may not offer ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), Open).
+- A request may pin several. It reads each held state in place, so the service must hold them in one process or copy all but one ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), Open).
 
-Lifting either rule later breaks no code.
+Lifting the first rule later breaks no code.
 
 ## Alternatives considered
 

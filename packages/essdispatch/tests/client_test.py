@@ -1978,16 +1978,16 @@ def test_references_in_one_submission_pin_one_state_while_rows_are_pushed(
         assert [client.output(r, 'value').tolist() for r in pair] == [[expected]] * 2
 
 
-def test_a_request_that_reads_two_accumulators_is_refused(
+def test_a_request_reads_several_accumulators(
     in_place: Client, loads: list[Record]
 ) -> None:
     client = in_place
     first, second = _total(client), _total(client)
-    for total in (first, second):
-        total.push({'parts': loads[0].refs('value')})
+    first.push({'parts': loads[0].refs('value')})
+    second.push({'parts': loads[1].refs('value')})
 
-    with pytest.raises(SubmitError, match=r'reads at most one accumulator, not 2$'):
-        client.submit(TOTAL, {'parts': [first.refs(), second.refs()]})
+    both = client.compute(TOTAL, {'parts': [first.refs(), second.refs()]})
+    assert client.output(both, 'value').tolist() == [3.0]
     twice = client.compute(TOTAL, {'parts': [first.refs(), first.refs()]})
     assert client.output(twice, 'value').tolist() == [2.0]
 
