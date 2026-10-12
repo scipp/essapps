@@ -415,28 +415,20 @@ The accumulator *stops* if
 
 Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
 
-**Adding waits for readers.** A notebook that uses a binding with `held_state` directly (see What a binding provides) is done with each state before the next push:
-
-```python
-held = binding.held_state(fixed)        # fixed: the template's fixed values
-for run in runs:
-    held.push({'runs': {'run': run}})
-    counts = held.outputs()['counts']   # may be the array the next push adds into
-    show(counts['q', 0])                # done with it before the next push
-```
-
-The framework keeps the same order when pushes and readers run in parallel.
-The example uses the toy specs `VOLUME`, which sums counts over a table of runs, and `CUT`, which takes the value at `index` ([user-stories.md](user-stories.md)):
+**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over a table of runs, and `CUT`, which takes the value at `index` ([user-stories.md](user-stories.md)):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
-cuts = []
 for run in runs:
-    volume.push({'runs': {'run': run}})                                  # returns at once
-    cuts.append(client.submit(CUT, {'data': volume.ref('counts'), 'index': 0}))
+    volume.push({'runs': {'run': run}})   # returns once logged; the backend adds it later
+    cut = client.submit(CUT, {'data': volume.ref('counts'), 'index': 0})
+                                          # pins this state; CUT reads it in place
+    show(client.output(volume, 'counts', select={'q': 0}))
+                                          # pins this state, waits for it, copies the slice
 ```
 
-Each cut sees the state after the push before it in the loop, and the next push waits for that cut.
+`push` and `submit` return once logged, and the backend adds pushes and runs readers in parallel.
+Each reader still sees the state after the push before it in the loop, as if the calls ran one after another.
 In Rust's terms, each reader of a state holds a shared borrow of the held state, and a push waits for a mutable borrow.
 
 The rule is that push n+1 waits for the *readers* of state n:
@@ -447,7 +439,7 @@ The rule is that push n+1 waits for the *readers* of state n:
 It has two reasons ([ADR 0003](adr/0003-accumulators-add-in-place.md)):
 
 - The held state only moves forward. After push n+1 is added, the outputs of state n cannot be computed again.
-- The binding's `push` may change in place the arrays its `outputs()` returned, as with `counts` above.
+- The binding's `push` may change in place the arrays its `outputs()` returned (see What a binding provides).
 
 So no reader sees a value change.
 
@@ -503,6 +495,18 @@ The binding's author promises three things, which the backend does not check:
 
 `combine(operator.add)` is such a binding.
 It combines each field of the rows with `operator.add` (story S4).
+
+Since `push` may change the held state in place, code that calls a held state itself is done with the outputs of each state before the next push:
+
+```python
+held = binding.held_state(fixed)
+for run in runs:
+    held.push({'runs': {'run': run}})
+    counts = held.outputs()['counts']   # may be the array the next push adds into
+    show(counts['q', 0])                # done with it before the next push
+```
+
+The backend keeps this order for every reader (see Adding waits for readers).
 
 For a binding without `held_state`, the held state keeps the rows pushed so far.
 Each state's outputs are computed as its plain request, through one `binding.stage` call, so the work per run repeats for every row so far.
