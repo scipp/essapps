@@ -31,7 +31,7 @@ dependencies = ["pydantic>=2.10"]
 [project.optional-dependencies]
 scipp = ["scipp>=26.3.1"]
 sciline = [
-    # sciline.Stage (ADR 0003 of scipp/essapps) is not released yet; only ess.spec.pipeline imports it.
+    # sciline.Stage (ADR 0003 of scipp/sciline) is not released yet; only ess.spec.pipeline imports it.
     "sciline @ git+https://github.com/scipp/sciline.git@map-reduce-outside-the-graph",
 ]
 test = [
