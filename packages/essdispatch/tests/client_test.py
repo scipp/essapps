@@ -11,7 +11,7 @@ import time
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import numpy as np
 import pytest
@@ -36,6 +36,7 @@ from ess.dispatch.backend import Entry
 from ess.dispatch.log import Log
 from ess.dispatch.testing import FakeDatasets
 from ess.spec import (
+    REPEATED_ROWS,
     AccumulatorRef,
     Array,
     ArraySpec,
@@ -236,6 +237,13 @@ class SumParams(BaseModel):
 
 
 SUM = _spec('sum', SumParams, Parts)
+
+
+class RepeatableParams(SumParams):
+    runs: Annotated[list[Run], REPEATED_ROWS]
+
+
+REPEATABLE = _spec('repeatable', RepeatableParams, Parts)
 
 
 class PositiveScale(Scale):
@@ -465,6 +473,7 @@ def backend(
             FILES_SUM: combine(operator.add),
             SUM: scaled_sum,
             POSITIVE: scaled_sum,
+            REPEATABLE: scaled_sum,
             MEAN_SUM: scaled_sum,
             TAGGED: scaled_sum,
         },
@@ -1103,6 +1112,64 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
     assert client.output(mean, 'mean') == 1.5
 
 
+def test_a_row_equal_to_an_earlier_one_is_refused_at_the_push(client: Client) -> None:
+    total = client.accumulator(Template(SUM, blanks=('runs',)))
+    total.push({'runs': {'file': dataset(run=1)}})
+
+    with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
+        total.push({'runs': {'file': dataset(run=1)}})
+    total.push({'runs': {'file': dataset(run=2)}})
+    assert client.output(total, 'value') == 3.0
+
+
+def test_a_dataset_is_the_same_value_by_any_name_that_resolves_to_it(
+    client: Client,
+) -> None:
+    total = client.accumulator(Template(SUM, blanks=('runs',)))
+    total.push({'runs': {'file': dataset(run=1)}})
+
+    with pytest.raises(SubmitError, match=r'repeats'):
+        total.push({'runs': {'file': {'dataset': 'run:1'}}})
+
+
+def test_a_row_is_equal_only_if_every_field_is(client: Client) -> None:
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    rows = client.accumulator(Template(WEIGHTED, blanks=('rows',)))
+    rows.push({'rows': {'value': load.ref('value'), 'weight': 1.0}})
+    rows.push({'rows': {'value': load.ref('value'), 'weight': 2.0}})  # same data
+
+    with pytest.raises(SubmitError, match=r'repeats'):
+        rows.push({'rows': {'value': load.ref('value'), 'weight': 2.0}})
+
+
+def test_a_plain_request_with_a_repeated_row_is_refused(client: Client) -> None:
+    run = {'file': dataset(run=1)}
+
+    with pytest.raises(SubmitError, match=r'runs\[1\]: repeats runs\[0\]'):
+        client.submit(SUM, {'runs': [run, run]})
+
+
+def test_a_template_that_fixes_a_repeated_row_is_refused(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    part = loads[0].refs('value')
+    fixed = {'backgrounds': [part, part]}
+
+    with pytest.raises(SubmitError, match=r'backgrounds\[1\]: repeats'):
+        client.accumulator(Template(SIDES, params=fixed, blanks=('samples',)))
+
+
+def test_a_table_may_allow_a_repeated_row(client: Client) -> None:
+    run = {'file': dataset(run=1)}
+    total = client.accumulator(Template(REPEATABLE, blanks=('runs',)))
+    total.push({'runs': run})
+    total.push({'runs': run})
+
+    plain = client.compute(REPEATABLE, {'runs': [run, run]})
+    assert client.output(total, 'value') == client.output(plain, 'value') == 2.0
+
+
 def test_a_field_validator_gives_the_held_state_the_plain_request_s_values(
     client: Client, scaled_sum: ScaledSum
 ) -> None:
@@ -1159,17 +1226,20 @@ def test_a_read_whose_validator_raises_holds_back_no_push(
         LOAD: lambda sample: {'value': sample['file'], 'extra': 0.0},
         FAULTY: combine(operator.add),
     }
+    datasets.measure(3, 3.0)
     backend = Backend(datasets, bind)
     client = Client(backend, proposal='p1', submitter='anna')
-    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    loads = [
+        client.compute(LOAD, {'sample': {'file': dataset(run=n)}}) for n in (1, 2, 3)
+    ]
     faulty = client.accumulator(Template(FAULTY, blanks=('parts',)))
-    for _ in range(2):
+    for load in loads[:2]:
         faulty.push({'parts': load.refs('value')})
     with pytest.raises(TypeError, match='a bug in a validator'):
         client.output(faulty, 'value')
-    faulty.push({'parts': load.refs('value')})
+    faulty.push({'parts': loads[2].refs('value')})
 
-    assert _start(lambda: client.output(faulty, 'value')).result(timeout=5) == 3.0
+    assert _start(lambda: client.output(faulty, 'value')).result(timeout=5) == 6.0
     backend.close()  # not before: a reader left behind would hold it open
 
 
@@ -2097,14 +2167,14 @@ def test_cancelling_the_record_of_a_state_fails_its_readers_and_frees_the_push(
     sides.push({'backgrounds': loads[1].refs('value')})  # adds once go is set
     copying.go.clear()
     copied = _copy(client, sides, 'difference')  # its state waits for that push
-    sides.push({'samples': loads[0].refs('value')})  # waits for the readers
+    sides.push({'samples': loads[1].refs('value')})  # waits for the readers
     state = _state(client, copied)
     assert state in client.records()
     client.cancel(state)
     subtracting.go.set()
 
     read = _start(lambda: client.output(sides, 'difference'))
-    assert read.result(timeout=2).tolist() == [0.0]  # copying.go is still clear
+    assert read.result(timeout=2).tolist() == [1.0]  # copying.go is still clear
     assert client.failure(copied) == f'input {state.id} cancelled'
 
 
@@ -2198,8 +2268,10 @@ def test_a_request_reads_several_accumulators(
 
     both = client.compute(TOTAL, {'parts': [first.refs(), second.refs()]})
     assert client.output(both, 'value').tolist() == [3.0]
-    twice = client.compute(TOTAL, {'parts': [first.refs(), first.refs()]})
-    assert client.output(twice, 'value').tolist() == [2.0]
+    twice = client.compute(
+        SIDES, {'samples': [first.refs()], 'backgrounds': [first.refs()]}
+    )
+    assert client.output(twice, 'difference').tolist() == [0.0]
 
 
 def test_a_submission_pins_states_whose_pushes_wait_and_returns_at_once(
@@ -2694,18 +2766,19 @@ def test_a_push_during_a_freeze_that_is_refused_is_logged(
     }
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+        other = client.compute(LOAD, {'sample': {'file': dataset(run=2)}})
         gated = client.accumulator(Template(GATED, blanks=('parts',)))
         gated.push({'parts': load.refs('value')})
         freeze = _start(lambda: client.freeze(gated))
         gate.reached.wait(timeout=5)  # the freeze is being checked
-        push = _start(lambda: gated.push({'parts': load.refs('value')}))
+        push = _start(lambda: gated.push({'parts': other.refs('value')}))
         time.sleep(0.05)  # the push reaches the backend, and waits
         gate.opened.set()
 
         with pytest.raises(SubmitError, match='needs two parts'):
             freeze.result(timeout=5)
         push.result(timeout=5)
-        assert client.output(gated, 'value') == 2.0
+        assert client.output(gated, 'value') == 3.0
 
 
 def test_a_frozen_held_state_is_dropped_once_its_readers_are_done(
@@ -2822,6 +2895,7 @@ def test_a_selection_the_output_cannot_take_raises_what_the_slice_raises(
 ) -> None:
     client = grids
     record = client.compute(GRID, {'sample': {'file': dataset(run=1)}})
+    other = client.compute(GRID, {'sample': {'file': dataset(run=2)}})
     total = _total(client)
     total.push({'parts': record.refs('value')})
 
@@ -2831,5 +2905,8 @@ def test_a_selection_the_output_cannot_take_raises_what_the_slice_raises(
         client.output(total, 'value', select={'x': 3})
     with pytest.raises(sc.DimensionError):
         client.output(total, 'value', select={'z': 0})
-    total.push({'parts': record.refs('value')})  # the reads let go of the state
-    assert client.output(total, 'value', select={'x': 2}).values.tolist() == [8.0, 10.0]
+    total.push({'parts': other.refs('value')})  # the reads let go of the state
+    assert client.output(total, 'value', select={'x': 2}).values.tolist() == [
+        12.0,
+        15.0,
+    ]
