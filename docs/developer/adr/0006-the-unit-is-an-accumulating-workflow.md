@@ -58,7 +58,7 @@ The two are fields of one row, and one push gives both to the binding.
 Two aligned tables could be paired wrongly.
 
 ```python
-iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs',)))  # can runs in shared
+iofq = client.accumulator(Template.from_spec(IOFQ_MULTI, sample_runs=BLANK, can_runs=cans))  # can runs fixed
 iofq.push({'sample_runs': Sample(file=dataset(run=611), transmission=dataset(run=610))})
 iofq.push({'sample_runs': Sample(file=dataset(run=613), transmission=dataset(run=612))})
 ```
@@ -68,11 +68,11 @@ Sample and can runs are two blanks, pushed as they arrive.
 This needs a binding whose sample sums depend only on sample rows, and whose can sums depend only on can rows.
 Then the order of pushes changes no state.
 esssans builds its pixel masks from the sample run, so its can sums depend on the sample too.
-A binding of esssans that accumulates (scipp/essapps#40) would refuse to open this accumulator.
+`AccumulatingPipelineBinding` refuses such a pipeline when it is made, so it cannot bind esssans in either example (README, [What a binding provides](../README.md#what-a-binding-provides)).
 Masks per run type would fix this in esssans.
 
 ```python
-iofq = client.accumulator(Template(IOFQ_MULTI, params=shared, blanks=('sample_runs', 'can_runs')))
+iofq = client.accumulator(Template.from_spec(IOFQ_MULTI, sample_runs=BLANK, can_runs=BLANK))
 iofq.push({'sample_runs': Sample(file=dataset(run=611))})
 iofq.push({'can_runs': Run(file=dataset(run=614))})
 iofq.push({'sample_runs': Sample(file=dataset(run=613)), 'can_runs': Run(file=dataset(run=615))})  # one push, one state
@@ -85,6 +85,7 @@ iofq.push({'sample_runs': Sample(file=dataset(run=613)), 'can_runs': Run(file=da
 - **A chain of totals**, each a request over the previous total and one new run. A record would not mean the sum of its runs, and a growing total is copied at every step.
 - **Only specs whose binding makes a held state can be accumulated.** The caller would have to know which specs accumulate.
 - **Records that name a state**, by a reference to an accumulator and a push count, or as a snapshot from `client.submit(acc)`. This adds a third kind of reference, which provenance and rerunning a record would have to resolve into pushes. A snapshot's value changes at the next push.
+- **Accumulating with `StreamProcessor`** from essreduce, as in the spike. Of `StreamProcessor`, an accumulator needs only the static part, the dynamic keys, the summed accumulators, and finalize. The context keys, rolling windows, and `clear()` of `StreamProcessor` would break the arrival symmetry. Importing it loads essreduce, with scippneutron, scippnexus, scipy, and dask. `AccumulatingPipelineBinding` does the same with two `sciline.Stage` cuts. The row fields, accumulated keys, and outputs of the binding are the dynamic keys, accumulators, and target keys of `StreamProcessor`, so esslivedata can build one from the same description.
 - **Nested tables**, such as rows that hold a table of banks. The framework would need a push per level, and rules on which work repeats at which level.
 
 ## Consequences

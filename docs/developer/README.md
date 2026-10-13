@@ -529,6 +529,26 @@ The binding's author promises three things, which the backend does not check:
 `combine(operator.add)` is such a binding.
 It combines each field of the rows with `operator.add` (story S4).
 
+`AccumulatingPipelineBinding` is another.
+It binds the multi-run spec to the sciline pipeline that `PipelineBinding` binds to the single-run spec, a pipeline of one run of each kind:
+
+```python
+AccumulatingPipelineBinding(pipeline,       # from ess.spec.pipeline
+                            params={'sample_runs.file': Filename[SampleRun], 'can_runs.file': Filename[BackgroundRun],
+                                    'reduction.bins': QBins, ...},
+                            outputs={'iofq': BackgroundSubtractedIofQ},
+                            accumulate={'sample_runs': (Numerator[SampleRun], Denominator[SampleRun]),
+                                        'can_runs': (Numerator[BackgroundRun], Denominator[BackgroundRun])})
+```
+
+`params` and `outputs` map as for `PipelineBinding`, with the rows of a table in place of a group: `'sample_runs.file'` is the field `file` of each row.
+`accumulate` names each table's *accumulated keys*, which are summed over its rows, and the outputs are computed from the sums.
+The accumulated keys must add over runs, such as a numerator and a denominator ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+A plain request, a stage, and a held state all compute this way, through `sciline.Stage`.
+When it is made, the binding refuses an accumulated key that depends on the rows of another table, and an output that depends on rows other than through accumulated keys.
+So the order of pushes into different tables changes no sum.
+For a table with no rows, the binding sets the keys of the table's fields to `None` and computes one row, as `PipelineBinding` does for a group that is `None`.
+
 Since `push` may change the held state in place, code that calls a held state itself is done with the outputs of each state before the next push:
 
 ```python
@@ -541,10 +561,9 @@ for run in runs:
 
 The backend keeps this order for every reader (see Adding waits for readers).
 
-For a binding without `held_state`, the held state keeps the rows pushed so far.
+For a binding without `held_state`, such as `PipelineBinding`, the held state keeps the rows pushed so far.
 Each state's outputs are computed as its plain request, through one `binding.stage` call, so the work per run repeats for every row so far.
 In the user's process, this held state keeps the data of every row in memory while the accumulator lives.
-`PipelineBinding` provides no `held_state` (scipp/essapps#40).
 
 ## Drivers
 
