@@ -429,6 +429,13 @@ A row or a template may reference no accumulator ([ADR 0003](adr/0003-accumulato
 Only the client that made an accumulator pins it.
 
 A push validates each row against its table's row model.
+A table whose rows hold a data field also refuses a row equal to an earlier row of the table, in every field, with datasets compared after resolution.
+Pushing a run twice is usually a mistake, such as running a notebook cell again.
+Only the same dataset, or the same output of the same record, counts as a repeat; a cell that computes a new record before pushing makes a different row.
+The same dataset in several rows is fine; only a whole row is refused.
+A push checks it against the pushes logged, since a pin that refused the repeat would refuse every later state.
+A plain request with a repeated row is refused too, including one in a template.
+A spec allows repeats for a table with `Annotated[list[Run], REPEATED_ROWS]`.
 A pin validates the plain request of its state, including table lengths and the params model's own validators.
 It is refused if that request would be refused.
 

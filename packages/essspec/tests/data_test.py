@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from pathlib import Path
+from typing import Annotated
 
 import pytest
 import scipp as sc
 from pydantic import BaseModel, ValidationError
 
 from ess.spec import (
+    REPEATED_ROWS,
     AccumulatorRef,
     Array,
     ArraySpec,
@@ -18,6 +20,7 @@ from ess.spec import (
     Quantity,
     as_ref,
     data_fields,
+    distinct_row_tables,
     group_fields,
     ref_fields,
     table_fields,
@@ -116,6 +119,27 @@ class TestGroupFields:
 
         with pytest.raises(ValueError, match=r'Nested\.group: .* Group\.nested holds'):
             group_fields(Nested)
+
+
+class TestDistinctRowTables:
+    def test_tables_of_data_fields_are_checked_and_tables_of_literals_not(
+        self,
+    ) -> None:
+        class Weight(BaseModel):
+            weight: float
+
+        class WithWeights(BaseModel):
+            runs: list[SampleRun]
+            weights: list[Weight]
+
+        assert distinct_row_tables(WithWeights) == {'runs'}
+
+    def test_a_table_can_allow_repeated_rows(self) -> None:
+        class Repeating(BaseModel):
+            runs: Annotated[list[SampleRun], REPEATED_ROWS]
+            parts: list[Parts]
+
+        assert distinct_row_tables(Repeating) == {'parts'}
 
 
 class TestTableFields:

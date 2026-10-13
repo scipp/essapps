@@ -17,6 +17,7 @@ from ._workflow_spec import NoParams, SerializedWorkflowSpec, WorkflowSpec
 from .binding import Binding, Function, HeldState, HeldStateBinding
 from .combine import combine
 from .data import (
+    REPEATED_ROWS,
     AccumulatorRef,
     Array,
     ArraySpec,
@@ -29,6 +30,7 @@ from .data import (
     Ref,
     as_ref,
     data_fields,
+    distinct_row_tables,
     group_fields,
     ref_fields,
     table_fields,
@@ -37,6 +39,7 @@ from .data import (
 from .parameters import Quantity
 
 __all__ = [
+    'REPEATED_ROWS',
     'AccumulatorRef',
     'Array',
     'ArraySpec',
@@ -58,6 +61,7 @@ __all__ = [
     'as_ref',
     'combine',
     'data_fields',
+    'distinct_row_tables',
     'group_fields',
     'ref_fields',
     'table_fields',

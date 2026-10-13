@@ -323,6 +323,42 @@ def table_fields(model: type[BaseModel]) -> dict[str, type[BaseModel]]:
     return _flat_fields(model, _row_model)
 
 
+class _RepeatedRows:
+    def __repr__(self) -> str:
+        return 'REPEATED_ROWS'
+
+
+REPEATED_ROWS = _RepeatedRows()
+"""
+Field annotation for a table that may hold the same row twice::
+
+    runs: Annotated[list[Run], REPEATED_ROWS]
+
+For an optional table, annotate the optional type:
+``Annotated[list[Run] | None, REPEATED_ROWS]``.
+
+Without it, a table whose rows hold a data field refuses a row equal to an
+earlier one, since repeating it usually means pushing a run twice (see
+:func:`distinct_row_tables`).
+"""
+
+
+def distinct_row_tables(model: type[BaseModel]) -> set[str]:
+    """
+    Tables of a params model that refuse a repeated row.
+
+    These are the tables whose rows hold a data field, unless the field is
+    annotated with :data:`REPEATED_ROWS`. Rows are equal when all their fields
+    are, with datasets resolved. The same dataset in several rows is fine; only
+    a whole row is refused. Tables of literals, such as weights, are not checked.
+    """
+    return {
+        name
+        for name, row in table_fields(model).items()
+        if data_fields(row) and REPEATED_ROWS not in model.model_fields[name].metadata
+    }
+
+
 _OUTPUT_REF_KEYS = frozenset(OutputRef.model_fields)
 _ACCUMULATOR_REF_KEYS = frozenset(AccumulatorRef.model_fields)
 

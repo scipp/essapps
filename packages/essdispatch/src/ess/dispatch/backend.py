@@ -187,6 +187,7 @@ from ess.spec import (
     Ref,
     WorkflowSpec,
     data_fields,
+    distinct_row_tables,
     group_fields,
     table_fields,
     walk_refs,
@@ -291,6 +292,14 @@ def _selected(value: Any, select: Selection) -> Any:
     for dim, index in select.items():
         value = value[dim, index]
     return value.copy()
+
+
+def _refuse_repeated(table: str, rows: Sequence[Row]) -> None:
+    """Refuse a row equal to an earlier one of the table."""
+    seen: dict[bytes, int] = {}
+    for i, row in enumerate(rows):
+        if (first := seen.setdefault(to_json(row), i)) != i:
+            raise SubmitError(f'{table}[{i}]: repeats {table}[{first}]')
 
 
 def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
@@ -1315,10 +1324,13 @@ class Backend:
         """
         model = model or self._specs[spec_id].params
         try:
-            return _values(model.model_validate(params))
+            values = _values(model.model_validate(params))
         except ValidationError as error:
             problems = '; '.join(validation_problems(error))
             raise SubmitError(f'{spec_id}: {problems}') from None
+        for table in distinct_row_tables(model) & values.keys():
+            _refuse_repeated(table, values[table] or [])
+        return values
 
     def _fixed(
         self, spec_id: SpecId, params: Mapping[str, Any], tables: Sequence[str]
@@ -1827,6 +1839,7 @@ class Backend:
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
             request = Request(acc.template.spec, {t: [r] for t, r in stored.items()})
+            self._refuse_repeated_push(acc, stored)
             self._check_reads(Entry(request), request, caller, {})
             self._append(Pushed(accumulator=accumulator_id, rows=stored))
             self._queue(acc, typed)
@@ -1889,6 +1902,21 @@ class Backend:
             with self._changed:
                 acc.freezing = False
                 self._let_go([(acc, upto)])
+
+    def _refuse_repeated_push(self, acc: _Accumulator, rows: Mapping[str, Row]) -> None:
+        """
+        Refuse a row equal to one already pushed into the same table, unless
+        the spec allows it (see ``distinct_row_tables``); lock held.
+
+        The rule is checked here and not with the whole table at a read, since
+        a read that refused the repeated row would refuse every later state,
+        and no push removes a row.
+        """
+        distinct = distinct_row_tables(self._specs[acc.template.spec].params)
+        pushed = self._views.pushes.get(acc.id, ())
+        for table in distinct & rows.keys():
+            earlier = [p.rows[table] for p in pushed if table in p.rows]
+            _refuse_repeated(table, [*earlier, rows[table]])
 
     def _pushable(
         self, accumulator_id: str, rows: Mapping[str, Row], client: str
