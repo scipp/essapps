@@ -11,13 +11,21 @@ asked of the client.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import inspect
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    create_model,
+    field_validator,
+)
 
 from ess.spec import (
     AccumulatorRef,
@@ -32,6 +40,53 @@ from ess.spec import (
 
 class SubmitError(ValueError):
     """A request that cannot run, refused before any record exists."""
+
+
+def validation_problems(
+    error: ValidationError, at: tuple[str | int, ...] = ()
+) -> list[str]:
+    """What a validation error finds wrong; the places are prefixed by ``at``."""
+    return [
+        f"{'.'.join(map(str, (*at, *e['loc']))) or 'params'}: {e['msg']}"
+        for e in error.errors()
+    ]
+
+
+def model_without(model: type[BaseModel], left_out: Collection[str]) -> type[BaseModel]:
+    """
+    ``model`` without the fields ``left_out`` and without its own validators,
+    which read whole requests; it validates each value of a template by its
+    own field and that field's validators.
+    """
+    fields: dict[str, Any] = {
+        f: (info.annotation, info)
+        for f, info in model.model_fields.items()
+        if f not in left_out
+    }
+    return create_model(
+        model.__name__,
+        __config__=model.model_config,
+        __validators__=_field_validators(model, fields),
+        **fields,
+    )
+
+
+def _field_validators(
+    model: type[BaseModel], fields: Collection[str]
+) -> dict[str, Any]:
+    """
+    The field validators of ``model`` that validate any of ``fields``, for a
+    model of these fields alone; ``create_model`` takes them as validators.
+    """
+    validators = {}
+    for name, decorator in model.__pydantic_decorators__.field_validators.items():
+        info = decorator.info
+        names = ['*'] if '*' in info.fields else [f for f in info.fields if f in fields]
+        if names:
+            func = decorator.func  # bound to ``model`` if a classmethod
+            unbound = classmethod(func.__func__) if inspect.ismethod(func) else func
+            validators[name] = field_validator(*names, mode=info.mode)(unbound)
+    return validators
 
 
 def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
@@ -75,7 +130,7 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec | SpecId | dict[str, Any]) -> SpecId:
+    def of(cls, spec: WorkflowSpec[Any] | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
         if isinstance(spec, WorkflowSpec):
@@ -99,7 +154,7 @@ class Request(BaseModel, frozen=True):
 
     def __init__(
         self,
-        spec: WorkflowSpec | SpecId,
+        spec: WorkflowSpec[Any] | SpecId,
         params: dict[str, Any] | BaseModel | None = None,
     ) -> None:
         values = {} if params is None else as_values(params)
@@ -124,14 +179,35 @@ class Request(BaseModel, frozen=True):
         return [ref for _, ref in walk_refs(self.params) if isinstance(ref, DatasetRef)]
 
 
+class _Blank:
+    def __repr__(self) -> str:
+        return 'BLANK'
+
+
+BLANK: Any = _Blank()
+"""
+A parameter left open in a template made by :meth:`Template.from_spec`; typed
+``Any`` so that a type checker accepts it for any parameter.
+"""
+
+
+class _HasParams[**P](Protocol):
+    """A spec as a type checker sees it, through its params model's signature."""
+
+    @property
+    def params(self) -> Callable[P, BaseModel]: ...
+
+
 @dataclass(frozen=True)
 class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    Naming a field as a blank drops the value given for it, so a template can
-    be made from any request's values or a whole params model, which it keeps
-    as a dict. Change a template with ``dataclasses.replace``.
+    :meth:`from_spec` writes a template with the params model's signature. The
+    constructor makes one from values in hand: naming a field as a blank drops
+    the value given for it, so a template can be made from any request's
+    values or a whole params model, which it keeps as a dict. Change a template
+    with ``dataclasses.replace``.
     """
 
     spec: SpecId
@@ -143,6 +219,41 @@ class Template:
         kept = {k: v for k, v in values.items() if k not in self.blanks}
         object.__setattr__(self, 'spec', SpecId.of(self.spec))
         object.__setattr__(self, 'params', kept)
+
+    @classmethod
+    def from_spec[**P](
+        cls, spec: _HasParams[P], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Template:
+        """
+        A template of ``spec`` from the parameters of its params model, given
+        as the params model takes them; each parameter given as ``BLANK`` is a
+        blank::
+
+            Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
+
+        So pyright reports a misspelt or missing parameter and a value
+        of the wrong type, as it does for the params model. Every keyword is a
+        parameter, so this method takes no option of its own. The values
+        given are validated by their own fields (see :func:`model_without`); a
+        required parameter may be a blank. Raises ``ValueError`` with what is
+        wrong, and ``TypeError`` for a parameter given by position.
+        """
+        if not isinstance(spec, WorkflowSpec):
+            raise TypeError(f'{spec!r}: not a WorkflowSpec')
+        spec_id, model = SpecId.of(spec), spec.params
+        if args:
+            raise TypeError(f'{spec_id}: give the parameters by name')
+        fields = model.model_fields
+        blanks = tuple(name for name in fields if kwargs.get(name) is BLANK)
+        given = {k: v for k, v in kwargs.items() if k not in blanks}
+        problems = [f'{k}: not a parameter' for k in given if k not in fields]
+        try:
+            model_without(model, blanks).model_validate(given)
+        except ValidationError as error:
+            problems += validation_problems(error)
+        if problems:
+            raise ValueError(f'{spec_id}: {"; ".join(problems)}')
+        return cls(spec_id, given, blanks)
 
     def fill(self, values: dict[str, Any] | BaseModel) -> Request:
         """The request with the blanks filled by ``values``."""

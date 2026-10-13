@@ -219,12 +219,23 @@ client.records(label='iofq')                          # oldest first; without la
 
 A *template* is a spec, its fixed values, and its blanks, the names of the parameters left open.
 Stages, accumulators, and automatic reduction are built from templates.
-A template can be made from any request's values.
 A blank is a whole parameter, never a field of a group.
+`Template.from_spec(IOFQ, ...)` takes the parameters as the params model does, with `BLANK` for each blank (both from `ess.dispatch`):
+
+```python
+template = Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
+```
+
+As with `IofQParams(...)`, an IDE suggests the parameters, and pyright (which Pylance uses) reports one that is misspelt, missing, or of the wrong type.
+mypy does not, since it cannot read the signature through the spec.
+`Template.from_spec` validates each value given by its own field, and a required parameter may be a blank.
+A check that reads several parameters is therefore a model validator, never a field validator reading `info.data`.
+The params model's own validators, which read several parameters, run on each request made from the template.
+
+A template can also be made from any request's values.
 A name in `blanks` drops the value given for it:
 
 ```python
-template = Template(IOFQ, params={'reduction': Reduction(bins=100)}, blanks=('sample',))
 final = client.latest('iofq', member='250K')    # the final reduction of one sample
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))   # its sample left open
 ```
@@ -374,7 +385,7 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'sample': Run(file=dataset(run=60339))}, blanks=('reduction',)))
+tune = client.stage(Template.from_spec(IOFQ, sample=Run(file=dataset(run=60339)), reduction=BLANK))
 for bins in (50, 100, 200):
     client.compute(tune, {'reduction': Reduction(bins=bins)}, label='iofq')   # the first call loads the run
 ```
@@ -389,8 +400,8 @@ The first call and the calls waiting to run fail, and later calls are refused, e
 The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)):
 
 ```python
-iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100)},
-                                   blanks=('sample_runs', 'can_runs')))
+iofq = client.accumulator(Template.from_spec(IOFQ_MULTI, sample_runs=BLANK, can_runs=BLANK,
+                                             reduction=Reduction(bins=100)))
 iofq.push({'sample_runs': Run(file=dataset(run=611))})   # one row
 iofq.push({'sample_runs': Run(file=dataset(run=612)),    # one row in each of two tables
            'can_runs': Run(file=dataset(run=614))})
@@ -432,7 +443,7 @@ Later pushes and pins are refused with the reason, and the records of states it 
 **Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over a table of runs, and `CUT`, which takes the value at `position.index` ([user-stories.md](user-stories.md)):
 
 ```python
-volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+volume = client.accumulator(Template.from_spec(VOLUME, runs=BLANK))
 for run in runs:
     volume.push({'runs': Run(file=run)})   # returns once logged; the backend adds it later
     cut = client.submit(CUT, CutParams(volume=Volume(data=volume.ref('counts')), position=Position(index=0)))
@@ -538,7 +549,7 @@ Drivers never run in the backend.
 This one adds each run of a rotation scan to a volume as it arrives, and cuts through the volume after each run (story D7):
 
 ```python
-volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+volume = client.accumulator(Template.from_spec(VOLUME, runs=BLANK))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):   # the scan's 300 runs
     volume.push({'runs': Run(file=run)})                    # added once the previous cut is copied
     show(client.output(volume, 'counts', select={'q': 0}))
@@ -565,7 +576,7 @@ A *lookup* fills further blanks, such as the latest can run before each sample r
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets,
+requests = apply(Template.from_spec(IOFQ, sample=BLANK, can=BLANK), samples, client.datasets,
                  member_field='temperature', lookup=cans)
 client.submit(requests, label='iofq', persist=True)
 ```
@@ -576,7 +587,7 @@ With a *series*, one request takes all matching datasets so far with the same va
 An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches:
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)),
+rule = Rule('reflectivity', Template.from_spec(STITCH, reference=Run(file=reference), runs=BLANK),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()
 ```
