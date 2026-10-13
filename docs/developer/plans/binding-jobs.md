@@ -130,10 +130,7 @@ For a sciline pipeline, with amendment B below:
 ```python
 keys = {'sample.file': RunData[SampleRun], 'can.file': RunData[CanRun], 'reduction.bins': Bins}
 single = PipelineBinding(IOFQ, pipeline, params=keys, outputs={'iofq': IofQ})
-multi = DriverBinding(IOFQ_MULTI,
-                      Sums(pipeline, accumulate=(Numerator[SampleRun], Denominator[SampleRun],
-                                                 Numerator[CanRun], Denominator[CanRun])),
-                      params=keys, outputs={'iofq': IofQ})
+multi = DriverBinding(IOFQ_MULTI, pipeline, driver=IofQDriver, params=keys, outputs={'iofq': IofQ})
 ```
 
 One mapping serves both specs, because the multi-run spec names each table as the single-run spec names the group, and the row model is the group's model:
@@ -151,7 +148,7 @@ class MultiIofQParams(BaseModel):     # IOFQ_MULTI
 ```
 
 The binding knows from its spec whether `'sample.file'` is the field of a group or of each row of a table (amendment B).
-How the rows are combined is the driver's job (section 2), here `Sums`.
+How the rows are combined is the driver's job (section 2), here `IofQDriver`.
 For a function, the mapping is its signature, whose form depends on the protocol (amendment D).
 
 Naming each table as the group is a convention that saves writing a second mapping; nothing depends on it.
@@ -169,24 +166,53 @@ The workflow author provides one of two things, and the backend serves each clie
 | The author provides | Plain request | Kept in the backend for a client |
 |---|---|---|
 | a pipeline or a function | compute everything | a **stage**: the fixed part, computed once |
-| a driver | make a held state, push every row, read the outputs | an **accumulator**: a held state that takes the client's pushes |
+| a driver | make a driver, push every row, read the outputs | an **accumulator**: a driver that takes the client's pushes |
 
 **A pipeline or a function** serves a spec without tables, or a spec whose tables the workflow takes whole, as lists.
 A stage over a pipeline holds a `sciline.Stage` cut at the keys of the blanks, so each call computes only what depends on the blanks.
 A stage over a function holds nothing, and each call computes everything.
-If the spec has tables, an accumulator over a pipeline or a function still works: the framework wraps the binding so that the held state keeps the rows, and each read computes the plain request over every row so far.
+If the spec has tables, an accumulator over a pipeline or a function still works: the framework wraps the binding so that it keeps the rows, and each read computes the plain request over every row so far.
 This is a convenience for workflows that take lists: each read computes every row again.
 
 **A driver** serves a spec with tables, one push at a time.
 It is a driver in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the object that calls stages and pushes into accumulators, and that holds everything stateful.
-`ess.spec` provides `Sums(pipeline, accumulate=...)`: one cut per table up to the accumulated keys, their sums over the rows, and one cut from the sums to the outputs, as SANS needs.
-A package writes its own driver for the cases of cost 9, for example:
+It is built over a pipeline whose fixed values are already set, and it starts with no rows:
 
 ```python
-DriverBinding(IOFQ_MULTI, Sums(pipeline, accumulate=(...)), ...)   # sums, as for SANS
-DriverBinding(VOLUME, GridDriver(pipeline), ...)   # a package's own (hypothetical): bins each
-                                                   # run's events into the held grid
+wf = pipeline.copy()
+wf[Bins] = 2                                                         # the fixed values
+driver = IofQDriver(wf)                                              # no rows yet
+driver.push({RunData[SampleRun]: run_612, RunData[CanRun]: can_614})   # a row of each of two tables
+driver.push({RunData[SampleRun]: run_613})                           # a row of one table
+driver.outputs()                                                     # -> {IofQ: ...}
 ```
+
+The workflow package writes its driver.
+For the toy SANS reduction, it sums each run's numerator and denominator per run type, and divides once:
+
+```python
+class IofQDriver:
+    def __init__(self, wf: sciline.Pipeline) -> None:
+        self._per_run = {
+            RunData[run]: sciline.Stage(wf, inputs=(RunData[run],),
+                                        outputs=(Numerator[run], Denominator[run]))
+            for run in (SampleRun, CanRun)
+        }
+        sums = tuple(key[run] for key in (Numerator, Denominator) for run in (SampleRun, CanRun))
+        self._finalize = sciline.Stage(wf, inputs=sums, outputs=(IofQ,))
+        self._sums = {}
+
+    def push(self, values: Mapping[type, Any]) -> None:
+        for key, value in values.items():
+            for k, part in self._per_run[key].compute({key: value}).items():
+                self._sums[k] = self._sums[k] + part if k in self._sums else part
+
+    def outputs(self) -> dict[type, Any]:
+        return self._finalize.compute(self._sums)
+```
+
+`ess.spec` provides no driver.
+sciline ADR 0003 defers a generic driver until packages repeat the same driver code; the cases of cost 9 each need code of their own.
 
 A driver is not staged.
 Tuning a parameter over fixed rows, such as the bins over a hundred runs, needs a pipeline that takes the table as a list; such a pipeline is staged as any other.
@@ -195,43 +221,30 @@ Tuning a parameter over fixed rows, such as the bins over a hundred runs, needs 
 Its protocol is what a client does with an accumulator, in keys instead of field names:
 
 ```python
-held = driver.held_state({Bins: 2})                                  # the fixed values
-held.push({RunData[SampleRun]: run_612, RunData[CanRun]: can_614})   # a row of each of two tables
-held.push({RunData[SampleRun]: run_613})                             # a row of one table
-held.outputs()                                                       # -> {IofQ: ...}
+class Driver(Protocol):
+    def push(self, values: Mapping[Key, Any]) -> None: ...   # one row of each table it names
+    def outputs(self) -> Mapping[Key, Any]: ...
 ```
 
+made by a function `Callable[[sciline.Pipeline], Driver]`, such as the class `IofQDriver`.
 The keys of a push tell the driver which table each value belongs to.
 Rows of two tables set different keys, as the single-run pipeline needs `RunData[SampleRun]` and `RunData[CanRun]` apart; the binding checks this when it is made.
-A table that the accumulator's template fixes, such as one can run for every state, is pushed by the binding right after it makes the held state, so the driver's `held_state` gets only the values that are not tables.
-A plain request over a spec with tables takes the same calls: the binding makes a held state, pushes every row, and reads the outputs.
+A table that the accumulator's template fixes, such as one can run for every state, is pushed by the binding right after it makes the driver, so the pipeline the driver is built over holds only the values that are not tables.
+A plain request over a spec with tables takes the same calls: the binding makes a driver, pushes every row, and reads the outputs.
+A changed fixed value means a new driver, as a changed parameter means new stages in sciline.
 
 This protocol is the part of `StreamProcessor` that [ADR 0006](../adr/0006-the-unit-is-an-accumulating-workflow.md) says an accumulator needs.
-The fixed values are its static part, the keys of a push are its dynamic keys, and `outputs` is its finalize.
-Context keys, rolling windows, and `clear()` are not part of it, since each would break the arrival symmetry.
+`StreamProcessor` too is built over a pipeline with its static values set; the keys of a push are its dynamic keys, `push` is its `accumulate`, and `outputs` is its `finalize`.
+Context keys, rolling windows, and `clear()` are not part of the protocol, since each would break the arrival symmetry.
 
-**So the pipeline and the driver are used directly**, in keys, with no spec, params model, or framework:
-
-```python
-wf = pipeline.copy()                           # the pipeline, directly
-wf[Bins] = 2
-wf[RunData[SampleRun]] = run_101
-wf[RunData[CanRun]] = can_110
-wf.compute(IofQ)
-
-held = Sums(pipeline, accumulate=(...)).held_state({Bins: 2})   # the driver, directly
-held.push({RunData[SampleRun]: run_101, RunData[CanRun]: can_110})
-held.push({RunData[SampleRun]: run_102})
-held.outputs()[IofQ]
-```
-
+**So the pipeline and the driver are used directly**, in keys, with no spec, params model, or framework, as in the two examples above.
 The params models, the mapping, and the framework come on top, for use through apps and services:
 
 | Level | Speaks | Used directly by |
 |---|---|---|
 | pipeline | keys | the workflow package and its tests; notebooks without the framework |
-| driver | keys | the same, for sums over runs |
-| binding: a mapping and a pipeline, function, or driver | the spec's fields and models | the backend |
+| driver | keys | the same, for accumulating runs |
+| binding: a mapping, and a pipeline, a function, or a pipeline with a driver | the spec's fields and models | the backend |
 | framework | requests and records | notebooks, apps, and services, through the client |
 
 Who keeps each symmetry:
@@ -239,8 +252,8 @@ Who keeps each symmetry:
 | Symmetry | Kept by | Given |
 |---|---|---|
 | caching | the stage, by a cut at the blanks | a pure pipeline |
-| arrival, order | the driver | for `Sums`: accumulated keys that add up over runs, such as a numerator and a denominator, and that each depend on one table only (checked when it is made); for a package's own driver: its author's promise |
-| arrival, order | the framework, for a held state that keeps the rows | nothing |
+| arrival, order | the driver | its author's promise, tested by `check_arrival_and_order` |
+| arrival, order | the framework, for a binding that keeps the rows | nothing |
 | one-row | the author of the two bindings | tested by `check_one_row` |
 
 ### 3. Protocol
@@ -252,25 +265,36 @@ A binding is one of two kinds, by what the author provides, and has only the met
 class StageBinding(Protocol):      # over a pipeline or a function
     def stage(self, fixed, blanks) -> Function: ...
 
-class HeldStateBinding(Protocol):  # over a driver
-    def held_state(self, fixed) -> HeldState: ...
+class HeldStateBinding(Protocol):  # over a pipeline with a driver
+    def start(self, fixed) -> HeldState: ...
 
 class HeldState(Protocol):
     def push(self, rows) -> None: ...
     def outputs(self) -> Mapping: ...
 ```
 
+`stage` and `start` are what the backend does with a template: stage it, or start accumulating with it.
+*Held state* is the backend's name for what `start` returns, which it keeps for the accumulator and never looks inside.
+
 What the backend calls for each client action:
 
 | Client action | `StageBinding` | `HeldStateBinding` |
 |---|---|---|
-| plain request | `stage(values, ())()` | `held_state(fixed)`, a `push` per row, `outputs()` |
+| plain request | `stage(values, ())()` | `start(fixed)`, a `push` per row, `outputs()` |
 | call through a stage | `stage(fixed, blanks)` at the first call, then the returned callable at each call | refused when the stage is made |
-| accumulator (spec with tables) | the rows kept by the framework; each read calls `stage(fixed, tables)` with the rows so far | `held_state(fixed)`, then `push` and `outputs()` |
+| accumulator (spec with tables) | the rows kept by the framework; each read calls `stage(fixed, tables)` with the rows so far | `start(fixed)`, then `push` and `outputs()` |
 
 The backend knows the kind of binding when a client makes a stage, so a stage over a `HeldStateBinding` is refused then, not at its first call.
 
-It carries the backend's promises to the binding: every value with defaults filled in, data read, a push never while the outputs of the state before it are in use.
+Both kinds begin the same way, by setting the fixed values onto the pipeline through the mapping, and differ in one step:
+
+```python
+wf = mapping.set(pipeline, fixed)   # both
+cut = sciline.Stage(wf, ...)        # PipelineBinding.stage: a cut at the keys of the blanks
+driver = make_driver(wf)            # DriverBinding.start
+```
+
+The protocol carries the backend's promises to the binding: every value with defaults filled in, data read, a push never while the outputs of the state before it are in use.
 Today it passes groups and rows as dicts by field name, with data in place of each reference, and takes the outputs as a dict.
 A `DriverBinding` translates these calls into the driver's, in keys, through its mapping.
 The client never sees the protocol, and neither does the author of a sciline workflow or of a driver.
@@ -295,19 +319,19 @@ Settles cost 5.
 A binding is a `StageBinding` or a `HeldStateBinding` (section 3), by what the author provides:
 
 ```python
-single = PipelineBinding(IOFQ, pipeline, params=keys, outputs={'iofq': IofQ})           # StageBinding
-multi = DriverBinding(IOFQ_MULTI, Sums(pipeline, accumulate=(...)), params=keys,
-                      outputs={'iofq': IofQ})                                            # HeldStateBinding
-fwd = function_binding(FORWARD, forward)                                                 # StageBinding
+single = PipelineBinding(IOFQ, pipeline, params=keys, outputs={'iofq': IofQ})     # StageBinding
+multi = DriverBinding(IOFQ_MULTI, pipeline, driver=IofQDriver, params=keys,
+                      outputs={'iofq': IofQ})                                      # HeldStateBinding
+fwd = function_binding(FORWARD, forward)                                           # StageBinding
 ```
 
-`DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` moves into `Sums`; `PipelineBinding` keeps its form and gets its spec.
-The kind of strategy is named by the class and its argument, not implied by whether `accumulate` is given.
-The two protocols are disjoint, where today `HeldStateBinding` extends the protocol with `stage`.
+`DriverBinding` replaces `AccumulatingPipelineBinding`, whose `accumulate` goes without a replacement in `ess.spec`: the workflow package writes its driver (section 2).
+`PipelineBinding` keeps its form and gets its spec.
+The kind of strategy is named by the class, not implied by whether `accumulate` is given.
+The two protocols are disjoint, where today `HeldStateBinding` extends the protocol with `stage`, and its `held_state` becomes `start`.
 When a binding is made, it checks that each path names a parameter or a field of a group or row, and that each output name is an output of the spec.
 A `DriverBinding` also checks that rows of different tables set different keys.
-The driver checks its own structure; `Sums` checks that each accumulated key depends on the rows of one table.
-A `DriverBinding` takes no pipeline next to its driver: the driver is built over the pipeline and owns it, and two arguments could disagree.
+It takes a function that makes a driver, not a driver, so there is one pipeline, set with the fixed values of each accumulator.
 
 A stage over fixed rows, which `AccumulatingPipelineBinding` serves today (`test_a_stage_over_fixed_rows_loads_each_run_once`), has no counterpart: a driver is not staged (section 2).
 
@@ -322,9 +346,10 @@ Settles costs 2, 3, and 9.
 
 ### C. All strategies in `ess.spec`
 
-`FunctionBinding` and the keep-the-rows held state move from `ess.dispatch.bindings` to `ess.spec`, next to `PipelineBinding`, `DriverBinding`, and `Sums`.
+`FunctionBinding` and the keep-the-rows wrapper move from `ess.dispatch.bindings` to `ess.spec`, next to `PipelineBinding` and `DriverBinding`.
 `ess.spec.testing` then checks every strategy, and a package tests any binding without `ess.dispatch`.
-sciline ADR 0003 defers a generic driver until packages repeat the same driver code; `Sums` could move to sciline then.
+`combine(op)` (`ess.spec.combine`), a binding that folds the rows of a table with `op`, is a generic accumulating helper of the same kind as `accumulate`.
+Its only readers are tests in essspec and essdispatch (`client_test.py`, `persist_test.py`, `stories/conftest.py`, `testing_test.py`), so it could go too, with the tests using fakes of their own.
 Settles cost 4.
 
 ### D. The protocol passes model instances (open, needs E)
@@ -335,7 +360,7 @@ def iofq(params: IofQParams) -> IofQOutputs: ...      # a function binding
 call = binding.stage({'sample': Run(...), 'can': Run(...)}, blanks=('reduction',))
 call(IofQParams(sample=..., can=..., reduction=Reduction(bins=4)))   # -> IofQOutputs
 
-held = binding.held_state({'reduction': Reduction(bins=2)})
+held = binding.start({'reduction': Reduction(bins=2)})
 held.push({'sample_runs': Run(...)})                  # the Run the client pushed
 held.outputs()                                        # -> IofQOutputs
 ```
@@ -343,7 +368,7 @@ held.outputs()                                        # -> IofQOutputs
 `stage` gets the fixed groups by name, and a blank is absent, so a strategy that reads a blank in the fixed part fails at once.
 The callable gets the full plain request, which the backend has already validated.
 So `stage` returns what a function binding is, `Callable[[IofQParams], IofQOutputs]`, and a function binding is a binding staged with nothing fixed.
-`held_state` gets the fixed groups by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
+`start` gets the fixed groups by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
 
 With `WorkflowSpec` generic in its outputs model as well as its params model, a type checker checks `function_binding(IOFQ, iofq)`.
 The output names are checked where the author writes them, `IofQOutputs(iofq=...)`, not in the backend.
@@ -452,11 +477,11 @@ What carries over:
 | Job | Written by | Lives in | Tested by |
 |---|---|---|---|
 | 1 mapping | the workflow author, or the instrument's glue | the workflow package, or `essdispatchinstruments` (ADR 0007) | `check_one_row`, the checks of the strategy when the binding is made |
-| 2 strategy | the framework: the stage cut, the function strategy, the keep-the-rows held state, `Sums`; a package: its own driver | `ess.spec`; the package | `ess.spec`'s tests, once; the package's own, with `check_arrival_and_order` |
+| 2 strategy | the framework: the stage cut, the function strategy, the keep-the-rows wrapper; the workflow package: its driver | `ess.spec`; the package | `ess.spec`'s tests, once; the package's own, with `check_arrival_and_order` |
 | 3 protocol | the framework | declared in `ess.spec.binding`, called by `ess.dispatch.backend` | essdispatch's tests |
 
 A mapping as a table is not tied to this framework's strategies.
-`StreamProcessor`, through which esslivedata accumulates, takes the same description: dynamic keys (the fields of a row), accumulated keys, and target keys (the outputs).
+`StreamProcessor`, through which esslivedata accumulates, takes part of the same description: dynamic keys (the fields of a row) and target keys (the outputs).
 One table could serve both frameworks; a mapping written as code, as esslivedata's are, serves only the strategy it builds.
 sciline ADR 0003 makes `StreamProcessor` a driver too, over chunks of a stream within a context.
 Without context keys, rolling windows, and `clear()`, it fits the driver protocol of section 2, with rows in place of chunks.
@@ -475,11 +500,11 @@ The client API, except that a stage over a spec bound to a driver is refused; re
 
 > Simon:
 
-3. B: two kinds of binding, `StageBinding` and `HeldStateBinding`, each with only the methods it serves; `accumulate` moved into a `Sums` driver; no stage over a driver?
+3. B: two kinds of binding, `StageBinding` and `HeldStateBinding`, each with only the methods it serves; a `DriverBinding` that takes the pipeline and a function that makes a driver from it; no driver in `ess.spec`; no stage over a driver?
 
 > Simon:
 
-4. C: the function and keep-the-rows strategies, `PipelineBinding`, `DriverBinding`, and `Sums` in `ess.spec`, with `Sums` moving to sciline once packages repeat it?
+4. C: the function and keep-the-rows strategies, `PipelineBinding`, and `DriverBinding` in `ess.spec`? Remove `combine(op)` as well?
 
 > Simon:
 
