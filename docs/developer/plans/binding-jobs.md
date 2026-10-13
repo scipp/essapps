@@ -128,30 +128,50 @@ The workflow author writes it, or the instrument's glue does ([ADR 0007](../adr/
 For a sciline pipeline, with amendment B below:
 
 ```python
-single = PipelineBinding(IOFQ, pipeline,
-                         params={'sample.file': RunData[SampleRun], 'can.file': RunData[CanRun],
-                                 'reduction.bins': Bins},
-                         outputs={'iofq': IofQ})
+keys = {'sample.file': RunData[SampleRun], 'can.file': RunData[CanRun], 'reduction.bins': Bins}
+single = PipelineBinding(IOFQ, pipeline, params=keys, outputs={'iofq': IofQ})
 multi = PipelineBinding(IOFQ_MULTI,
                         Sums(pipeline, accumulate=(Numerator[SampleRun], Denominator[SampleRun],
                                                    Numerator[CanRun], Denominator[CanRun])),
-                        params={'sample_runs.file': RunData[SampleRun], 'can_runs.file': RunData[CanRun],
-                                'reduction.bins': Bins},
-                        outputs={'iofq': IofQ})
+                        params=keys, outputs={'iofq': IofQ})
 ```
 
-The two mappings differ only in the names of the fields: `'sample.file'` and `'sample_runs.file'` set the same key.
-How the rows of the multi-run spec are combined is the driver's job (section 2), here `Sums`.
+One mapping serves both specs, because the multi-run spec names each table as the single-run spec names the group, and the row model is the group's model:
+
+```python
+class IofQParams(BaseModel):          # IOFQ
+    sample: Run
+    can: Run
+    reduction: Reduction = Field(default_factory=Reduction)
+
+class MultiIofQParams(BaseModel):     # IOFQ_MULTI
+    sample: list[Run] = Field(min_length=1)
+    can: list[Run] = Field(min_length=1)
+    reduction: Reduction = Field(default_factory=Reduction)
+```
+
+The binding knows from its spec whether `'sample.file'` is the field of a group or of each row of a table (amendment B).
+How the rows are combined is the driver's job (section 2), here `Sums`.
 For a function, the mapping is its signature, whose form depends on the protocol (amendment D).
 
-The author of the mappings promises that the single-run and multi-run mappings describe the same workflow (the one-row symmetry).
+With one mapping, the one-row symmetry holds by construction: `Sums` over one row computes the outputs from that row's own accumulated values, and computes an empty table as one row of `None`, as the default driver computes a group set to `None`.
+A package whose specs name their parameters differently, such as `sample` and `sample_runs` as in [roles/toy_sans.py](../roles/toy_sans.py), needs two mappings, and its author promises that they describe the same workflow.
+
 The author of the pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
 
 ### 2. Strategy: a driver
 
-A strategy computes a plain request, a stage, and a held state.
-For a sciline pipeline, it is a *driver* in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the object that calls the stages and pushes into the accumulators, and that holds everything stateful, such as which rows are in and what a changed value invalidates.
-A package passes its driver in place of the pipeline; a bare pipeline gets the default driver:
+For a sciline pipeline, the strategy is a *driver* in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
+The driver holds everything stateful: its `sciline.Stage`s, the sums or rows it keeps, and what a changed value invalidates.
+The backend makes three kinds of call, and the driver decides how to serve each:
+
+- a **plain request**, with every value given;
+- a call through a **stage**, in the framework's sense: a template the backend keeps for a client, whose fixed values are the same at every call, so the driver may compute their part once (with a `sciline.Stage` cut at the keys of the blanks);
+- a **held state**, to which rows arrive one push at a time.
+
+A package passes its driver in place of the pipeline.
+A bare pipeline stands for the default driver, which serves plain requests and stages through `sciline.Stage`, and keeps the rows of a held state.
+`ess.spec` also provides `Sums`, today's `AccumulatingPipelineBinding` without the mapping, which sums accumulated keys as SANS needs; the cases of cost 9 need a package's own driver.
 
 ```python
 PipelineBinding(IOFQ, pipeline, ...)                                  # the default driver
@@ -160,39 +180,61 @@ PipelineBinding(VOLUME, GridDriver(pipeline), ...)   # a package's own (hypothet
                                                      # run's events into the held grid
 ```
 
-A driver works in the keys of its pipeline, never in the spec's field names.
-The mapping translates both ways, so the driver protocol is the binding protocol in keys:
+A function binding has no pipeline and no keys, so it has no driver: its signature is the mapping, and each call computes everything.
+
+**A driver speaks the keys of its pipeline.**
+The mapping translates the spec's field names to keys and back, so the driver protocol is the binding protocol in keys:
 
 ```python
-call = driver.stage(fixed, blanks)     # fixed: values by key, such as {Bins: 2}; blanks: keys
-held = driver.held_state(fixed)        # values by key
-held.push({RunData[SampleRun]: ...})   # one row, by key
-held.outputs()                         # {IofQ: ...}
+call = driver.stage({}, blanks=(Bins,), rows=fixed_rows)   # tune the bins over fixed runs
+call({Bins: 4})                                            # -> {IofQ: ...}
+held = driver.held_state({Bins: 2})
+held.push({RunData[SampleRun]: run_101, RunData[CanRun]: can_110})   # one row of each table
+held.outputs()                                                       # -> {IofQ: ...}
 ```
 
-So a package writes its driver against its own pipeline, without knowing the spec, its field names, or the protocol's dicts or models.
-How the fixed rows of a table look in keys is open; one candidate is a list of dicts by key, told apart by table through their keys.
+A group sets one value per key, so a dict by key holds the fixed groups, such as `{Bins: 2}`.
+A table sets the same key once per row, so its rows cannot go into that dict; they need an argument of their own:
 
-The strategies:
+```python
+fixed_rows = [{RunData[SampleRun]: run_101}, {RunData[SampleRun]: run_102},
+              {RunData[CanRun]: can_110}]
+```
 
-| Strategy | Plain request | Stage | Held state |
-|---|---|---|---|
-| a function (not a driver) | call it | call it, with every value, at each call | keep the rows; compute the plain request for each state read |
-| the default driver | one `sciline.Stage` | cut at the keys of the blanks | keep the rows; compute the plain request for each state read |
-| `Sums` | sum the accumulated keys over the rows; compute the outputs from the sums | the same, holding each fixed row's part that does not depend on a blank | add each push's accumulated keys to the sums |
-| a package's own driver | its own | its own | its own |
-| fold (`combine`) | fold the rows | the same | fold each push |
+The keys of a row tell the driver which table it belongs to.
+The exact shape of this argument is open.
 
-`Sums` is today's `AccumulatingPipelineBinding` without the mapping.
-It covers SANS; the cases of cost 9 need a package's own driver.
+**So the driver is used as the pipeline is**, in keys, with no spec, params model, or framework:
+
+```python
+wf = pipeline.copy()                           # the pipeline, directly
+wf[Bins] = 2
+wf[RunData[SampleRun]] = run_101
+wf[RunData[CanRun]] = can_110
+wf.compute(IofQ)
+
+held = Sums(pipeline, accumulate=(...)).held_state({Bins: 2})   # the driver, directly
+held.push({RunData[SampleRun]: run_101, RunData[CanRun]: can_110})
+held.push({RunData[SampleRun]: run_102})
+held.outputs()[IofQ]
+```
+
+The params models, the mapping, and the framework come on top, for use through apps and services:
+
+| Level | Speaks | Used directly by |
+|---|---|---|
+| pipeline | keys | the workflow package and its tests; notebooks without the framework |
+| driver | keys | the same, for sums over runs and for stages |
+| binding: a mapping and a driver | the spec's fields and models | the backend |
+| framework | requests and records | notebooks, apps, and services, through the client |
 
 A strategy keeps caching, arrival, and order:
 
 | Symmetry | Kept by | Given |
 |---|---|---|
-| caching | the cut at the blanks | a pure pipeline |
+| caching | the driver, by a cut at the blanks | a pure pipeline |
 | arrival, order | the driver | for `Sums`: accumulated keys that add up over runs, such as a numerator and a denominator, and that each depend on one table only (checked when it is made); for a package's own driver: its author's promise |
-| one-row | nothing | single-run and multi-run mappings that describe the same workflow |
+| one-row | the shared mapping, with `Sums` or the default driver | single-run and multi-run specs whose parameters have the same names and models; otherwise, the author's promise that the two mappings describe the same workflow |
 
 ### 3. Protocol
 
@@ -425,5 +467,9 @@ The client API, records, the symmetries, and the backend's promises to a binding
 > Simon:
 
 10. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
+
+> Simon:
+
+11. Mapping: make it a rule that the multi-run spec names each table as the single-run spec names the group, with the same model, so that one mapping serves both? That convention is mechanical enough to go one step further, either by deriving the single-run spec (`IOFQ_MULTI.single_run()`), or by letting the backend accept a group where a table is expected, as a table of one row, so that a package offers only the multi-run spec. Worth it, or a step too far?
 
 > Simon:
