@@ -9,8 +9,9 @@ data fields, :mod:`~.binding` for the protocol of the code behind a spec, and
 ADR 0001 (docs/developer/adr in the package) for the rationale.
 
 The package does not import :mod:`~.conversions` (needs scipp),
-:mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`
-(checks of the symmetries a binding promises). Import them directly.
+:mod:`~.pipeline` (``PipelineBinding`` and ``AccumulatingPipelineBinding``,
+need sciline), and :mod:`~.testing` (checks of the symmetries a binding
+promises). Import them directly.
 """
 
 from ._workflow_spec import NoParams, SerializedWorkflowSpec, WorkflowSpec
