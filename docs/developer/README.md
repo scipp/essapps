@@ -7,6 +7,7 @@ It states each rule once.
 The [ADRs](adr/index.md) give the reasons, and [the requirements](../requirements/README.md) the goals.
 [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
 [three-ways-to-run-a-spec.html](three-ways-to-run-a-spec.html) shows the main concepts on two slides.
+[prior-art/](prior-art/README.md) holds studies of other systems.
 The first release combines no runs and tunes no parameters interactively.
 It needs neither the section Stages and accumulators nor the loop over arrivals in Drivers.
 

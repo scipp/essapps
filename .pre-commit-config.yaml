@@ -35,5 +35,6 @@ repos:
     rev: v2.3.0
     hooks:
       - id: codespell
+        args: ["--ignore-words-list", "ines"]  # INES: an ISIS instrument
         exclude_types:
           - svg
