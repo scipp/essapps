@@ -219,8 +219,9 @@ def setup_qedges(bins: QBins) -> QEdges:
 The conversion is a provider of the workflow, so the mapping needs no functions (amendment F), and a user without the framework sets either key: `wf[QBins] = QBins(...)`, or `wf[QEdges] = edges` directly.
 
 A model that serves several run types gets a key per run type, as `RunInput[RunType]` does.
-The order of bases matters: `sciline.Scope` first, as above, works (pydantic warns about the order).
-Two other forms fail without an error, since sciline then does not tell `[SampleRun]` from `[CanRun]` and computes both from one value: a pydantic generic model, `Run[SampleRun]`, and `class RunInput(Run, sciline.Scope[RunType, Run])`.
+A generic pydantic model, `class Run(BaseModel, Generic[RunType])` with keys `Run[SampleRun]`, would also do, and sciline supports it, but not with run types made by `NewType`, as ess.reduce makes them.
+pydantic names both `Run[SampleRun]` and `Run[CanRun]` as `Run[NewType]`, and sciline's dask scheduler names its tasks by the key's name, so both keys become one task and get one value, without an error.
+`RunInput` with `sciline.Scope` as its first base avoids this (pydantic warns about the order of bases).
 
 When a binding is made, it checks that every parameter of the spec has a key, that the keys are distinct, and that every output of the spec has a key; optional outputs may have none.
 
