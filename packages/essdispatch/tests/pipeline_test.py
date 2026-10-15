@@ -70,7 +70,7 @@ SHIFT = WorkflowSpec(
 
 
 class TotalParams(BaseModel):
-    offsets: list[Offset]
+    offsets: list[Offset] = Field(min_length=1)
 
 
 class TotalOutputs(BaseModel):

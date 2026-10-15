@@ -148,7 +148,8 @@ The module that defines a spec imports pydantic, `ess.spec`, and scipp for the t
 A workflow without data takes `NoInputs`, as one without configuration takes `NoParams`.
 A request computes every output its spec declares.
 
-A check of one value belongs to the value's type, such as a field validator of `BeamCentre`; `WorkflowSpec` refuses field validators of the params and inputs models themselves.
+A check of one value belongs to the value's type, such as a field validator of `BeamCentre`, and so does the JSON form of a value, which the framework stores and reads back.
+`WorkflowSpec` refuses every pydantic decorator of the params and inputs models themselves but a model validator: field validators, serializers, and computed fields.
 A check across parameters is a model validator of the params model, and a check across inputs one of the inputs model.
 A check across params and inputs, such as a transmission mode that requires a transmission run, is the binding's, and fails when the request runs.
 
@@ -404,8 +405,9 @@ IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 
 ```
 
 Each field named becomes a `list` on its own side, and is the index of a table.
-An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
-An index is required, or optional with default `None`, and `tabulate` refuses any other default.
+An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None = None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
+An index is `X`, or `X | None = None`, and `tabulate` refuses any other.
+The validators and constraints of a field named check each row.
 The other fields, `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
 A request that gives every row is a plain request:
 
@@ -429,6 +431,7 @@ A column whose type allows `None` and that a request or a push leaves out is `No
 A column of any other type is given with its index every time.
 
 A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables={'runs': ()})`.
+Its required index carries `Field(min_length=1)`, as one that `tabulate` makes, such as `runs: list[RunFile] = Field(min_length=1)`, so the model, its schema, and the backend agree that the table has a row.
 A list field makes a table only when `tables` names it; otherwise it is a value like any other.
 
 The *table rules* are: the columns of a table have equal length, a table with a required index has a row, and the index values are distinct.
@@ -635,7 +638,8 @@ A parameter or an input in neither takes the spec's default.
 The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
-Each parameter and input sets the sciline key of its type as written, such as `Reduction`, `SampleFile`, or `CanFile | None`.
+The function does not get the blanks, so a field that changes the graph cannot be a blank.
+Each parameter and input sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `SampleFile`, or `CanFile | None`.
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
 A table sets the key of each of its columns to its list.
 A workflow with keys of its own names them with `keys=`:
@@ -651,6 +655,8 @@ A stage computes what does not depend on the blanks once, through `sciline.Stage
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
 `binding.keys` and `binding.pipeline(fixed)` give the keys and the graph of a `PipelineBinding`, so that the driver of the multi-run spec reuses them ([roles/toy_sans.py](roles/toy_sans.py)).
+A driver passes `pipeline` the fixed values it is made with: every value that is not a column of a table, defaults filled in.
+So a field that is a column of the multi-run spec cannot shape the graph, as a blank cannot.
 
 **A driver.** A *driver* is an object with `push(table, columns)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
@@ -795,7 +801,7 @@ Arrival, order, and placement hold up to rounding.
 
 - `check_one_row(single, multi, params, inputs)`: the binding of the multi-run spec, given the one-row request made from `params` and `inputs`, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
-- `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{index: {column: list}}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec. Both sides go through the driver, so it does not prove the outputs are right.
+- `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{index: {column: list}}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a column of a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
 
 ## Left to the system
 

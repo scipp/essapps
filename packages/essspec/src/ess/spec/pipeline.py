@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
-from .field_types import optional
+from .field_types import optional, plain
 
 Key = Any
 
@@ -31,7 +31,8 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     defaults filled in, so that the graph may depend on them; it gets no
     blank, and each call must return a pipeline of its own, such as a copy.
     Each parameter and input sets the sciline key of its type as written,
-    such as ``Reduction`` or ``CanFile | None``; a column of a table sets the
+    without ``Annotated`` metadata, such as ``Reduction`` or
+    ``CanFile | None``; a column of a table sets the
     key of its type, a list, to its list. Each output is computed as the key
     of its type without ``| None``, since an optional output means that the
     graph may lack it, not that a provider returns ``None``; an output that a
@@ -79,7 +80,7 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
         if unset := [n for n in outputs if n in keys and keys[n] is None]:
             raise ValueError(f'{unset}: an output is computed as a key')
         all_keys = {
-            **{n: keys.get(n, f.annotation) for n, f in declared.items()},
+            **{n: keys.get(n, plain(f.annotation)) for n, f in declared.items()},
             **{n: keys.get(n, optional(f.annotation)[0]) for n, f in outputs.items()},
         }
         names: dict[Key, list[str]] = {}
@@ -107,8 +108,10 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
         The pipeline ``make_pipeline`` makes from ``fixed``, by name, with each
         value of ``fixed`` set at its key: the graph that a stage cuts.
 
-        A stage passes its fixed values with defaults filled in; a driver may
-        pass what its graph needs, such as ``{'reduction': ..., 'can': None}``.
+        A stage passes its fixed values with defaults filled in. A driver
+        passes the fixed values it is made with: every value that is not a
+        column of a table, defaults filled in. So a field that is a column of
+        the multi-run spec cannot shape the graph, as a blank cannot.
         """
         spec = self.spec
         declared = spec.params.model_fields.keys() | spec.inputs.model_fields.keys()

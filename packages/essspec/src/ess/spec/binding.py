@@ -177,15 +177,19 @@ def fixed_values(
     neither has no rows: an empty list in each column. Raises ``ValueError``
     if a name is both fixed and blank, if either names no parameter, input,
     or table of the spec, if a blank names an attached column, if a table is
-    fixed in part or with columns of unequal length, or if one without a
-    default is in neither.
+    fixed in part, with a column that is not a list, or with columns of
+    unequal length, or if one without a default is in neither.
     """
     fields = spec.params.model_fields | spec.inputs.model_fields
     attached = {c for columns in spec.tables.values() for c in columns}
     if unknown := sorted(fixed.keys() - fields.keys()):
         raise ValueError(f'{unknown}: not parameters or inputs of {spec.name}')
-    if unknown := sorted(set(blanks) - (fields.keys() - attached)):
+    if unknown := sorted(set(blanks) - fields.keys()):
         raise ValueError(f'{unknown}: not parameters, inputs, or tables of {spec.name}')
+    if columns := sorted(set(blanks) & attached):
+        raise ValueError(
+            f'{columns}: columns of a table; a blank names a table by its index'
+        )
     left_open = spec.blank_fields(blanks)
     if both := sorted(fixed.keys() & left_open):
         raise ValueError(f'{both}: both fixed and blank')
@@ -194,6 +198,8 @@ def fixed_values(
         if given := [c for c in columns if c in fixed]:
             if missing := [c for c in columns if c not in fixed]:
                 raise ValueError(f'{index}: a table is fixed whole, {missing} missing')
+            if not all(isinstance(fixed[c], list) for c in given):
+                raise ValueError(f'{index}: the columns of a table are lists')
             if len({len(fixed[c]) for c in given}) > 1:
                 raise ValueError(f'{index}: the columns of a table have equal length')
     left = {n: f for n, f in fields.items() if n not in fixed and n not in left_open}

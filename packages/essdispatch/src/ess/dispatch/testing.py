@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec
 from ess.spec.binding import fixed_values
+from ess.spec.testing import instances
 
 from .datasets import Selector
 
@@ -137,15 +138,6 @@ class FakeStore:
     def __contains__(self, key: tuple[str, str]) -> bool:
         with self._lock:
             return key in self._values
-
-
-def instances(spec: Spec, values: Mapping[str, Any]) -> tuple[BaseModel, BaseModel]:
-    """
-    Instances of the spec's params and inputs models from ``values`` by name,
-    as a stage or a driver takes them.
-    """
-    params, inputs = spec.split(values)
-    return spec.params.model_validate(params), spec.inputs.model_validate(inputs)
 
 
 @dataclass

@@ -28,7 +28,7 @@ dynamic = ["version"]
 
 dependencies = [
     "essspec",
-    "pydantic>=2.10",
+    "pydantic>=2.12",
 ]
 
 [project.optional-dependencies]

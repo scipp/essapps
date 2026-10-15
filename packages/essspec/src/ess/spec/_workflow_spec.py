@@ -38,10 +38,13 @@ framework: what the framework needs, it reads from the field types (see
   object (a scipp type, a model, a ``NewType`` of either). The default of an
   input is ``None`` or an empty list.
 - Each output is a data value, possibly optional, or a list or a dict of them.
-- The params and inputs models have no field validators: a check of one value
-  belongs to the value's type, such as a field validator of a group or of a
-  model that is a data value.
-- The index of a table is required, or empty by default.
+- The params and inputs models have no pydantic decorators but model
+  validators: no field validators, serializers, or computed fields. A check
+  of one value belongs to the value's type, such as a field validator of a
+  group or of a model that is a data value; so does its JSON form, which the
+  framework stores and reads back.
+- The index of a table is required, with ``Field(min_length=1)``, or empty by
+  default.
 
 A check across fields is a model validator. One of
 the params model runs in the request phase of every request; one of the
@@ -69,7 +72,8 @@ Two forms exist, related by a one-way projection:
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from typing import Any, Literal, Self, get_origin
+from types import NoneType
+from typing import Annotated, Any, Literal, Self, Union, get_args, get_origin
 
 from annotated_types import MinLen
 from pydantic import (
@@ -294,13 +298,15 @@ class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen
                           tables={'sample': ('sample_geometry',), 'can': ()})
 
         Each field named becomes a ``list`` on its own side. An index is
-        required, or optional with default ``None``, and loses ``| None``:
+        ``X``, or ``X | None = None``, and loses ``| None``:
         ``sample: SampleFile`` becomes ``list[SampleFile]`` with at least one
-        row, and ``can: CanFile | None`` becomes ``list[CanFile]``, empty by
-        default. An attached column keeps its type as written,
+        row, and ``can: CanFile | None = None`` becomes ``list[CanFile]``,
+        empty by default. An attached column keeps its type as written,
         ``list[SampleGeometry | None]``, and has no default. Where its type
         is optional, as here, the framework fills a column left out with
-        ``None`` in each row; a column of another type is given. Title,
+        ``None`` in each row; a column of another type is given. The
+        validators and constraints of a field named, such as an
+        ``AfterValidator`` or ``Field(gt=0)``, check each row. Title,
         description, examples (each as one row), and ``json_schema_extra`` of
         a field named are kept. The other fields, the outputs, and the field
         validators of the types are as in this spec. A model with a field
@@ -321,15 +327,8 @@ class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen
             raise ValueError(f'{unknown}: not parameters or inputs of {self.name}')
         if lists := sorted(n for n in names if element(self.field(n).annotation)):
             raise ValueError(f'{lists}: lists already, cannot be columns')
-        if defaulted := sorted(
-            index
-            for index in named
-            if not self.field(index).is_required()
-            and self.field(index).get_default(call_default_factory=True) is not None
-        ):
-            raise ValueError(
-                f'{defaulted}: an index is required, or optional with default None'
-            )
+        if misshapen := sorted(i for i in named if not _index_shape(self.field(i))):
+            raise ValueError(f'{misshapen}: an index is X, or X | None = None')
         attached = {n for columns in named.values() for n in columns}
         return WorkflowSpec(
             name=name,
@@ -414,18 +413,33 @@ def _one_or_list(annotation: Any) -> bool:
     return element(tp) is None or (get_origin(tp) is list and not is_optional)
 
 
-def _no_field_validators(model: type[BaseModel]) -> list[str]:
-    """Refuse a field validator of the params or the inputs model itself."""
-    if validators := model.__pydantic_decorators__.field_validators:
+def _model_validators_only(model: type[BaseModel]) -> list[str]:
+    """
+    Refuse a decorator of the params or the inputs model itself but a model
+    validator: a field validator, a field or model serializer, or a computed
+    field.
+    """
+    decorators = model.__pydantic_decorators__
+    if found := {
+        kind: sorted(getattr(decorators, kind))
+        for kind in (
+            'validators',
+            'field_validators',
+            'field_serializers',
+            'model_serializers',
+            'computed_fields',
+        )
+        if getattr(decorators, kind)
+    }:
         return [
-            f'{model.__name__}: no field validators, {sorted(validators)}; a '
-            "check of one value belongs to the value's type"
+            f'{model.__name__}: no decorators but model validators, {found}; '
+            "the check or the JSON form of one value belongs to the value's type"
         ]
     return []
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
-    problems = _no_field_validators(model)
+    problems = _model_validators_only(model)
     for name, field in model.model_fields.items():
         group = base(value_type(field.annotation))
         if not (
@@ -469,7 +483,7 @@ def _holds_file(tp: Any, seen: set[type[BaseModel]]) -> bool:
 
 
 def _inputs_problems(model: type[BaseModel]) -> list[str]:
-    problems = _no_field_validators(model)
+    problems = _model_validators_only(model)
     for name, field in model.model_fields.items():
         if not (
             _one_or_list(field.annotation)
@@ -515,7 +529,14 @@ def _tables_problems(spec: WorkflowSpec[Any, Any, Any]) -> list[str]:
                 problems.append(f'{name}: a column of a table is a list')
             elif name == index and optional(element(field.annotation))[1]:
                 problems.append(f'{index}: the index of a table holds no None')
-            elif name == index and not field.is_required():
+            elif name == index and field.is_required():
+                if not any(
+                    isinstance(m, MinLen) and m.min_length >= 1 for m in field.metadata
+                ):
+                    problems.append(
+                        f'{index}: a required index has Field(min_length=1)'
+                    )
+            elif name == index:
                 default = field.get_default(call_default_factory=True)
                 if not (isinstance(default, list) and not default):
                     problems.append(
@@ -543,16 +564,31 @@ def _tabulated(
             # An example of a column is one row of it.
             'examples': None if info.examples is None else [[e] for e in info.examples],
         }
+        # A row is a value of the field, so the field's validators and
+        # constraints check each row.
         if name in attached:
-            fields[name] = (list[info.annotation], Field(**meta))
-        else:
-            core, _ = optional(info.annotation)
-            rows = (
-                {'min_length': 1} if info.is_required() else {'default_factory': list}
-            )
-            fields[name] = (list[core], Field(**rows, **meta))
+            row, rows = info.annotation, {}
+        elif info.is_required():
+            row, rows = info.annotation, {'min_length': 1}
+        else:  # X | None = None, as tabulate checks
+            members = [a for a in get_args(info.annotation) if a is not NoneType]
+            row = Union[tuple(members)]  # noqa: UP007
+            rows = {'default_factory': list}
+        if info.metadata:
+            row = Annotated[row, *info.metadata]
+        fields[name] = (list[row], Field(**rows, **meta))
     return create_model(
         f'Tabulated{model.__name__}', __config__=model.model_config, **fields
+    )
+
+
+def _index_shape(field: FieldInfo) -> bool:
+    """Whether ``tabulate`` takes a field as an index: ``X``, or ``X | None = None``."""
+    if field.is_required():
+        return not optional(field.annotation)[1]
+    return (
+        optional(field.annotation)[1]
+        and field.get_default(call_default_factory=True) is None
     )
 
 

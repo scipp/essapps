@@ -36,7 +36,7 @@ An output without a type in the list of toy specs has a `NewType` of `sc.Variabl
 `Parts` is a model of two `sc.Variable`s.
 A reference to an output fits an input when the output's type fits the input's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, and every curve fits `EXPORT`'s `result: sc.Variable`.
 The list inputs of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with its runs as the index and no attached columns.
-`tabulate` makes none of these specs, so each declares its tables with `tables=`.
+`tabulate` makes none of these specs, so each declares its tables with `tables=`, and each index, being required, carries `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
 `IOFQ` and `VANADIUM`, which the stories stage, are bound to the functions `iofq` and `vanadium` by a toy binding that serves plain requests and stages.

@@ -4,6 +4,7 @@
 
 import threading
 from collections.abc import Iterator
+from enum import Enum
 from itertools import islice
 from pathlib import Path
 from typing import Any, NewType
@@ -18,10 +19,11 @@ from ess.dispatch import (
     Selector,
     Status,
     SubmitError,
+    Template,
     dataset,
 )
 from ess.dispatch.log import Event, Log
-from ess.dispatch.testing import FakeDatasets, read_dataset
+from ess.dispatch.testing import FakeDatasets, StagedFunction, read_dataset
 from ess.spec import NoParams, WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
@@ -102,10 +104,33 @@ class BoxParams(BaseModel):
     box: Box = Field(default_factory=Box)
 
 
+class Values(BaseModel):
+    values: frozenset[float] = frozenset()
+
+
+class Mode(Enum):
+    fast = 'fast'
+    slow = 'slow'
+
+
+class Strict(BaseModel, strict=True):
+    mode: Mode = Mode.fast
+
+
+class ModeParams(BaseModel):
+    values: Values = Field(default_factory=Values)
+    strict: Strict = Field(default_factory=Strict)
+
+
+def slow(params: ModeParams, inputs: LoadInputs) -> ValueOutputs:
+    return ValueOutputs(value=float(params.strict.mode is Mode.slow))
+
+
 SPLIT = _spec('split', outputs=PartsOutputs)
 PIECES = _spec('pieces', outputs=PiecesOutputs)
 ANYTHING = _spec('anything', params=BoxParams)  # a box of any value
 SCALED = _spec('scaled', params=ScaledParams)
+MODES = _spec('modes', params=ModeParams)
 SUM = SCALED.tabulate(name='sum', version=1, tables={'sample': ('scale',)})
 
 
@@ -169,6 +194,7 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
         function_binding(ANYTHING, lambda p, i: ValueOutputs(value=0.0)),
+        StagedFunction(MODES, slow),
     ]
     backend = Backend(datasets, bindings)
     yield backend
@@ -286,26 +312,51 @@ def _boxed(value: Any) -> Request:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored'):
+    with pytest.raises(
+        SubmitError, match=r'^second: anything/v1: cannot be stored as JSON'
+    ):
         client.submit({'first': _boxed(1), 'second': _boxed(len)})
     assert client.records() == []
 
 
 @pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
-def test_a_value_that_is_not_finite_is_refused(client: Client, value: float) -> None:
-    with pytest.raises(SubmitError, match=r'^box: not finite; has no JSON form$'):
+def test_a_value_whose_json_form_reads_back_as_another_is_refused(
+    client: Client, value: float
+) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^box: has no JSON form that reads back as the value$'
+    ):
         client.submit(_boxed(value))
+
+
+def test_a_number_that_is_not_finite_is_refused_in_a_set(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^values: has no JSON form that reads'):
+        client.submit(
+            MODES,
+            params={'values': {'values': [1.0, float('inf')]}},
+            inputs={'sample': dataset(run=1)},
+        )
+
+
+def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
+    strict = {'strict': Strict(mode=Mode.slow)}
+    plain = client.compute(MODES, params=strict, inputs={'sample': dataset(run=1)})
+    stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
+    staged = client.compute(stage, inputs={'sample': dataset(run=1)})
+
+    assert plain.request.params['strict'] == {'mode': 'slow'}
+    assert client.output(plain, 'value') == client.output(staged, 'value') == 1.0
 
 
 def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
     typo = Request(
         ANYTHING,
-        params={'box': {'item': {'valeu': 1}}},
+        params={'box': {'item': {'unknown': 1}}},
         inputs={'sample': dataset(run=1)},
     )
 
     with pytest.raises(
-        SubmitError, match=r"^box\.item: \['valeu'\]: not fields of Item"
+        SubmitError, match=r"box\.item\.unknown: Extra inputs are not permitted"
     ):
         client.submit(typo)
 
@@ -526,13 +577,14 @@ def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> Non
     whole, half = (
         split.ref('pieces').model_copy(update={'key': k}) for k in ('0', '1')
     )
-    named = split.ref('pieces').model_copy(update={'key': 'half'})
 
     assert client.output(client.compute(ADD, inputs=operands(whole, half))) == {
         'value': 3.0
     }
-    with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of a list'):
-        client.submit(ADD, inputs=operands(named, half))
+    for key in ('half', '01', '+1', '-1', ' 1'):
+        named = split.ref('pieces').model_copy(update={'key': key})
+        with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of'):
+            client.submit(ADD, inputs=operands(named, half))
 
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:

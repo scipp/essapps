@@ -92,7 +92,7 @@ class PositiveInputs(BaseModel):
 class CheckedInputs(BaseModel):
     """Inputs whose model validator refuses every instance, to show where it runs."""
 
-    sample: list[SampleFile]
+    sample: list[SampleFile] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _refused(self) -> Self:
@@ -282,7 +282,7 @@ def test_a_misspelt_name_is_refused(client: Client) -> None:
         client.stage(
             Template(SCALE, inputs={'sampel': dataset(run=1)}, blanks=('scaling',))
         )
-    with pytest.raises(SubmitError, match='sampel: a blank, not a parameter'):
+    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters, inputs, or"):
         client.stage(Template(SCALE, blanks=('sampel',)))
 
 

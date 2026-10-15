@@ -132,7 +132,13 @@ def test_fixed_values_take_a_table_as_its_columns() -> None:
         (SAMPLE_TABLE, ('sample',), r"\['sample', 'weight'\]: both fixed and blank"),
         ({'weight': [None]}, ('sample',), r"\['weight'\]: both fixed and blank"),
         ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters or inputs"),
-        ({}, ('weight',), r"\['weight'\]: not parameters, inputs, or tables"),
+        ({}, ('speed',), r"\['speed'\]: not parameters, inputs, or tables"),
+        ({}, ('weight',), r"\['weight'\]: columns of a table; a blank names a"),
+        (
+            {'sample': 5.0, 'weight': None},
+            ('can',),
+            'sample: the columns of a table are lists',
+        ),
         ({}, ('can',), r"\['sample'\]: neither fixed nor blank"),
         ({'sample': [5.0]}, ('can',), r"sample: a table is fixed whole, \['weight'\]"),
         (

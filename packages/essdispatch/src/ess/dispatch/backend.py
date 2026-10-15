@@ -77,13 +77,15 @@ the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each
 reference to a record or an accumulator is one the client may read, and its
 data fit the input's field. In the *call phase*, on a worker, the backend
-reads the data each reference names, a local path for a dataset. For a plain
-request it builds the inputs instance from them, which runs the inputs
-model's own validators; for a stage or an accumulator, it validates each
-value by its own field. The binding gets instances of the params and inputs
-models, or the values by name, and returns one of the outputs model: an
-output that the spec declares optional and the binding returns as ``None`` is
-left out, and a record whose binding returns anything else fails.
+reads the data each reference names, a local path for a dataset, and
+validates the params from their JSON form, which the log holds, so that both
+phases see the same values. For a plain request it builds the inputs
+instance from the data, which runs the inputs model's own validators; for a
+stage or an accumulator, it validates each value by its own field. The
+binding gets instances of the params and inputs models, or the values by
+name, and returns one of the outputs model: an output that the spec declares
+optional and the binding returns as ``None`` is left out, and a record whose
+binding returns anything else fails.
 
 A stage checks its template's values when it is made, and resolves dataset
 names: each fixed value by its own field, without the params model's own
@@ -200,6 +202,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
+from pydantic_core import to_json
 
 from ess.spec import (
     AccumulatorBinding,
@@ -531,8 +534,8 @@ class Backend:
     ) -> None:
         self._datasets = datasets
         self._store = store
-        self._specs: dict[SpecId, Spec] = {}
         self._bindings: dict[SpecId, Binding] = {}
+        self._checks: dict[SpecId, Checks] = {}
         if isinstance(bind, Mapping):
             raise TypeError('bind is a list of bindings, each of which names its spec')
         for binding in bind:
@@ -541,13 +544,10 @@ class Backend:
                     f'bind is a list of bindings, such as a PipelineBinding, '
                     f'a DriverBinding, or a function_binding, not {binding!r}'
                 )
-            if (spec_id := SpecId.of(binding.spec)) in self._specs:
+            if (spec_id := SpecId.of(binding.spec)) in self._bindings:
                 raise ValueError(f'two specs are bound as {spec_id}')
-            self._specs[spec_id] = binding.spec
             self._bindings[spec_id] = binding
-        self._checks = {
-            spec_id: Checks(spec, datasets) for spec_id, spec in self._specs.items()
-        }
+            self._checks[spec_id] = Checks(binding.spec, datasets)
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
         self._log = Log() if log is None else log
@@ -681,7 +681,7 @@ class Backend:
 
     def spec(self, spec_id: SpecId) -> Spec:
         try:
-            return self._specs[spec_id]
+            return self._bindings[spec_id].spec
         except KeyError:
             raise SubmitError(f'unknown spec {spec_id}') from None
 
@@ -787,7 +787,7 @@ class Backend:
         ids = [uuid.uuid4().hex for _ in entries]
 
         def outputs(spec_id: SpecId) -> tuple[str, ...]:
-            return tuple(self._specs[spec_id].outputs.model_fields)
+            return tuple(self._bindings[spec_id].spec.outputs.model_fields)
 
         def state_record(ref: Ref) -> Ref:
             if isinstance(ref, AccumulatorRef):
@@ -951,11 +951,11 @@ class Backend:
         ``also``, what the stage keeps, which :meth:`_check_stage` has checked
         it for; one through a stage that has staged reads only its blanks.
         """
-        for where, ref, tp in refs(self._specs[spec_id].inputs, inputs):
+        for where, ref, tp in refs(self._bindings[spec_id].spec.inputs, inputs):
             if isinstance(ref, DatasetRef):
                 continue  # checked when resolved
             source = self._readable(ref, where, caller, states, also)
-            check_fit(self._specs[source], ref, tp, where)
+            check_fit(self._bindings[source].spec, ref, tp, where)
             if isinstance(ref, OutputRef) and self._views.omitted(
                 (ref.record, ref.output)
             ):
@@ -1177,9 +1177,9 @@ class Backend:
         if state is not None:
             return dict(state[0].outputs())
         request = record.request
-        spec = self._specs[request.spec]
+        spec = self._bindings[request.spec].spec
         if stage is None:
-            params = spec.params.model_validate(request.params)
+            params = spec.params.model_validate_json(to_json(request.params))
             inputs = spec.inputs.model_validate(self._read(request.inputs))
             returned = self._bindings[request.spec].compute(params, inputs)
         else:
@@ -1200,16 +1200,17 @@ class Backend:
     ) -> dict[str, Any]:
         """
         ``values`` of a request by name as a stage or a driver takes them; no
-        lock. Each parameter is validated by its own field, and each input
-        read and validated by its own field, or with ``rows`` as the columns
-        of rows pushed (see :func:`.checks.model_of`).
+        lock. Each parameter is validated by its own field from its JSON form,
+        which the log holds, and each input read and validated by its own
+        field, or with ``rows`` as the columns of rows pushed (see
+        :func:`.checks.model_of`).
         """
-        spec = self._specs[spec_id]
+        spec = self._bindings[spec_id].spec
         params, inputs = spec.split(values)
         params_model = model_of(spec.params, params, rows=rows)
         inputs_model = model_of(spec.inputs, inputs, rows=rows)
         return {
-            **dict(params_model.model_validate(params)),
+            **dict(params_model.model_validate_json(to_json(params))),
             **dict(inputs_model.model_validate(self._read(inputs))),
         }
 
@@ -1808,7 +1809,7 @@ class Backend:
 
         The step holds the outputs it reads until it is done.
         """
-        reads = _output_reads(self._specs[acc.template.spec].split(values)[1])
+        reads = _output_reads(self._bindings[acc.template.spec].spec.split(values)[1])
         self._readers.update(reads)
         acc.steps.append((table, values, reads))
         self._accumulating.add(acc)
@@ -2132,7 +2133,7 @@ class Backend:
         """
         if names is None:
             raise ValueError('select= needs the name of an output')
-        declared = self._specs[spec_id].outputs.model_fields
+        declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
             tp = base(optional(declared[name].annotation)[0])
             if not (isinstance(tp, type) and hasattr(tp, 'dims')):
@@ -2166,7 +2167,7 @@ class Backend:
                 self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
                 if acc.added != upto:
                     raise LookupError(acc.stopped)
-            declared = list(self._specs[acc.template.spec].outputs.model_fields)
+            declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
             for name in names or ():
                 if name not in declared:
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')

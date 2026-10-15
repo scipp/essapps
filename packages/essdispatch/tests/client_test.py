@@ -100,7 +100,7 @@ class ScaleParams(BaseModel):
 
 
 class Parts(BaseModel):
-    parts: list[Part]
+    parts: list[Part] = Field(min_length=1)
 
 
 def _spec(
@@ -161,7 +161,7 @@ class WeightedParams(BaseModel):
 
 
 class WeightedInputs(BaseModel):
-    values: list[Part]
+    values: list[Part] = Field(min_length=1)
 
 
 WEIGHTED = _spec(
@@ -223,7 +223,7 @@ class StepsParams(BaseModel):
     """A table on the params side: its index is a list of groups."""
 
     scale: PositiveScale = Field(default_factory=PositiveScale)
-    steps: list[Step]
+    steps: list[Step] = Field(min_length=1)
 
 
 class WalkParams(StepsParams):
@@ -752,13 +752,13 @@ def test_a_template_and_its_calls_take_models(client: Client) -> None:
 def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None:
     acc = client.accumulator(Template(SUM, blanks=('runs',)))
 
-    with pytest.raises(SubmitError, match=r"^scaling: \['speed'\]: not fields of"):
+    with pytest.raises(SubmitError, match=r'scaling\.speed: Extra inputs are not'):
         client.submit(
             SCALE,
             params={'scaling': {'factor': 2.0, 'speed': 2.0}},
             inputs={'sample': dataset(run=1)},
         )
-    with pytest.raises(SubmitError, match=r"^tag\[0\]: \['speed'\]: not fields of"):
+    with pytest.raises(SubmitError, match=r'tag\.0\.speed: Extra inputs are not'):
         acc.push(runs=[dataset(run=1)], tag=[{'speed': 2.0}])
 
 
@@ -1733,7 +1733,7 @@ class ArrayValue(Data):
 
 
 class ArrayParts(Data):
-    parts: list[ArrayPart]
+    parts: list[ArrayPart] = Field(min_length=1)
 
 
 class CopyInputs(Data):
@@ -1750,8 +1750,8 @@ class SidesInputs(Data):
 
 
 class BothInputs(Data):
-    samples: list[SampleArray]
-    backgrounds: list[BackgroundArray]
+    samples: list[SampleArray] = Field(min_length=1)
+    backgrounds: list[BackgroundArray] = Field(min_length=1)
 
 
 class Sides(Data):

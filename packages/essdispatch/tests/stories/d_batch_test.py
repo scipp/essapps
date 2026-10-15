@@ -141,7 +141,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     renamed = apply(
         replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
     )
-    with pytest.raises(SubmitError, match=r"reduction: \['threshold'\]"):
+    with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
         client.submit(renamed, label='scan')
     moved = replace(
         template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5)}

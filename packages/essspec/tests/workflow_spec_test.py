@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, NewType
 
 import pydantic
 import pytest
 import scipp as sc
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from ess.spec import NoInputs, NoParams, SerializedWorkflowSpec, WorkflowSpec
 
@@ -61,6 +69,23 @@ def validated(name: str, **fields: Any) -> type[BaseModel]:
         __validators__=validators,
         **fields,
     )
+
+
+class SerializedParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @field_serializer('reduction')
+    def _bins(self, reduction: Reduction) -> int:
+        return reduction.bins
+
+
+class ComputedParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def bins(self) -> int:
+        return self.reduction.bins
 
 
 class IofQParams(BaseModel):
@@ -259,11 +284,22 @@ class TestModelRules:
             ),
             (
                 {'params': validated('P', reduction=(Reduction, ...))},
-                r"P: no field validators, \['_check'\]",
+                r"P: no decorators but model validators, {'field_validators': "
+                r"\['_check'\]}",
             ),
             (
                 {'inputs': validated('I', sample=(SampleFile, ...))},
-                r"I: no field validators, \['_check'\]",
+                r"I: no decorators but model validators, {'field_validators': ",
+            ),
+            (
+                {'params': SerializedParams},
+                r"SerializedParams: no decorators but model validators, "
+                r"{'field_serializers': \['_bins'\]}",
+            ),
+            (
+                {'params': ComputedParams},
+                r"ComputedParams: no decorators but model validators, "
+                r"{'computed_fields': \['bins'\]}",
             ),
             (
                 {'inputs': model('I', runs=(dict[str, SampleFile], {}))},
@@ -317,7 +353,7 @@ class TestModelRules:
 class TestTables:
     def test_a_spec_may_declare_tables_of_its_list_fields(self) -> None:
         stitch = spec(
-            inputs=model('I', sample=(list[SampleFile], ...)),
+            inputs=model('I', sample=(list[SampleFile], Field(min_length=1))),
             outputs=model('O', iofq=(IofQ, ...), runs=(list[Banks], ...)),
             tables=['sample'],
         )
@@ -345,11 +381,19 @@ class TestTables:
             ),
             (
                 {'sample': (list[SampleFile], ...)},
+                ['sample'],
+                r'sample: a required index has Field\(min_length=1\)',
+            ),
+            (
+                {'sample': (list[SampleFile], Field(min_length=1))},
                 ['run'],
                 "'run': not a parameter or an input",
             ),
             (
-                {'sample': (list[SampleFile], ...), 'can': (list[CanFile], [])},
+                {
+                    'sample': (list[SampleFile], Field(min_length=1)),
+                    'can': (list[CanFile], []),
+                },
                 {'sample': ('can',), 'can': ()},
                 'can: a column of two tables',
             ),
@@ -423,8 +467,35 @@ class TestTabulate:
         assert slices.inputs is IofQInputs
 
     def test_refuses_an_index_with_a_default_but_none(self) -> None:
-        with pytest.raises(ValueError, match=r"\['reduction'\]: an index is required"):
+        with pytest.raises(ValueError, match=r"\['reduction'\]: an index is X, or"):
             IOFQ.tabulate(name='geometries', version=1, tables=('reduction',))
+
+    def test_refuses_an_optional_index_without_a_default(self) -> None:
+        inputs = model('I', sample=(SampleFile, ...), can=(CanFile | None, ...))
+        with pytest.raises(ValueError, match=r"\['can'\]: an index is X, or X \| None"):
+            spec(inputs=inputs).tabulate(name='runs', version=1, tables=('can',))
+
+    def test_the_validators_of_a_field_named_check_each_row(self) -> None:
+        def known(path: Path) -> Path:
+            if path.name != 'run.nxs':
+                raise ValueError('unknown run')
+            return path
+
+        inputs = model(
+            'I',
+            sample=(Annotated[SampleFile, AfterValidator(known)], ...),
+            can=(Annotated[CanFile, AfterValidator(known)] | None, None),
+        )
+        runs = spec(inputs=inputs).tabulate(
+            name='runs', version=1, tables=('sample', 'can')
+        )
+        runs.inputs(sample=[Path('run.nxs')], can=[Path('run.nxs')])
+        for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
+            with pytest.raises(pydantic.ValidationError, match='unknown run'):
+                runs.inputs(**{'sample': [Path('run.nxs')], **rows})
+        assert runs.serialize().inputs_schema['properties']['sample']['items'] == {
+            'dataType': 'SampleFile'
+        }
 
     def test_keeps_the_display_metadata_of_a_column(self) -> None:
         sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})

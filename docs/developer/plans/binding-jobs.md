@@ -129,8 +129,8 @@ class Driver(Protocol[O]):
 `make_stage` and `make_accumulator` get values *by name*, params and inputs in one mapping: a parameter as its group, an input as its data, and each column of a table under its own name, as a list:
 
 ```python
-binding.make_stage({'sample': path_611, 'can': None}, blanks=('reduction',))
-binding.make_accumulator({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))
+single.make_stage({'sample': path_611, 'can': None}, blanks=('reduction',))
+multi.make_accumulator({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))
 multi.make_accumulator({'reduction': Reduction(bins=2), 'sample': [path_611]},
                        blanks=('can',))                    # the table 'sample' fixed, with one row
 ```
@@ -271,6 +271,8 @@ sans = PipelineBinding(SANS, make_pipeline)
 ```
 
 A field that changes the graph cannot be a blank: `make_pipeline` does not get the blanks, so it fails when it reads one, and the stage is refused when it is made.
+A driver passes `pipeline` the fixed values it is made with: every value that is not a column of a table, defaults filled in.
+So a field that is a column of the multi-run spec cannot shape the graph, as a blank cannot.
 Over a graph that changes from call to call, a stage would have nothing to cache; such a field is varied by plain requests, or by a driver.
 Since the key of each blank is its type, the `sciline.Stage` is cut at the blanks whatever `make_pipeline` inserts.
 Values that users never see are set in this function, by the workflow package or by the instrument's glue.
@@ -399,6 +401,7 @@ driver.outputs().iofq
 | one-row | the package | that the driver computes what the pipeline computes | `check_one_row(single, multi, params, inputs)`: the binding of the multi-run spec, with one row in each table whose index is given and none where it is left out, gives the outputs of the binding of the single-run spec. The only check against an independent reference; more rows are the package's own tests. |
 
 `check_arrival_and_order` takes a function that makes a driver, the fixed values by name, and the tables as `{index: {column: list}}`, so a package tests its driver without a spec.
+The fixed values are every value that is not a column of a table, defaults included: the check does not fill them in.
 `tabulate` makes the one-row symmetry a property of the two specs: `IOFQ_MULTI` has a table for each field of `IOFQ` it names, whose element type is the field's type, without `| None` for an index, so a pipeline over `IOFQ` and a driver over `IOFQ_MULTI` use the same keys.
 A can left out of an `IOFQ` request is a table without rows in `IOFQ_MULTI`.
 

@@ -16,14 +16,15 @@ method for each thing checked::
     index, columns = checks.push(blanks, columns, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
-The checks of a request, the other rows check part of these:
+The checks of a request; a template, a push, and a state check part of these:
 
 - *Names and sides.* Each name is a parameter or an input of the spec, and
   given on its side: a parameter in ``params``, an input in ``inputs``.
-- *Params.* The params model validates the params, its own model validators
-  included, and every value has a JSON form, which the log holds: a value
-  that is not finite has none. A group, at any depth, with a field its model
-  lacks is refused, since validating it would drop that field silently.
+- *Params.* The params model validates the JSON form of the params, its own
+  model validators included, and refuses a field that a model lacks, at any
+  depth, since validating would drop it silently. The log holds the JSON
+  form of the validated params, and the call phase validates that, so it
+  must read back as the value: a number that is not finite has none.
 - *Inputs.* Each input is a reference, ``None`` for an optional field, or
   for a list field a list of them, so a file given as a string is refused:
   data are given by reference, a file as ``dataset(path=...)``. A required
@@ -52,7 +53,7 @@ keeps is the backend's.
 from __future__ import annotations
 
 import functools
-import math
+import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, get_origin
 
@@ -60,7 +61,8 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from pydantic_core import PydanticSerializationError, from_json, to_json
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
-from ess.spec.field_types import base, element, fits, is_file, optional, type_name
+from ess.spec.binding import fixed_values
+from ess.spec.field_types import element, fits, is_file, optional, type_name
 from ess.spec.refs import as_ref, map_refs
 
 from .datasets import DatasetSource, readable
@@ -111,44 +113,28 @@ class Checks:
         """
         spec, blanks = self.spec, template.blanks
         _check_names(spec, template.params, template.inputs)
-        fields = [*spec.params.model_fields, *spec.inputs.model_fields]
-        for blank in blanks:
-            if blank not in fields:
-                raise SubmitError(
-                    f'{blank}: a blank, not a parameter or an input of {self.id}'
-                )
-            if (index := spec.table_of(blank)) not in (None, blank):
-                raise SubmitError(
-                    f'{blank}: a column of the table of {index}; a template '
-                    'leaves a whole table blank, by its index'
-                )
         left_open = spec.blank_fields(blanks)
-        names = [n for n in fields if n not in left_open]
         given = {
             n: v
             for n, v in {**template.params, **template.inputs}.items()
             if n not in left_open
         }
-        if missing := [
-            n
-            for n in names
-            if n not in given
-            and spec.table_of(n) in (None, n)  # a column follows its index
-            and spec.field(n).is_required()
-        ]:
-            raise SubmitError(
-                f'{missing}: neither fixed nor blank, and without a default'
-            )
         tables = [index for index in spec.tables if index not in blanks]
-        params, inputs = spec.split(_columns(spec, given, tables))
+        filled = _columns(spec, given, tables)
+        try:
+            fixed_values(spec, filled, blanks)  # the rules on blanks and defaults
+        except ValueError as error:
+            raise SubmitError(str(error)) from None
+        names = (spec.params.model_fields | spec.inputs.model_fields).keys() - left_open
+        params, inputs = spec.split(filled)
+        params = self._params(params, names)
         inputs = self._resolve(inputs, proposal)
         stored = Template(
             self.id,
-            params={n: _storable(n, v) for n, v in given.items() if n in params},
+            params={n: params[n] for n in given if n in params},
             inputs={n: inputs[n] for n in given if n in inputs},
             blanks=blanks,
         )
-        params = self._params(params, spec.params.model_fields.keys() & names)
         inputs = _with_defaults(spec.inputs, inputs, names)
         _rows(spec, {**params, **inputs}, tables)
         return stored, {**params, **inputs}
@@ -196,15 +182,18 @@ class Checks:
         ``None``.
 
         Each value was checked by its field when it was given, so this checks
-        the rest: the params model, its own validators included, and a row
-        in each table with a required index among the ``blanks``. It takes
-        time in proportion to the rows of the params' tables.
+        the rest: the params model, its own validators included, on the
+        params' JSON form, as the call phase validates them, and a row in
+        each table with a required index among the ``blanks``. It takes time
+        in proportion to the rows of the params' tables.
         """
         try:
             _required_rows(self.spec, {**plain.params, **plain.inputs}, blanks)
-            self._params(plain.params)
+            self.spec.params.model_validate_json(to_json(plain.params))
         except SubmitError as error:
             return str(error)
+        except ValidationError as error:
+            return f'{self.id}: {_problems(error)}'
         return None
 
     def _resolve(self, inputs: Mapping[str, Any], proposal: str) -> dict[str, Any]:
@@ -242,29 +231,50 @@ class Checks:
         rows: bool = False,
     ) -> dict[str, Any]:
         """
-        ``params`` as the record holds them, in JSON's types, defaults filled
-        in. They are validated by the spec's params model, or if ``names``
-        are given, each of these by its own field, or with ``rows`` as the
-        columns of rows pushed (see :func:`model_of`).
+        ``params`` as the record holds them, their JSON form read back,
+        defaults filled in. They are validated from their JSON form, as the
+        call phase validates the log's, by the spec's params model, or if
+        ``names`` are given, each of these by its own field, or with ``rows``
+        as the columns of rows pushed (see :func:`model_of`). A field that a
+        model lacks is refused at any depth, and so is a value whose JSON
+        form does not read back as the value, such as a number that is not
+        finite, which JSON holds as ``null``.
         """
         model = self.spec.params
         if names is not None:
             model = model_of(model, names, rows=rows)
-        _check_groups(model, params)
         try:
-            made = model.model_validate(params)
+            given = to_json(params, inf_nan_mode='constants')
+        except PydanticSerializationError as error:
+            raise SubmitError(f'{self.id}: cannot be stored as JSON: {error}') from None
+        try:
+            made = model.model_validate_json(given, extra='forbid')
         except ValidationError as error:
-            problems = '; '.join(validation_problems(error))
-            raise SubmitError(f'{self.id}: {problems}') from None
-        return {name: _storable(name, value) for name, value in dict(made).items()}
+            raise SubmitError(f'{self.id}: {_problems(error)}') from None
+        line = to_json(made, by_alias=True)
+        try:
+            again = model.model_validate_json(line)
+        except ValidationError as error:
+            unread = sorted(
+                {str(e['loc'][0]) if e['loc'] else 'params' for e in error.errors()}
+            )
+        else:
+            unread = [
+                n for n in model.model_fields if getattr(again, n) != getattr(made, n)
+            ]
+        if unread:
+            raise SubmitError(
+                f'{", ".join(unread)}: has no JSON form that reads back as the value'
+            )
+        return from_json(line)
 
 
-def validation_problems(error: ValidationError) -> list[str]:
+def _problems(error: ValidationError) -> str:
     """What a validation error finds wrong, each with its place."""
-    return [
+    return '; '.join(
         f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
         for e in error.errors()
-    ]
+    )
 
 
 def model_of(
@@ -273,8 +283,8 @@ def model_of(
     """
     A model of the fields ``names`` of ``model`` alone, with its config and
     without its validators, which read whole requests: it validates each value
-    by its own field. A spec's params and inputs models have no field
-    validators; a check of one value belongs to the value's type.
+    by its own field. A spec's params and inputs models have no decorators
+    but model validators; a check of one value belongs to the value's type.
 
     With ``rows``, each field is a column of rows pushed into a table: it is
     validated by its type alone, without its constraints on the whole table,
@@ -336,7 +346,8 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) 
     """
     Refuse a reference to an output that ``spec`` lacks, or whose data do not
     fit ``tp``. A reference with a key names one element of an output, of the
-    output's element type, and the key of an element of a list is an integer.
+    output's element type, and the key of an element of a list is an integer
+    in its canonical form, such as ``'0'`` or ``'12'``, not ``'012'``.
     """
     field = spec.outputs.model_fields.get(ref.output)
     if field is None:
@@ -347,13 +358,10 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) 
             raise SubmitError(
                 f'{where}: {ref} names an element of an output without elements'
             )
-        if get_origin(data) is list:
-            try:
-                int(ref.key)
-            except ValueError:
-                raise SubmitError(
-                    f'{where}: {ref}: the key of an element of a list is an integer'
-                ) from None
+        if get_origin(data) is list and not re.fullmatch('0|[1-9][0-9]*', ref.key):
+            raise SubmitError(
+                f'{where}: {ref}: the key of an element of a list is an integer'
+            )
         data = item
     if not fits(data, tp):
         raise SubmitError(
@@ -381,37 +389,6 @@ def distinct(
     return new
 
 
-def _storable(field: str, value: Any) -> Any:
-    """
-    Refuse a value that cannot be stored in the log, which holds JSON; return
-    it as the log holds it, read back. A number that is not finite has no
-    JSON form.
-    """
-    try:
-        stored = from_json(to_json(value))
-    except PydanticSerializationError as error:
-        raise SubmitError(f'{field}: cannot be stored as JSON: {error}') from None
-    if not _finite(value):
-        raise SubmitError(f'{field}: not finite; has no JSON form')
-    return stored
-
-
-def _finite(value: Any) -> bool:
-    """
-    Whether each number in a literal is finite; JSON would hold one that is
-    not as ``null``.
-    """
-    if isinstance(value, BaseModel):
-        value = value.model_dump()
-    if isinstance(value, float):
-        return math.isfinite(value)
-    if isinstance(value, dict):
-        return all(_finite(v) for v in value.values())
-    if isinstance(value, list | tuple):
-        return all(_finite(v) for v in value)
-    return True
-
-
 def _check_names(
     spec: Spec, params: Mapping[str, Any], inputs: Mapping[str, Any]
 ) -> None:
@@ -425,42 +402,6 @@ def _check_names(
             if (actual := spec.side(name)) != side:
                 what = 'a parameter' if actual == 'params' else 'an input'
                 raise SubmitError(f'{name}: {what} of {spec_id}, given in {side}')
-
-
-def _check_groups(params: type[BaseModel], values: Mapping[str, Any]) -> None:
-    """
-    Refuse a group, at any depth, with a field its model lacks.
-
-    Validating it would drop such a field silently; it is refused instead, as
-    a parameter the spec lacks is.
-    """
-    for name, value in values.items():
-        _check_fields(params.model_fields[name].annotation, value, name)
-
-
-def _check_fields(annotation: Any, value: Any, where: str) -> None:
-    """
-    Refuse a field that a model in ``value`` lacks, found by ``annotation``:
-    a model, or a list or a dict of them, possibly optional, at any depth.
-    """
-    tp, _ = optional(annotation)
-    if (item := element(tp)) is not None:
-        if isinstance(value, list):
-            for i, cell in enumerate(value):
-                _check_fields(item, cell, f'{where}[{i}]')
-        elif isinstance(value, dict):
-            for key, cell in value.items():
-                _check_fields(item, cell, f'{where}.{key}')
-        return
-    model = base(tp)
-    is_model = isinstance(model, type) and issubclass(model, BaseModel)
-    if not (is_model and isinstance(value, dict)):
-        return
-    if extra := value.keys() - model.model_fields:
-        raise SubmitError(f'{where}: {sorted(extra)}: not fields of {model.__name__}')
-    for name, field in model.model_fields.items():
-        if name in value:
-            _check_fields(field.annotation, value[name], f'{where}.{name}')
 
 
 def _columns(

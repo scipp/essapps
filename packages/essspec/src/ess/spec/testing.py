@@ -81,13 +81,16 @@ def one_row(
         rows = 0 if values[index] is None else 1
         for name in spec.columns(index):
             values[name] = [values[name]] * rows
-    return _models(spec, values)
+    return instances(spec, values)
 
 
-def _models(
+def instances(
     spec: WorkflowSpec[Any, Any, Any], values: Mapping[str, Any]
 ) -> tuple[BaseModel, BaseModel]:
-    """Instances of the spec's params and inputs models from ``values``, by name."""
+    """
+    Instances of the spec's params and inputs models from ``values`` by name,
+    as a stage or a driver takes them.
+    """
     params, inputs = spec.split(values)
     return spec.params.model_validate(params), spec.inputs.model_validate(inputs)
 
@@ -114,7 +117,7 @@ def check_caching(
     call = binding.make_stage(fixed, blanks)
     for n, values in enumerate(calls, start=1):
         given = fixed_values(spec, {**fixed, **values}, ())
-        params, inputs = _models(spec, given)
+        params, inputs = instances(spec, given)
         expected = binding.compute(params, inputs)
         actual = call(values)
         where = f'caching, call {n} {values}'
@@ -134,20 +137,20 @@ def check_arrival_and_order(
     Arrival and order: after each push, a driver gives the outputs that one
     push of each table's rows so far gives.
 
-    ``make_driver`` makes a driver from ``fixed``, the values that are not
-    tables, as for a ``DriverBinding``, so a package tests its driver without
-    a spec. ``tables`` holds the columns of each table by its index. The rows
-    are pushed into a new driver for each of
-    several schedules, each table's rows in their order: one push per table,
-    the tables reversed, one row per push table by table, and one row per
-    push alternating between the tables. Every schedule ends with the same
-    rows, so arrival in all of them is order too.
+    ``make_driver`` makes a driver from ``fixed``, as for a
+    ``DriverBinding``, so a package tests its driver without a spec.
+    ``fixed`` holds every value that is not a column of a table, defaults
+    included: this function does not fill them in. ``tables`` holds the
+    columns of each table by its index. The rows are pushed into a new
+    driver for each of several schedules, each table's rows in their order:
+    one push per table, the tables reversed, one row per push table by
+    table, and one row per push alternating between the tables. Every
+    schedule ends with the same rows, so arrival in all of them is order too.
 
     The expected outputs come from a new driver with one push per table that
-    has rows so far. A state
-    whose expected outputs raise is not read, since a driver may refuse a
-    state; the state with every row is always read. The check fails if a
-    push modifies the values it was given.
+    has rows so far. A state whose expected outputs raise is not read, since
+    a driver may refuse a state; the state with every row is always read.
+    The check fails if a push modifies the values it was given.
 
     The check compares the driver with itself under other push schedules, so
     it does not prove that the outputs are right. Only a comparison with an

@@ -209,7 +209,7 @@ def vanadium(params: VanadiumParams, inputs: VanadiumInputs) -> VanadiumOutputs:
 
 
 class RunsInputs(Data):
-    runs: list[RunFile]
+    runs: list[RunFile] = Field(min_length=1)
 
 
 class NormalizeParams(BaseModel):
@@ -239,8 +239,8 @@ def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
 
 
 class BackgroundInputs(Data):
-    sample_runs: list[SampleFile]
-    background_runs: list[BackgroundFile]
+    sample_runs: list[SampleFile] = Field(min_length=1)
+    background_runs: list[BackgroundFile] = Field(min_length=1)
 
 
 Subtracted = NewType('Subtracted', sc.Variable)
@@ -406,7 +406,7 @@ def cut(params: CutParams, inputs: CutInputs) -> CutOutputs:
 
 
 class StitchInputs(Data):
-    runs: list[RunFile]
+    runs: list[RunFile] = Field(min_length=1)
     reference: ReferenceFile
 
 

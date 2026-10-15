@@ -156,7 +156,7 @@ Joined = NewType('Joined', object)
 
 
 class PartsInputs(BaseModel):
-    parts: list[Part]
+    parts: list[Part] = Field(min_length=1)
 
 
 class JoinedOutputs(BaseModel):

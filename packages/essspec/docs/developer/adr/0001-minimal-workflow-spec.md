@@ -196,10 +196,12 @@ reference fits a file field. A framework checks fit in the request phase, so
 that a chain of requests is refused before anything runs.
 
 **Checks.** A check of one value belongs to the value's type, as the field
-validator of `BeamCentre` checks its data; `WorkflowSpec` refuses field
-validators of the params and inputs models themselves. A check across params
-and inputs, such as a transmission mode that requires a transmission run, is
-the binding's, and fails when the request runs.
+validator of `BeamCentre` checks its data, and so does the JSON form of a
+value, which a framework stores and reads back. `WorkflowSpec` refuses every
+pydantic decorator of the params and inputs models themselves but a model
+validator: field validators, serializers, and computed fields. A check across
+params and inputs, such as a transmission mode that requires a transmission
+run, is the binding's, and fails when the request runs.
 
 ### One params model and one inputs model per workflow
 
@@ -263,16 +265,18 @@ SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
 ```
 
 Each field named becomes a `list` on its own side: `sample: SampleFile`
-becomes `list[SampleFile]` with at least one row. An index is required, or
-optional with default `None`, which becomes a table without rows. The
-docstring of `WorkflowSpec.tabulate` states the rules for each kind of field.
+becomes `list[SampleFile]` with at least one row. An index is `X`, or
+`X | None = None`, which becomes a table without rows. The validators and
+constraints of a field named check each row. The docstring of `WorkflowSpec.tabulate` states the rules for each kind of field.
 
 `tabulate` fills the field `tables` of `WorkflowSpec`, which maps each index to
 its attached columns. A spec whose outputs differ from those of a single-run
 spec, such as a stitch of all angles, or that has no single-run spec, such as a
 sum of counts over the runs of a scan, declares its tables itself:
-`WorkflowSpec(..., tables={'angle': ()})`. A list field makes a table only
-when `tables` names it.
+`WorkflowSpec(..., tables={'angle': ()})`. Its required index carries
+`Field(min_length=1)`, as one that `tabulate` makes, so that the model, its
+schema, and the backend agree that the table has a row. A list field makes a
+table only when `tables` names it.
 
 With one row in each table whose index is given, and none where it is left out,
 a request of the multi-run spec is a request of the single-run spec.

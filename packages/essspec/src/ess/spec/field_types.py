@@ -12,20 +12,43 @@ pieces, which these functions take apart::
     list[CanFile | None]    value_type(...) -> CanFile
     IofQ                    supertypes(...) -> [IofQ, sc.DataArray]
 
-with ``IofQ = NewType('IofQ', sc.DataArray)``. :func:`fits` says whether data
+with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
+``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
+(see :func:`plain`). :func:`fits` says whether data
 of one type can be the value of a field of another, so that an output of one
 spec can feed an input of another.
 """
 
 from __future__ import annotations
 
+import functools
+import operator
 from pathlib import PurePath
 from types import NoneType, UnionType
-from typing import Any, NewType, Union, get_args, get_origin
+from typing import Annotated, Any, NewType, Union, get_args, get_origin
+
+
+def plain(tp: Any) -> Any:
+    """
+    ``tp`` without ``Annotated`` metadata, in a list, a dict, or a union too:
+    ``list[Annotated[X, ...] | None]`` becomes ``list[X | None]``.
+    """
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Annotated:
+        return plain(args[0])
+    if origin not in (Union, UnionType, list, dict):
+        return tp
+    plain_args = tuple(plain(arg) for arg in args)
+    if plain_args == args:
+        return tp  # unchanged, so that a sciline key stays the same object
+    if origin in (list, dict):
+        return origin[plain_args]
+    return functools.reduce(operator.or_, plain_args)
 
 
 def optional(tp: Any) -> tuple[Any, bool]:
-    """``tp`` without ``| None``, and whether it had it."""
+    """``tp`` without ``| None`` and ``Annotated`` metadata, and whether it had it."""
+    tp = plain(tp)
     if get_origin(tp) in (Union, UnionType):
         args = [arg for arg in get_args(tp) if arg is not NoneType]
         if len(args) < len(get_args(tp)):
@@ -35,7 +58,11 @@ def optional(tp: Any) -> tuple[Any, bool]:
 
 
 def element(tp: Any) -> Any | None:
-    """``X`` if ``tp`` is ``list[X]`` or ``dict[str, X]``, else ``None``."""
+    """
+    ``X`` if ``tp`` is ``list[X]`` or ``dict[str, X]``, else ``None``; without
+    ``Annotated`` metadata.
+    """
+    tp = plain(tp)
     origin = get_origin(tp)
     if origin is list:
         return get_args(tp)[0]

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from pathlib import Path, PosixPath
-from typing import Any, NewType
+from typing import Annotated, Any, NewType
 
 import pytest
 import scipp as sc
@@ -14,6 +14,7 @@ from ess.spec.field_types import (
     is_data_value,
     is_file,
     optional,
+    plain,
     supertypes,
     type_name,
     value_type,
@@ -39,6 +40,14 @@ def test_optional_removes_none_and_says_whether_it_was_there() -> None:
     assert optional(SampleFile) == (SampleFile, False)
     assert optional(int | str | None) == (int | str, True)
     assert optional(int | str) == (int | str, False)
+
+
+def test_annotated_metadata_is_removed_at_any_depth() -> None:
+    known = Annotated[SampleFile, 'a validator']
+    assert plain(list[known | None]) == list[SampleFile | None]
+    assert plain(dict[str, known]) == dict[str, SampleFile]
+    assert optional(known | None) == (SampleFile, True)
+    assert value_type(list[known]) is SampleFile
 
 
 def test_element_of_a_list_or_a_dict() -> None:
