@@ -42,8 +42,20 @@ ADR 0007 of scipp/essapps, `docs/developer/adr/0007-packages-split-by-dependenci
 Its only dependency beyond the standard library is pydantic. The pieces that
 need scipp or sciline are kept in two submodules, `conversions` and
 `pipeline`, which the package does not import. The package also holds the
-binding protocol (`ess.spec.binding`), the other half of the contract with
-workflow packages; the spec itself does not refer to it.
+bindings and their protocol (`ess.spec.binding`), the other half of the
+contract with workflow packages; the spec itself does not refer to them.
+
+A binding is what the backend calls to compute a spec's requests. The
+workflow author makes it from a pipeline, a driver, or a function, each for
+one spec: `PipelineBinding(spec, pipeline, params=..., outputs=...)` (in
+`ess.spec.pipeline`) serves plain requests and stages, `DriverBinding(spec,
+make_driver)` plain requests and accumulators, and `function_binding(spec,
+func)` plain requests. The backend calls them through protocols named for the
+client action they serve: `Binding.compute`, `StageBinding.make_stage`, and
+`AccumulatorBinding.make_accumulator`, which returns a *driver* with
+`push(table, rows)` and `outputs()`. A binding takes its spec, so it can check
+what it is given and fill in defaults when a test or a notebook calls it
+directly. `ess.spec.testing` checks the symmetries that a binding keeps.
 
 ### The spec is pure interface: no factory, no keys, no registry
 
@@ -52,8 +64,8 @@ workflow packages; the spec itself does not refer to it.
 optional `code_revision`. Nothing else. In particular it holds *no* workflow
 factory and *no* sciline keys: a spec describes *what a user can configure and
 what they get back*, not how it is computed. Binding a spec to the code
-that computes it is a parallel mechanism: `ess.spec.binding` defines its
-protocol, and a caller of a remote service that holds the same spec needs no
+that computes it is a parallel mechanism: `ess.spec.binding` defines it, and
+a caller of a remote service that holds the same spec needs no
 binding at all. This is what keeps the spec valid across local, service, and
 cluster execution.
 
@@ -200,14 +212,16 @@ class Params(BaseModel):
 
 A group and a row are the same kind of model, and differ only in how many a
 field holds. A single-run spec takes `sample: Sample` where a multi-run spec
-of the same reduction takes `samples: list[Sample]`, and an optional run,
-`can: Run | None = None`, corresponds to a table that may be empty,
-`cans: list[Run] = []`. The
+of the same reduction takes `sample: list[Sample]`: the multi-run spec names
+each table as the single-run spec names the group, with the same row type.
+The framework knows of no link between the two specs, and whether an empty
+table stands for an optional run left out is the binding's choice. The
 models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
 groups that specs share.
 
 A binding gets a group, like a row, as a dict of its fields, with data read in
-place of each reference (`ess.spec.binding`). A model instance would hold data
+place of each reference, and a table as a list of such dicts
+(`ess.spec.binding`). A model instance would hold data
 in fields declared as references. A binding that wants the model, such as a
 `QEdges` for `edges_to_variable`, validates the dict again:
 `QEdges.model_validate(values['q_edges'])`.

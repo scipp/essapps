@@ -67,7 +67,7 @@ After 5 consecutive failures the job is paused, and `verdi process play` resumes
 Each computer also sets a minimum interval between scheduler polls ([computers.py L73-74][poll]).
 For us, a slow or missing `/ess` mount is the likely transient failure on the service.
 Today it fails the record, and since a failed record counts as handled ([automatic-reduction.md](../automatic-reduction.md), The trigger loop), automatic reduction never reduces that run.
-Whether the backend retries before it fails a record, or marks the failure so a driver may resubmit, belongs to the service design (scipp/essapps#27).
+Whether the backend retries before it fails a record, or marks the failure so a controller may resubmit, belongs to the service design (scipp/essapps#27).
 
 **Checkpointed workflow state does not survive upgrades.** A WorkChain resumes after a daemon restart because its state is serialised between steps.
 The unreleased version says such checkpoints "cannot be continued after upgrading. Finish or terminate all active processes before upgrading" ([CHANGELOG L11-12][cl-head]).

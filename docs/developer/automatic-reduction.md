@@ -50,7 +50,7 @@ The core keeps no store of them, and records do not name them: a record's reques
 
 ## The trigger loop
 
-The trigger loop is the driver for rules. It runs in a driving server or a notebook, never in the backend.
+The trigger loop is the controller for rules. It runs in a server of its own or in a notebook, never in the backend.
 It finds new datasets through `client.datasets`, and submits with `persist=` the outputs each rule names, so its client keeps nothing.
 
 ```python
@@ -74,6 +74,6 @@ A rule whose requests are refused, such as for an unknown spec version, submits 
 
 ## Open
 
-- Adding, replacing, and listing rules in a running driving server.
+- Adding, replacing, and listing rules in a running trigger loop.
 - A can measured after the sample, and other lookups than `LastBefore`.
 - A rule that pushes into an accumulator, for a sum that grows with each dataset (D7 as a rule). The loop's client would keep the accumulator, the only thing it keeps, and freeze it with `persist=` once the sum is complete.

@@ -1,4 +1,4 @@
-# ADR 0003: An accumulator adds in place to one held state, and push n+1 waits for the readers of state n
+# ADR 0003: An accumulator's driver adds in place, and push n+1 waits for the readers of state n
 
 - Status: accepted
 - Deciders: Simon
@@ -28,8 +28,8 @@ So a call cannot wait for a push to be added.
 
 README, [Stages and accumulators](../README.md#stages-and-accumulators), states the rules in full.
 
-**One held state, changed in place.**
-An accumulator keeps one held state, made by its binding ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), and each push changes it in place (the last row of the table).
+**One driver, changed in place.**
+An accumulator keeps one driver, made by its binding ([ADR 0006](0006-the-unit-is-an-accumulating-workflow.md)), and each push changes it in place (the last row of the table).
 
 **Calls return once logged, and pinning does not wait for pushes to be added**, so that no call waits for a run to be reduced (Context).
 The backend adds the pushes later, in the order logged.
@@ -37,11 +37,11 @@ Only `client.output` waits, for its state, before it copies.
 
 **Push n+1 waits for the readers of state n**, the requests that read its record and the pins of it (README, [Stages and accumulators](../README.md#stages-and-accumulators), Adding waits for readers).
 There are two reasons.
-The held state only moves forward, so state n cannot be computed once push n+1 is added.
-And the binding's `push` may change in place the arrays its `outputs()` returned.
+The driver only moves forward, so state n cannot be computed once push n+1 is added.
+And the driver's `push` may change in place the arrays its `outputs()` returned.
 So no reader sees a value change.
-In Rust's terms, a reader holds a shared borrow of the held state, and a push needs a mutable one.
-The framework cannot tell whether outputs share memory with the held state, so it waits for every binding.
+In Rust's terms, a reader holds a shared borrow of the driver, and a push needs a mutable one.
+The framework cannot tell whether outputs share memory with the driver, so it waits for every driver.
 
 No wait goes round in a circle, since every wait is for work that came before the waiter was logged.
 A request waits for records submitted before it, and for pushes logged before its submission.
@@ -50,14 +50,14 @@ A push waits for the readers of the state before it, all made before the push wa
 **`client.output` copies, and a request reads in place.**
 `client.output(acc, ...)` returns a copy, since the caller may keep it past the next push.
 A request reads the outputs of its state's record without a copy, so a cut costs no second volume.
-All outputs of a state are computed at once, the first time a pin needs them, since the binding, not the backend, knows how to share work between outputs.
+All outputs of a state are computed at once, the first time a pin needs them, since the driver, not the backend, knows how to share work between outputs.
 Two pins of one state compute once.
 
 **Checks at pin, not at push.**
 A push checks each row by its row model alone, and a state's plain request is checked when the state is first pinned.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
 Opening an accumulator types each fixed value by its own field alone, since a params-model validator that needs rows would refuse the empty tables.
-So a validator that reads several values must not change one, because the held state got the values typed one by one.
+So a validator that reads several values must not change one, because the driver got the values typed one by one.
 
 **A failed push stops the accumulator**, since skipping it would make state n differ from the plain request over the first n pushes.
 
@@ -65,12 +65,12 @@ So a validator that reads several values must not change one, because the held s
 The accumulator takes no more pushes.
 
 **Releasing returns at once.**
-The pushes up to each pinned state are still added, so a driver may release an accumulator right after its last pin.
+The pushes up to each pinned state are still added, so a controller may release an accumulator right after its last pin.
 
 **What may pin an accumulator.**
 
 - A row or a template pins none. Its binding could keep the pinned output as long as its own accumulator or stage lives, and the pinned accumulator's next push would wait that long.
-- A request may pin several. It reads each held state in place, so the service must hold them in one process or copy all but one ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), Open).
+- A request may pin several. It reads the outputs of each driver in place, so the service must hold the drivers in one process or copy all but one ([ADR 0002](0002-a-value-lives-while-something-keeps-it.md), Open).
 
 Lifting the first rule later breaks no code.
 
@@ -85,9 +85,9 @@ Lifting the first rule later breaks no code.
 
 ## Consequences
 
-- An accumulator holds one held state, the rows of the push being added, and a pinned state's outputs until the next push. Outputs that allocate, such as a normalized volume, cost one more volume.
-- A slow reader delays the next addition, not the driver's `push` call.
-- A failure to add reaches the driver at its next push or pin, not from `push` itself.
+- An accumulator holds one driver, the rows of the push being added, and a pinned state's outputs until the next push. Outputs that allocate, such as a normalized volume, cost one more volume.
+- A slow reader delays the next addition, not the controller's `push` call.
+- A failure to add reaches the controller at its next push or pin, not from `push` itself.
 - A binding must not return an output that shares memory with an input, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
 - The first pin of each state checks its plain request, about 1.3 ms at 300 rows and 4 ms at 1000. Story D7 pins after every push, so its total grows with the square of the pushes, to 0.2 s for 300 and 2 s for 1000.
 - A request that reads two accumulators holds back the next push of both until it has run.

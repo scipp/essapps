@@ -63,7 +63,7 @@ Snakemake's three layers (workflow author, site, default from input size) are on
 **Data-dependent fan-out in the scheduler.**
 A checkpoint makes the graph depend on a rule's output: an input function calls `checkpoints.<name>.get()`, which raises `IncompleteCheckpointException` until the checkpoint has run, and Snakemake then evaluates the graph again ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L3034-L3068)).
 It works only in input functions, and checkpoint outputs read this way are never temporary.
-For us: a separate reduction for each value found only in the data is a non-goal ([requirements](../../requirements/README.md#non-goals)); a driver that reads a first reduction's outputs and then submits is ordinary code ([README, Drivers](../README.md#drivers)).
+For us: a separate reduction for each value found only in the data is a non-goal ([requirements](../../requirements/README.md#non-goals)); a controller that reads a first reduction's outputs and then submits is ordinary code ([README, Controllers](../README.md#controllers)).
 
 **A lock without liveness.**
 Snakemake locks by writing the paths of its inputs and outputs into the metadata folder, and deletes them on exit ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L478-L511)).
