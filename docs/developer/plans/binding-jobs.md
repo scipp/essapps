@@ -200,7 +200,7 @@ class Binding(Protocol[P, O]):
     def compute(self, params: P) -> O: ...                               # a plain request
 
 class StageBinding(Binding[P, O], Protocol):                            # PipelineBinding
-    def stage(self, fixed: Mapping[str, Any], blanks: Collection[str]
+    def stage(self, fixed: Mapping[str, Any]
               ) -> Callable[[Mapping[str, Any]], O]: ...        # called with the blanks' values
 
 class AccumulatorBinding(Binding[P, O], Protocol):                      # DriverBinding
@@ -211,7 +211,8 @@ class Driver(Protocol[O]):
     def outputs(self) -> O: ...
 ```
 
-`stage` gets the fixed parameters by name, and a blank is absent, so a strategy that reads a blank in the fixed part fails at once.
+`stage` gets the fixed parameters by name, with defaults filled in, and a blank is absent: the blanks are the spec's parameters that `fixed` does not name, so the binding, which knows its spec, needs no list of them.
+A strategy that reads a blank in the fixed part fails at once.
 The callable it returns gets the values of the blanks only, by name, as a driver's `push` gets only the new rows: the fixed values are in the stage, and nothing passes or checks them again.
 The backend validates the full plain request, and makes its record, before each call.
 `start` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
@@ -222,7 +223,7 @@ What the backend calls for each client action:
 | Client action | `PipelineBinding` | `DriverBinding` | `function_binding` |
 |---|---|---|---|
 | plain request | `compute(params)` | `compute(params)` | `compute(params)` |
-| stage | `stage(fixed, blanks)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
+| stage | `stage(fixed)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
 | accumulator | refused when the accumulator is made | `start(fixed)`, then `push` per client push and `outputs()` per state read | refused when the accumulator is made |
 
 The protocol carries the backend's promises to the binding: every value with defaults filled in, a push never while the outputs of the state before it are in use.
