@@ -22,7 +22,7 @@ The workflow author provides one of three things, and each serves some of the cl
 | a driver (`DriverBinding`) | make a driver, push every row, read the outputs | refused | a driver that takes the client's pushes |
 | a function (`function_binding`) | call it | refused | refused |
 
-A *driver* is a stateful object with `push(rows)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the code that calls `sciline.Stage`s and pushes into accumulators.
+A *driver* is a stateful object with `push(table, rows)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the code that calls `sciline.Stage`s and pushes into accumulators.
 It is written for one spec, in that spec's terms.
 The workflow package chooses it: its own code, or a generic one behind an adapter, such as ess.reduce's `StreamProcessor`; the framework needs no particular driver.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
@@ -207,7 +207,7 @@ class AccumulatorBinding(Binding[P, O], Protocol):                      # Driver
     def start(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Driver[O]: ...
 
 class Driver(Protocol[O]):
-    def push(self, rows: Mapping[str, Sequence[BaseModel]]) -> None: ...  # rows by table name
+    def push(self, table: str, rows: Sequence[BaseModel]) -> None: ...   # rows of one table
     def outputs(self) -> O: ...
 ```
 
@@ -219,7 +219,9 @@ A strategy that reads a blank in the fixed part fails at once, since a blank is 
 The callable it returns gets the values of the blanks only, by name, as a driver's `push` gets only the new rows: the fixed values are in the stage, and nothing passes or checks them again.
 The backend validates the full plain request, and makes its record, before each call.
 `start` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
-A push names each table by its parameter name, and gives its rows as the models the client pushed.
+A push names one table by its parameter name, and gives its rows as the models the client pushed.
+It never names two tables: rows of different tables have nothing to do with each other, and a push of two would read as if they did.
+Rows that belong together are one row of a model with several fields, such as `class Measurement(BaseModel): sample: Run; can: Run`.
 
 What the backend calls for each client action:
 
@@ -313,15 +315,15 @@ It is a driver in the sense of sciline ADR 0003, holds everything stateful, and 
 multi = DriverBinding(IOFQ_MULTI, functools.partial(IofQDriver, pipeline))
 
 driver = binding.start({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))   # no rows yet
-driver.push({'sample': [run_101, run_102]})                 # two rows of the sample table
-driver.push({'can': [can_110], 'sample': [run_103]})
+driver.push('sample', [run_101, run_102])                   # two rows of the sample table
+driver.push('can', [can_110])
 driver.outputs()                                            # -> IofQOutputs
 ```
 
 `start` makes the driver from the values that are not tables, and pushes the rows of any table in `fixed`, so `compute(params)` of a `DriverBinding` is `start(dict(params), blanks=()).outputs()`.
-A push may carry several rows and several tables, so that a driver can work on them together, such as loading runs in parallel.
-A plain request, and the tables fixed by an accumulator's template, are one push of every row.
-A client's push is one driver push.
+A push may carry several rows of its table, so that a driver can work on them together, such as loading runs in parallel.
+A plain request, and the tables fixed by an accumulator's template, are one push per table, of all its rows.
+A client's push may name several tables, so that their rows enter one state; the backend makes it one driver push per table, and reads the outputs only after the last, so the driver need not know.
 A changed fixed value means a new driver.
 
 For the toy SANS reduction, the package writes a driver that sums each run's numerator and denominator per run type with `sciline.Reduced`, and divides once.
@@ -341,12 +343,11 @@ class IofQDriver:
         self._sums = {key: sciline.Reduced(operator.add)() for key in sums}
         self._finalize = sciline.Stage(wf, inputs=sums, outputs=(IofQ,))
 
-    def push(self, rows: Mapping[str, Sequence[Run]]) -> None:
-        for table, runs in rows.items():
-            key, stage = self._contribute[table]
-            for run in runs:
-                for k, part in stage.compute({key: run}).items():
-                    self._sums[k].push(part)
+    def push(self, table: str, rows: Sequence[Run]) -> None:
+        key, stage = self._contribute[table]
+        for run in rows:
+            for k, part in stage.compute({key: run}).items():
+                self._sums[k].push(part)
 
     def outputs(self) -> IofQOutputs:
         sums = {k: acc.value for k, acc in self._sums.items()}
@@ -362,8 +363,8 @@ class StitchDriver:
         self._wf[Reference] = fixed['reference']
         self._runs: list[Run] = []
 
-    def push(self, rows: Mapping[str, Sequence[Run]]) -> None:
-        self._runs.extend(rows['runs'])
+    def push(self, table: str, rows: Sequence[Run]) -> None:
+        self._runs.extend(rows)                    # STITCH has one table, 'runs'
 
     def outputs(self) -> StitchOutputs:
         self._wf[Runs] = list(self._runs)
@@ -376,7 +377,7 @@ A driver need not use sciline.
 The framework calls `push` and `outputs` and nothing else, so it needs no particular driver.
 A package writes its own, as above, or uses a generic one, and generic drivers may in time be collected in a library module; the design does not depend on which.
 `StreamProcessor` of ess.reduce is one: `accumulate` is `push`, and `finalize` is `outputs`.
-It takes one value per key, by key, so an adapter names the key of each table and pushes a list of rows one at a time.
+It takes one value per key, by key, so an adapter names the key of each table and pushes the rows one at a time.
 Its context keys, rolling windows, and `clear()` stay unused, since each would break the arrival symmetry.
 The framework itself does not import it ([ADR 0006](../adr/0006-the-unit-is-an-accumulating-workflow.md)); a package's driver may.
 
@@ -404,7 +405,8 @@ wf[Filename[CanRun]] = path_110                            # a key past the mode
 wf.compute(IofQ)
 
 driver = IofQDriver(pipeline, {'reduction': Reduction(bins=2)})   # the driver
-driver.push({'sample': [Run(file=path_101)], 'can': [Run(file=path_110)]})
+driver.push('sample', [Run(file=path_101)])
+driver.push('can', [Run(file=path_110)])
 driver.outputs().iofq
 ```
 
@@ -552,7 +554,7 @@ What carries over:
 - **The choice of source is passed beside the params.** `source_name` and `aux_source_names`, the user's choice of detector and monitors, are arguments of the factory, and the factory also routes each stream to its key. In `ess.spec` they become parameters, and the routing stays apart from the params (amendment E).
 - **Conversions are called in the factory**, such as `get_edges()`, where amendment F puts them in providers.
 - **Outputs are matched by name, unchecked.** The factory's target keys map output names to keys; nothing checks the names against the outputs model, and no instance of the outputs model is made. The same holds in essapps today (cost 2). The outputs model holds the data itself (`IofQOutputs.i_of_q: sc.DataArray`), as this note writes outputs.
-- **The workflow it returns is a driver.** `accumulate` and `finalize` are `push` and `outputs`, over one chunk per stream, by key, where essapps pushes lists of rows by table name. One generic driver serves every sciline factory; only workflows without sciline are written by hand.
+- **The workflow it returns is a driver.** `accumulate` and `finalize` are `push` and `outputs`, over one chunk per stream, by key, where essapps pushes a list of rows of one table. One generic driver serves every sciline factory; only workflows without sciline are written by hand.
 
 ## Where things live
 
@@ -594,7 +596,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-6. Strategies: a driver push carries lists of rows for several tables. Is `Mapping[str, Sequence[Row]]` the form, or do you prefer one table per push?
+6. Strategies: a driver push names one table and carries a list of its rows, `push(table, rows)`. The client's push may still name several tables, meaning that their rows enter one state; it reads, as the driver push did, as if the rows belonged together. Keep it, or make each client push name one table too, with states then visible between the pushes of a sample and its can?
 
 > Simon:
 
