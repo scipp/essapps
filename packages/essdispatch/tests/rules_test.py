@@ -3,6 +3,8 @@
 """The trigger loop: what one step submits, and why a rule submits nothing."""
 
 from collections.abc import Iterator
+from pathlib import Path
+from typing import NewType
 
 import pytest
 from pydantic import BaseModel
@@ -18,55 +20,68 @@ from ess.dispatch import (
     TriggerLoop,
     apply,
 )
-from ess.dispatch.testing import FakeDatasets, FakeStore
-from ess.spec import Array, NexusFile, WorkflowSpec, function_binding
+from ess.dispatch.testing import FakeDatasets, FakeStore, read_dataset
+from ess.spec import NoParams, WorkflowSpec, function_binding
+
+SampleFile = NewType('SampleFile', Path)
+CanFile = NewType('CanFile', Path)
 
 
-class Run(BaseModel):
-    file: NexusFile
+class LoadInputs(BaseModel):
+    sample: SampleFile
 
 
-class LoadParams(BaseModel):
-    sample: Run
+class SubtractInputs(BaseModel):
+    sample: SampleFile
+    can: CanFile
 
 
-class SubtractParams(BaseModel):
-    sample: Run
-    can: Run
+class Scale(BaseModel):
+    factor: float = 1.0
 
 
-class Measurement(BaseModel):
-    nexus: NexusFile
-
-
-class MeasureParams(BaseModel):
-    sample: Measurement
-    can: Measurement
+class ScaleParams(BaseModel):
+    scale: Scale
 
 
 class ValueOutputs(BaseModel):
-    value: Array()  # type: ignore[valid-type]
+    value: float
 
 
-def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
+def _spec(
+    name: str, inputs: type[BaseModel], params: type[BaseModel] = NoParams
+) -> WorkflowSpec:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=name,
         params=params,
+        inputs=inputs,
         outputs=ValueOutputs,
     )
 
 
-LOAD = _spec('load', LoadParams)
-SUBTRACT = _spec('subtract', SubtractParams)
-MEASURE = _spec('measure', MeasureParams)
+LOAD = _spec('load', LoadInputs)
+SUBTRACT = _spec('subtract', SubtractInputs)
+SCALE = _spec('scale', LoadInputs, ScaleParams)
+
+
+def load(params: NoParams, inputs: LoadInputs) -> ValueOutputs:
+    return ValueOutputs(value=read_dataset(inputs.sample))
+
+
+def subtract(params: NoParams, inputs: SubtractInputs) -> ValueOutputs:
+    return ValueOutputs(value=read_dataset(inputs.sample) - read_dataset(inputs.can))
+
+
+def scale(params: ScaleParams, inputs: LoadInputs) -> ValueOutputs:
+    return ValueOutputs(value=params.scale.factor * read_dataset(inputs.sample))
 
 
 @pytest.fixture
-def datasets() -> FakeDatasets:
-    return FakeDatasets(proposal='p1')
+def datasets(tmp_path: Path) -> FakeDatasets:
+    return FakeDatasets(proposal='p1', directory=tmp_path)
 
 
 @pytest.fixture
@@ -74,13 +89,9 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
     backend = Backend(
         datasets,
         [
-            function_binding(LOAD, lambda sample: {'value': sample['file']}),
-            function_binding(
-                SUBTRACT, lambda sample, can: {'value': sample['file'] - can['file']}
-            ),
-            function_binding(
-                MEASURE, lambda sample, can: {'value': sample['nexus'] - can['nexus']}
-            ),
+            function_binding(LOAD, load),
+            function_binding(SUBTRACT, subtract),
+            function_binding(SCALE, scale),
         ],
         store=FakeStore(),
     )
@@ -155,15 +166,26 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
     assert loop.status(load).reason is None
 
 
-def test_a_dataset_goes_in_the_field_of_its_group_that_dataset_field_names(
+def test_a_dataset_fills_a_blank_input_never_a_parameter(
     client: Client, datasets: FakeDatasets
 ) -> None:
-    datasets.measure(1, 1.0, role='can')
-    sample = datasets.measure(2, 5.0, role='sample')
-    cans = Lookup(can=LastBefore(Selector(role='can')))
-    template = Template(MEASURE, blanks=('sample', 'can'))
-    requests = apply(
-        template, [sample], client.datasets, dataset_field='nexus', lookup=cans
+    sample = datasets.measure(1, 5.0, role='sample')
+    scaled = apply(
+        Template(SCALE, params={'scale': Scale(factor=2.0)}, blanks=('sample',)),
+        [sample],
+        client.datasets,
     )
+    rule = Rule(
+        'scale',
+        Template(SCALE, inputs={'sample': sample}, blanks=('scale',)),
+        selector=Selector(role='sample'),
+        label='scaled',
+    )
+    loop = TriggerLoop(client, rules=[rule])
 
-    assert client.output(client.compute(requests['2']), 'value') == 4.0
+    assert client.output(client.compute(scaled['1']), 'value') == 10.0
+    assert scaled['1'].inputs['sample'] == sample
+    assert loop.step() == []
+    assert (
+        loop.status(rule).reason == '1: scale: a parameter of scale/v1, given in inputs'
+    )

@@ -70,13 +70,35 @@ A request runs through its spec's binding (see ``ess.spec.binding``): a plain
 request through ``compute``, a stage through ``make_stage``, and an
 accumulator through ``make_accumulator``. A stage is refused when it is made
 unless its spec's binding makes stages, and so is an accumulator unless the
-binding makes accumulators. A stage checks its template's values as a
-request's and resolves dataset names when it is made, and keeps the outputs
-they reference until it has staged. A request through it must have its values
-outside the blanks. The first such request to run has the binding make its
-stage with the template's values, and every request through the stage runs
-through the callable the binding returned, so a binding that holds values
-computes only what depends on the blanks. The record of a request through a
+binding makes accumulators.
+
+A request lives in two phases. In the *request phase*, when it is submitted,
+the backend checks what it can without data: the params model, its own
+validators included, and each input a reference, or a list of references,
+that the client may read and whose data fit the input's field (see
+``ess.spec.fits``); a dataset fits a file field only. The *table rules* hold
+too: the columns of a table have equal length, a table with a required index
+has a row, and the index values of a table are distinct, compared as the
+record holds them: a dataset by its identity, a reference to an output by
+record, output, and key, and a literal by equality. In the *call phase*, on a
+worker, the backend reads the data each reference names, a local path for a
+dataset, and builds the inputs instance from them, which runs the inputs
+model's own validators (see ``inputs.py``). The binding gets instances of the
+params and inputs models, and returns one of the outputs model: an output
+that the spec declares optional and the binding returns as ``None`` is left
+out, and a record whose binding returns anything else fails.
+
+A stage checks its template's values when it is made, and resolves dataset
+names: each fixed value by its own field, without the params model's own
+validators, which run on each request through the stage. It keeps the
+outputs they reference until it has staged. A request through it must have
+its values outside the blanks. The first such request to run has the binding
+make its stage with the template's values by name, each input read and
+validated by its own field, and every request through the stage runs through
+the callable the binding returned, with the values of the blanks, so a
+binding that holds values computes only what depends on the blanks. The
+inputs model's own validators run only on a plain request, since a stage
+makes no whole inputs instance. The record of a request through a
 stage that has staged still names the template's values, but these
 references are provenance only: they are not checked against what the client
 keeps, waited for, or read, except by a restart, which runs the record as its
@@ -85,22 +107,27 @@ stops: the requests through it fail, and later ones are refused. A stage
 lives until its client releases it or ends, and the requests made through it
 have run.
 
-An accumulator opens from a template whose blanks are table fields, checked
-as a stage's template is. Each other value is typed by its own field. Each
-push names one table and gives one or more of its rows; a row is checked by
-its table's row model alone. Opening and pushing return once these checks pass
-and the event is logged, as a submission does: they check the records they
-reference against what the backend knows now, and refuse one that has
-failed, but do not wait for one that is pending.
+An accumulator opens from a template whose blanks are tables, each named by
+its index, checked as a stage's template is. Each push gives the columns of
+one blank table: its index and the columns attached to it, as lists of equal
+length, one or more rows; a column left out is ``None`` in each row if its
+type allows it. A push is checked by its columns' types alone, and refused if
+it repeats an index value the table holds. Opening and pushing return once
+these checks pass and the event is logged, as a submission does: they check
+the records they reference against what the backend knows now, and refuse
+one that has failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order
 they were logged, on the workers: opening has the binding make the driver
-from the template's values, and each push is one push into the driver, which
-may add the rows in place. A step starts once the records it references
-have completed, and a push once the readers of the state before it are done.
-If a step fails, or a record it references has not completed, the
-accumulator stops: it takes no more pushes or readers, the steps after it
-are dropped, and the requests that wait for a state it will not reach fail.
+from the template's values by name, each input read and validated by its
+own field, and each push is one push of the table's columns into the driver,
+which may add the rows in place; each value is first validated by its
+column's type, and a data value that fails its check fails the push. A step
+starts once the records it references have completed, and a push once the
+readers of the state before it are done. If a step fails, or a record it
+references has not completed, the accumulator stops: it takes no more pushes
+or readers, the steps after it are dropped, and the requests that wait for a
+state it will not reach fail.
 Its driver is dropped once no reader holds its current state, without
 waiting for its client to release it.
 
@@ -112,15 +139,16 @@ submission makes one record of the plain request of the pinned state for each
 accumulator its requests reference, logs it before them, as the accumulator
 and its number of pushes, and the records of the requests reference that
 record's outputs. No client keeps the record of a state, so only the requests
-of that submission read it. A row or a template reads no accumulator. A state
-may be read only if its plain request would be accepted. The first read of a
-state validates that request, outside the backend's lock, and a read of a state
-whose request would be refused is refused with that request's reason. So
-rules on a whole table, such as its length, and the params model's own
-validators apply at reads, not at pushes. Validators that read more than one
-value, such as the params model's own or those of a table field, must not
+of that submission read it. A push or a template reads no accumulator. A
+state may be read only if its plain request would be accepted. The first read
+of a state checks that request's params model and that a table with a
+required index has a row, outside the backend's lock, and a read of a state
+whose request would be refused is refused with that request's reason. So the
+params model's own validators apply at reads, not at pushes. They must not
 change a value: the driver got the values typed one by one, and nothing
-checks that the plain request holds the same.
+checks that the plain request holds the same. The inputs model's own
+validators run on no state, since its rows go to the driver one push at a
+time; a state's request, submitted again as a plain request, runs them.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
@@ -172,33 +200,27 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
-from pydantic_core import (
-    PydanticSerializationError,
-    from_json,
-    to_json,
-)
+from pydantic_core import PydanticSerializationError, from_json, to_json
 
 from ess.spec import (
     AccumulatorBinding,
     AccumulatorRef,
     Binding,
-    DataField,
     DatasetRef,
     Driver,
-    Format,
     OutputRef,
     Ref,
     StageBinding,
     StageCall,
     WorkflowSpec,
-    data_fields,
-    distinct_row_tables,
-    group_fields,
-    table_fields,
+    fits,
+    is_file,
     walk_refs,
 )
+from ess.spec.field_types import base, element, optional, type_name
 
 from .datasets import DatasetSource, Selector, readable
+from .inputs import InputsFactory, map_inputs
 from .log import (
     Event,
     Finished,
@@ -214,71 +236,70 @@ from .log import (
 from .records import (
     Record,
     Request,
-    Row,
     SpecId,
     Status,
     SubmitError,
     Template,
-    as_refs,
     map_refs,
-    model_without,
+    model_of,
     validation_problems,
 )
 from .store import Store
 from .views import PENDING, Views, WriteFailed
+
+type Spec = WorkflowSpec[Any, Any, Any]
 
 
 class ClientEnded(RuntimeError):
     """A call of a client that has ended."""
 
 
-def _agree(output: DataField, param: DataField) -> bool:
-    """Whether an output field fulfils a params field."""
-    if output.format != param.format:
-        return False
-    return output.array is None or param.array is None or output.array == param.array
-
-
-def _values(model: BaseModel) -> dict[str, Any]:
-    """
-    The values of a params model by field, a group and each row of a table as
-    a dict, so that the data its references name can take their place.
-    """
-    return as_refs(model.model_dump())
-
-
-def _required(outputs: type[BaseModel]) -> frozenset[str]:
-    """The names of the outputs a workflow must return."""
-    return frozenset(n for n, f in outputs.model_fields.items() if f.is_required())
-
-
-def _check_storable(field: str, value: Any) -> Any:
+def _storable(field: str, value: Any) -> Any:
     """
     Refuse a value that cannot be stored in the log, which holds JSON; return
     it as the log holds it, read back.
     """
     try:
-        return as_refs(from_json(to_json(value)))
+        return from_json(to_json(value))
     except PydanticSerializationError as error:
         raise SubmitError(f'{field}: cannot be stored as JSON: {error}') from None
 
 
-_OMITTED = object()
-"""The value of an optional output that a driver left out."""
+def _outputs_of(
+    spec_id: SpecId, model: type[BaseModel], returned: Any
+) -> dict[str, Any]:
+    """
+    The outputs a binding returned, an instance of the outputs ``model``, by
+    name; an output that the spec declares optional and the binding returned
+    as ``None`` is left out. Raises for anything else.
+    """
+    if not isinstance(returned, model):
+        raise TypeError(
+            f'the workflow of {spec_id} returned {type(returned).__name__}, '
+            f'not {model.__name__}'
+        )
+    outputs = {}
+    for name, field in model.model_fields.items():
+        if (value := getattr(returned, name)) is not None:
+            outputs[name] = value
+        elif not optional(field.annotation)[1]:
+            raise ValueError(f'the workflow of {spec_id} returned None as {name}')
+    return outputs
 
 
-def _not_returned(record_id: str, output: str) -> LookupError:
-    return LookupError(
-        f'record {record_id} output {output}: the workflow did not return it'
-    )
+def _not_returned(where: str) -> LookupError:
+    return LookupError(f'{where}: the workflow did not return it')
 
 
-def _returned(value: Any, where: str) -> Any:
-    """``value``, unless it stands for an output that was left out."""
-    if value is _OMITTED:
-        raise LookupError(f'{where}: the workflow did not return it')
-    return value
+def _element(value: Any, key: str | None) -> Any:
+    """``value``, or its element ``key`` if given: by index for a list."""
+    if key is None:
+        return value
+    return value[int(key)] if isinstance(value, list) else value[key]
 
+
+_Values = tuple[dict[str, Any], dict[str, Any]]
+"""Values of a request by side: params and inputs, each by name."""
 
 Selection = Mapping[str, int | slice]
 """Part of an array: an index or a slice for each dimension it names."""
@@ -298,75 +319,186 @@ def _selected(value: Any, select: Selection) -> Any:
     return value.copy()
 
 
-def _refuse_repeated(table: str, rows: Sequence[Row]) -> None:
-    """Refuse a row equal to an earlier one of the table."""
-    seen: dict[bytes, int] = {}
-    for i, row in enumerate(rows):
-        if (first := seen.setdefault(to_json(row), i)) != i:
-            raise SubmitError(f'{table}[{i}]: repeats {table}[{first}]')
+def _split(spec: Spec, values: Mapping[str, Any]) -> _Values:
+    """``values`` by name split into params and inputs."""
+    sides: dict[str, dict[str, Any]] = {'params': {}, 'inputs': {}}
+    for name, value in values.items():
+        sides[spec.side(name)][name] = value
+    return sides['params'], sides['inputs']
 
 
-def _check_cells(
-    params: type[BaseModel], values: Mapping[str, Any], first: int = 0
-) -> None:
+def _by_index(spec: Spec, values: Mapping[str, Any]) -> dict[str, Any]:
     """
-    Refuse a group, or a row of a table, with a field its model lacks.
+    ``values`` by name as a binding takes them: each table given under its
+    index, as its columns.
+    """
+    tables = {
+        index: {name: values[name] for name in spec.columns(index)}
+        for index in spec.tables
+        if index in values
+    }
+    columns = {name for table in tables.values() for name in table}
+    return {**{n: v for n, v in values.items() if n not in columns}, **tables}
+
+
+def _open(spec: Spec, blanks: Collection[str]) -> frozenset[str]:
+    """The names that ``blanks`` leave open: each table's with its columns."""
+    return frozenset(
+        name
+        for blank in blanks
+        for name in (spec.columns(blank) if blank in spec.tables else (blank,))
+    )
+
+
+def _check_names(spec_id: SpecId, spec: Spec, params: Any, inputs: Any) -> None:
+    """Refuse a name the spec lacks, or one given on the other side."""
+    for side, values in (('params', params), ('inputs', inputs)):
+        unknown = []
+        for name in values:
+            try:
+                actual = spec.side(name)
+            except KeyError:
+                unknown.append(name)
+                continue
+            if actual != side:
+                what = 'a parameter' if actual == 'params' else 'an input'
+                raise SubmitError(f'{name}: {what} of {spec_id}, given in {side}')
+        if unknown:
+            raise SubmitError(
+                f'{sorted(unknown)}: not parameters or inputs of {spec_id}'
+            )
+
+
+def _check_groups(params: type[BaseModel], values: Mapping[str, Any]) -> None:
+    """
+    Refuse a group, or a group of a list, with a field its model lacks.
 
     Validating it would drop such a field silently; it is refused instead, as
-    a parameter the spec lacks is. A row is named by its index in its table,
-    ``first`` for the first row given.
+    a parameter the spec lacks is.
     """
-    for field, group in group_fields(params).items():
-        cells = values.get(field)
-        extra = set(cells) - set(group.model_fields) if isinstance(cells, dict) else ()
-        if extra:
-            raise SubmitError(
-                f'{field}: {sorted(extra)}: not fields of {group.__name__}'
-            )
-    for field, row in table_fields(params).items():
-        rows = values.get(field)
-        for i, cells in enumerate(rows if isinstance(rows, list) else []):
-            if isinstance(cells, dict) and (
-                extra := set(cells) - set(row.model_fields)
-            ):
+    for name, value in values.items():
+        if (field := params.model_fields.get(name)) is None:
+            continue  # refused as a name the spec lacks
+        tp, _ = optional(field.annotation)
+        item = element(tp)
+        group = base(tp if item is None else optional(item)[0])
+        if not (isinstance(group, type) and issubclass(group, BaseModel)):
+            continue
+        cells = value if item is not None and isinstance(value, list) else [value]
+        for i, cell in enumerate(cells):
+            if isinstance(cell, dict) and (extra := cell.keys() - group.model_fields):
+                where = name if item is None else f'{name}[{i}]'
                 raise SubmitError(
-                    f'{field}[{first + i}]: {sorted(extra)}: '
-                    f'not fields of {row.__name__}'
+                    f'{where}: {sorted(extra)}: not fields of {group.__name__}'
                 )
 
 
-def _reading(value: Any) -> list[OutputRef | AccumulatorRef]:
-    """The references in ``value`` that read a value: of a record or an accumulator."""
-    return [ref for _, ref in walk_refs(value) if not isinstance(ref, DatasetRef)]
+def _columns(
+    spec: Spec, values: Mapping[str, Any], indexes: Iterable[str]
+) -> dict[str, Any]:
+    """
+    ``values`` by name with the columns of the tables of ``indexes`` checked
+    and filled; needs no lock.
+
+    A column is given with its index, as long as it. A column left out is
+    ``None`` in each row if its element type is optional; a column whose
+    element type is not is given whenever the table has rows. A table whose
+    index is left out has no rows, unless its index is required.
+    """
+    filled = dict(values)
+    for index in indexes:
+        attached = spec.tables[index]
+        if index not in values:
+            if given := [c for c in attached if c in values]:
+                raise SubmitError(
+                    f'{given}: columns of the table of {index}, given without it'
+                )
+            if spec.field(index).is_required():
+                continue
+            rows = 0
+        elif isinstance(values[index], list):
+            rows = len(values[index])
+        else:
+            continue  # validation refuses it
+        for column in attached:
+            if column in values:
+                cells = values[column]
+                if isinstance(cells, list) and len(cells) != rows:
+                    raise SubmitError(
+                        f'{column}: {len(cells)} rows, but {index} has {rows}'
+                    )
+            elif rows == 0 or optional(element(spec.field(column).annotation))[1]:
+                filled[column] = [None] * rows
+            else:
+                raise SubmitError(f'{column}: a column without a default, not given')
+    return filled
 
 
-def _output_reads(values: Any) -> list[tuple[str, str]]:
-    """The outputs of records that ``values`` reference, by record ID and name."""
+def _rows(spec: Spec, values: Mapping[str, Any], indexes: Collection[str]) -> None:
+    """
+    Refuse a table of ``indexes`` with a required index and no row, or with
+    an index value repeated; ``values`` by name, as the record holds them.
+    """
+    _required_rows(spec, values, indexes)
+    for index in indexes:
+        _distinct(index, values.get(index) or [])
+
+
+def _required_rows(
+    spec: Spec, values: Mapping[str, Any], indexes: Iterable[str]
+) -> None:
+    """Refuse a table of ``indexes`` with a required index and no row."""
+    for index in indexes:
+        if spec.field(index).is_required() and not values.get(index):
+            raise SubmitError(f'{index}: the table has no row; its index is required')
+
+
+def _distinct(index: str, values: Sequence[Any]) -> None:
+    """
+    Refuse an index value equal to an earlier one of its table: a reference
+    by its fields, such as a dataset's identity, a literal by its JSON form.
+    Rows are counted in the whole table, as the plain request holds it.
+    """
+    seen: dict[bytes, int] = {}
+    for i, value in enumerate(values):
+        shown = to_json(value)
+        if (first := seen.setdefault(shown, i)) != i:
+            raise SubmitError(
+                f'{index}[{i}]: repeats {index}[{first}], {shown.decode()}'
+            )
+
+
+def _with_defaults(
+    model: type[BaseModel], values: Mapping[str, Any], names: Collection[str]
+) -> dict[str, Any]:
+    """
+    The inputs ``names`` of ``model``: those given in ``values``, the default
+    of the others; refuses a required input not given.
+    """
+    fields = {n: f for n, f in model.model_fields.items() if n in names}
+    if missing := [n for n, f in fields.items() if n not in values and f.is_required()]:
+        raise SubmitError(f'{missing}: required inputs, not given')
+    return {
+        n: values[n] if n in values else f.get_default(call_default_factory=True)
+        for n, f in fields.items()
+    }
+
+
+def _part(request: Request, keep: Callable[[str], bool]) -> _Values:
+    """The values of a request whose names ``keep`` accepts, by side."""
+    return (
+        {n: v for n, v in request.params.items() if keep(n)},
+        {n: v for n, v in request.inputs.items() if keep(n)},
+    )
+
+
+def _output_reads(inputs: Any) -> list[tuple[str, str]]:
+    """The outputs of records that ``inputs`` reference, by record ID and name."""
     return [
         (ref.record, ref.output)
-        for _, ref in walk_refs(values)
+        for _, ref in walk_refs(inputs)
         if isinstance(ref, OutputRef)
     ]
-
-
-def _reads(
-    params: type[BaseModel], field: str, value: Any
-) -> Iterator[tuple[str, OutputRef | AccumulatorRef, DataField | None]]:
-    """
-    Each value a param's value reads, with its place and the field it fills;
-    a param is a group or a table.
-    """
-    if (group := group_fields(params).get(field)) is not None:
-        cells = data_fields(group)
-        for cell, cell_value in (value or {}).items():
-            for ref in _reading(cell_value):
-                yield f'{field}.{cell}', ref, cells.get(cell)
-        return
-    cells = data_fields(table_fields(params)[field])
-    for i, cell_values in enumerate(value or []):
-        for cell, cell_value in cell_values.items():
-            for ref in _reading(cell_value):
-                yield f'{field}[{i}].{cell}', ref, cells.get(cell)
 
 
 @dataclass(frozen=True)
@@ -391,31 +523,28 @@ class Entry:
 
 class _Stage:
     """
-    A stage: its spec's binding, its blanks, its fixed values, and the
-    binding's callable once it has staged.
+    A stage: its spec's binding, its template, and the binding's callable
+    once it has staged.
 
-    The fixed values are the template's, with dataset names resolved when the
-    stage was made. ``reads`` are the outputs of records they reference, which
-    the stage keeps as a reader until it has staged, has stopped, or is
-    released; it is empty from then on. The first call to run stages the
-    binding under ``staging``, so that concurrent calls stage it once.
-    ``call``, the callable the binding returned, and ``stopped``, why staging
-    failed, change under the backend's lock. A stage that has stopped takes
-    no more calls.
+    The template's values are as given, with dataset names resolved when the
+    stage was made. ``given`` names the values a call gives: the blanks, a
+    table's with its columns. ``reads`` are the outputs of records the
+    template references, which the stage keeps as a reader until it has
+    staged, has stopped, or is released; it is empty from then on. The first
+    call to run stages the binding under ``staging``, so that concurrent calls
+    stage it once. ``call``, the callable the binding returned, and
+    ``stopped``, why staging failed, change under the backend's lock. A stage
+    that has stopped takes no more calls.
     """
 
     def __init__(
-        self,
-        spec: SpecId,
-        binding: StageBinding,
-        blanks: tuple[str, ...],
-        fixed: dict[str, Any],
+        self, binding: StageBinding, template: Template, given: frozenset[str]
     ) -> None:
-        self.spec = spec
+        self.spec = template.spec
         self.binding = binding
-        self.blanks = blanks
-        self.fixed = fixed
-        self.reads = _output_reads(fixed)
+        self.template = template
+        self.given = given
+        self.reads = _output_reads(template.inputs)
         self.call: StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
@@ -423,12 +552,15 @@ class _Stage:
     def read_part(self, request: Request) -> Request:
         """
         The part of a call's ``request`` that the call reads: all of it until
-        the stage has staged, then only its blanks; backend's lock held.
+        the stage has staged, then only the values of its blanks; backend's
+        lock held.
         """
         if self.call is None:
             return request
-        blanks = {k: v for k, v in request.params.items() if k in self.blanks}
-        return Request(request.spec, blanks)
+        return Request(
+            request.spec,
+            inputs={k: v for k, v in request.inputs.items() if k in self.given},
+        )
 
 
 class _Accumulator:
@@ -438,10 +570,11 @@ class _Accumulator:
 
     ``added`` is the number of pushes in the driver, ``None`` until the
     driver is made. ``steps`` holds the values of each step not yet done, in
-    the order logged: first the template's values, until the driver is made,
-    then the table and rows of each push. Each comes with the outputs of
-    records it reads, which it holds as a reader. ``busy`` says a worker makes
-    the driver or pushes into it, outside the backend's lock.
+    the order logged, as params and inputs by name: first the template's
+    values, until the driver is made, then the columns of each push. Each
+    comes with the outputs of records it reads, which it holds as a reader.
+    ``busy`` says a worker makes the driver or pushes into it, outside the
+    backend's lock.
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was validated, and why it would be refused, or ``None``. Two
@@ -469,17 +602,14 @@ class _Accumulator:
         self.id = accumulator_id
         self.template = template
         self.binding = binding
-        outputs = binding.spec.outputs
         self.added: int | None = None
-        self.steps: deque[tuple[dict[str, Any], list[tuple[str, str]]]] = deque()
+        self.steps: deque[tuple[_Values, list[tuple[str, str]]]] = deque()
         self.busy = False
         self.checked: tuple[int, str | None] | None = None
         self.stopped: str | None = None
         self.released = False
         self.freezing = False
         self.frozen: str | None = None
-        self._declared = tuple(outputs.model_fields)
-        self._required = _required(outputs)
         self._computing = threading.Lock()
         self._computed: dict[str, Any] | None = None
 
@@ -490,22 +620,17 @@ class _Accumulator:
 
     def outputs(self) -> dict[str, Any]:
         """
-        Every output of the current state, for one of its readers; needs no
-        lock. An optional output that the driver leaves out is
-        ``_OMITTED``.
+        Every output of the current state that the driver returns, for one of
+        its readers; needs no lock.
 
         They are what the driver returns, not a copy (see the module
         docstring), computed once for the state.
         """
         with self._computing:
             if self._computed is None:
-                outputs = self.driver.outputs()
-                if lacking := self._required - outputs.keys():
-                    raise ValueError(
-                        f'the driver of {self.template.spec} returned '
-                        f'{sorted(outputs)}: missing {sorted(lacking)}'
-                    )
-                self._computed = {**dict.fromkeys(self._declared, _OMITTED), **outputs}
+                spec = self.binding.spec
+                returned = self.driver.outputs()
+                self._computed = _outputs_of(self.template.spec, spec.outputs, returned)
             return self._computed
 
     def drop(self) -> None:
@@ -598,7 +723,7 @@ class Backend:
     ) -> None:
         self._datasets = datasets
         self._store = store
-        self._specs: dict[SpecId, WorkflowSpec[Any]] = {}
+        self._specs: dict[SpecId, Spec] = {}
         self._bindings: dict[SpecId, Binding] = {}
         if isinstance(bind, Mapping):
             raise TypeError('bind is a list of bindings, each of which names its spec')
@@ -612,8 +737,9 @@ class Backend:
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._specs[spec_id] = binding.spec
             self._bindings[spec_id] = binding
-        self._output_fields = {
-            spec_id: data_fields(spec.outputs) for spec_id, spec in self._specs.items()
+        self._inputs = {
+            spec_id: InputsFactory(spec.inputs, self._read)
+            for spec_id, spec in self._specs.items()
         }
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._changed = threading.Condition()
@@ -622,7 +748,7 @@ class Backend:
         self._stopped: Exception | None = None  # why an append failed
         # Not history
         self._clients: dict[str, _Client] = {}  # by client ID, until it ends
-        # by record ID and name; _OMITTED for an optional output left out
+        # by record ID and name
         self._outputs: dict[tuple[str, str], Any] = {}
         # a value, as (record ID, name) or (accumulator, number of pushes), to
         # the number of its readers (see _Read)
@@ -708,8 +834,8 @@ class Backend:
         needed |= {i for (i, _), write in views.writes.items() if write == PENDING}
         for record_id in reversed(pending):  # a record follows what it reads
             if record_id in needed and record_id not in views.states:
-                inputs = views.records[record_id].request.inputs()
-                needed.update(ref.record for ref in inputs)
+                upstream = views.records[record_id].request.upstream()
+                needed.update(ref.record for ref in upstream)
         runs: set[str] = set()
         for record_id in pending:
             if record_id not in needed:
@@ -731,7 +857,7 @@ class Backend:
         views = self._views
         if record_id in views.states:
             return 'the driver it reads is gone'
-        for ref in views.records[record_id].request.inputs():
+        for ref in views.records[record_id].request.upstream():
             where = f'input {ref.record} output {ref.output}'
             if ref.record in runs:
                 continue
@@ -746,7 +872,7 @@ class Backend:
                 return f'{where} was not persisted'
         return None
 
-    def spec(self, spec_id: SpecId) -> WorkflowSpec[Any]:
+    def spec(self, spec_id: SpecId) -> Spec:
         try:
             return self._specs[spec_id]
         except KeyError:
@@ -869,12 +995,15 @@ class Backend:
             also = stage.reads if stage is not None else ()
             keys = {
                 (ref.record, ref.output)
-                for ref in request.inputs()
+                for ref in request.upstream()
                 if ref.record not in state_ids.values()
             }
             return {key for key in keys if self._access(caller, key, also)}
 
-        requests = [Request(r.spec, map_refs(r.params, state_record)) for r in requests]
+        requests = [
+            r.model_copy(update={'inputs': map_inputs(r.inputs, state_record)})
+            for r in requests
+        ]
         stored = [from_store(e, r) for e, r in zip(entries, requests, strict=True)]
         self._append(
             Submitted(
@@ -942,63 +1071,85 @@ class Backend:
 
     def _prepare(self, entry: Entry, proposal: str) -> Request:
         """
-        The request with names resolved and defaults filled; needs no lock.
+        The request with names resolved and defaults filled, checked as a
+        plain request in the request phase, but for the records it reads
+        (see :meth:`_check_reads`); needs no lock.
         """
         request = entry.request
+        spec_id = request.spec
         try:
-            params = self._resolve(request.spec, request.params, (), proposal)
-            values = self._typed(request.spec, params)
-            for field, value in values.items():
-                _check_storable(field, value)
-            prepared = Request(request.spec, values)
+            spec = self.spec(spec_id)
+            _check_names(spec_id, spec, request.params, request.inputs)
+            values = {**request.params, **request.inputs}
+            params, inputs = _split(spec, _columns(spec, values, spec.tables))
+            inputs = self._resolve(spec_id, inputs, proposal)
+            inputs = _with_defaults(spec.inputs, inputs, spec.inputs.model_fields)
+            params = self._params(spec_id, params)
+            _rows(spec, {**params, **inputs}, spec.tables)
         except SubmitError as error:
             raise entry.refused(error) from None
-        return prepared
+        return Request(spec_id, params=params, inputs=inputs)
 
     def _resolve(
+        self, spec_id: SpecId, inputs: Mapping[str, Any], proposal: str
+    ) -> dict[str, Any]:
+        """
+        ``inputs``, each a reference or a list of references by its field,
+        with dataset names resolved; needs no lock.
+
+        A dataset must be one the proposal may read, and fit its field, a
+        file. A reference to a record or an accumulator is checked by
+        :meth:`_check_reads`.
+        """
+        resolved: dict[Ref, Ref] = {}
+        for where, ref, tp in self._inputs[spec_id].refs(inputs):
+            if not isinstance(ref, DatasetRef):
+                continue
+            if not is_file(tp):
+                raise SubmitError(
+                    f'{where}: dataset {ref} does not fit {type_name(tp)}, '
+                    'which is not a file'
+                )
+            try:
+                identity = self._datasets.resolve(ref)
+            except KeyError:
+                raise SubmitError(f'{where}: unknown dataset {ref}') from None
+            metadata = self._datasets.metadata(identity)
+            if not readable(metadata, proposal):
+                raise SubmitError(
+                    f'{where}: dataset {ref} belongs to proposal {metadata["proposal"]}'
+                )
+            resolved[ref] = identity
+        resolved_inputs: dict[str, Any] = map_refs(
+            dict(inputs), lambda ref: resolved.get(ref, ref)
+        )
+        return resolved_inputs
+
+    def _params(
         self,
         spec_id: SpecId,
         params: Mapping[str, Any],
-        blanks: tuple[str, ...],
-        proposal: str,
-        first: int = 0,
+        names: Collection[str] | None = None,
+        *,
+        rows: bool = False,
     ) -> dict[str, Any]:
         """
-        ``params`` with dataset names resolved; needs no lock.
-
-        Refuses a param or blank the spec lacks, and a row of a table with a
-        field its row model lacks; ``first`` is the index in its table of the
-        first row given.
+        ``params`` as the record holds them, in JSON's types, defaults filled
+        in; needs no lock. They are validated by the spec's params model, or
+        if ``names`` are given, each of these by its own field, or with
+        ``rows`` as the columns of rows pushed (see :func:`.records.model_of`).
+        Raises ``SubmitError`` with what the model finds wrong.
         """
-        spec = self.spec(spec_id)
-        unknown = (set(params) | set(blanks)) - set(spec.params.model_fields)
-        if unknown:
-            raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
-        _check_cells(spec.params, params, first)
-        return {
-            field: map_refs(value, self._resolver(field, proposal))
-            for field, value in params.items()
-        }
-
-    def _resolver(self, field: str, proposal: str) -> Callable[[Ref], Ref]:
-        def resolve(ref: Ref) -> Ref:
-            if isinstance(ref, DatasetRef):
-                try:
-                    identity = self._datasets.resolve(ref)
-                except KeyError:
-                    raise SubmitError(f'{field}: unknown dataset {ref}') from None
-                metadata = self._datasets.metadata(identity)
-                if not readable(metadata, proposal):
-                    raise SubmitError(
-                        f'{field}: dataset {ref} belongs to proposal '
-                        f'{metadata["proposal"]}'
-                    )
-                return identity
-            if isinstance(ref, OutputRef) and ref.key is not None:
-                raise SubmitError(f'{field}: {ref} names an element of an output')
-            return ref
-
-        return resolve
+        model = self._specs[spec_id].params
+        if names is not None:
+            model = model_of(model, names, rows=rows)
+        _check_groups(model, params)
+        try:
+            made = model.model_validate(params)
+        except ValidationError as error:
+            problems = '; '.join(validation_problems(error))
+            raise SubmitError(f'{spec_id}: {problems}') from None
+        return {name: _storable(name, value) for name, value in dict(made).items()}
 
     def _pin_states(
         self, caller: _Client, ids: Iterable[str]
@@ -1027,42 +1178,62 @@ class Backend:
         states: Mapping[str, _Pinned],
     ) -> None:
         """
-        Check the outputs of records and accumulators a request reads; lock held.
+        Check the outputs of records and accumulators a request reads; lock
+        held. Each must be one the client may read (see :meth:`_readable`),
+        declared by its spec, returned if its record has completed, and fit
+        its field (see :meth:`_check_fit`).
 
         Only a submission reads accumulators, from the ``states`` it pinned;
         it reads the records of these states, which it makes in
         :meth:`_create`, after these checks. A stage, an accumulator, or a
         push passes no states: a stage or an accumulator that held a state of
         an accumulator would hold back its every push for as long as it
-        lives, and a row pushed into one would read another's value while it
+        lives, and a value pushed into one would read another's while it
         adds. A request through a stage that has yet to stage also reads
         what the stage keeps, which :meth:`_check_stage` has checked it for;
         one through a stage that has staged reads only its blanks.
         """
-        params = self._specs[request.spec].params
         stage = caller.stages[entry.stage] if entry.stage is not None else None
         also = set(stage.reads) if stage is not None else set()
         read = stage.read_part(request) if stage is not None else request
         try:
-            for field, value in read.params.items():
-                for where, ref, target in _reads(params, field, value):
-                    spec_id = self._readable(ref, where, caller, states, also)
-                    outputs = self._output_fields[spec_id]
-                    if ref.output not in outputs:
-                        raise SubmitError(
-                            f'{where}: {spec_id} has no output {ref.output!r}'
-                        )
-                    if target is not None and not _agree(outputs[ref.output], target):
-                        raise SubmitError(f'{where}: {ref} does not fit the field')
-                    if isinstance(ref, OutputRef) and self._views.omitted(
-                        (ref.record, ref.output)
-                    ):
-                        raise SubmitError(
-                            f'{where}: record {ref.record} output {ref.output}: '
-                            'the workflow did not return it'
-                        )
+            for where, ref, tp in self._inputs[request.spec].refs(read.inputs):
+                if isinstance(ref, DatasetRef):
+                    continue  # checked when resolved
+                spec_id = self._readable(ref, where, caller, states, also)
+                self._check_fit(spec_id, ref, tp, where)
+                if isinstance(ref, OutputRef) and self._views.omitted(
+                    (ref.record, ref.output)
+                ):
+                    raise SubmitError(
+                        f'{where}: record {ref.record} output {ref.output}: '
+                        'the workflow did not return it'
+                    )
         except SubmitError as error:
             raise entry.refused(error) from None
+
+    def _check_fit(
+        self, spec_id: SpecId, ref: OutputRef | AccumulatorRef, tp: Any, where: str
+    ) -> None:
+        """
+        Refuse a reference to an output that the spec lacks, or whose data
+        do not fit ``tp``; a reference with a key names one element of an
+        output, of the output's element type. Needs no lock.
+        """
+        field = self._specs[spec_id].outputs.model_fields.get(ref.output)
+        if field is None:
+            raise SubmitError(f'{where}: {spec_id} has no output {ref.output!r}')
+        data, _ = optional(field.annotation)
+        if isinstance(ref, OutputRef) and ref.key is not None:
+            if (data := element(data)) is None:
+                raise SubmitError(
+                    f'{where}: {ref} names an element of an output without elements'
+                )
+        if not fits(data, tp):
+            raise SubmitError(
+                f'{where}: {ref}, of type {type_name(data)}, does not fit '
+                f'{type_name(tp)}'
+            )
 
     def _check_stage(self, entry: Entry, request: Request, caller: _Client) -> None:
         """
@@ -1082,13 +1253,15 @@ class Backend:
             raise entry.refused(
                 SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
             )
+        raw, template = entry.request, stage.template
         given = {
-            k: as_refs(v)
-            for k, v in entry.request.params.items()
-            if k not in stage.blanks
+            k: v
+            for k, v in {**raw.params, **raw.inputs}.items()
+            if k not in stage.given
         }
-        differ = (given.keys() ^ stage.fixed.keys()) | {
-            k for k in given.keys() & stage.fixed.keys() if given[k] != stage.fixed[k]
+        fixed = {**template.params, **template.inputs}
+        differ = (given.keys() ^ fixed.keys()) | {
+            k for k in given.keys() & fixed.keys() if given[k] != fixed[k]
         }
         if differ:
             raise entry.refused(
@@ -1192,7 +1365,7 @@ class Backend:
             request = self._views.records[record_id].request
             if (stage := self._stage_of.get(record_id)) is not None:
                 request = stage.read_part(request)
-            refs = request.inputs()
+            refs = request.upstream()
             self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
             waiting = {ref.record for ref in refs} - self._views.finished.keys()
             # a write that a persist request made later names ends on its own
@@ -1269,32 +1442,52 @@ class Backend:
     ) -> dict[str, Any]:
         """
         The outputs a record's workflow returns, or those of the state it
-        reads; no lock. What the workflow read goes out of scope here, so
-        once the caller lets go of the values read, nothing holds them.
+        reads, by name, an optional output returned as ``None`` left out; no
+        lock. What the workflow read goes out of scope here, so once the
+        caller lets go of the values read, nothing holds them.
         """
-        outputs: dict[str, Any]
-        if state is None:
-            outputs = dict(self._call(record.request, stage))
-        else:
-            computed = state[0].outputs().items()
-            outputs = {n: v for n, v in computed if v is not _OMITTED}
-        if problem := self._unfit(record.spec, outputs):
-            raise ValueError(problem)
-        return outputs
-
-    def _call(self, request: Request, stage: _Stage | None) -> Mapping[str, Any]:
-        """
-        The outputs of a request, computed through its stage if it has one;
-        the inputs are read.
-        """
-        values = self._typed(request.spec, request.params)
+        if state is not None:
+            return dict(state[0].outputs())
+        request = record.request
+        spec = self._specs[request.spec]
         if stage is None:
-            return self._bindings[request.spec].compute(self._read(values))
-        fixed = {k: v for k, v in values.items() if k not in stage.blanks}
-        call = self._staged(
-            stage, lambda: stage.binding.make_stage(self._read(fixed), stage.blanks)
-        )
-        return call(self._read({k: values[k] for k in stage.blanks}))
+            params = spec.params.model_validate(request.params)
+            inputs = self._inputs[request.spec].make(request.inputs)
+            returned = self._bindings[request.spec].compute(params, inputs)
+        else:
+            fixed = _part(request, lambda name: name not in stage.given)
+            call = self._staged(
+                stage,
+                lambda: stage.binding.make_stage(
+                    self._by_name(request.spec, *fixed), stage.template.blanks
+                ),
+            )
+            given = _part(request, lambda name: name in stage.given)
+            returned = call(self._by_name(request.spec, *given))
+        return _outputs_of(request.spec, spec.outputs, returned)
+
+    def _by_name(
+        self,
+        spec_id: SpecId,
+        params: Mapping[str, Any],
+        inputs: Mapping[str, Any],
+        *,
+        rows: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Values of a request by name, as a stage or a driver takes them; no
+        lock. Each parameter is validated by its own field, and each input
+        read and validated by its own field, or with ``rows`` as the columns
+        of rows pushed (see :func:`.records.model_of`); a table is given under
+        its index, as its columns.
+        """
+        spec = self._specs[spec_id]
+        made = model_of(spec.params, params, rows=rows).model_validate(params)
+        values = {
+            **{name: getattr(made, name) for name in params},
+            **self._inputs[spec_id].make_fields(inputs, rows=rows),
+        }
+        return _by_index(spec, values)
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
@@ -1330,80 +1523,44 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _typed(
-        self,
-        spec_id: SpecId,
-        params: Mapping[str, Any],
-        model: type[BaseModel] | None = None,
-    ) -> dict[str, Any]:
+    def _read(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """
-        ``params`` as the spec's params model gives them, or ``model`` if
-        given, defaults filled in. Raises ``SubmitError`` with what the model
-        finds wrong.
-
-        A record holds its values as the log does, in JSON's types; a binding
-        gets the types the params model declares, such as a tuple.
-        """
-        model = model or self._specs[spec_id].params
-        try:
-            values = _values(model.model_validate(params))
-        except ValidationError as error:
-            problems = '; '.join(validation_problems(error))
-            raise SubmitError(f'{spec_id}: {problems}') from None
-        for table in distinct_row_tables(model) & values.keys():
-            _refuse_repeated(table, values[table] or [])
-        return values
-
-    def _fixed(
-        self, spec_id: SpecId, params: Mapping[str, Any], tables: Sequence[str]
-    ) -> dict[str, Any]:
-        """
-        The values of an accumulator's template that fills ``tables``, each
-        typed by its own field and that field's validators, defaults filled
-        in.
-
-        The params model's own validators read whole requests, so they run
-        on the plain request of a state when it is read (see
-        :meth:`_check_state`), not here.
-        """
-        return self._typed(
-            spec_id, params, model_without(self._specs[spec_id].params, tables)
-        )
-
-    def _read(self, values: dict[str, Any]) -> dict[str, Any]:
-        """
-        ``values`` with the outputs and datasets they reference read: outputs
-        held in memory under the backend's lock, outputs written and no
-        longer held from the store, and datasets outside the lock.
+        ``inputs`` with the data their references name read: outputs held in
+        memory under the backend's lock, outputs written and no longer held
+        from the store, and the paths of datasets outside the lock.
         """
         with self._changed:
-            values = map_refs(
-                values,
-                lambda ref: ref if isinstance(ref, DatasetRef) else self._value(ref),
-            )
-        return map_refs(values, self._stored)
+            inputs = map_inputs(inputs, self._value)
+        return map_inputs(inputs, self._stored)
 
-    def _value(self, ref: OutputRef) -> Any:
+    def _value(self, ref: Ref) -> Any:
         """
-        The value of an output of a completed record held in memory, or
-        ``ref`` itself if only the store holds it; lock held. The caller
-        reads only what something keeps for it, so the value is one or the
-        other.
+        The value of an output of a completed record held in memory, or its
+        element if ``ref`` has a key, or ``ref`` itself if only the store
+        holds it or it names a dataset; lock held. The caller reads only what
+        something keeps for it, so the value is one or the other.
         """
+        if not isinstance(ref, OutputRef):
+            return ref
         key = (ref.record, ref.output)
         if self._views.omitted(key):
-            raise _not_returned(*key)
-        return self._outputs.get(key, ref)
+            raise _not_returned(f'record {ref.record} output {ref.output}')
+        if key not in self._outputs:
+            return ref
+        return _element(self._outputs[key], ref.key)
 
     def _stored(self, ref: Ref) -> Any:
-        """The value of a dataset, or of a written output; needs no lock."""
+        """
+        The local path of a dataset, or the value of a written output, or its
+        element if ``ref`` has a key; needs no lock.
+        """
         if isinstance(ref, DatasetRef):
-            return self._datasets.read(ref)
+            return self._datasets.path(ref)
         if isinstance(ref, AccumulatorRef):
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:
             raise LookupError(f'{ref}: the backend has no store')
-        return self._store.read(ref.record, ref.output)
+        return _element(self._store.read(ref.record, ref.output), ref.key)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
@@ -1481,18 +1638,6 @@ class Backend:
         ):
             del self._state_of[record_id]
             self._let_go([state])
-
-    def _unfit(self, spec_id: SpecId, outputs: Mapping[str, Any]) -> str | None:
-        """Why the outputs a workflow returned do not fit its spec, or ``None``."""
-        fields = self._specs[spec_id].outputs.model_fields
-        extra = set(outputs) - set(fields)
-        missing = _required(self._specs[spec_id].outputs) - set(outputs)
-        if extra or missing:
-            return (
-                f'the workflow of {spec_id} returned {sorted(outputs)}: '
-                f'missing {sorted(missing)}, not in the spec {sorted(extra)}'
-            )
-        return None
 
     def _complete(
         self, record_id: str, outputs: dict[str, Any], failure: str | None
@@ -1773,75 +1918,127 @@ class Backend:
         until its first call to run has made the binding's stage, or it is
         released.
         """
-        spec_id, blanks = template.spec, template.blanks
+        spec_id = template.spec
         proposal = self._client(client).proposal
-        self.spec(spec_id)  # an unknown spec is refused as such
+        spec = self.spec(spec_id)  # an unknown spec is refused as such
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
             raise SubmitError(f'{spec_id}: its binding makes no stages')
-        fixed = self._check_template(template, proposal)
+        stored, _, _ = self._check_template(template, proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            request = Request(spec_id, fixed)
+            request = Request(spec_id, inputs=stored.inputs)
             self._check_reads(Entry(request), request, caller, {})
-            stage = caller.stages[stage_id] = _Stage(spec_id, binding, blanks, fixed)
+            given = _open(spec, stored.blanks)
+            stage = caller.stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
-        return stage_id, Template(spec_id, fixed, blanks)
+        return stage_id, stored
 
-    def _check_template(self, template: Template, proposal: str) -> dict[str, Any]:
+    def _check_template(
+        self, template: Template, proposal: str
+    ) -> tuple[Template, dict[str, Any], dict[str, Any]]:
         """
-        The template's values with dataset names resolved, as the log holds
-        them; needs no lock.
+        The template as given, with dataset names resolved, as the log holds
+        it, and its fixed values with defaults filled in, by side; needs no
+        lock.
 
-        They are checked as a request's are, but for the blanks, and for the
-        params model's own validators, which read whole requests and so run on
-        each request the template makes (see :func:`~.records.model_without`).
-        Defaults are not filled in.
+        A blank is a parameter, an input, or a table, named by its index; a
+        template fixes a whole table or leaves it blank. A parameter or an
+        input in neither the values nor the blanks takes its default, so it
+        must have one. Each fixed value is checked by its own field, as a
+        request's is, and so are the table rules on the fixed tables. The
+        params model's own validators read whole requests, so they run on each
+        request the template makes, and on the plain request of each state of
+        an accumulator when it is read (see :meth:`_check_state`).
         """
         spec_id, blanks = template.spec, template.blanks
-        fixed = self._resolve(spec_id, template.params, blanks, proposal)
-        self._typed(spec_id, fixed, model_without(self.spec(spec_id).params, blanks))
-        return {field: _check_storable(field, value) for field, value in fixed.items()}
+        spec = self.spec(spec_id)
+        _check_names(spec_id, spec, template.params, template.inputs)
+        fields = spec.params.model_fields.keys() | spec.inputs.model_fields.keys()
+        for blank in blanks:
+            if blank not in fields:
+                raise SubmitError(
+                    f'{blank}: a blank, not a parameter or an input of {spec_id}'
+                )
+            if (index := spec.table_of(blank)) not in (None, blank):
+                raise SubmitError(
+                    f'{blank}: a column of the table of {index}; a template '
+                    'leaves a whole table blank, by its index'
+                )
+        left_open = _open(spec, blanks)
+        given = {**template.params, **template.inputs}
+        if fixed_open := sorted(given.keys() & left_open):
+            raise SubmitError(f'{fixed_open}: columns of a blank table')
+        names = [
+            name
+            for model in (spec.params, spec.inputs)
+            for name in model.model_fields
+            if name not in left_open
+        ]
+        if missing := [
+            n
+            for n in names
+            if n not in given
+            and spec.table_of(n) in (None, n)  # a column follows its index
+            and spec.field(n).is_required()
+        ]:
+            raise SubmitError(
+                f'{missing}: neither fixed nor blank, and without a default'
+            )
+        tables = [index for index in spec.tables if index not in blanks]
+        params, inputs = _split(spec, _columns(spec, given, tables))
+        inputs = self._resolve(spec_id, inputs, proposal)
+        stored = Template(
+            spec_id,
+            params={n: _storable(n, v) for n, v in template.params.items()},
+            inputs={n: inputs[n] for n in template.inputs},
+            blanks=blanks,
+        )
+        params = self._params(spec_id, params, spec.params.model_fields.keys() & names)
+        inputs = _with_defaults(spec.inputs, inputs, names)
+        _rows(spec, {**params, **inputs}, tables)
+        return stored, params, inputs
 
     def open_accumulator(self, template: Template, client: str) -> tuple[str, Template]:
         """
         An accumulator of the client, and its template as history holds it.
 
         The spec's binding must make accumulators, and the template's blanks
-        are table fields, which the pushes fill. The template is checked as a
-        stage's is (see :meth:`_check_template`), its values are typed (see
-        :meth:`_fixed`), and the records they reference are checked as a
-        request's are. The accumulator then opens: its first step has the
-        binding make the driver with these values read and defaults filled
-        in (see :meth:`_advance`).
+        are tables, named by their indexes, which the pushes fill. The
+        template is checked as a stage's is (see :meth:`_check_template`), and
+        the records its values reference are checked as a request's are. The
+        accumulator then opens: its first step has the binding make the driver
+        with these values, defaults filled in, by name (see :meth:`_advance`).
         """
         spec_id, blanks = template.spec, template.blanks
         caller = self._client(client)
-        tables = table_fields(self.spec(spec_id).params)
+        spec = self.spec(spec_id)
+        tables = spec.tables
         binding = self._bindings[spec_id]
         if not isinstance(binding, AccumulatorBinding):
             raise SubmitError(f'{spec_id}: its binding makes no accumulators')
         if not blanks or not set(blanks) <= tables.keys():
             raise SubmitError(
-                f'{spec_id}: the blanks of an accumulator are table fields of '
-                f'{sorted(tables)}, not {list(blanks)}'
+                f'{spec_id}: the blanks of an accumulator are tables, by their '
+                f'indexes {sorted(tables)}, not {list(blanks)}'
             )
-        stored = Template(
-            spec_id, self._check_template(template, caller.proposal), blanks
-        )
-        fixed = self._fixed(spec_id, stored.params, blanks)
+        stored, params, inputs = self._check_template(template, caller.proposal)
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            request = Request(spec_id, fixed)
+            request = Request(spec_id, inputs=inputs)
             self._check_reads(Entry(request), request, caller, {})
+            # The blank tables without rows, so that the pushes extend them
+            # into the plain request of each state.
+            empty = _split(spec, {c: [] for b in blanks for c in spec.columns(b)})
             self._append(
                 Opened(
                     accumulator=accumulator_id,
                     proposal=caller.proposal,
                     template=stored,
-                    fixed={f: _check_storable(f, v) for f, v in fixed.items()},
+                    params={**params, **empty[0]},
+                    inputs={**inputs, **empty[1]},
                 )
             )
             acc = _Accumulator(
@@ -1850,32 +2047,40 @@ class Backend:
                 binding,
             )
             caller.accumulators[accumulator_id] = acc
-            self._queue(acc, fixed)
+            self._queue(acc, (params, inputs))
         return accumulator_id, acc.template
 
     def push(
-        self, accumulator_id: str, table: str, rows: Sequence[Row], client: str
+        self, accumulator_id: str, columns: Mapping[str, list[Any]], client: str
     ) -> None:
         """
-        Log a push of rows into one table; they enter one state.
+        Log a push of the columns of one table; its rows enter one state.
 
-        The rows are checked (see :meth:`_pushable`), and so are the records
-        they reference, as a request's are, without waiting for those that
-        are pending. The push is logged before it is added, so the pushes
-        into one accumulator are added in the order they were logged (see
-        :meth:`_advance`). A push waits while a freeze is being checked, and
-        is refused if the freeze is logged.
+        The columns are checked (see :meth:`_pushable`), and so are the
+        records they reference, as a request's are, without waiting for those
+        that are pending. An index value the table holds is refused. The push
+        is logged before it is added, so the pushes into one accumulator are
+        added in the order they were logged (see :meth:`_advance`). A push
+        waits while a freeze is being checked, and is refused if the freeze is
+        logged.
         """
-        stored, typed = self._pushable(accumulator_id, table, rows, client)
+        index, params, inputs = self._pushable(accumulator_id, columns, client)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
-            request = Request(acc.template.spec, {table: stored})
-            self._refuse_repeated_push(acc, table, stored)
+            self._refuse_repeated_push(acc, index, {**params, **inputs}[index])
+            request = Request(acc.template.spec, inputs=inputs)
             self._check_reads(Entry(request), request, caller, {})
-            self._append(Pushed(accumulator=accumulator_id, table=table, rows=stored))
-            self._queue(acc, {table: typed})
+            self._append(
+                Pushed(
+                    accumulator=accumulator_id,
+                    table=index,
+                    params=params,
+                    inputs=inputs,
+                )
+            )
+            self._queue(acc, (params, inputs))
 
     def freeze(
         self,
@@ -1937,77 +2142,72 @@ class Backend:
                 self._let_go([(acc, upto)])
 
     def _refuse_repeated_push(
-        self, acc: _Accumulator, table: str, rows: Sequence[Row]
+        self, acc: _Accumulator, index: str, values: Sequence[Any]
     ) -> None:
         """
-        Refuse a row equal to one already pushed into the table, or to another
-        of the push, unless the spec allows it (see ``distinct_row_tables``);
-        lock held.
+        Refuse an index value the table of ``index`` holds, or that the push
+        repeats; lock held.
 
         The rule is checked here and not with the whole table at a read, since
-        a read that refused the repeated row would refuse every later state,
+        a read that refused the repeated value would refuse every later state,
         and no push removes a row.
         """
-        if table not in distinct_row_tables(self._specs[acc.template.spec].params):
-            return
-        pushed = self._views.pushes.get(acc.id, ())
-        earlier = [row for p in pushed if p.table == table for row in p.rows]
-        _refuse_repeated(table, [*earlier, *rows])
+        earlier = [
+            value
+            for push in self._views.pushes.get(acc.id, ())
+            if push.table == index
+            for value in {**push.params, **push.inputs}[index]
+        ]
+        _distinct(index, [*earlier, *values])
 
     def _pushable(
-        self, accumulator_id: str, table: str, rows: Sequence[Row], client: str
-    ) -> tuple[list[Row], list[Row]]:
+        self, accumulator_id: str, columns: Mapping[str, Any], client: str
+    ) -> tuple[str, dict[str, list[Any]], dict[str, list[Any]]]:
         """
-        The rows, once checked, as the log holds them and as the driver gets
-        them; needs no lock.
+        The index of the table a push names, and its columns, once checked,
+        by side, as the log holds them; needs no lock.
 
-        A push of no rows is refused. Each row is checked by its table's row
-        model alone, and refused as the state's plain request would refuse it:
-        named by its index in the table, counting the rows pushed before.
-        Rules on the whole table, such as its length, and the params model's
-        own validators apply when a state is read (see
-        :meth:`_check_state`). A row comes back as that request holds it:
-        names resolved and defaults filled in. The driver gets it typed from
-        that form, as the binding of the state's plain request does: a tuple,
-        which JSON keeps as a list, reaches both as a list.
+        A push gives the columns of one blank table: its index, and the
+        columns attached to it, as lists of equal length, one or more rows; a
+        column left out is filled (see :func:`_columns`). Each literal is
+        checked by its column's type, and each reference is a dataset the
+        proposal may read that fits its column, or is checked under the
+        backend's lock (see :meth:`_check_reads`).
         """
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
-            pushed = self._views.pushes.get(accumulator_id, ())
-            first = sum(len(p.rows) for p in pushed if p.table == table)
         spec_id, blanks = acc.template.spec, acc.template.blanks
-        if table not in blanks:
+        spec = self._specs[spec_id]
+        if unknown := sorted(n for n in columns if n not in _open(spec, spec.tables)):
+            raise SubmitError(f'{unknown}: not columns of a table of {spec_id}')
+        indexes = {spec.table_of(n) or n for n in columns}  # each n is a column
+        if len(indexes) != 1:
             raise SubmitError(
-                f'a push names a table of the accumulator, {list(blanks)}, '
-                f'not {table!r}'
+                f'a push gives the columns of one table, not of {sorted(indexes)}'
             )
-        if not rows:
-            raise SubmitError(f'a push into {table} has no rows')
-        (resolved,) = self._resolve(
-            spec_id, {table: list(rows)}, (), caller.proposal, first
-        ).values()
-        model = table_fields(self._specs[spec_id].params)[table]
-        stored: list[Row] = []
-        typed: list[Row] = []
-        try:
-            for row in resolved:
-                stored.append(_check_storable(table, dict(model.model_validate(row))))
-                typed.append(dict(model.model_validate(stored[-1])))
-        except ValidationError as error:
-            at = (table, first + len(typed))
-            problems = '; '.join(validation_problems(error, at=at))
-            raise SubmitError(f'{spec_id}: {problems}') from None
-        return stored, typed
+        (index,) = indexes
+        if index not in columns:
+            raise SubmitError(f'{sorted(columns)}: columns pushed without {index}')
+        if index not in blanks:
+            raise SubmitError(
+                f'a push names a table of the accumulator by its index, '
+                f'{list(blanks)}, not {index!r}'
+            )
+        if not columns[index]:
+            raise SubmitError(f'a push into {index} has no rows')
+        params, inputs = _split(spec, _columns(spec, columns, [index]))
+        inputs = self._resolve(spec_id, inputs, caller.proposal)
+        return index, self._params(spec_id, params, params.keys(), rows=True), inputs
 
-    def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
+    def _queue(self, acc: _Accumulator, values: _Values) -> None:
         """
         Queue a step of the accumulator: opening its driver with the
-        template's values, or adding the rows of a push; lock held.
+        template's values, or adding the columns of a push; lock held.
 
         The step holds the outputs it reads until it is done.
         """
-        reads = _output_reads(values)
+        reads = _output_reads(values[1])
         self._readers.update(reads)
         acc.steps.append((values, reads))
         self._accumulating.add(acc)
@@ -2046,20 +2246,22 @@ class Backend:
         Make the accumulator's driver or push into it, as its next step
         says; on a worker, outside the backend's lock.
 
-        If the step fails, the accumulator stops, since the driver may hold
-        part of the rows.
+        The values are given by name, each input read and each value
+        validated by its own field. If the step fails, the accumulator stops,
+        since the driver may hold part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
         # _unneeded keeps a busy step, and _stop runs only when no step is
         # busy, or on this worker.
-        values, reads = acc.steps[0]
+        (params, inputs), reads = acc.steps[0]
         try:
-            read = self._read(values)
-            if acc.added is None:
-                acc.driver = acc.binding.make_accumulator(read, acc.template.blanks)
+            pushing = acc.added is not None
+            values = self._by_name(acc.template.spec, params, inputs, rows=pushing)
+            if not pushing:
+                acc.driver = acc.binding.make_accumulator(values, acc.template.blanks)
             else:
-                ((table, rows),) = read.items()
-                acc.driver.push(table, rows)
+                ((table, columns),) = values.items()
+                acc.driver.push(table, columns)
         except Exception as error:  # the binding refuses the values or rows
             with self._changed:
                 self._stop(acc, f'{acc.step} failed: {str(error) or repr(error)}')
@@ -2100,22 +2302,25 @@ class Backend:
         would be refused, or ``None``; needs no lock.
 
         That request is the one its records list (see ``views.py``): the
-        template's values that the driver was given, with each table
-        filled by the rows pushed, in push order. Each was checked by its
-        field when it was given; the params model's own validators run here,
-        and must not change a value (see the module docstring).
-        ``acc.checked`` keeps the answer for the last state validated. The
-        validation takes time in proportion to the rows, so it runs outside
-        the backend's lock.
+        template's fixed values, with each blank table filled by the columns
+        pushed, in push order. Each value was checked by its field when it was
+        given; the params model, its own validators included, runs here and
+        must not change a value (see the module docstring), and a table with
+        a required index must have a row. ``acc.checked`` keeps the answer for
+        the last state validated. The validation takes time in proportion to
+        the rows, so it runs outside the backend's lock.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
             return checked[1]
         with self._changed:
             plain = self._views.plain(acc.id, upto)
+        spec = self._specs[plain.spec]
         refused: str | None = None
         try:
-            self._typed(plain.spec, plain.params)
+            values = {**plain.params, **plain.inputs}
+            _required_rows(spec, values, acc.template.blanks)
+            self._params(plain.spec, plain.params)
         except SubmitError as error:
             refused = str(error)
         acc.checked = (upto, refused)  # another check may overwrite it at once
@@ -2268,7 +2473,7 @@ class Backend:
         Values of a record's outputs, once it has completed: of ``names``, or
         of every output the workflow returned if ``names`` is ``None``; with
         ``select``, a copy of that part of each. A selection names outputs
-        declared as arrays (``Format.SCIPP``).
+        declared as arrays: of a type with named dimensions, ``dims``.
 
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
@@ -2318,13 +2523,13 @@ class Backend:
                 names = [n for n in names if not views.omitted((record_id, n))]
             for name in names:
                 if views.omitted((record_id, name)):
-                    raise _not_returned(record_id, name)
+                    raise _not_returned(f'record {record_id} output {name}')
             # from memory if kept, else from the store: never another's value
             values = {
                 n: self._outputs[(record_id, n)] if kept else record.ref(n)
                 for n in names
             }
-        values = map_refs(values, self._stored)
+        values = map_inputs(values, self._stored)
         if select is None:
             return values
         return {n: _selected(v, select) for n, v in values.items()}
@@ -2337,11 +2542,10 @@ class Backend:
         """
         if names is None:
             raise ValueError('select= needs the name of an output')
-        fields = self._output_fields[spec_id]
         declared = self._specs[spec_id].outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
-            field = fields.get(name)
-            if field is None or field.format is not Format.SCIPP:
+            tp = base(optional(declared[name].annotation)[0])
+            if not (isinstance(tp, type) and hasattr(tp, 'dims')):
                 raise ValueError(f'{spec_id} output {name!r}: select= needs an array')
 
     def accumulator_outputs(
@@ -2377,11 +2581,10 @@ class Backend:
                 if name not in declared:
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')
             outputs = acc.outputs()
-            values = {
-                n: _returned(outputs[n], f'{accumulator_id}[:{upto}].{n}')
-                for n in (declared if names is None else names)
-                if names is not None or outputs[n] is not _OMITTED
-            }
+            for name in names or ():
+                if name not in outputs:
+                    raise _not_returned(f'{accumulator_id}[:{upto}].{name}')
+            values = {n: outputs[n] for n in names or declared if n in outputs}
             if select is None:
                 return copy.deepcopy(values)
             return {n: _selected(v, select) for n, v in values.items()}

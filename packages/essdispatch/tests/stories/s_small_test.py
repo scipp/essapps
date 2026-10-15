@@ -21,14 +21,10 @@ from .conftest import (
     NORMALIZE,
     PARTS_SUM,
     VANADIUM,
-    BackgroundParams,
-    ContributeParams,
-    Corrections,
     IofQParams,
     Measure,
     NormalizeParams,
     Reduction,
-    Run,
     Scaling,
     VanadiumParams,
 )
@@ -38,7 +34,8 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     result = client.compute(
         IOFQ,
-        IofQParams(sample=Run(file=run), reduction=Reduction(threshold=1.5)),
+        params=IofQParams(reduction=Reduction(threshold=1.5)),
+        inputs={'sample': run},
     )
 
     assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]
@@ -48,17 +45,17 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
 
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-    tune = client.stage(
-        Template(IOFQ, params={'sample': Run(file=run)}, blanks=('reduction',))
-    )
+    tune = client.stage(Template(IOFQ, inputs={'sample': run}, blanks=('reduction',)))
     for bins in (1, 2, 4):
         result = client.compute(
-            tune, {'reduction': Reduction(bins=bins)}, label='tuning'
+            tune, params={'reduction': Reduction(bins=bins)}, label='tuning'
         )
 
     assert client.latest('tuning') == result
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0, 3.0, 4.0]
-    plain = client.compute(IOFQ, result.request.params)
+    plain = client.compute(
+        IOFQ, params=result.request.params, inputs=result.request.inputs
+    )
     assert sc.identical(client.output(plain, 'iofq'), client.output(result, 'iofq'))
 
 
@@ -68,7 +65,8 @@ def test_s3_look_at_a_value_inside_a_reduction(
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     result = client.compute(
         IOFQ,
-        IofQParams(sample=Run(file=run), reduction=Reduction(threshold=2.5)),
+        params=IofQParams(reduction=Reduction(threshold=2.5)),
+        inputs={'sample': run},
     )
 
     assert client.output(result, 'masked').values.tolist() == [0.0, 0.0, 3.0, 4.0]
@@ -78,13 +76,11 @@ def test_s3_look_at_a_value_inside_a_reduction(
 def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = client.submit(
-        [
-            Request(CONTRIBUTE, ContributeParams(sample=Run(file=run)))
-            for run in (r611, r612)
-        ]
+        [Request(CONTRIBUTE, inputs={'sample': run}) for run in (r611, r612)]
     )
     summed = client.submit(
-        PARTS_SUM, {'parts': [p.refs('numerator', 'denominator') for p in parts]}
+        PARTS_SUM,
+        inputs={'parts': [p.ref('parts') for p in parts]},
     )
 
     assert client.output(summed, 'numerator').values.tolist() == [3.0, 9.0]
@@ -92,16 +88,14 @@ def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> 
 
 def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
-    rows = [Run(file=run) for run in runs]
     total = client.compute(
-        NORMALIZE, NormalizeParams(runs=rows, scaling=Scaling(scale=2.0))
+        NORMALIZE,
+        params=NormalizeParams(scaling=Scaling(scale=2.0)),
+        inputs={'runs': runs},
     )
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
-        BACKGROUND,
-        BackgroundParams(
-            sample_runs=rows, background_runs=[Run(file=r) for r in backgrounds]
-        ),
+        BACKGROUND, inputs={'sample_runs': runs, 'background_runs': backgrounds}
     )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
@@ -139,14 +133,12 @@ def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.compute(
         VANADIUM,
-        VanadiumParams(vanadium=Run(file=vanadium_run), scaling=Scaling(scale=2.0)),
+        params=VanadiumParams(scaling=Scaling(scale=2.0)),
+        inputs={'vanadium': vanadium_run},
     )
     result = client.compute(
         IOFQ,
-        IofQParams(
-            sample=Run(file=sample),
-            corrections=Corrections(normalization=vanadium.ref('normalization')),
-        ),
+        inputs={'sample': sample, 'normalization': vanadium.ref('normalization')},
     )
 
     provenance = client.provenance(result)

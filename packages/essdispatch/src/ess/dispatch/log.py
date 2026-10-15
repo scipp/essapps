@@ -11,8 +11,8 @@ part of that event, and its write is the record's: the record finishes once
 the outputs are written, so no write event follows. A submission that read
 an accumulator, and a freeze, hold a
 record of the plain request of the state read, as the accumulator and its
-number of pushes, before the records that read it; the views list its rows
-when it is read. The backend's views, such as the records by ID, are built by
+number of pushes, before the records that read it; the views list its
+request when it is read. The backend's views, such as the records by ID, are built by
 applying the events in order, when they are appended and again when a backend
 starts from an existing log.
 
@@ -41,7 +41,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, Field, TypeAdapter
 
-from .records import Request, Row, Status, Template, as_refs
+from .records import Request, Status, Template, as_refs
 
 
 class NewRecord(BaseModel, frozen=True):
@@ -100,11 +100,12 @@ class Opened(BaseModel, frozen=True):
     """
     An accumulator that opened, with its template as the backend accepted it.
 
-    The template's blanks are the tables that the pushes fill. ``fixed`` holds
-    the template's other values, each typed by its field, defaults filled in:
-    the driver was made with them, and with the rows pushed they give
-    the plain request of a state. ``template`` holds the values as the client
-    gave them, names resolved, which the client gets back, as it does a
+    The template's blanks are the tables that the pushes fill. ``params`` and
+    ``inputs`` hold the template's other values, defaults filled in, in JSON's
+    types, and the columns of the blank tables, without rows: the driver was
+    made with the other values, and with the columns pushed they give the
+    plain request of a state. ``template`` holds the values as the
+    client gave them, names resolved, which the client gets back, as it does a
     stage's template.
     """
 
@@ -112,16 +113,22 @@ class Opened(BaseModel, frozen=True):
     accumulator: str
     proposal: str
     template: Template
-    fixed: dict[str, Any]
+    params: dict[str, Any]
+    inputs: dict[str, Any]
 
 
 class Pushed(BaseModel, frozen=True):
-    """A push into an accumulator: rows of one table, in order."""
+    """
+    A push into an accumulator: rows of the table of index ``table``, as its
+    columns by side, each a list, of equal length, names resolved, a column
+    left out filled.
+    """
 
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
     table: str
-    rows: list[Row]
+    params: dict[str, list[Any]]
+    inputs: dict[str, list[Any]]
 
 
 class Persist(BaseModel, frozen=True):
@@ -155,13 +162,15 @@ _event: TypeAdapter[Event] = TypeAdapter(Event)
 
 
 def _with_refs(event: Event) -> Event:
-    """The event with references in values read as references, not dicts."""
+    """The event with references in inputs read as references, not dicts."""
     match event:
         case Submitted():
             records = tuple(
                 r.model_copy(
                     update={
-                        'request': Request(r.request.spec, as_refs(r.request.params))
+                        'request': r.request.model_copy(
+                            update={'inputs': as_refs(r.request.inputs)}
+                        )
                     }
                 )
                 if isinstance(r, NewRecord)
@@ -170,13 +179,13 @@ def _with_refs(event: Event) -> Event:
             )
             return event.model_copy(update={'records': records})
         case Opened():
-            params = as_refs(event.template.params)
-            template = dataclasses.replace(event.template, params=params)
+            inputs = as_refs(event.template.inputs)
+            template = dataclasses.replace(event.template, inputs=inputs)
             return event.model_copy(
-                update={'template': template, 'fixed': as_refs(event.fixed)}
+                update={'template': template, 'inputs': as_refs(event.inputs)}
             )
         case Pushed():
-            return event.model_copy(update={'rows': as_refs(event.rows)})
+            return event.model_copy(update={'inputs': as_refs(event.inputs)})
     return event
 
 

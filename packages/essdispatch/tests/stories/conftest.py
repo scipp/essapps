@@ -3,9 +3,10 @@
 """
 Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 
-A dataset made by ``measure`` holds a list of counts. The toy specs compute
-what the table in user-stories.md says, so that every number can be checked by
-hand.
+A dataset made by ``measure`` is a file of a list of counts. The toy specs
+compute what the table in user-stories.md says, so that every number can be
+checked by hand. Each toy workflow takes its params and inputs as instances of
+its spec's models, a file as a path, and reads the counts of each file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -15,58 +16,84 @@ is run again as its request by that client, and must give the same outputs
 from __future__ import annotations
 
 import functools
-import operator
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping
+from pathlib import Path
+from typing import Any, NewType
 
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from ess.dispatch import Backend, Client, ClientEnded, Record, Status
+from ess.dispatch import Backend, Client, ClientEnded, Record, SpecId, Status
 from ess.dispatch.log import Log
 from ess.dispatch.records import map_refs
-from ess.dispatch.testing import FakeDatasets, FakeStore, StagedFunction, kept_rows
+from ess.dispatch.testing import (
+    FakeDatasets,
+    FakeStore,
+    StagedFunction,
+    kept_rows,
+    read_dataset,
+)
 from ess.spec import (
-    Array,
     Binding,
     DatasetRef,
     DriverBinding,
-    NexusFile,
-    OpaqueFile,
+    NoParams,
     OutputRef,
     Ref,
     WorkflowSpec,
     function_binding,
-    table_fields,
 )
 from ess.spec.testing import assert_close
 
 
-def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> WorkflowSpec:
+class Data(BaseModel):
+    """Base of the toy inputs and outputs models, which hold scipp objects."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+def _spec(
+    name: str,
+    outputs: type[BaseModel],
+    *,
+    params: type[BaseModel] = NoParams,
+    inputs: type[BaseModel],
+    tables: tuple[str, ...] = (),
+) -> WorkflowSpec[Any, Any, Any]:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=f'toy spec {name}',
         params=params,
+        inputs=inputs,
         outputs=outputs,
+        tables=tables,
     )
 
 
-def _counts(values: Any) -> np.ndarray:
-    return np.asarray(values, dtype=float)
+def _counts(path: Path) -> np.ndarray:
+    return np.asarray(read_dataset(path), dtype=float)
 
 
 def _array(values: Any) -> sc.Variable:
-    return sc.array(dims=['q'], values=_counts(values))
+    return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-class Run(BaseModel):
-    """A group of a single-run spec, and a row of a table."""
+SampleFile = NewType('SampleFile', Path)
+CanFile = NewType('CanFile', Path)
+DirectBeamFile = NewType('DirectBeamFile', Path)
+VanadiumFile = NewType('VanadiumFile', Path)
+RunFile = NewType('RunFile', Path)
+BackgroundFile = NewType('BackgroundFile', Path)
+ReferenceFile = NewType('ReferenceFile', Path)
 
-    file: NexusFile
+BeamCentre = NewType('BeamCentre', sc.Variable)
+Normalization = NewType('Normalization', sc.Variable)
+IofQ = NewType('IofQ', sc.Variable)
+Masked = NewType('Masked', sc.Variable)
 
 
 class Reduction(BaseModel):
@@ -74,42 +101,38 @@ class Reduction(BaseModel):
     threshold: float = 0.0
 
 
-class Corrections(BaseModel):
-    beam_centre: Array() | None = None  # type: ignore[valid-type]
-    normalization: Array() | None = None  # type: ignore[valid-type]
-
-
 class IofQParams(BaseModel):
-    sample: Run
-    can: Run | None = None
     reduction: Reduction = Field(default_factory=Reduction)
-    corrections: Corrections = Field(default_factory=Corrections)
 
 
-class IofQOutputs(BaseModel):
-    iofq: Array()  # type: ignore[valid-type]
-    masked: Array()  # type: ignore[valid-type]
+class IofQInputs(Data):
+    sample: SampleFile
+    can: CanFile | None = None
+    beam_centre: BeamCentre | None = None
+    normalization: Normalization | None = None
 
 
-IOFQ = _spec('sans-iofq', IofQParams, IofQOutputs)
+class IofQOutputs(Data):
+    iofq: IofQ
+    masked: Masked
 
 
-def iofq(
-    sample: Mapping[str, Any],
-    can: Mapping[str, Any] | None,
-    reduction: Mapping[str, Any],
-    corrections: Mapping[str, Any],
-) -> dict[str, sc.Variable]:
-    beam_centre = corrections['beam_centre']
-    normalization = corrections['normalization']
-    counts = _counts(sample['file']) - (0.0 if can is None else _counts(can['file']))
-    masked = np.where(counts < reduction['threshold'], 0.0, counts)
-    reduced = masked - (0.0 if beam_centre is None else beam_centre.value)
-    reduced = reduced / (1.0 if normalization is None else normalization.value)
-    return {
-        'iofq': _array(reduced.reshape(reduction['bins'], -1).sum(axis=1)),
-        'masked': _array(masked),
-    }
+IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams, inputs=IofQInputs)
+
+
+def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs:
+    reduction = params.reduction
+    can = 0.0 if inputs.can is None else _counts(inputs.can)
+    counts = _counts(inputs.sample) - can
+    masked = np.where(counts < reduction.threshold, 0.0, counts)
+    centre = inputs.beam_centre
+    reduced = masked - (0.0 if centre is None else centre.value)
+    norm = inputs.normalization
+    reduced = reduced / (1.0 if norm is None else norm.value)
+    return IofQOutputs(
+        iofq=IofQ(_array(reduced.reshape(reduction.bins, -1).sum(axis=1))),
+        masked=Masked(_array(masked)),
+    )
 
 
 class ReductionV2(BaseModel):
@@ -118,10 +141,7 @@ class ReductionV2(BaseModel):
 
 
 class IofQV2Params(BaseModel):
-    sample: Run
-    can: Run | None = None
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
-    corrections: Corrections = Field(default_factory=Corrections)
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -130,28 +150,32 @@ IOFQ_V2 = WorkflowSpec(
     title='sans-iofq',
     description='toy spec sans-iofq, version 2: threshold renamed mask_below',
     params=IofQV2Params,
+    inputs=IofQInputs,
     outputs=IofQOutputs,
 )
 
 
-def iofq_v2(reduction: Mapping[str, Any], **groups: Any) -> dict[str, sc.Variable]:
-    renamed = {'bins': reduction['bins'], 'threshold': reduction['mask_below']}
-    return iofq(reduction=renamed, **groups)
+def iofq_v2(params: IofQV2Params, inputs: IofQInputs) -> IofQOutputs:
+    reduction = params.reduction
+    renamed = Reduction(bins=reduction.bins, threshold=reduction.mask_below)
+    return iofq(IofQParams(reduction=renamed), inputs)
 
 
-class BeamCentreParams(BaseModel):
-    direct_beam: Run
+class BeamCentreInputs(Data):
+    direct_beam: DirectBeamFile
 
 
-class CentreOutputs(BaseModel):
-    centre: Array()  # type: ignore[valid-type]
+class CentreOutputs(Data):
+    centre: BeamCentre
 
 
-BEAM_CENTRE = _spec('beam-centre', BeamCentreParams, CentreOutputs)
+BEAM_CENTRE = _spec('beam-centre', CentreOutputs, inputs=BeamCentreInputs)
 
 
-def beam_centre(direct_beam: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    return {'centre': sc.scalar(float(_counts(direct_beam['file']).mean()))}
+def beam_centre(params: NoParams, inputs: BeamCentreInputs) -> CentreOutputs:
+    return CentreOutputs(
+        centre=BeamCentre(sc.scalar(float(_counts(inputs.direct_beam).mean())))
+    )
 
 
 class Scaling(BaseModel):
@@ -161,158 +185,198 @@ class Scaling(BaseModel):
 
 
 class VanadiumParams(BaseModel):
-    vanadium: Run
     scaling: Scaling = Field(default_factory=Scaling)
 
 
-class VanadiumOutputs(BaseModel):
-    normalization: Array()  # type: ignore[valid-type]
+class VanadiumInputs(Data):
+    vanadium: VanadiumFile
 
 
-VANADIUM = _spec('vanadium', VanadiumParams, VanadiumOutputs)
+class VanadiumOutputs(Data):
+    normalization: Normalization
 
 
-def vanadium(
-    vanadium: Mapping[str, Any], scaling: Mapping[str, Any]
-) -> dict[str, sc.Variable]:
-    total = float(_counts(vanadium['file']).sum())
-    return {'normalization': sc.scalar(total * scaling['scale'])}
+VANADIUM = _spec(
+    'vanadium', VanadiumOutputs, params=VanadiumParams, inputs=VanadiumInputs
+)
 
 
-class RunsParams(BaseModel):
-    runs: list[Run]
+def vanadium(params: VanadiumParams, inputs: VanadiumInputs) -> VanadiumOutputs:
+    total = float(_counts(inputs.vanadium).sum())
+    return VanadiumOutputs(
+        normalization=Normalization(sc.scalar(total * params.scaling.scale))
+    )
+
+
+class RunsInputs(Data):
+    runs: list[RunFile]
 
 
 class NormalizeParams(BaseModel):
-    runs: list[Run]
     scaling: Scaling = Field(default_factory=Scaling)
 
 
-class NormalizedOutputs(BaseModel):
-    normalized: Array()  # type: ignore[valid-type]
+Normalized = NewType('Normalized', sc.Variable)
 
 
-NORMALIZE = _spec('normalize', NormalizeParams, NormalizedOutputs)
+class NormalizedOutputs(Data):
+    normalized: Normalized
 
 
-def normalize(runs: np.ndarray, scaling: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    return {'normalized': _array(runs / runs.sum() * scaling['scale'])}
+NORMALIZE = _spec(
+    'normalize',
+    NormalizedOutputs,
+    params=NormalizeParams,
+    inputs=RunsInputs,
+    tables=('runs',),
+)
 
 
-class BackgroundParams(BaseModel):
-    sample_runs: list[Run]
-    background_runs: list[Run]
+def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
+    return NormalizedOutputs(
+        normalized=Normalized(_array(runs / runs.sum() * scaling.scale))
+    )
 
 
-class BackgroundOutputs(BaseModel):
-    subtracted: Array()  # type: ignore[valid-type]
+class BackgroundInputs(Data):
+    sample_runs: list[SampleFile]
+    background_runs: list[BackgroundFile]
 
 
-BACKGROUND = _spec('background', BackgroundParams, BackgroundOutputs)
+Subtracted = NewType('Subtracted', sc.Variable)
+
+
+class BackgroundOutputs(Data):
+    subtracted: Subtracted
+
+
+BACKGROUND = _spec(
+    'background',
+    BackgroundOutputs,
+    inputs=BackgroundInputs,
+    tables=('sample_runs', 'background_runs'),
+)
 
 
 def background(
     sample_runs: np.ndarray, background_runs: np.ndarray
-) -> dict[str, sc.Variable]:
-    return {'subtracted': _array(sample_runs - background_runs)}
+) -> BackgroundOutputs:
+    return BackgroundOutputs(
+        subtracted=Subtracted(_array(sample_runs - background_runs))
+    )
 
 
-class ContributeParams(BaseModel):
-    sample: Run
+Transmission = NewType('Transmission', sc.Variable)
 
 
-class ContributeOutputs(BaseModel):
-    numerator: Array()  # type: ignore[valid-type]
-    denominator: Array()  # type: ignore[valid-type]
-    transmission: Array()  # type: ignore[valid-type]
+class Parts(Data):
+    """The numerator and the denominator of one run, summed by ``PARTS_SUM``."""
+
+    numerator: sc.Variable
+    denominator: sc.Variable
 
 
-CONTRIBUTE = _spec('sans-contribute', ContributeParams, ContributeOutputs)
+class ContributeInputs(Data):
+    sample: SampleFile
 
 
-def contribute(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    counts = _counts(sample['file'])
-    return {
-        'numerator': _array(counts),
-        'denominator': sc.scalar(float(counts.sum())),
-        'transmission': sc.scalar(float(counts[0] / counts.sum())),
-    }
+class ContributeOutputs(Data):
+    parts: Parts
+    transmission: Transmission
 
 
-class NormalizationParts(BaseModel):
-    numerator: Array()  # type: ignore[valid-type]
-    denominator: Array()  # type: ignore[valid-type]
+CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, inputs=ContributeInputs)
 
 
-class PartsSumParams(BaseModel):
-    parts: list[NormalizationParts]
+def contribute(params: NoParams, inputs: ContributeInputs) -> ContributeOutputs:
+    counts = _counts(inputs.sample)
+    return ContributeOutputs(
+        parts=Parts(
+            numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
+        ),
+        transmission=Transmission(sc.scalar(float(counts[0] / counts.sum()))),
+    )
 
 
-PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
+class PartsInputs(Data):
+    parts: list[Parts]
 
 
-def parts_sum(parts: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        name: functools.reduce(operator.add, (part[name] for part in parts))
-        for name in NormalizationParts.model_fields
-    }
+TotalNumerator = NewType('TotalNumerator', sc.Variable)
+TotalDenominator = NewType('TotalDenominator', sc.Variable)
+
+
+class PartsOutputs(Data):
+    numerator: TotalNumerator
+    denominator: TotalDenominator
+
+
+PARTS_SUM = _spec('sans-parts-sum', PartsOutputs, inputs=PartsInputs)
+
+
+def parts_sum(params: NoParams, inputs: PartsInputs) -> PartsOutputs:
+    def total(field: str) -> sc.Variable:
+        return functools.reduce(sc.add, [getattr(p, field) for p in inputs.parts])
+
+    return PartsOutputs(
+        numerator=TotalNumerator(total('numerator')),
+        denominator=TotalDenominator(total('denominator')),
+    )
 
 
 class Summing:
     """
     A driver over tables of runs, a toy ``StreamProcessor``: the counts of
     each table's runs are summed, and ``finalize`` computes the outputs from
-    the sums, by table name, and the fixed values.
+    the sums, by table name, and the fixed values by name.
     """
 
     def __init__(
         self,
-        finalize: Callable[..., dict[str, Any]],
-        tables: Sequence[str],
+        finalize: Callable[..., BaseModel],
+        spec: WorkflowSpec[Any, Any, Any],
         fixed: Mapping[str, Any],
     ) -> None:
         self._finalize = finalize
         self._fixed = fixed
-        self._sums: dict[str, Any] = dict.fromkeys(tables, 0.0)
+        self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
-    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
-        for row in rows:
-            self._sums[table] += _counts(row['file'])  # in place from the second row
+    def push(self, table: str, columns: Mapping[str, list[Any]]) -> None:
+        for path in columns[table]:
+            self._sums[table] += _counts(path)  # in place from the second row
 
-    def outputs(self) -> Mapping[str, Any]:
+    def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)
 
 
 def summing(
-    spec: WorkflowSpec, finalize: Callable[..., dict[str, Any]]
+    spec: WorkflowSpec[Any, Any, Any], finalize: Callable[..., BaseModel]
 ) -> DriverBinding:
     """The binding of a spec over tables of runs, by :class:`Summing`."""
-    tables = tuple(table_fields(spec.params))
-    return DriverBinding(spec, functools.partial(Summing, finalize, tables))
+    return DriverBinding(spec, functools.partial(Summing, finalize, spec))
 
 
-class Counts(BaseModel):
-    counts: Array()  # type: ignore[valid-type]
+Counts = NewType('Counts', sc.Variable)
 
 
-class AngleParams(BaseModel):
-    sample: Run
+class CountsOutputs(Data):
+    counts: Counts
 
 
-ANGLE = _spec('angle', AngleParams, Counts)
-VOLUME = _spec('volume', RunsParams, Counts)
+class AngleInputs(Data):
+    sample: SampleFile
 
 
-def angle(sample: Mapping[str, Any]) -> dict[str, sc.Variable]:
-    return {'counts': _array(sample['file'])}
+ANGLE = _spec('angle', CountsOutputs, inputs=AngleInputs)
+VOLUME = _spec('volume', CountsOutputs, inputs=RunsInputs, tables=('runs',))
 
 
-def volume(runs: np.ndarray) -> dict[str, sc.Variable]:
-    return {'counts': _array(runs)}
+def angle(params: NoParams, inputs: AngleInputs) -> CountsOutputs:
+    return CountsOutputs(counts=Counts(_array(_counts(inputs.sample))))
 
 
-class Volume(BaseModel):
-    data: Array()  # type: ignore[valid-type]
+def volume(runs: np.ndarray) -> CountsOutputs:
+    return CountsOutputs(counts=Counts(_array(runs)))
 
 
 class Position(BaseModel):
@@ -320,66 +384,68 @@ class Position(BaseModel):
 
 
 class CutParams(BaseModel):
-    volume: Volume
     position: Position
 
 
-class CutOutputs(BaseModel):
-    cut: Array()  # type: ignore[valid-type]
+class CutInputs(Data):
+    volume: sc.Variable
 
 
-CUT = _spec('cut', CutParams, CutOutputs)
+Cut = NewType('Cut', sc.Variable)
 
 
-def cut(
-    volume: Mapping[str, Any], position: Mapping[str, Any]
-) -> dict[str, sc.Variable]:
-    return {'cut': volume['data'][position['index']].copy()}
+class CutOutputs(Data):
+    cut: Cut
 
 
-class StitchParams(BaseModel):
-    runs: list[Run]
-    reference: Run
+CUT = _spec('cut', CutOutputs, params=CutParams, inputs=CutInputs)
 
 
-class StitchOutputs(BaseModel):
-    stitched: Array()  # type: ignore[valid-type]
+def cut(params: CutParams, inputs: CutInputs) -> CutOutputs:
+    return CutOutputs(cut=Cut(inputs.volume['q', params.position.index].copy()))
 
 
-STITCH = _spec('stitch', StitchParams, StitchOutputs)
+class StitchInputs(Data):
+    runs: list[RunFile]
+    reference: ReferenceFile
 
 
-def stitch(
-    runs: list[dict[str, Any]], reference: Mapping[str, Any]
-) -> dict[str, sc.Variable]:
-    curves = [_counts(row['file']) / _counts(reference['file']) for row in runs]
+Stitched = NewType('Stitched', sc.Variable)
+
+
+class StitchOutputs(Data):
+    stitched: Stitched
+
+
+STITCH = _spec('stitch', StitchOutputs, inputs=StitchInputs, tables=('runs',))
+
+
+def stitch(params: NoParams, inputs: StitchInputs) -> StitchOutputs:
+    reference = _counts(inputs.reference)
+    curves = [_counts(run) / reference for run in inputs.runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
-    return {'stitched': _array(np.concatenate(scaled))}
+    return StitchOutputs(stitched=Stitched(_array(np.concatenate(scaled))))
 
 
-class Result(BaseModel):
-    data: Array()  # type: ignore[valid-type]
-
-
-class ExportParams(BaseModel):
-    result: Result
+class ExportInputs(Data):
+    result: sc.Variable
 
 
 class ExportOutputs(BaseModel):
-    text: OpaqueFile
+    text: str
 
 
-EXPORT = _spec('export', ExportParams, ExportOutputs)
+EXPORT = _spec('export', ExportOutputs, inputs=ExportInputs)
 
 
-def export(result: Mapping[str, Any]) -> dict[str, str]:
-    return {'text': ','.join(str(v) for v in result['data'].values)}
+def export(params: NoParams, inputs: ExportInputs) -> ExportOutputs:
+    return ExportOutputs(text=','.join(str(v) for v in inputs.result.values))
 
 
-TOYS: dict[WorkflowSpec, Binding] = {
-    binding.spec: binding
+TOYS: dict[SpecId, Binding[Any, Any, Any]] = {
+    SpecId.of(binding.spec): binding
     for binding in [
         StagedFunction(IOFQ, iofq),
         function_binding(IOFQ_V2, iofq_v2),
@@ -396,12 +462,12 @@ TOYS: dict[WorkflowSpec, Binding] = {
         summing(VOLUME, volume),
     ]
 }
-"""The binding of each toy spec, by spec."""
+"""The binding of each toy spec, by its ID."""
 
 
 @pytest.fixture
-def datasets() -> FakeDatasets:
-    return FakeDatasets(proposal='p1')
+def datasets(tmp_path: Path) -> FakeDatasets:
+    return FakeDatasets(proposal='p1', directory=tmp_path)
 
 
 @pytest.fixture
@@ -447,11 +513,15 @@ def upgrade(
     it, and that backend once its persisted work is done.
     """
 
-    def upgrade(specs: list[WorkflowSpec] | None = None) -> Client:
+    def upgrade(specs: list[WorkflowSpec[Any, Any, Any]] | None = None) -> Client:
         for client in clients:
             client.close()
         backends[-1].close()
-        bind = list(TOYS.values()) if specs is None else [TOYS[s] for s in specs]
+        bind = (
+            list(TOYS.values())
+            if specs is None
+            else [TOYS[SpecId.of(s)] for s in specs]
+        )
         backends.append(Backend(datasets, bind, log=history, store=store))
         clients.append(Client(backends[-1], proposal='p1', submitter='anna'))
         return clients[-1]
@@ -480,7 +550,10 @@ Measure = Callable[..., DatasetRef]
 
 @pytest.fixture
 def measure(datasets: FakeDatasets) -> Measure:
-    """Make run ``n`` appear with the given counts and metadata; return its identity."""
+    """
+    Make run ``n`` appear as a file of the given counts, with the given
+    metadata; return its identity.
+    """
 
     def measure(n: int, counts: list[float], **fields: Any) -> DatasetRef:
         return datasets.measure(n, counts, **fields)
@@ -535,12 +608,15 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
     def again(record: Record) -> Record:
         def source(ref: Ref) -> Ref:
             if isinstance(ref, OutputRef) and not kept(ref):
-                return again(records[ref.record]).ref(ref.output)
+                return ref.model_copy(update={'record': again(records[ref.record]).id})
             return ref
 
         if record.id not in replays:
-            params = map_refs(record.request.params, source)
-            replays[record.id] = client.compute(record.spec, params)
+            request = record.request
+            inputs = map_refs(request.inputs, source)
+            replays[record.id] = client.compute(
+                record.spec, params=request.params, inputs=inputs
+            )
         return replays[record.id]
 
     for record in list(records.values()):

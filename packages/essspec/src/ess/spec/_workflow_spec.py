@@ -4,51 +4,86 @@
 Workflow specifications: implementation-independent workflow metadata.
 
 A :class:`WorkflowSpec` describes a workflow's user-facing interface — identity,
-display metadata, parameters, and outputs — without reference to how or where
-the workflow is computed. User interfaces (widgets, dashboards, command-line
-tools) are generated from the spec alone; the binding from a spec to an
-executor is a separate, parallel mechanism deliberately not defined here.
+display metadata, and three pydantic models — without reference to how or
+where the workflow is computed:
 
-Parameters and outputs are both pydantic model classes over one vocabulary
-(:mod:`ess.spec.parameters` for literals, :mod:`ess.spec.data`
-for files and arrays), so an output field of one workflow can feed a parameter
-field of another when their types match.
+=======  =======================  ====================  =========================
+Model    Holds                    In a request          When the workflow runs
+=======  =======================  ====================  =========================
+params   configuration: literals  the values            the same values
+inputs   data only                a reference per value the data the references name
+outputs  results                  (none)                the data the workflow returns
+=======  =======================  ====================  =========================
 
-Each field of a params model is a *group*, a flat model, or a *table*, a list of
-a flat model (see :func:`~ess.spec.data.group_fields` and
-:func:`~ess.spec.data.table_fields`); a flat model holds literals and data
-fields only. A UI shows a group as a section of a form and a table as rows and
-columns, so this one shape is all a form needs to handle. A field of an outputs
-model may also be a literal or a data field, since a reference names an output
-by its field. A spec whose groups or rows hold a model or a table, or whose
-params model has a field that is neither a group nor a table, is refused at
-construction.
+A request lives in two phases. In the *request phase*, before any data is
+read, an input is a reference (see :mod:`ess.spec.refs`); in the *call
+phase*, the backend reads the data each reference names and builds the
+inputs model from them. Params are the same in both phases; the inputs model
+exists as an instance only in the call phase, so every field of it holds the
+type it declares.
 
-A check that reads several fields of a params model is a model validator, never
-a field validator reading ``info.data``. A consumer may validate some fields
-without the others, such as the fixed values of a template, and then runs only
-the validators of those fields, so another field may be absent.
+The models are ordinary pydantic models and carry no annotations for the
+framework: what the framework needs, it reads from the field types (see
+:mod:`ess.spec.field_types`). The rules on them, checked when a spec is made:
+
+- The names of params, inputs, and outputs are distinct, and so are their
+  types, with ``| None`` and ``list`` or ``dict`` removed: the type is the
+  sciline key of the value. Two parameters of one model get a ``NewType`` each.
+- Each parameter is a *group*, a model of literals, possibly optional, or a
+  list of groups. Every value in the params model has a JSON form, and none
+  is a file: a file is always given by reference, as an input.
+- Each input is a data value, possibly optional, or a list of data values. A
+  data value is any type but a list, a dict, or a union, after its
+  ``NewType``s are removed: a file (``Path``, or a ``NewType`` of it) or an
+  object (a scipp type, a model, a ``NewType`` of either). The default of an
+  input is ``None`` or an empty list.
+- Each output is a data value, possibly optional, or a list or a dict of them.
+
+A check of one value belongs to the value's type, such as a field validator of
+a model that is a data value; the params and inputs models have no field
+validators of their own. A check across fields is a model validator. One of
+the params model runs in the request phase of every request; one of the
+inputs model runs in the call phase of a plain request only. A check across
+params and inputs is the binding's: it fails when the request runs.
+
+A *table* is a set of list fields of equal length, pushed together into an
+accumulator. Its *index* is the field that names it, such as the run; its
+other *columns* are attached to the index. ``tables`` maps each index to its
+attached columns; :meth:`WorkflowSpec.tabulate` makes a multi-run spec from a
+single-run one by naming them. A list field is a table only where ``tables``
+names it.
 
 Two forms exist, related by a one-way projection:
 
-* :class:`WorkflowSpec` is the in-process form. It holds the params and outputs
-  model *classes*, so consumers in the same process get full pydantic
-  validation, including cross-field validators.
+* :class:`WorkflowSpec` is the in-process form. It holds the model *classes*,
+  so consumers in the same process get full pydantic validation.
 * :class:`SerializedWorkflowSpec` is the plain-data form produced by
-  :meth:`WorkflowSpec.serialize`, with both models as JSON Schema. It is what a
-  service announces to remote consumers, which can render forms and validate
-  optimistically against the schema. There is intentionally no inverse:
-  validators do not round-trip through JSON Schema, and authoritative
-  validation always happens in the process owning the model classes.
+  :meth:`WorkflowSpec.serialize`. It is what a service announces to remote
+  consumers. There is intentionally no inverse: validators do not round-trip
+  through JSON Schema, and authoritative validation always happens in the
+  process owning the model classes.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Literal, Self, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from annotated_types import MinLen
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    create_model,
+    field_validator,
+    model_validator,
+)
+from pydantic.errors import PydanticInvalidForJsonSchema
+from pydantic.fields import FieldInfo
 
-from .data import group_fields, table_fields
+from .field_types import base, element, is_data_value, is_file, optional, type_name
+
+Side = Literal['params', 'inputs']
 
 
 class NoParams(BaseModel):
@@ -60,6 +95,12 @@ class NoParams(BaseModel):
     Extra fields are rejected so that sending params to such a workflow is an
     error rather than silently ignored.
     """
+
+    model_config = ConfigDict(extra='forbid')
+
+
+class NoInputs(BaseModel):
+    """Inputs model for workflows that take no data; see :class:`NoParams`."""
 
     model_config = ConfigDict(extra='forbid')
 
@@ -79,7 +120,7 @@ class _SpecFields(BaseModel, frozen=True):
         ge=1,
         description=(
             "Version of the workflow interface. Increment on any change a "
-            "consumer could observe: params model, outputs, or semantics."
+            "consumer could observe: params, inputs, outputs, or semantics."
         ),
     )
     title: str = Field(min_length=1, description="Display title of the workflow.")
@@ -95,69 +136,179 @@ class _SpecFields(BaseModel, frozen=True):
             "version is ``version``."
         ),
     )
+    tables: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description=(
+            "The tables, each as its index and the columns attached to it. A "
+            "sequence of indexes is a table each, without attached columns."
+        ),
+    )
+
+    def __hash__(self) -> int:
+        # The tables are a dict, which pydantic's hash of all fields refuses;
+        # equal specs have equal identities, so these suffice.
+        return hash((type(self), self.name, self.version))
+
+    @field_validator('tables', mode='before')
+    @classmethod
+    def _tables_of_names(cls, tables: Any) -> Any:
+        if isinstance(tables, Sequence) and not isinstance(tables, str):
+            return _as_tables(tables)
+        return tables
 
 
-class WorkflowSpec[M: BaseModel](_SpecFields, frozen=True):
+def _as_tables(
+    tables: Sequence[str] | Mapping[str, Sequence[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Tables by index; a sequence of indexes makes a table of each, alone."""
+    if isinstance(tables, Mapping):
+        return {index: tuple(attached) for index, attached in tables.items()}
+    return dict.fromkeys(tables, ())
+
+
+class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     """
     Implementation-independent specification of a workflow's user interface.
 
-    Holds identity and display metadata and the pydantic model classes defining
-    the workflow's parameters and outputs. Contains no factory, no executor, and
-    no reference to any workflow implementation; pairing a spec with something
-    that computes it is a separate mechanism. The module defining a spec must
-    therefore be importable without importing the workflow code, so that a
-    service can load and validate every spec it knows without that code.
+    Holds identity and display metadata and the pydantic model classes of the
+    workflow's params, inputs, and outputs. Contains no factory, no executor,
+    and no reference to any workflow implementation. The module defining a
+    spec must therefore be importable without importing the workflow code, so
+    that a service can load and validate every spec it knows without that
+    code.
 
-    The spec is generic over its params model ``M``, which a type checker
-    infers from ``params=``. So code that takes a spec can offer the params
-    model's signature, as ``Template.from_spec`` in ``ess.dispatch`` does
-    for pyright; mypy cannot read a signature from ``type[M]``. Code that
-    takes any spec annotates it ``WorkflowSpec[Any]``.
+    The spec is generic over its models, which a type checker infers from
+    ``params=``, ``inputs=``, and ``outputs=``, so that a binding's
+    ``compute(params: P, inputs: I) -> O`` is checked against them. Code
+    that takes any spec annotates it ``WorkflowSpec[Any, Any, Any]``.
     """
 
-    # A type checker cannot check a default against M, which only params=
-    # decides; pyright honours this mypy ignore too.
-    params: type[M] = Field(  # type: ignore[assignment]
+    # A type checker cannot check a default against P or I, which only
+    # params= and inputs= decide; pyright honours this mypy ignore too.
+    params: type[P] = Field(  # type: ignore[assignment]
         default=NoParams,
         description=(
-            "Pydantic model class defining the workflow parameters, each "
-            "field a group or a table. Defaults to :class:`NoParams` for "
-            "workflows that take no configuration."
+            "Pydantic model class of the workflow's configuration, each field "
+            "a group or a list of groups. Defaults to :class:`NoParams`."
         ),
     )
-    outputs: type[BaseModel] = Field(
+    inputs: type[I] = Field(  # type: ignore[assignment]
+        default=NoInputs,
         description=(
-            "Pydantic model class defining the workflow outputs. Field title "
-            "and description are the display metadata; array and file outputs "
-            "are data fields (see :mod:`ess.spec.data`); a field may be "
-            "optional when the workflow does not always produce it. Order is "
+            "Pydantic model class of the workflow's data, each field a data "
+            "value or a list of them. Defaults to :class:`NoInputs`."
+        ),
+    )
+    outputs: type[O] = Field(
+        description=(
+            "Pydantic model class of the workflow's results. Field title and "
+            "description are the display metadata; a field may be optional "
+            "when the workflow does not always produce it. Order is "
             "meaningful: consumers present outputs in this order and may "
             "auto-select the first, so put the primary output first."
         ),
     )
 
-    @field_validator('params', 'outputs')
-    @classmethod
-    def _check_shape(
-        cls, model: type[BaseModel], info: ValidationInfo
-    ) -> type[BaseModel]:
-        # group_fields and table_fields raise if a group or a row is not flat
-        flat = group_fields(model).keys() | table_fields(model).keys()
-        loose = [name for name in model.model_fields if name not in flat]
-        if info.field_name == 'params' and loose:
-            raise ValueError(
-                f'{model.__name__}: {loose}: each field of a params model is a '
-                'group (a flat model) or a table (a list of a flat model)'
-            )
-        return model
+    @model_validator(mode='after')
+    def _check_models(self) -> Self:
+        problems = [
+            *_distinct(self.params, self.inputs, self.outputs),
+            *_params_problems(self.params),
+            *_inputs_problems(self.inputs),
+            *_outputs_problems(self.outputs),
+            *_tables_problems(self),
+        ]
+        if problems:
+            raise ValueError(f'{self.name}: {"; ".join(problems)}')
+        return self
+
+    def side(self, name: str) -> Side:
+        """Whether ``name`` is a parameter or an input; ``KeyError`` if neither."""
+        if name in self.params.model_fields:
+            return 'params'
+        if name in self.inputs.model_fields:
+            return 'inputs'
+        raise KeyError(f'{name!r}: not a parameter or an input of {self.name}')
+
+    def field(self, name: str) -> FieldInfo:
+        """The field of a parameter or an input; ``KeyError`` if neither."""
+        return getattr(self, self.side(name)).model_fields[name]
+
+    def columns(self, index: str) -> tuple[str, ...]:
+        """The columns of the table of ``index``, the index first."""
+        return (index, *self.tables[index])
+
+    def table_of(self, name: str) -> str | None:
+        """The index of the table that holds the field ``name``, if any."""
+        for index, attached in self.tables.items():
+            if name == index or name in attached:
+                return index
+        return None
+
+    def tabulate(
+        self,
+        *,
+        name: str,
+        version: int,
+        tables: Sequence[str] | Mapping[str, Sequence[str]],
+        title: str | None = None,
+        description: str | None = None,
+    ) -> WorkflowSpec[Any, Any, O]:
+        """
+        A spec over tables, made from this one by naming the indexes of its
+        tables, each with the columns attached to it::
+
+            IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
+            SANS.tabulate(name='sans-multi', version=1,
+                          tables={'sample': ('sample_geometry',), 'can': ()})
+
+        Each field named becomes a ``list`` on its own side. An index loses
+        ``| None``: ``sample: SampleFile`` becomes ``list[SampleFile]`` with
+        at least one row, and ``can: CanFile | None`` becomes
+        ``list[CanFile]``, empty by default; an index with another default has
+        one row of it by default. An attached column keeps its type
+        as written, ``list[SampleGeometry | None]``, and has no default: the
+        framework fills a column left out with ``None`` in each row. The other
+        fields, the outputs, and the field validators of the types are as in
+        this spec. A model with a field named is made anew, without this
+        spec's model validators, which read fields whose types change; a
+        model without one is kept. The new models have no static type.
+
+        With one row in each table whose index is given, and none where it is
+        left out, a request of the new spec is a request of this one (see
+        :func:`ess.spec.testing.check_one_row`).
+        """
+        if self.tables:
+            raise ValueError(f'{self.name} has tables already')
+        named = _as_tables(tables)
+        names = {n for index, attached in named.items() for n in (index, *attached)}
+        fields = self.params.model_fields.keys() | self.inputs.model_fields.keys()
+        if unknown := sorted(names - fields):
+            raise ValueError(f'{unknown}: not parameters or inputs of {self.name}')
+        if lists := sorted(n for n in names if element(self.field(n).annotation)):
+            raise ValueError(f'{lists}: lists already, cannot be columns')
+        attached = {n for columns in named.values() for n in columns}
+        return WorkflowSpec(
+            name=name,
+            version=version,
+            title=title or self.title,
+            description=description or self.description,
+            code_revision=self.code_revision,
+            params=_tabulated(self.params, named.keys(), attached),
+            inputs=_tabulated(self.inputs, named.keys(), attached),
+            outputs=self.outputs,
+            tables=named,
+        )
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
-        Project to the plain-data form with params and outputs as JSON Schema.
+        Project to the plain-data form.
 
-        The projection is one-way: pydantic validators do not survive it, so
-        a consumer of the serialized form can validate only optimistically.
-        Authoritative validation happens where the model classes live.
+        The params schema is the params model's JSON Schema. The inputs and
+        outputs schemas are made from the field types: each value is a
+        reference to data of a type, named in ``dataType``. The projection is
+        one-way: pydantic validators do not survive it, so a consumer of the
+        serialized form can validate only optimistically.
         """
         return SerializedWorkflowSpec(
             name=self.name,
@@ -165,8 +316,10 @@ class WorkflowSpec[M: BaseModel](_SpecFields, frozen=True):
             title=self.title,
             description=self.description,
             code_revision=self.code_revision,
+            tables=self.tables,
             params_schema=self.params.model_json_schema(),
-            outputs_schema=self.outputs.model_json_schema(),
+            inputs_schema=_data_schema(self.inputs),
+            outputs_schema=_data_schema(self.outputs),
         )
 
 
@@ -174,20 +327,211 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     """
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
-    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. Params
-    and outputs are represented as JSON Schema, sufficient for form generation
-    and optimistic validation but not for authoritative validation — that
-    remains with the process owning the model classes. Data fields carry a
-    ``dataField`` key with their format and array structure. A group refers
-    (``$ref``) to its model under ``$defs``, through ``anyOf`` with ``null`` if
-    it is optional; a table field is an array whose ``items`` refer to the row
-    model. The model's properties carry the ``dataField`` key of its data
-    fields.
+    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A form
+    shows the params schema, and a picker per input the inputs schema: each
+    input property names the type of the data it takes in ``dataType``, a list
+    field as an array of them, an optional one with ``null`` in ``anyOf``.
     """
 
     params_schema: dict[str, Any] = Field(
         description="JSON Schema of the workflow's params model."
     )
-    outputs_schema: dict[str, Any] = Field(
-        description="JSON Schema of the workflow's outputs model."
+    inputs_schema: dict[str, Any] = Field(
+        description="Schema of the workflow's inputs, by the type of each value."
     )
+    outputs_schema: dict[str, Any] = Field(
+        description="Schema of the workflow's outputs, by the type of each value."
+    )
+
+
+def _core(annotation: Any) -> Any:
+    """The type of one value of a field: ``| None``, list, and dict removed."""
+    tp, _ = optional(annotation)
+    if (item := element(tp)) is not None:
+        tp, _ = optional(item)
+    return tp
+
+
+def _distinct(*models: type[BaseModel]) -> list[str]:
+    """Refuse a name, or a type, of two fields of the spec."""
+    problems = []
+    names: dict[str, str] = {}
+    keys: dict[Any, str] = {}
+    for model in models:
+        for name, field in model.model_fields.items():
+            if (other := names.setdefault(name, model.__name__)) != model.__name__:
+                problems.append(f'{name}: a field of both {other} and {model.__name__}')
+            core = _core(field.annotation)
+            if (first := keys.setdefault(core, name)) != name:
+                problems.append(
+                    f'{first} and {name}: both of type {type_name(core)}; give '
+                    'each a NewType of its own'
+                )
+    return problems
+
+
+def _value_type(annotation: Any) -> Any | None:
+    """
+    ``X`` if ``annotation`` is ``X``, ``X | None``, ``list[X]``, or
+    ``list[X | None]``, else ``None``.
+    """
+    tp, is_optional = optional(annotation)
+    if (item := element(tp)) is None:
+        return tp
+    if get_origin(tp) is not list or is_optional:
+        return None
+    return optional(item)[0]
+
+
+def _params_problems(model: type[BaseModel]) -> list[str]:
+    problems = []
+    for name, field in model.model_fields.items():
+        group = base(_value_type(field.annotation))
+        if not (isinstance(group, type) and issubclass(group, BaseModel)):
+            problems.append(
+                f'{model.__name__}.{name}: a parameter is a group, a model of '
+                'literals, possibly optional, or a list of groups'
+            )
+        elif _holds_file(group):
+            problems.append(
+                f'{model.__name__}.{name}: a parameter holds no file; a file is '
+                'an input'
+            )
+    if not problems:
+        try:
+            model.model_json_schema()
+        except PydanticInvalidForJsonSchema as error:
+            problems.append(
+                f'{model.__name__}: every parameter has a JSON form: {error}'
+            )
+    return problems
+
+
+def _holds_file(tp: Any) -> bool:
+    """Whether a type, or a field of a model in it, is a file."""
+    tp = base(tp)
+    if is_file(tp):
+        return True
+    if isinstance(tp, type) and issubclass(tp, BaseModel):
+        return any(_holds_file(f.annotation) for f in tp.model_fields.values())
+    return any(_holds_file(arg) for arg in getattr(tp, '__args__', ()))
+
+
+def _inputs_problems(model: type[BaseModel]) -> list[str]:
+    problems = []
+    for name, field in model.model_fields.items():
+        tp = _value_type(field.annotation)
+        if tp is None or not is_data_value(tp):
+            problems.append(
+                f'{model.__name__}.{name}: an input is a data value, possibly '
+                'optional, or a list of data values'
+            )
+        elif not field.is_required():
+            default = field.get_default(call_default_factory=True)
+            if not (default is None or (isinstance(default, list) and not default)):
+                problems.append(
+                    f'{model.__name__}.{name}: the default of an input is None '
+                    'or an empty list'
+                )
+    return problems
+
+
+def _outputs_problems(model: type[BaseModel]) -> list[str]:
+    return [
+        f'{model.__name__}.{name}: an output is a data value, possibly '
+        'optional, or a list or a dict of them'
+        for name, field in model.model_fields.items()
+        if not is_data_value(_core(field.annotation))
+    ]
+
+
+def _tables_problems(spec: WorkflowSpec[Any, Any, Any]) -> list[str]:
+    problems = []
+    seen: set[str] = set()
+    for index, attached in spec.tables.items():
+        for name in (index, *attached):
+            if name in seen:
+                problems.append(f'{name}: a column of two tables')
+            seen.add(name)
+            try:
+                annotation = spec.field(name).annotation
+            except KeyError as error:
+                problems.append(error.args[0])
+                continue
+            if get_origin(annotation) is not list:
+                problems.append(f'{name}: a column of a table is a list')
+            elif name == index and optional(element(annotation))[1]:
+                problems.append(f'{index}: the index of a table holds no None')
+    return problems
+
+
+def _tabulated(
+    model: type[BaseModel], indexes: Sequence[str], attached: set[str]
+) -> type[BaseModel]:
+    """``model`` with the fields named as columns, or itself if it has none."""
+    if not (model.model_fields.keys() & {*indexes, *attached}):
+        return model
+    fields: dict[str, Any] = {}
+    for name, info in model.model_fields.items():
+        meta = {'title': info.title, 'description': info.description}
+        if name in indexes:
+            core, _ = optional(info.annotation)
+            if info.is_required():
+                fields[name] = (list[core], Field(min_length=1, **meta))
+            else:
+                rows = _default_rows(info)
+                fields[name] = (list[core], Field(default_factory=rows, **meta))
+        elif name in attached:
+            fields[name] = (list[info.annotation], Field(**meta))
+        else:
+            fields[name] = (info.annotation, info)
+    return create_model(
+        f'Tabulated{model.__name__}', __config__=model.model_config, **fields
+    )
+
+
+def _default_rows(info: FieldInfo) -> Callable[[], list[Any]]:
+    """
+    The default of an index: no row for a default of ``None``, or one row of
+    the default, so that the one-row symmetry holds for an index left out.
+    """
+
+    def rows() -> list[Any]:
+        default = info.get_default(call_default_factory=True, validated_data={})
+        return [] if default is None else [default]
+
+    return rows
+
+
+def _data_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """A schema of a model of data values, by the type of each value."""
+    properties = {}
+    for name, field in model.model_fields.items():
+        prop = _data_type_schema(field.annotation)
+        if field.title is not None:
+            prop['title'] = field.title
+        if field.description is not None:
+            prop['description'] = field.description
+        if not field.is_required():
+            prop['default'] = field.get_default(call_default_factory=True)
+        for min_len in (m for m in field.metadata if isinstance(m, MinLen)):
+            prop['minItems'] = min_len.min_length
+        properties[name] = prop
+    required = [n for n, f in model.model_fields.items() if f.is_required()]
+    return {
+        'title': model.__name__,
+        'type': 'object',
+        'properties': properties,
+        'required': required,
+    }
+
+
+def _data_type_schema(annotation: Any) -> dict[str, Any]:
+    tp, is_optional = optional(annotation)
+    if (item := element(tp)) is None:
+        schema: dict[str, Any] = {'dataType': type_name(tp)}
+    elif get_origin(tp) is list:
+        schema = {'type': 'array', 'items': _data_type_schema(item)}
+    else:
+        schema = {'type': 'object', 'additionalProperties': _data_type_schema(item)}
+    return {'anyOf': [schema, {'type': 'null'}]} if is_optional else schema

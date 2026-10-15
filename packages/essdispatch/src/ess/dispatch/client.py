@@ -43,7 +43,7 @@ from ess.spec import AccumulatorRef, Binding, DatasetRef, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
-from .records import Record, Request, Row, SpecId, Template, as_values
+from .records import Record, Request, SpecId, Template, as_values
 from .store import Store
 
 
@@ -163,47 +163,60 @@ class Accumulator:
         template: Template,
         accumulator_id: str,
         outputs: tuple[str, ...],
-        push: Callable[[str, Sequence[Row]], None],
+        push: Callable[[dict[str, list[Any]]], None],
     ) -> None:
         self.template = template
         self.id = accumulator_id
         self.outputs = outputs
         self._push = push
 
-    def push(self, table: str, rows: Sequence[Row | BaseModel]) -> None:
+    def push(self, **columns: Sequence[Any]) -> None:
         """
-        Add rows to a table of the template, each as a request over the table
-        takes it, a row model or a dict; the rows enter one state, in order. A
-        table that is not one of the template's blanks is refused, and so is a
-        push of no rows.
+        Add rows to a blank table of the template: its index and the columns
+        attached to it, by name, as lists of equal length, the rows entering
+        one state in order::
 
-        One push is one push into the binding's driver. Rows of different
-        tables have nothing to do with each other, so a push names one table;
-        rows that belong together are one row of a model with several fields.
+            acc.push(sample=[dataset(run=611), dataset(run=612)])
+            acc.push(sample=[dataset(run=613)], sample_geometry=[geometry])
 
-        A row names datasets or references outputs of records, never an
-        accumulator. It is checked by its table's row model; rules on a whole
-        table, such as its length, are checked when a state is pinned. So a
-        table with a maximum length cannot be pinned again once a push
-        exceeds it, since no row can be removed. A record that has failed or
-        was cancelled is refused, and one that is pending is not waited for.
-        The push returns once it is logged. The backend adds the pushes one at
-        a time, in the order logged, each once the records its rows reference
-        have completed and the readers of the state before it are done (see
-        :mod:`ess.dispatch.backend`).
+        A parameter is given as a group, a model or a dict, and an input by
+        reference. A column left out is ``None`` in each row if its type
+        allows it, and a column without a default is given in every push. A
+        push names one table, through its index: a column without its index
+        is refused, and so are an index of a table the template fixes, an
+        index value the table holds already or that the push repeats, and a
+        push of no rows. Index values are compared as the record holds them:
+        a dataset by its identity, a reference to an output by record,
+        output, and key, and a literal by equality.
 
-        If adding fails, or a record has not completed, the accumulator stops
-        for good: the records of states it did not reach fail, and so do the
-        requests that read them, and every later push and pin is refused. The
-        reason names the step, such as ``push 0`` for the first push. A
-        controller that should skip a run whose reduction failed waits for
-        that record before it pushes.
+        One push is one push into the binding's driver. A push references
+        datasets or outputs of records, never an accumulator. Each value is
+        checked by its column's type; rules on the whole state, such as the
+        params model's own validators and a row in a table with a required
+        index, are checked when a state is pinned. A record that has failed
+        or was cancelled is refused, and one that is pending is not waited
+        for. The push returns once it is logged. The backend adds the pushes
+        one at a time, in the order logged, each once the records it
+        references have completed and the readers of the state before it are
+        done (see :mod:`ess.dispatch.backend`).
+
+        If adding fails, such as for data that fail their column's check, or
+        a record has not completed, the accumulator stops for good: the
+        records of states it did not reach fail, and so do the requests that
+        read them, and every later push and pin is refused. The reason names
+        the step, such as ``push 0`` for the first push. A controller that
+        should skip a run whose reduction failed waits for that record before
+        it pushes.
         """
-        if isinstance(rows, BaseModel | Mapping) or not isinstance(rows, Sequence):
-            raise TypeError(
-                f'rows is a list of rows of {table}, such as [row], not {rows!r}'
-            )
-        self._push(table, as_values(list(rows)))
+        for name, column in columns.items():
+            if isinstance(column, str | BaseModel | Mapping) or not isinstance(
+                column, Sequence
+            ):
+                raise TypeError(
+                    f'{name}: a column is a list of values, such as [value], '
+                    f'not {column!r}'
+                )
+        self._push({name: as_values(list(c)) for name, c in columns.items()})
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -281,8 +294,9 @@ class Client:
     def submit(
         self,
         what: Any,
-        params: dict[str, Any] | BaseModel | None = None,
         *,
+        params: Mapping[str, Any] | BaseModel | None = None,
+        inputs: Mapping[str, Any] | None = None,
         label: str | None = None,
         member: str | None = None,
         persist: bool | Sequence[str] = False,
@@ -290,18 +304,27 @@ class Client:
         """
         Submit a spec or a stage with values, or requests.
 
-        Requests may be one, a list, or a dict. The records come back pending,
-        in the shape given. Under a label, the keys of a dict become the
-        members of their records. An accumulator is not submitted: a request
-        reads it through :meth:`Accumulator.ref`.
+        A spec takes its params, an instance of its params model or a dict of
+        its fields, and its inputs, a reference for each input, or a list of
+        references for a list field::
+
+            client.submit(IOFQ, params=IofQParams(reduction=Reduction(bins=4)),
+                          inputs={'sample': dataset(run=60339)})
+
+        A stage takes the values of its blanks the same way. Requests may be
+        one, a list, or a dict. The records come back pending, in the shape
+        given. Under a label, the keys of a dict become the members of their
+        records. An accumulator is not submitted: a request reads it through
+        :meth:`Accumulator.ref`.
 
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError`` naming the field at fault, after the request's
         key or index if several are given: an invalid value, an unknown spec
-        or dataset, a reference the client may not read, or an output that
-        does not fit its field. Then no request of the call is submitted; the
-        records of earlier calls stay.
+        or dataset, a value that is not a reference where an input takes
+        one, a reference the client may not read, or one whose data do not
+        fit its field. Then no request of the call is submitted; the records
+        of earlier calls stay.
 
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
@@ -311,16 +334,16 @@ class Client:
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
-            what = Request(what, params)
+            what = Request(what, params=params, inputs=inputs)
         elif isinstance(what, Stage):
-            stage, what = what.id, what.template.fill(params or {})
+            stage, what = what.id, what.template.fill(params=params, inputs=inputs)
         elif isinstance(what, Accumulator):
             raise TypeError(
                 'an accumulator is read by referencing it in a request: '
                 'accumulator.ref(output)'
             )
-        elif params is not None:
-            raise TypeError('params go with a spec or a stage')
+        elif params is not None or inputs is not None:
+            raise TypeError('params and inputs go with a spec or a stage')
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -383,11 +406,11 @@ class Client:
         """
         An accumulator of the template; the client keeps it until it releases it.
 
-        The template's blanks are one or more of the spec's table fields. A
-        template a request would refuse is refused here, with the blanks left
-        out, and so is one that references an accumulator, and one whose
-        spec's binding makes no accumulators. The driver gets each value typed
-        by its own field and that field's validators; the
+        The template's blanks are one or more of the spec's tables, each named
+        by its index. A template a request would refuse is refused here, with
+        the blanks left out, and so is one that references an accumulator,
+        and one whose spec's binding makes no accumulators. The driver gets
+        each value validated by its own field, an input as its data; the
         accumulator's template holds the values as the backend resolved them.
         A record the template references that has failed or was cancelled is
         refused, and one that is pending is not waited for. Opening returns
@@ -417,7 +440,7 @@ class Client:
         freeze is refused, and the accumulator takes pushes again, if the
         plain request of the state would be refused; a push made meanwhile
         waits for that answer. If the record fails or is cancelled, the
-        accumulator can be read and frozen again. A template or a row, which
+        accumulator can be read and frozen again. A template or a push, which
         may not reference an accumulator, references this record instead.
         """
         return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
@@ -524,7 +547,7 @@ class Client:
         upstream: dict[str, Record] = {}
         todo = deque([request])
         while todo:
-            for ref in todo.popleft().inputs():
+            for ref in todo.popleft().upstream():
                 if ref.record not in upstream:
                     upstream[ref.record] = self._backend.record(ref.record, self._id)
                     todo.append(upstream[ref.record].request)

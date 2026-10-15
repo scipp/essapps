@@ -5,19 +5,18 @@ Checks of the symmetries that a workflow author promises, for a package's tests.
 
 Each check computes the same outputs in two ways and compares them, so it
 needs no known result. With a single-run binding ``single`` (a
-``PipelineBinding``), a multi-run binding ``multi`` (a ``DriverBinding``) of
-one reduction, and the function ``make_driver`` that ``multi`` makes its
-drivers with::
+``PipelineBinding``) of ``IOFQ``, a multi-run binding ``multi`` (a
+``DriverBinding``) of ``IOFQ_MULTI = IOFQ.tabulate(...)``, and the function
+``make_driver`` that ``multi`` makes its drivers with::
 
-    reduction = {'reduction': {'bins': 2}}
-    check_one_row(
-        single,
-        multi,
-        {'sample': {'file': run_101}, 'can': {'file': run_110}, **reduction},
-        {'sample': [{'file': run_101}], 'can': [{'file': run_110}], **reduction},
+    params = IofQParams(reduction=Reduction(bins=2))
+    check_one_row(single, multi, params, IofQInputs(sample=run_101, can=run_110))
+    check_caching(single, {'sample': run_101}, [{'reduction': ...}, ...])
+    check_arrival_and_order(
+        make_driver,
+        {'reduction': params.reduction},
+        {'sample': {'sample': [run_101, run_102]}, 'can': {'can': [run_110]}},
     )
-    check_caching(single, {'sample': ..., 'can': ...}, [{'reduction': ...}, ...])
-    check_arrival_and_order(make_driver, reduction, {'sample': [...], 'can': [...]})
 
 Values are those the binding receives: data read. Outputs are compared up to
 ``rtol``, since adding in another order rounds differently, with
@@ -34,35 +33,72 @@ import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
-from .binding import Binding, Driver, StageBinding
+from pydantic import BaseModel
 
-Row = Mapping[str, Any]
+from ._workflow_spec import WorkflowSpec
+from .binding import Binding, Driver, StageBinding, fixed_values
+
+Columns = Mapping[str, Sequence[Any]]
+"""A table's columns by name, the index among them, as a push gives them."""
 
 
 def check_one_row(
-    single: Binding,
-    multi: Binding,
-    single_values: Mapping[str, Any],
-    multi_values: Mapping[str, Any],
+    single: Binding[Any, Any, Any],
+    multi: Binding[Any, Any, Any],
+    params: BaseModel,
+    inputs: BaseModel,
     *,
     rtol: float = 1e-12,
 ) -> None:
     """
-    One-row: the multi-run binding with one row per table gives the outputs of
-    the single-run binding.
+    One-row: the binding of a tabulated spec, with one row in each table
+    whose index is given and none where it is left out, gives the outputs of
+    the binding of the spec tabulated.
 
-    ``multi_values`` are ``single_values`` with each run's group as a table of
-    one row of the same model.
+    ``params`` and ``inputs`` are a request of ``single``, instances of its
+    spec's models; the request of ``multi`` is made from them.
     """
-    expected = single.compute(single_values)
-    actual = multi.compute(multi_values)
-    _check_no_shared_memory(expected, single_values, where='one-row, single-run')
-    _check_no_shared_memory(actual, multi_values, where='one-row, multi-run')
+    multi_params, multi_inputs = one_row(multi.spec, params, inputs)
+    expected = single.compute(params, inputs)
+    actual = multi.compute(multi_params, multi_inputs)
+    _check_no_shared_memory(expected, (params, inputs), where='one-row, single-run')
+    _check_no_shared_memory(
+        actual, (multi_params, multi_inputs), where='one-row, multi-run'
+    )
     assert_close(actual, expected, rtol=rtol, where='one-row')
 
 
+def one_row(
+    spec: WorkflowSpec[Any, Any, Any], params: BaseModel, inputs: BaseModel
+) -> tuple[BaseModel, BaseModel]:
+    """
+    The request of the tabulated ``spec`` with one row in each table whose
+    index is given in the request ``params`` and ``inputs`` of the spec
+    tabulated, and none where it is ``None``.
+    """
+    values = {**dict(params), **dict(inputs)}
+    for index in spec.tables:
+        rows = 0 if values[index] is None else 1
+        for name in spec.columns(index):
+            values[name] = [values[name]] * rows
+    return _models(spec, values)
+
+
+def _models(
+    spec: WorkflowSpec[Any, Any, Any], values: Mapping[str, Any]
+) -> tuple[BaseModel, BaseModel]:
+    """Instances of the spec's params and inputs models from ``values``, by name."""
+    sides: dict[str, dict[str, Any]] = {'params': {}, 'inputs': {}}
+    for name, value in values.items():
+        sides[spec.side(name)][name] = value
+    return (
+        spec.params.model_validate(sides['params']),
+        spec.inputs.model_validate(sides['inputs']),
+    )
+
+
 def check_caching(
-    binding: StageBinding,
+    binding: StageBinding[Any, Any, Any],
     fixed: Mapping[str, Any],
     calls: Sequence[Mapping[str, Any]],
     *,
@@ -72,15 +108,20 @@ def check_caching(
     Caching: each call through one stage gives the outputs of the plain
     request with the same values.
 
-    The stage is made with ``fixed`` and the parameters of the calls as
-    blanks, and called in the order given. Repeat a call after others, as in
-    bins 50, 100, and 50 again, to find a stage whose calls change what it
-    holds.
+    The stage is made with ``fixed`` and the names of the first call as
+    blanks, and called in the order given. Values are by name, as
+    ``make_stage`` takes them. Repeat a call after others, as in bins 50,
+    100, and 50 again, to find a stage whose calls change what it holds.
     """
+    spec = binding.spec
     call = binding.make_stage(fixed, tuple(calls[0]))
     for n, values in enumerate(calls, start=1):
-        given = {**fixed, **values}
-        expected = binding.compute(given)
+        given = fixed_values(spec, {**fixed, **values}, ())
+        flat: dict[str, Any] = {}
+        for key, value in given.items():
+            flat.update(value if key in spec.tables else {key: value})
+        params, inputs = _models(spec, flat)
+        expected = binding.compute(params, inputs)
         actual = call(values)
         where = f'caching, call {n} {values}'
         _check_no_shared_memory(expected, given, where=f'{where}, plain')
@@ -89,9 +130,9 @@ def check_caching(
 
 
 def check_arrival_and_order(
-    make_driver: Callable[[Mapping[str, Any]], Driver],
+    make_driver: Callable[[Mapping[str, Any]], Driver[Any]],
     fixed: Mapping[str, Any],
-    tables: Mapping[str, Sequence[Row]],
+    tables: Mapping[str, Columns],
     *,
     rtol: float = 1e-12,
 ) -> None:
@@ -100,17 +141,17 @@ def check_arrival_and_order(
     push of each table's rows so far gives.
 
     ``make_driver`` makes a driver from ``fixed``, the values that are not
-    tables, as for a ``DriverBinding``. ``tables`` holds the rows of each
-    table. The rows are pushed into a new driver for each of several
-    schedules, each table's rows in their order: one push per table, the
-    tables reversed, one row per push table by table, and one row per push
-    alternating between the tables. Every schedule ends with the same rows,
-    so arrival in all of them is order too.
+    tables, as for a ``DriverBinding``. ``tables`` holds the columns of each
+    table by its index. The rows are pushed into a new driver for each of
+    several schedules, each table's rows in their order: one push per table,
+    the tables reversed, one row per push table by table, and one row per
+    push alternating between the tables. Every schedule ends with the same
+    rows, so arrival in all of them is order too.
 
     The expected outputs come from a new driver with one push per table that
     has rows so far. A state whose expected outputs raise is not read, since
     a driver may refuse a state; the state with every row is always read. The
-    check fails if a push modifies the rows it was given.
+    check fails if a push modifies the values it was given.
 
     The check compares the driver with itself under other push schedules, so
     it does not prove that the outputs are right. Only a comparison with an
@@ -120,12 +161,16 @@ def check_arrival_and_order(
     pristine = copy.deepcopy(tables)
     for name, schedule in _schedules(tables):
         driver = make_driver(fixed)
-        pushed: dict[str, list[Row]] = {t: [] for t in tables}
+        pushed: dict[str, int] = dict.fromkeys(tables, 0)
         for n, (table, start, stop) in enumerate(schedule, start=1):
-            driver.push(table, list(tables[table][start:stop]))
-            pushed[table].extend(pristine[table][start:stop])
+            driver.push(table, _rows(tables[table], start, stop))
+            pushed[table] = stop
             try:
-                expected = _one_push_per_table(make_driver, fixed, pushed)
+                expected = _one_push_per_table(
+                    make_driver,
+                    fixed,
+                    {t: _rows(pristine[t], 0, upto) for t, upto in pushed.items()},
+                )
             except Exception:
                 if n == len(schedule):
                     raise
@@ -133,43 +178,53 @@ def check_arrival_and_order(
             where = f'arrival, {name}, state {n} of pushes {schedule[:n]}'
             assert_close(driver.outputs(), expected, rtol=rtol, where=where)
         assert_close(
-            tables, pristine, rtol=0.0, where=f'rows after pushing them, {name}'
+            tables, pristine, rtol=0.0, where=f'values after pushing them, {name}'
         )
 
 
+def _rows(columns: Columns, start: int, stop: int) -> dict[str, list[Any]]:
+    """Rows ``start`` to ``stop`` of a table, as its columns."""
+    return {name: list(column[start:stop]) for name, column in columns.items()}
+
+
+def _length(columns: Columns) -> int:
+    return len(next(iter(columns.values())))
+
+
 def _one_push_per_table(
-    make_driver: Callable[[Mapping[str, Any]], Driver],
+    make_driver: Callable[[Mapping[str, Any]], Driver[Any]],
     fixed: Mapping[str, Any],
-    tables: Mapping[str, Sequence[Row]],
-) -> Mapping[str, Any]:
+    tables: Mapping[str, Columns],
+) -> Any:
     driver = make_driver(fixed)
-    for table, rows in tables.items():
-        if rows:
-            driver.push(table, copy.deepcopy(list(rows)))
+    for table, columns in tables.items():
+        if _length(columns):
+            driver.push(table, copy.deepcopy(dict(columns)))
     return driver.outputs()
 
 
 def _schedules(
-    tables: Mapping[str, Sequence[Row]],
+    tables: Mapping[str, Columns],
 ) -> list[tuple[str, list[tuple[str, int, int]]]]:
     """
     Named push schedules over the rows of ``tables``, each push as its table
     and the slice of its rows; schedules that push the same are listed once.
     """
-    names = [t for t in tables if tables[t]]
-    longest = max((len(rows) for rows in tables.values()), default=0)
+    lengths = {t: _length(columns) for t, columns in tables.items()}
+    names = [t for t in tables if lengths[t]]
+    longest = max(lengths.values(), default=0)
 
     def whole(order: Sequence[str]) -> list[tuple[str, int, int]]:
-        return [(t, 0, len(tables[t])) for t in order]
+        return [(t, 0, lengths[t]) for t in order]
 
     candidates = {
         'one push per table': whole(names),
         'one push per table, reversed': whole(names[::-1]),
         'one row per push, table by table': [
-            (t, i, i + 1) for t in names for i in range(len(tables[t]))
+            (t, i, i + 1) for t in names for i in range(lengths[t])
         ],
         'one row per push, alternating tables': [
-            (t, i, i + 1) for i in range(longest) for t in names if i < len(tables[t])
+            (t, i, i + 1) for i in range(longest) for t in names if i < lengths[t]
         ],
     }
     unique: dict[str, tuple[str, list[tuple[str, int, int]]]] = {}
@@ -200,7 +255,9 @@ def _check_no_shared_memory(outputs: Any, values: Any, *, where: str) -> None:
 
 def _arrays(value: Any, at: str) -> Iterator[tuple[str, Any]]:
     """The numpy arrays that hold ``value``, recursively, each with its place."""
-    if isinstance(value, Mapping):
+    if isinstance(value, BaseModel):
+        yield from _arrays(dict(value), at)
+    elif isinstance(value, Mapping):
         for key, item in value.items():
             yield from _arrays(item, f'{at}[{key!r}]')
     elif isinstance(value, list | tuple):
@@ -241,9 +298,14 @@ def assert_close(
     Mappings, lists, and tuples are compared element by element, scipp objects
     and arrays up to ``rtol``, floats too, and other values by equality. The
     message starts with ``where``, followed by the keys and indices of the
-    value that differs.
+    value that differs. Models are compared field by field, and must be of
+    one type.
     """
-    if isinstance(expected, Mapping):
+    if isinstance(expected, BaseModel):
+        if type(actual) is not type(expected):
+            raise AssertionError(f'{where}: {actual!r}, expected {expected!r}')
+        assert_close(dict(actual), dict(expected), rtol=rtol, where=where)
+    elif isinstance(expected, Mapping):
         if not isinstance(actual, Mapping) or actual.keys() != expected.keys():
             got = sorted(actual) if isinstance(actual, Mapping) else actual
             raise AssertionError(f'{where}: {got!r}, expected {sorted(expected)!r}')

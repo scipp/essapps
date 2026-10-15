@@ -3,11 +3,10 @@
 """
 Bindings: what the backend calls to compute a spec's requests.
 
-A binding is what the backend calls to compute a spec's requests. The
-workflow author makes it from a pipeline, a driver, or a function, each for
-one spec::
+The workflow author makes a binding from a pipeline, a driver, or a function,
+each for one spec::
 
-    single = PipelineBinding(IOFQ, pipeline, params=..., outputs=...)
+    single = PipelineBinding(IOFQ, make_pipeline)
     multi = DriverBinding(IOFQ_MULTI, make_driver)
     export = function_binding(EXPORT, export_csv)
 
@@ -24,13 +23,20 @@ binding                plain request  stage           accumulator
 
 The protocols name what the backend calls: :class:`Binding` for a plain
 request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
-for an accumulator. Values pass by parameter name, with data read: a group as
-a dict of its fields, and a table as a list of such dicts, its rows. Outputs
-come back by name.
+for an accumulator. A plain request passes model instances,
+``compute(params, inputs) -> outputs``. A stage or an accumulator is made from
+some values only, so these pass by name: a parameter as its group, an input
+as its data, and a table under its index's name as its columns, by name, as
+lists of equal length::
 
-A *driver* (:class:`Driver`) is the object behind an accumulator: rows are
-pushed into it, one table at a time, and it gives the outputs over the rows so
-far. The workflow package writes it; only a driver accumulates.
+    {'reduction': Reduction(bins=2), 'beam_centre': centre,
+     'sample': {'sample': [path_611, path_612], 'sample_geometry': [None, g]}}
+
+An output that the spec declares optional is left out by being ``None``.
+
+A *driver* (:class:`Driver`) is the object behind an accumulator: tables are
+pushed into it, and it gives the outputs over the rows so far. The workflow
+package writes it; only a driver accumulates.
 """
 
 from __future__ import annotations
@@ -39,51 +45,48 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
-from .data import table_fields
 
-StageCall = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+type StageCall[O] = Callable[[Mapping[str, Any]], O]
 """What ``make_stage`` returns: the outputs from the values of the blanks."""
 
 
 @runtime_checkable
-class Binding(Protocol):
+class Binding[P: BaseModel, I: BaseModel, O: BaseModel](Protocol):
     @property
-    def spec(self) -> WorkflowSpec[Any]:
+    def spec(self) -> WorkflowSpec[P, I, O]:
         """The spec whose requests the binding computes."""
         ...
 
-    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+    def compute(self, params: P, inputs: I) -> O:
         """
-        The outputs of a plain request, by name.
-
-        ``params`` holds each parameter's value by name, with data read. A
-        parameter left out takes the spec's default. An output that the spec
-        declares optional may be left out.
+        The outputs of a plain request.
 
         It may be called from several threads at once, and does not modify
-        ``params``.
+        ``params`` or ``inputs``.
         """
         ...
 
 
 @runtime_checkable
-class StageBinding(Binding, Protocol):
+class StageBinding[P: BaseModel, I: BaseModel, O: BaseModel](
+    Binding[P, I, O], Protocol
+):
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> StageCall:
+    ) -> StageCall[O]:
         """
         A callable that computes the outputs from the values of ``blanks``,
         by name, with the values of ``fixed``.
 
         The callable gets the values of the blanks only, and gives what
         :meth:`compute` gives with the same values. It may compute what
-        depends only on ``fixed`` once, and hold it. A parameter in neither
-        ``fixed`` nor ``blanks`` takes the spec's default. An implementation
-        raises ``ValueError`` for ``fixed`` and ``blanks`` that do not fit
-        the spec.
+        depends only on ``fixed`` once, and hold it. A parameter or an input
+        in neither ``fixed`` nor ``blanks`` takes the spec's default. An
+        implementation raises ``ValueError`` for ``fixed`` and ``blanks``
+        that do not fit the spec.
 
         This method and the callable may be called from several threads at
         once, and neither modifies the values it is given. The callable may
@@ -93,9 +96,9 @@ class StageBinding(Binding, Protocol):
         ...
 
 
-class Driver(Protocol):
+class Driver[O: BaseModel](Protocol):
     """
-    The object behind an accumulator: rows are pushed into it, and it gives
+    The object behind an accumulator: tables are pushed into it, and it gives
     the outputs over the rows so far.
 
     The caller calls :meth:`push` and :meth:`outputs` from one thread at a
@@ -106,12 +109,12 @@ class Driver(Protocol):
       the rows were grouped into pushes, and whatever the order of pushes
       into different tables.
     - Within a table, the rows keep the order in which they were pushed.
-    - :meth:`push` does not modify a row. A driver that adds in place copies
-      the first contribution, so that adding never changes a value that
-      another record returned.
+    - :meth:`push` does not modify a value it is given. A driver that adds in
+      place copies the first contribution, so that adding never changes a
+      value that another record returned.
     - :meth:`outputs` may share memory with what the driver holds; the
       caller reads them before the next push.
-    - An output that the spec declares optional may be left out.
+    - An output that the spec declares optional may be ``None``.
     - A driver may refuse a state, such as one with no can row yet, by
       raising in :meth:`outputs`; later pushes may make the state valid.
 
@@ -119,28 +122,35 @@ class Driver(Protocol):
     of its rows.
     """
 
-    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
-        """Add rows of the table named, in order; ``rows`` is never empty."""
+    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+        """
+        Add rows to the table of index ``table``, in order: ``columns`` holds
+        the index and each column attached to it, by name, as lists of equal
+        length, never empty.
+        """
         ...
 
-    def outputs(self) -> Mapping[str, Any]:
-        """The outputs over the rows pushed so far, by name."""
+    def outputs(self) -> O:
+        """The outputs over the rows pushed so far."""
         ...
 
 
 @runtime_checkable
-class AccumulatorBinding(Binding, Protocol):
+class AccumulatorBinding[P: BaseModel, I: BaseModel, O: BaseModel](
+    Binding[P, I, O], Protocol
+):
     def make_accumulator(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> Driver:
+    ) -> Driver[O]:
         """
-        A driver that takes pushes into the tables ``blanks``, made with the
-        values of ``fixed``, with the rows of any table in ``fixed`` in it.
+        A driver that takes pushes into the tables ``blanks``, named by their
+        indexes, made with the values of ``fixed``, with the rows of any table
+        in ``fixed`` in it.
 
-        A parameter in neither ``fixed`` nor ``blanks`` takes the spec's
-        default. An implementation raises ``ValueError`` for ``fixed`` and
-        ``blanks`` that do not fit the spec, and for a blank that is not a
-        table.
+        A parameter or an input in neither ``fixed`` nor ``blanks`` takes the
+        spec's default. An implementation raises ``ValueError`` for ``fixed``
+        and ``blanks`` that do not fit the spec, and for a blank that is not
+        a table.
 
         It may be called from several threads at once, and does not modify
         the values it is given.
@@ -148,59 +158,85 @@ class AccumulatorBinding(Binding, Protocol):
         ...
 
 
-def fixed_values(
-    spec: WorkflowSpec[Any], fixed: Mapping[str, Any], blanks: Collection[str]
+def by_name(
+    spec: WorkflowSpec[Any, Any, Any], params: Any, inputs: Any
 ) -> dict[str, Any]:
     """
-    The values of ``fixed``, with the default of each parameter in neither
-    ``fixed`` nor ``blanks``.
-
-    A default comes as the backend passes values: a group as a dict of its
-    fields. Raises ``ValueError`` if a parameter is both fixed and blank, if
-    either names a parameter the spec lacks, or if a parameter without a
-    default is in neither.
+    The values of ``params`` and ``inputs``, instances of the spec's models,
+    by name, as ``make_stage`` and ``make_accumulator`` take them: each table
+    under its index as its columns.
     """
-    fields = spec.params.model_fields
+    values = {**dict(params), **dict(inputs)}
+    tables = {
+        index: {name: values[name] for name in spec.columns(index)}
+        for index in spec.tables
+    }
+    columns = {name for table in tables.values() for name in table}
+    return {**{n: v for n, v in values.items() if n not in columns}, **tables}
+
+
+def fixed_values(
+    spec: WorkflowSpec[Any, Any, Any],
+    fixed: Mapping[str, Any],
+    blanks: Collection[str],
+) -> dict[str, Any]:
+    """
+    The values of ``fixed``, with the default of each parameter or input in
+    neither ``fixed`` nor ``blanks``.
+
+    Names are those of parameters and inputs, but a table is named by its
+    index, and its default is its columns without rows. Raises ``ValueError``
+    if a name is both fixed and blank, if either names no parameter, input,
+    or table of the spec, or if one without a default is in neither.
+    """
+    attached = {c for index in spec.tables for c in spec.tables[index]}
+    fields = {
+        name: info
+        for model in (spec.params, spec.inputs)
+        for name, info in model.model_fields.items()
+        if name not in attached
+    }
     if both := fixed.keys() & set(blanks):
         raise ValueError(f'{sorted(both)}: both fixed and blank')
     if unknown := (fixed.keys() | set(blanks)) - fields.keys():
-        raise ValueError(f'{sorted(unknown)}: not parameters of {spec.name}')
+        raise ValueError(
+            f'{sorted(unknown)}: not parameters, inputs, or tables of {spec.name}'
+        )
     left = {n: f for n, f in fields.items() if n not in fixed and n not in blanks}
     if missing := [n for n, f in left.items() if f.is_required()]:
         raise ValueError(f'{missing}: neither fixed nor blank, and without a default')
     defaults = {
-        name: TypeAdapter(field.annotation).dump_python(
-            field.get_default(call_default_factory=True, validated_data={})
-        )
-        for name, field in left.items()
+        name: {c: [] for c in spec.columns(name)}
+        if name in spec.tables
+        else info.get_default(call_default_factory=True, validated_data={})
+        for name, info in left.items()
     }
     return {**defaults, **fixed}
 
 
 @dataclass(frozen=True)
-class DriverBinding:
+class DriverBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     """
     A driver behind a spec over tables: plain requests and accumulators.
 
     ``make_driver`` makes a driver from the fixed values that are not tables,
     by name. It may be called from several threads at once. An accumulator
-    gets a driver of its own, with the rows of each table in its fixed values
-    in one push; a table without rows, or ``None``, is not pushed. A plain
-    request is an accumulator with no blanks, read once. ``fixed`` and
-    ``blanks`` are checked by :func:`fixed_values`, and each blank must be a
-    table.
+    gets a driver of its own, with each table in its fixed values in one
+    push; a table without rows is not pushed. A plain request is an
+    accumulator with no blanks, read once. ``fixed`` and ``blanks`` are
+    checked by :func:`fixed_values`, and each blank must be a table.
     """
 
-    spec: WorkflowSpec[Any]
-    make_driver: Callable[[Mapping[str, Any]], Driver]
+    spec: WorkflowSpec[P, I, O]
+    make_driver: Callable[[Mapping[str, Any]], Driver[O]]
 
-    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.make_accumulator(params, ()).outputs()
+    def compute(self, params: P, inputs: I) -> O:
+        return self.make_accumulator(by_name(self.spec, params, inputs), ()).outputs()
 
     def make_accumulator(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> Driver:
-        tables = table_fields(self.spec.params)
+    ) -> Driver[O]:
+        tables = self.spec.tables
         if not_tables := sorted(set(blanks) - tables.keys()):
             raise ValueError(
                 f'{not_tables}: the blanks of an accumulator are tables of '
@@ -208,30 +244,30 @@ class DriverBinding:
             )
         values = fixed_values(self.spec, fixed, blanks)
         driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
-        for table in tables:
-            if rows := values.get(table):
-                driver.push(table, rows)
+        for index in tables:
+            if (columns := values.get(index)) and columns[index]:
+                driver.push(index, columns)
         return driver
 
 
 @dataclass(frozen=True)
-class _FunctionBinding:
-    spec: WorkflowSpec[Any]
-    function: Callable[..., Mapping[str, Any]]
+class _FunctionBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
+    spec: WorkflowSpec[P, I, O]
+    function: Callable[[P, I], O]
 
-    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.function(**fixed_values(self.spec, params, ()))
+    def compute(self, params: P, inputs: I) -> O:
+        return self.function(params, inputs)
 
 
-def function_binding(
-    spec: WorkflowSpec[Any], function: Callable[..., Mapping[str, Any]]
-) -> Binding:
+def function_binding[P: BaseModel, I: BaseModel, O: BaseModel](
+    spec: WorkflowSpec[P, I, O], function: Callable[[P, I], O]
+) -> Binding[P, I, O]:
     """
     A function behind a spec: plain requests only.
 
-    ``function`` takes each parameter by name, with data read and defaults
-    filled in, and returns the outputs by name. It must be pure: the backend
-    may call it from several threads at once, and it does not modify its
-    arguments.
+    ``function`` takes the params and the inputs, instances of the spec's
+    models, and returns an instance of its outputs model. It must be pure:
+    the backend may call it from several threads at once, and it does not
+    modify its arguments.
     """
     return _FunctionBinding(spec, function)

@@ -12,7 +12,7 @@ import pytest
 from ess.dispatch import Client, Rule, Selector, Template, TriggerLoop
 from ess.dispatch.testing import FakeDatasets
 
-from .conftest import IOFQ, IOFQ_V2, STITCH, Measure, Reduction, Run
+from .conftest import IOFQ, IOFQ_V2, STITCH, Measure, Reduction
 
 NO_PUBLISH = 'publication is not implemented'
 
@@ -21,9 +21,7 @@ def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-    template = Template(
-        STITCH, params={'reference': Run(file=reference)}, blanks=('runs',)
-    )
+    template = Template(STITCH, inputs={'reference': reference}, blanks=('runs',))
     rule = Rule(
         'reflectivity',
         template,
@@ -43,7 +41,7 @@ def test_e1_series_grows_reduction_follows(
     user = connect()  # any client of the proposal
     curve = user.latest('reflectivity', member='si')
     assert len(user.records(label='reflectivity')) == 2
-    assert curve.request.params['runs'] == [{'file': r} for r in (r2, r3, r4)]
+    assert curve.request.inputs['runs'] == [r2, r3, r4]  # run order
     assert user.output(curve, 'stitched').values.tolist() == [
         1.0,
         2.0,
