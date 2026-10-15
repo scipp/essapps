@@ -200,19 +200,22 @@ class Binding(Protocol[P, O]):
     def compute(self, params: P) -> O: ...                               # a plain request
 
 class StageBinding(Binding[P, O], Protocol):                            # PipelineBinding
-    def stage(self, fixed: Mapping[str, Any]
+    def stage(self, fixed: Mapping[str, Any], blanks: Collection[str]
               ) -> Callable[[Mapping[str, Any]], O]: ...        # called with the blanks' values
 
 class AccumulatorBinding(Binding[P, O], Protocol):                      # DriverBinding
-    def start(self, fixed: Mapping[str, Any]) -> Driver[O]: ...
+    def start(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Driver[O]: ...
 
 class Driver(Protocol[O]):
     def push(self, rows: Mapping[str, Sequence[BaseModel]]) -> None: ...  # rows by table name
     def outputs(self) -> O: ...
 ```
 
-`stage` gets the fixed parameters by name, with defaults filled in, and a blank is absent: the blanks are the spec's parameters that `fixed` does not name, so the binding, which knows its spec, needs no list of them.
-A strategy that reads a blank in the fixed part fails at once.
+`stage` and `start` get the fixed parameters by name and the names of the blanks.
+A parameter that is in neither takes its default from the spec; the binding fills it in.
+When the stage or the driver is made, the binding checks that `fixed` and `blanks` do not overlap, that both name only parameters of the spec, and that each parameter without a default is in one of them; `start` also checks that each blank is a table.
+So a caller, such as a test, names what changes and leaves out what keeps its default: `binding.stage({'sample': run}, blanks=('reduction',))`.
+A strategy that reads a blank in the fixed part fails at once, since a blank is not in `fixed`.
 The callable it returns gets the values of the blanks only, by name, as a driver's `push` gets only the new rows: the fixed values are in the stage, and nothing passes or checks them again.
 The backend validates the full plain request, and makes its record, before each call.
 `start` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
@@ -223,10 +226,10 @@ What the backend calls for each client action:
 | Client action | `PipelineBinding` | `DriverBinding` | `function_binding` |
 |---|---|---|---|
 | plain request | `compute(params)` | `compute(params)` | `compute(params)` |
-| stage | `stage(fixed)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
-| accumulator | refused when the accumulator is made | `start(fixed)`, then `push` per client push and `outputs()` per state read | refused when the accumulator is made |
+| stage | `stage(fixed, blanks)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
+| accumulator | refused when the accumulator is made | `start(fixed, blanks)`, then `push` per client push and `outputs()` per state read | refused when the accumulator is made |
 
-The protocol carries the backend's promises to the binding: every value with defaults filled in, a push never while the outputs of the state before it are in use.
+The protocol carries the backend's promises to the binding: a push never while the outputs of the state before it are in use, and a call through a stage only with a valid plain request.
 The client never sees the protocol.
 The author of a function or a driver writes against it, in the spec's models; the author of a sciline pipeline does not.
 
@@ -309,13 +312,13 @@ It is a driver in the sense of sciline ADR 0003, holds everything stateful, and 
 ```python
 multi = DriverBinding(IOFQ_MULTI, functools.partial(IofQDriver, pipeline))
 
-driver = binding.start({'reduction': Reduction(bins=2)})   # the fixed values; no rows yet
+driver = binding.start({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))   # no rows yet
 driver.push({'sample': [run_101, run_102]})                 # two rows of the sample table
 driver.push({'can': [can_110], 'sample': [run_103]})
 driver.outputs()                                            # -> IofQOutputs
 ```
 
-`start(fixed)` makes the driver and pushes the rows of any table in `fixed`, so `compute(params)` of a `DriverBinding` is `start(dict(params)).outputs()`.
+`start` makes the driver from the values that are not tables, and pushes the rows of any table in `fixed`, so `compute(params)` of a `DriverBinding` is `start(dict(params), blanks=()).outputs()`.
 A push may carry several rows and several tables, so that a driver can work on them together, such as loading runs in parallel.
 A plain request, and the tables fixed by an accumulator's template, are one push of every row.
 A client's push is one driver push.
