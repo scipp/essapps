@@ -227,11 +227,13 @@ The names follow one scheme per kind of thing:
 
 | Kind | Named for | Names |
 |---|---|---|
-| protocols, which the backend calls | the client action they serve | `Binding` (plain request), `StageBinding`, `AccumulatorBinding` |
+| protocols, which the backend calls, and their methods | the client object they serve | `Binding.compute` (a plain request), `StageBinding.stage`, `AccumulatorBinding.start` (question 9) |
 | classes, which the author uses | what the author provides | `PipelineBinding`, `DriverBinding`, `function_binding` |
 | what a protocol method returns | what it is | a stage callable, a `Driver` |
 
-A client's accumulator is the template, its pushes, states, pins, and records, kept by the backend; the driver is the binding's state behind it, one per accumulator.
+`StageBinding` and `AccumulatorBinding` are factories for the computing half of a client's stage or accumulator.
+The other half, the template, its log, states, pins, and records, is the backend's.
+So a client's accumulator has one driver behind it, and a client's stage one callable.
 
 What the backend calls for each client action:
 
@@ -619,7 +621,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-9. A: should `AccumulatorBinding.start` be named `driver`, so that each method is named for what it returns, as `stage` is?
+9. A: should `AccumulatorBinding.start` be named `accumulator`, so that each method is named for the client object it serves, as `stage` is? `stage` returns a callable, and `accumulator` would return a `Driver`.
 
 > Simon:
 
