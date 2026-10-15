@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The backend's log: what it holds, and a backend started from it."""
 
-import operator
 import shutil
 import threading
 import uuid
@@ -35,14 +34,13 @@ from ess.dispatch.log import (
     Pushed,
     Submitted,
 )
-from ess.dispatch.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows
 from ess.spec import (
     AccumulatorRef,
     Array,
     NexusFile,
     OutputRef,
     WorkflowSpec,
-    combine,
 )
 
 
@@ -87,6 +85,10 @@ TOTAL = WorkflowSpec(
 )
 
 
+def total(values: list[dict[str, Any]]) -> dict[str, Any]:
+    return {'value': sum(row['value'] for row in values)}
+
+
 @pytest.fixture
 def datasets() -> FakeDatasets:
     datasets = FakeDatasets(proposal='p1')
@@ -126,7 +128,7 @@ def start(
         return {'value': run * (window[1] - window[0])}
 
     def start(path: Path) -> Client:
-        bind = {LOAD: load, TOTAL: combine(operator.add)}
+        bind = [StagedFunction(LOAD, load), kept_rows(TOTAL, total)]
         backends.append(Backend(datasets, bind, log=Log(path)))
         return Client(backends[-1], proposal='p1', submitter='anna')
 
@@ -195,7 +197,7 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
     }
     total = _total(first)
     for load in loads.values():
-        total.push({'values': load.refs('value')})
+        total.push('values', [load.refs('value')])
     read = first.compute(TOTAL, _read(total))
 
     again = restart(tmp_path / 'log')
@@ -237,7 +239,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     ]
     total = _total(client)
     for load in loads:
-        total.push({'values': load.refs('value')})
+        total.push('values', [load.refs('value')])
     read = client.compute(TOTAL, _read(total))
 
     template = Template(TOTAL, blanks=('values',))
@@ -245,7 +247,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     assert events[6:10] == [
         Opened(accumulator=total.id, proposal='p1', template=template, fixed={}),
         *(
-            Pushed(accumulator=total.id, rows={'values': load.refs('value')})
+            Pushed(accumulator=total.id, table='values', rows=[load.refs('value')])
             for load in loads
         ),
     ]
@@ -272,8 +274,8 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     loading.clear()
     pending = first.submit(LOAD, {'sample': {'file': dataset(run=2)}})
     total = _total(first)
-    total.push({'values': {'value': dataset(run=1)}})
-    total.push({'values': pending.refs('value')})  # waits for ``pending``
+    total.push('values', [{'value': dataset(run=1)}])
+    total.push('values', [pending.refs('value')])  # waits for ``pending``
     read = first.submit(TOTAL, _read(total))
     state = _record(first, read.request.params['values'][0]['value'].record)
 
@@ -314,7 +316,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
 
     total = _total(again)
     with pytest.raises(SubmitError, match='not kept by this client'):
-        total.push({'values': load.refs('value')})
+        total.push('values', [load.refs('value')])
 
 
 def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only(
@@ -327,13 +329,8 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
         )
     )
     total = _total(client)
-    total.push(
-        {
-            'values': client.compute(LOAD, {'sample': {'file': dataset(run=1)}}).refs(
-                'value'
-            )
-        }
-    )
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    total.push('values', [load.refs('value')])
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
         Opened,
@@ -354,14 +351,18 @@ def test_a_refused_call_writes_nothing_to_the_log(
         client.submit(LOAD, {'sample': {'file': dataset(run=1)}, 'bins': 2})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))
+    with pytest.raises(SubmitError, match='makes no accumulators'):
+        client.accumulator(Template(LOAD, blanks=('sample',)))
     total = _total(client)
-    total.push({'values': load.refs('value')})
+    total.push('values', [load.refs('value')])
     written += 2  # the accumulator opened, and the push
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, {'values': [{'value': other}]})
     with pytest.raises(SubmitError, match='fields'):
-        total.push({'values': {'other': load.ref('value')}})
+        total.push('values', [{'other': load.ref('value')}])
+    with pytest.raises(SubmitError, match='has no rows'):
+        total.push('values', [])
 
     assert len(Log.read(tmp_path / 'log')) == written
 

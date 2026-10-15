@@ -109,7 +109,7 @@ class Views:
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
     record of a state. ``accumulators`` holds the event that opened each
-    accumulator, and ``pushes`` its pushes in order, each a row per table.
+    accumulator, and ``pushes`` its pushes in order, each rows of one table.
 
     ``persisted`` names the outputs each record persists at submission; their
     write is the record's: pending while it is, written once it completes.
@@ -190,8 +190,11 @@ class Views:
         it, in push order.
         """
         opened = self.accumulators[accumulator_id]
-        rows = [p.rows for p in self.pushes.get(accumulator_id, [])[:pushes]]
-        tables = {t: [r[t] for r in rows if t in r] for t in opened.template.blanks}
+        pushed = self.pushes.get(accumulator_id, [])[:pushes]
+        tables = {
+            t: [row for p in pushed if p.table == t for row in p.rows]
+            for t in opened.template.blanks
+        }
         return Request(opened.template.spec, {**opened.fixed, **tables})
 
     def status(self, record_id: str) -> Status:

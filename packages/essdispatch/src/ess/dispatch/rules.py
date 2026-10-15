@@ -3,7 +3,7 @@
 """
 Rules and the trigger loop: automatic reduction of new datasets.
 
-A rule is plain data. The trigger loop is a driver: it uses a client, never
+A rule is plain data. The trigger loop is a controller: it uses a client, never
 runs in the backend, and keeps no memory of its own. It persists what it
 submits, so its client keeps nothing, and any client of the proposal reads the
 results. It finds new datasets

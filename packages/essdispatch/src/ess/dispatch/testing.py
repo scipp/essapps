@@ -1,18 +1,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Fakes for tests: a dataset source whose datasets a test makes appear, and a
-store held in memory.
+Fakes for tests: a dataset source whose datasets a test makes appear, a store
+held in memory, and bindings over plain functions.
 """
 
 from __future__ import annotations
 
 import copy
+import functools
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
-from ess.spec import DatasetRef
+from ess.spec import DatasetRef, DriverBinding, WorkflowSpec, table_fields
 
 from .datasets import Selector
 
@@ -117,3 +119,65 @@ class FakeStore:
     def __contains__(self, key: tuple[str, str]) -> bool:
         with self._lock:
             return key in self._values
+
+
+@dataclass
+class StagedFunction:
+    """
+    A binding that makes stages, over a function that takes each parameter by
+    name and returns the outputs by name. A stage holds nothing: each call
+    calls the function. ``staged`` lists the blanks of each stage made, and
+    ``fail_next`` makes the next stage fail.
+    """
+
+    spec: WorkflowSpec[Any]
+    function: Callable[..., Mapping[str, Any]]
+    staged: list[tuple[str, ...]] = field(default_factory=list)
+    fail_next: bool = False
+
+    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self.function(**params)
+
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+        if self.fail_next:
+            self.fail_next = False
+            raise OSError('staging failed')
+        self.staged.append(tuple(blanks))
+        return lambda values: self.function(**fixed, **values)
+
+
+class KeptRows:
+    """
+    A driver that keeps the rows pushed into each of ``tables``, and calls
+    ``function`` with them and the fixed values at each read.
+    """
+
+    def __init__(
+        self,
+        function: Callable[..., Mapping[str, Any]],
+        tables: Sequence[str],
+        fixed: Mapping[str, Any],
+    ) -> None:
+        self._function = function
+        self._fixed = fixed
+        self._rows: dict[str, list[Mapping[str, Any]]] = {t: [] for t in tables}
+
+    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        self._rows[table].extend(rows)
+
+    def outputs(self) -> Mapping[str, Any]:
+        rows = {t: list(r) for t, r in self._rows.items()}
+        return self._function(**self._fixed, **rows)
+
+
+def kept_rows(
+    spec: WorkflowSpec[Any], function: Callable[..., Mapping[str, Any]]
+) -> DriverBinding:
+    """
+    A ``DriverBinding`` whose drivers keep the rows (:class:`KeptRows`):
+    ``function`` takes each parameter by name, a table as a list of its rows.
+    """
+    tables = tuple(table_fields(spec.params))
+    return DriverBinding(spec, functools.partial(KeptRows, function, tables))

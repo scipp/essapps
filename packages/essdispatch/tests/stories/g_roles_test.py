@@ -8,6 +8,7 @@ import pytest
 
 from ess.dispatch import Client, SubmitError, local
 from ess.dispatch.testing import FakeDatasets
+from ess.spec import function_binding
 
 from .conftest import (
     BEAM_CENTRE,
@@ -25,7 +26,7 @@ def test_g2_developer_iterates_on_a_workflow(
     measure: Measure, datasets: FakeDatasets
 ) -> None:
     draft = iofq
-    dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})
+    dev = local(proposal='p1', datasets=datasets, bind=[function_binding(IOFQ, draft)])
     result = dev.compute(
         IOFQ, IofQParams(sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0])))
     )

@@ -66,11 +66,15 @@ of an accumulator's state until the accumulator has reached that state, and
 an accumulator's steps as described below. This is the only scheduling there
 is.
 
-A request runs through its spec's binding. A stage checks its template's
-values as a request's and resolves dataset names when it is made, and keeps
-the outputs they reference until it has staged. A request through it must
-have its values outside the blanks. The first such request to run stages the
-binding with the template's values, and every request through the stage runs
+A request runs through its spec's binding (see ``ess.spec.binding``): a plain
+request through ``compute``, a stage through ``make_stage``, and an
+accumulator through ``make_accumulator``. A stage is refused when it is made
+unless its spec's binding makes stages, and so is an accumulator unless the
+binding makes accumulators. A stage checks its template's values as a
+request's and resolves dataset names when it is made, and keeps the outputs
+they reference until it has staged. A request through it must have its values
+outside the blanks. The first such request to run has the binding make its
+stage with the template's values, and every request through the stage runs
 through the callable the binding returned, so a binding that holds values
 computes only what depends on the blanks. The record of a request through a
 stage that has staged still names the template's values, but these
@@ -83,22 +87,21 @@ have run.
 
 An accumulator opens from a template whose blanks are table fields, checked
 as a stage's template is. Each other value is typed by its own field. Each
-push names one row for each of one or more tables; a row is checked by its
-table's row model alone. Opening and pushing return once these checks pass
+push names one table and gives one or more of its rows; a row is checked by
+its table's row model alone. Opening and pushing return once these checks pass
 and the event is logged, as a submission does: they check the records they
 reference against what the backend knows now, and refuse one that has
 failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order
-they were logged, on the workers: opening makes the held state from the
-template's values, by the binding or, for a binding that makes none, by
-keeping the rows (see ``bindings.py``), and each push adds its rows to it, in
-place if the binding does so. A step starts once the records it references
+they were logged, on the workers: opening has the binding make the driver
+from the template's values, and each push is one push into the driver, which
+may add the rows in place. A step starts once the records it references
 have completed, and a push once the readers of the state before it are done.
 If a step fails, or a record it references has not completed, the
 accumulator stops: it takes no more pushes or readers, the steps after it
 are dropped, and the requests that wait for a state it will not reach fail.
-Its held state is dropped once no reader holds its current state, without
+Its driver is dropped once no reader holds its current state, without
 waiting for its client to release it.
 
 A read pins the accumulator's state after the pushes logged so far: a request
@@ -116,19 +119,19 @@ whose request would be refused is refused with that request's reason. So
 rules on a whole table, such as its length, and the params model's own
 validators apply at reads, not at pushes. Validators that read more than one
 value, such as the params model's own or those of a table field, must not
-change a value: the held state got the values typed one by one, and nothing
+change a value: the driver got the values typed one by one, and nothing
 checks that the plain request holds the same.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
-kept until the next push. The record of a state is computed from the held
-state, as a call through a stage is from what the stage holds: its outputs
-are what the binding returns, not a copy, and may share memory with the held
-state, which the next push may change in place. They are kept until the
+kept until the next push. The record of a state is computed from the
+driver, as a call through a stage is from what the stage holds: its outputs
+are what the driver returns, not a copy, and may share memory with the
+driver, which the next push may change in place. They are kept until the
 requests that read them have run, and the record holds the state as its
 reader until then. Reading the outputs of the accumulator copies them, or
 only the part that a selection names. So the next push waits until the
-readers of the state before it are done, since the held state cannot go back
+readers of the state before it are done, since the driver cannot go back
 to that state and no reader may see its outputs change: the records of that
 state, until the requests that read them have run, even those cancelled while
 they run, and the reads of its outputs in progress. Every wait is for work
@@ -139,14 +142,14 @@ the push, since only the submission that made a record of a state reads it.
 So no wait goes round in a circle.
 Releasing the accumulator or ending its client keeps the pushes up to the last
 state a reader still holds, which are still added, and drops the later ones,
-again each time a reader lets go; the held state is dropped once its readers
+again each time a reader lets go; the driver is dropped once its readers
 are done.
 
 A freeze is a read whose record of the state the client keeps. While the
 plain request of its state is checked, pushes wait; once the freeze is
 logged, the accumulator takes no more pushes. Once that record has
 completed, it holds the outputs of the last state, the accumulator takes no
-readers, and its held state is dropped once its last reader is done. A
+readers, and its driver is dropped once its last reader is done. A
 freeze whose record fails or is cancelled leaves the accumulator readable,
 and it may be frozen again; its computed outputs are dropped once the last
 reader of its state is done, since no push comes to drop them.
@@ -176,15 +179,16 @@ from pydantic_core import (
 )
 
 from ess.spec import (
+    AccumulatorBinding,
     AccumulatorRef,
     Binding,
     DataField,
     DatasetRef,
+    Driver,
     Format,
-    Function,
-    HeldState,
     OutputRef,
     Ref,
+    StageBinding,
     WorkflowSpec,
     data_fields,
     distinct_row_tables,
@@ -193,7 +197,6 @@ from ess.spec import (
     walk_refs,
 )
 
-from .bindings import as_binding, open_held_state
 from .datasets import DatasetSource, Selector, readable
 from .log import (
     Event,
@@ -260,7 +263,10 @@ def _check_storable(field: str, value: Any) -> Any:
 
 
 _OMITTED = object()
-"""The value of an optional output that a held state left out."""
+"""The value of an optional output that a driver left out."""
+
+_StageCall = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+"""What ``StageBinding.make_stage`` returns."""
 
 
 def _not_returned(record_id: str, output: str) -> LookupError:
@@ -383,8 +389,8 @@ class Entry:
 
 class _Stage:
     """
-    A stage: its spec, its blanks, its fixed values, and the binding's callable
-    once it has staged.
+    A stage: its spec's binding, its blanks, its fixed values, and the
+    binding's callable once it has staged.
 
     The fixed values are the template's, with dataset names resolved when the
     stage was made. ``reads`` are the outputs of records they reference, which
@@ -397,13 +403,18 @@ class _Stage:
     """
 
     def __init__(
-        self, spec: SpecId, blanks: tuple[str, ...], fixed: dict[str, Any]
+        self,
+        spec: SpecId,
+        binding: StageBinding,
+        blanks: tuple[str, ...],
+        fixed: dict[str, Any],
     ) -> None:
         self.spec = spec
+        self.binding = binding
         self.blanks = blanks
         self.fixed = fixed
         self.reads = _output_reads(fixed)
-        self.call: Function | None = None
+        self.call: _StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
 
@@ -420,15 +431,15 @@ class _Stage:
 
 class _Accumulator:
     """
-    An accumulator: its template, the binding's held state once it has
+    An accumulator: its template, its spec's binding, its driver once it has
     opened, and the steps logged but not yet done.
 
-    ``added`` is the number of pushes in the held state, ``None`` until the
-    held state has opened. ``steps`` holds the values of each step not yet
-    done, in the order logged: first the template's values, until the held
-    state has opened, then the rows of each push. Each comes with the outputs
-    of records it reads, which it holds as a reader. ``busy`` says a worker
-    opens the held state or adds to it, outside the backend's lock.
+    ``added`` is the number of pushes in the driver, ``None`` until the
+    driver is made. ``steps`` holds the values of each step not yet done, in
+    the order logged: first the template's values, until the driver is made,
+    then the table and rows of each push. Each comes with the outputs of
+    records it reads, which it holds as a reader. ``busy`` says a worker makes
+    the driver or pushes into it, outside the backend's lock.
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was validated, and why it would be refused, or ``None``. Two
@@ -444,17 +455,19 @@ class _Accumulator:
     :meth:`outputs` computes every output of the current state the first time
     a reader reads it, and keeps them until :meth:`drop`, which the backend
     calls before a push adds. They are computed under a lock of their own,
-    outside the backend's, so ``state.outputs`` is called from one thread at a
+    outside the backend's, so ``driver.outputs`` is called from one thread at a
     time and never while a push adds.
     """
 
-    state: HeldState  # once the held state has opened
+    driver: Driver  # once the accumulator has opened
 
     def __init__(
-        self, accumulator_id: str, template: Template, outputs: type[BaseModel]
+        self, accumulator_id: str, template: Template, binding: AccumulatorBinding
     ) -> None:
         self.id = accumulator_id
         self.template = template
+        self.binding = binding
+        outputs = binding.spec.outputs
         self.added: int | None = None
         self.steps: deque[tuple[dict[str, Any], list[tuple[str, str]]]] = deque()
         self.busy = False
@@ -476,18 +489,18 @@ class _Accumulator:
     def outputs(self) -> dict[str, Any]:
         """
         Every output of the current state, for one of its readers; needs no
-        lock. An optional output that the held state leaves out is
+        lock. An optional output that the driver leaves out is
         ``_OMITTED``.
 
-        They are what the held state returns, not a copy (see the module
+        They are what the driver returns, not a copy (see the module
         docstring), computed once for the state.
         """
         with self._computing:
             if self._computed is None:
-                outputs = self.state.outputs()
+                outputs = self.driver.outputs()
                 if lacking := self._required - outputs.keys():
                     raise ValueError(
-                        f'the held state of {self.template.spec} returned '
+                        f'the driver of {self.template.spec} returned '
                         f'{sorted(outputs)}: missing {sorted(lacking)}'
                     )
                 self._computed = {**dict.fromkeys(self._declared, _OMITTED), **outputs}
@@ -502,12 +515,12 @@ class _Accumulator:
 
     def end(self) -> None:
         """
-        Drop the held state of an accumulator that takes no more readers, once
+        Drop the driver of an accumulator that takes no more readers, once
         the last reader of its current state is done; the backend's lock held.
         """
         self._computed = None
-        if hasattr(self, 'state'):  # an accumulator that failed to open has none
-            del self.state
+        if hasattr(self, 'driver'):  # an accumulator that failed to open has none
+            del self.driver
 
 
 def _state_key(accumulator_id: str, upto: int) -> str:
@@ -561,20 +574,21 @@ class Backend:
     """
     Checks requests, keeps records, and runs requests (see the module docstring).
 
-    ``datasets`` is its dataset source, and ``bind`` maps each spec it runs to
-    the spec's binding. Workflows, the steps of accumulators, and writes share
-    ``workers`` threads. A long step or workflow holds one of them, so other
-    work waits only once every worker is busy; submissions are accepted
-    meanwhile. ``log`` holds history, in memory if not given, and ``store`` is
-    where persisted outputs are written. A backend started on an existing log
-    needs the store the earlier backend wrote to: without one, the persisted
-    work it goes on with fails, since it has no store.
+    ``datasets`` is its dataset source, and ``bind`` lists a binding for each
+    spec it runs; each binding names its spec. Workflows, the steps of
+    accumulators, and writes share ``workers`` threads. A long step or
+    workflow holds one of them, so other work waits only once every worker is
+    busy; submissions are accepted meanwhile. ``log`` holds history, in
+    memory if not given, and ``store`` is where persisted outputs are
+    written. A backend started on an existing log needs the store the earlier
+    backend wrote to: without one, the persisted work it goes on with fails,
+    since it has no store.
     """
 
     def __init__(
         self,
         datasets: DatasetSource,
-        bind: Mapping[WorkflowSpec[Any], Binding | Function],
+        bind: Sequence[Binding],
         *,
         workers: int = 4,
         log: Log | None = None,
@@ -583,11 +597,12 @@ class Backend:
         self._datasets = datasets
         self._store = store
         self._specs: dict[SpecId, WorkflowSpec[Any]] = {}
-        for spec in bind:
-            if (spec_id := SpecId.of(spec)) in self._specs:
+        self._bindings: dict[SpecId, Binding] = {}
+        for binding in bind:
+            if (spec_id := SpecId.of(binding.spec)) in self._specs:
                 raise ValueError(f'two specs are bound as {spec_id}')
-            self._specs[spec_id] = spec
-        self._bindings = {SpecId.of(spec): as_binding(b) for spec, b in bind.items()}
+            self._specs[spec_id] = binding.spec
+            self._bindings[spec_id] = binding
         self._output_fields = {
             spec_id: data_fields(spec.outputs) for spec_id, spec in self._specs.items()
         }
@@ -662,7 +677,7 @@ class Backend:
            or through other pending records.
         3. Otherwise it runs if each value it reads is a dataset, is written,
            or is an output of a pending record that runs, and fails if not.
-           A record of a state fails, since the held state it reads is gone.
+           A record of a state fails, since the driver it reads is gone.
            A call through a stage runs as its plain request, since the stage
            is gone, so it reads the values of the stage's template too.
 
@@ -706,7 +721,7 @@ class Backend:
         """
         views = self._views
         if record_id in views.states:
-            return 'the held state it reads is gone'
+            return 'the driver it reads is gone'
         for ref in views.records[record_id].request.inputs():
             where = f'input {ref.record} output {ref.output}'
             if ref.record in runs:
@@ -1248,8 +1263,7 @@ class Backend:
         """
         outputs: dict[str, Any]
         if state is None:
-            call, blanks = self._call(record.request, stage)
-            outputs = dict(call(**blanks))
+            outputs = dict(self._call(record.request, stage))
         else:
             computed = state[0].outputs().items()
             outputs = {n: v for n, v in computed if v is not _OMITTED}
@@ -1257,24 +1271,21 @@ class Backend:
             raise ValueError(problem)
         return outputs
 
-    def _call(
-        self, request: Request, stage: _Stage | None
-    ) -> tuple[Function, dict[str, Any]]:
+    def _call(self, request: Request, stage: _Stage | None) -> Mapping[str, Any]:
         """
-        The callable that computes a request, through its stage if it has one,
-        and the values of the blanks to call it with; the inputs are read.
+        The outputs of a request, computed through its stage if it has one;
+        the inputs are read.
         """
-        binding = self._bindings[request.spec]
         values = self._typed(request.spec, request.params)
         if stage is None:
-            return binding.stage(self._read(values), ()), {}
+            return self._bindings[request.spec].compute(self._read(values))
         fixed = {k: v for k, v in values.items() if k not in stage.blanks}
         call = self._staged(
-            stage, lambda: binding.stage(self._read(fixed), stage.blanks)
+            stage, lambda: stage.binding.make_stage(self._read(fixed), stage.blanks)
         )
-        return call, self._read({k: values[k] for k in stage.blanks})
+        return call(self._read({k: values[k] for k in stage.blanks}))
 
-    def _staged(self, stage: _Stage, make: Callable[[], Function]) -> Function:
+    def _staged(self, stage: _Stage, make: Callable[[], _StageCall]) -> _StageCall:
         """
         The stage's callable; ``make`` stages the binding, outside the
         backend's lock, if no call has yet.
@@ -1396,7 +1407,7 @@ class Backend:
         within the loop only adds to it. The outputs of an accumulator's state
         go at the next push. An accumulator that takes no more pushes drops
         them once the last reader of its state is done, and one that takes no
-        more readers drops its held state too.
+        more readers drops its driver too.
         """
         for key in keys:
             self._readers[key] -= 1
@@ -1666,7 +1677,7 @@ class Backend:
         references, if it has not let go already. A released accumulator
         takes no more pushes or readers; the pushes up to the last state that
         a reader still holds are added, the later ones are dropped, and its
-        held state is dropped once its readers are done. Releasing what the
+        driver is dropped once its readers are done. Releasing what the
         client does not keep does nothing.
         """
         with self._changed:
@@ -1745,19 +1756,23 @@ class Backend:
         """
         A stage of the client, and its template as the stage holds it.
 
-        The template is checked (see :meth:`_check_template`), and the stage
-        keeps its values; a request through it must have them. The stage
-        keeps the outputs they reference until its first call to run has
-        staged the binding, or it is released.
+        The spec's binding must make stages. The template is checked (see
+        :meth:`_check_template`), and the stage keeps its values; a request
+        through it must have them. The stage keeps the outputs they reference
+        until its first call to run has made the binding's stage, or it is
+        released.
         """
         spec_id, blanks = template.spec, template.blanks
         fixed = self._check_template(template, self._client(client).proposal)
+        binding = self._bindings[spec_id]
+        if not isinstance(binding, StageBinding):
+            raise SubmitError(f'{spec_id}: its binding makes no stages')
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
             request = Request(spec_id, fixed)
             self._check_reads(Entry(request), request, caller, {})
-            stage = caller.stages[stage_id] = _Stage(spec_id, blanks, fixed)
+            stage = caller.stages[stage_id] = _Stage(spec_id, binding, blanks, fixed)
             self._readers.update(stage.reads)
         return stage_id, Template(spec_id, fixed, blanks)
 
@@ -1780,17 +1795,20 @@ class Backend:
         """
         An accumulator of the client, and its template as history holds it.
 
-        The template's blanks are table fields, which the pushes fill. The
-        template is checked as a stage's is (see :meth:`_check_template`), its
-        values are typed (see :meth:`_fixed`), and the records they reference
-        are checked as a request's are. The accumulator then opens: its first
-        step makes the held state with these values read and defaults filled
-        in, so what depends only on them is computed once (see
-        :func:`~.bindings.open_held_state` and :meth:`_advance`).
+        The spec's binding must make accumulators, and the template's blanks
+        are table fields, which the pushes fill. The template is checked as a
+        stage's is (see :meth:`_check_template`), its values are typed (see
+        :meth:`_fixed`), and the records they reference are checked as a
+        request's are. The accumulator then opens: its first step has the
+        binding make the driver with these values read and defaults filled
+        in (see :meth:`_advance`).
         """
         spec_id, blanks = template.spec, template.blanks
         caller = self._client(client)
         tables = table_fields(self.spec(spec_id).params)
+        binding = self._bindings[spec_id]
+        if not isinstance(binding, AccumulatorBinding):
+            raise SubmitError(f'{spec_id}: its binding makes no accumulators')
         if not blanks or not set(blanks) <= tables.keys():
             raise SubmitError(
                 f'{spec_id}: the blanks of an accumulator are table fields of '
@@ -1816,15 +1834,17 @@ class Backend:
             acc = _Accumulator(
                 accumulator_id,
                 self._views.accumulators[accumulator_id].template,
-                self._specs[spec_id].outputs,
+                binding,
             )
             caller.accumulators[accumulator_id] = acc
             self._queue(acc, fixed)
         return accumulator_id, acc.template
 
-    def push(self, accumulator_id: str, rows: Mapping[str, Row], client: str) -> None:
+    def push(
+        self, accumulator_id: str, table: str, rows: Sequence[Row], client: str
+    ) -> None:
         """
-        Log a push of one row into each named table; the rows enter one state.
+        Log a push of rows into one table; they enter one state.
 
         The rows are checked (see :meth:`_pushable`), and so are the records
         they reference, as a request's are, without waiting for those that
@@ -1833,16 +1853,16 @@ class Backend:
         :meth:`_advance`). A push waits while a freeze is being checked, and
         is refused if the freeze is logged.
         """
-        stored, typed = self._pushable(accumulator_id, rows, client)
+        stored, typed = self._pushable(accumulator_id, table, rows, client)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
-            request = Request(acc.template.spec, {t: [r] for t, r in stored.items()})
-            self._refuse_repeated_push(acc, stored)
+            request = Request(acc.template.spec, {table: stored})
+            self._refuse_repeated_push(acc, table, stored)
             self._check_reads(Entry(request), request, caller, {})
-            self._append(Pushed(accumulator=accumulator_id, rows=stored))
-            self._queue(acc, typed)
+            self._append(Pushed(accumulator=accumulator_id, table=table, rows=stored))
+            self._queue(acc, {table: typed})
 
     def freeze(
         self,
@@ -1861,9 +1881,9 @@ class Backend:
         checked outside the lock, while pushes wait. If it would be refused,
         so is the freeze, and the waiting pushes are logged. Otherwise the
         record is logged, and the accumulator takes no more pushes. The
-        record's outputs are those of the held state, computed once and not
+        record's outputs are those of the driver, computed once and not
         copied; once it has completed, the accumulator takes no readers, and
-        its held state is dropped when its last reader is done. If the record
+        its driver is dropped when its last reader is done. If the record
         fails or is cancelled, the accumulator may be read and frozen again,
         but takes no pushes.
         """
@@ -1903,63 +1923,70 @@ class Backend:
                 acc.freezing = False
                 self._let_go([(acc, upto)])
 
-    def _refuse_repeated_push(self, acc: _Accumulator, rows: Mapping[str, Row]) -> None:
+    def _refuse_repeated_push(
+        self, acc: _Accumulator, table: str, rows: Sequence[Row]
+    ) -> None:
         """
-        Refuse a row equal to one already pushed into the same table, unless
-        the spec allows it (see ``distinct_row_tables``); lock held.
+        Refuse a row equal to one already pushed into the table, or to another
+        of the push, unless the spec allows it (see ``distinct_row_tables``);
+        lock held.
 
         The rule is checked here and not with the whole table at a read, since
         a read that refused the repeated row would refuse every later state,
         and no push removes a row.
         """
-        distinct = distinct_row_tables(self._specs[acc.template.spec].params)
+        if table not in distinct_row_tables(self._specs[acc.template.spec].params):
+            return
         pushed = self._views.pushes.get(acc.id, ())
-        for table in distinct & rows.keys():
-            earlier = [p.rows[table] for p in pushed if table in p.rows]
-            _refuse_repeated(table, [*earlier, rows[table]])
+        earlier = [row for p in pushed if p.table == table for row in p.rows]
+        _refuse_repeated(table, [*earlier, *rows])
 
     def _pushable(
-        self, accumulator_id: str, rows: Mapping[str, Row], client: str
-    ) -> tuple[dict[str, Row], dict[str, Row]]:
+        self, accumulator_id: str, table: str, rows: Sequence[Row], client: str
+    ) -> tuple[list[Row], list[Row]]:
         """
-        The rows, once checked, as the log holds them and as the binding gets
+        The rows, once checked, as the log holds them and as the driver gets
         them; needs no lock.
 
-        Each row is checked by its table's row model alone, and refused as the
-        request over that one row would refuse it. Rules on the whole table,
-        such as its length, and the params model's own validators apply when
-        a state is read (see :meth:`_check_state`). A row comes back as that
-        request holds it: names resolved and defaults filled in. The binding
-        gets it typed from that form, as the binding of the state's plain
-        request does: a tuple, which JSON keeps as a list, reaches both as a
-        list.
+        A push of no rows is refused. Each row is checked by its table's row
+        model alone, and refused as the request over that one row would refuse
+        it. Rules on the whole table, such as its length, and the params
+        model's own validators apply when a state is read (see
+        :meth:`_check_state`). A row comes back as that request holds it:
+        names resolved and defaults filled in. The driver gets it typed from
+        that form, as the binding of the state's plain request does: a tuple,
+        which JSON keeps as a list, reaches both as a list.
         """
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
         spec_id, blanks = acc.template.spec, acc.template.blanks
-        if not rows or not rows.keys() <= set(blanks):
+        if table not in blanks:
             raise SubmitError(
-                f'a push names tables of the accumulator, {list(blanks)}, '
-                f'not {sorted(rows)}'
+                f'a push names a table of the accumulator, {list(blanks)}, '
+                f'not {table!r}'
             )
-        alone = {table: [row] for table, row in rows.items()}
-        resolved = self._resolve(spec_id, alone, (), caller.proposal)
-        row_models = table_fields(self._specs[spec_id].params)
-        stored, typed = {}, {}
-        for table, (row,) in resolved.items():
-            model = row_models[table]
-            try:
-                stored[table] = _check_storable(table, dict(model.model_validate(row)))
-                typed[table] = dict(model.model_validate(stored[table]))
-            except ValidationError as error:
-                problems = '; '.join(validation_problems(error, at=(table, 0)))
-                raise SubmitError(f'{spec_id}: {problems}') from None
+        if not rows:
+            raise SubmitError(f'a push into {table} has no rows')
+        (resolved,) = self._resolve(
+            spec_id, {table: list(rows)}, (), caller.proposal
+        ).values()
+        model = table_fields(self._specs[spec_id].params)[table]
+        stored: list[Row] = []
+        typed: list[Row] = []
+        try:
+            for row in resolved:
+                stored.append(_check_storable(table, dict(model.model_validate(row))))
+                typed.append(dict(model.model_validate(stored[-1])))
+        except ValidationError as error:
+            at = (table, len(typed))
+            problems = '; '.join(validation_problems(error, at=at))
+            raise SubmitError(f'{spec_id}: {problems}') from None
         return stored, typed
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
-        Queue a step of the accumulator: opening its held state with the
+        Queue a step of the accumulator: opening its driver with the
         template's values, or adding the rows of a push; lock held.
 
         The step holds the outputs it reads until it is done.
@@ -2000,10 +2027,10 @@ class Backend:
 
     def _do_step(self, acc: _Accumulator) -> None:
         """
-        Open the accumulator's held state or add a push to it, as its next step
+        Make the accumulator's driver or push into it, as its next step
         says; on a worker, outside the backend's lock.
 
-        If the step fails, the accumulator stops, since the binding may hold
+        If the step fails, the accumulator stops, since the driver may hold
         part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
@@ -2013,10 +2040,10 @@ class Backend:
         try:
             read = self._read(values)
             if acc.added is None:
-                binding = self._bindings[acc.template.spec]
-                acc.state = open_held_state(binding, read, acc.template.blanks)
+                acc.driver = acc.binding.make_accumulator(read, acc.template.blanks)
             else:
-                acc.state.push(read)
+                ((table, rows),) = read.items()
+                acc.driver.push(table, rows)
         except Exception as error:  # the binding refuses the values or rows
             with self._changed:
                 self._stop(acc, f'{acc.step} failed: {str(error) or repr(error)}')
@@ -2034,7 +2061,7 @@ class Backend:
         """
         Stop the accumulator: it takes no more pushes or readers, its steps
         are dropped, and the records of its states that wait for them fail;
-        lock held. The held state is dropped now if no reader holds its
+        lock held. The driver is dropped now if no reader holds its
         current state, and otherwise once the last one is done.
         """
         acc.stopped = f'the accumulator stopped: {failure}'
@@ -2057,7 +2084,7 @@ class Backend:
         would be refused, or ``None``; needs no lock.
 
         That request is the one its records list (see ``views.py``): the
-        template's values that the held state was given, with each table
+        template's values that the driver was given, with each table
         filled by the rows pushed, in push order. Each was checked by its
         field when it was given; the params model's own validators run here,
         and must not change a value (see the module docstring).
@@ -2311,7 +2338,7 @@ class Backend:
     ) -> dict[str, Any]:
         """
         Copies of outputs of the accumulator's current state: of ``names``, or
-        of every output its held state returns if ``names`` is ``None``; with
+        of every output its driver returns if ``names`` is ``None``; with
         ``select``, of that part of each only, as :meth:`outputs` selects.
 
         The read pins the state after the pushes logged so far, waits until

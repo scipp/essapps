@@ -3,7 +3,6 @@
 """Persisting outputs: what the store keeps, who reads it, and a restart."""
 
 import gc
-import operator
 import shutil
 import threading
 import uuid
@@ -26,8 +25,8 @@ from ess.dispatch import (
     local,
 )
 from ess.dispatch.log import Finished, Log, Persist
-from ess.dispatch.testing import FakeDatasets, FakeStore
-from ess.spec import Array, NexusFile, WorkflowSpec, combine
+from ess.dispatch.testing import FakeDatasets, FakeStore, StagedFunction, kept_rows
+from ess.spec import Array, Binding, NexusFile, WorkflowSpec, function_binding
 
 
 class Run(BaseModel):
@@ -141,9 +140,7 @@ def boxes() -> list[weakref.ref[Box]]:
 
 
 @pytest.fixture
-def bind(
-    loading: threading.Event, boxes: list[weakref.ref[Box]]
-) -> dict[WorkflowSpec, Any]:
+def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
     def load(sample: dict[str, float]) -> dict[str, float]:
         run = sample['file']
         loading.wait(timeout=5)
@@ -153,15 +150,20 @@ def bind(
         boxes.append(weakref.ref(value := Box(sample['file'])))
         return {'value': value}
 
-    return {
-        LOAD: load,
-        SHIFT: lambda source: {'value': source['value'] + 10.0},
-        TOTAL: combine(operator.add),
-        LIST: lambda sample: {'value': [sample['file']]},
-        BOX: box,
-        UNBOX: lambda source: {'value': source['value'].value},
-        OFFSET: lambda source, shift: {'value': source['value'] + shift['offset']},
-    }
+    def total(parts: list[dict[str, float]]) -> dict[str, float]:
+        return {'value': sum(part['value'] for part in parts)}
+
+    return [
+        function_binding(LOAD, load),
+        function_binding(SHIFT, lambda source: {'value': source['value'] + 10.0}),
+        kept_rows(TOTAL, total),
+        function_binding(LIST, lambda sample: {'value': [sample['file']]}),
+        function_binding(BOX, box),
+        function_binding(UNBOX, lambda source: {'value': source['value'].value}),
+        StagedFunction(
+            OFFSET, lambda source, shift: {'value': source['value'] + shift['offset']}
+        ),
+    ]
 
 
 @pytest.fixture
@@ -173,7 +175,7 @@ def log() -> Log:
 def backend(
     datasets: FakeDatasets,
     store: GatedStore,
-    bind: dict[WorkflowSpec, Any],
+    bind: list[Binding],
     log: Log,
 ) -> Iterator[Backend]:
     backend = Backend(datasets, bind, store=store, log=log)
@@ -326,7 +328,9 @@ def test_persist_is_refused_for_what_the_client_cannot_persist(
     with pytest.raises(SubmitError, match=r"no outputs \['other'\] to persist"):
         client.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=('other',))
     with local(
-        proposal='p1', datasets=datasets, bind={LOAD: lambda sample: {}}
+        proposal='p1',
+        datasets=datasets,
+        bind=[function_binding(LOAD, lambda sample: {})],
     ) as alone:
         with pytest.raises(SubmitError, match='needs a store'):
             alone.submit(LOAD, {'sample': {'file': dataset(run=1)}}, persist=True)
@@ -359,7 +363,7 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
 ) -> None:
     load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     total = client.accumulator(Template(TOTAL, blanks=('parts',)))
-    total.push({'parts': load.refs('value')})
+    total.push('parts', [load.refs('value')])
     frozen = client.freeze(total, persist=True)
 
     assert connect().output(frozen, 'value') == 1.0
@@ -369,7 +373,7 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
 
 
 def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
-    datasets: FakeDatasets, bind: dict[WorkflowSpec, Any], store: GatedStore
+    datasets: FakeDatasets, bind: list[Binding], store: GatedStore
 ) -> None:
     client = local(proposal='p1', datasets=datasets, bind=bind, store=store)
     load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
@@ -477,7 +481,7 @@ def test_a_frozen_record_kept_by_the_client_is_persisted_later(
 ) -> None:
     load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
     total = client.accumulator(Template(TOTAL, blanks=('parts',)))
-    total.push({'parts': load.refs('value')})
+    total.push('parts', [load.refs('value')])
     frozen = client.freeze(total)
     client.persist(frozen)
 
@@ -489,7 +493,7 @@ def test_a_frozen_record_kept_by_the_client_is_persisted_later(
 
 @pytest.fixture
 def start(
-    datasets: FakeDatasets, bind: dict[WorkflowSpec, Any], store: GatedStore
+    datasets: FakeDatasets, bind: list[Binding], store: GatedStore
 ) -> Iterator[Callable[[Path], Client]]:
     """A client of a new backend over the log at a path, with the same store."""
     backends: list[Backend] = []
@@ -560,7 +564,7 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
     loading.clear()
     pending = first.submit(LOAD, {'sample': {'file': dataset(run=2)}})
     total = first.accumulator(Template(TOTAL, blanks=('parts',)))
-    total.push({'parts': pending.refs('value')})  # its state waits for ``pending``
+    total.push('parts', [pending.refs('value')])  # its state waits for ``pending``
     unpersisted = first.submit(
         TOTAL, {'parts': [kept.refs('value'), pending.refs('value')]}, persist=True
     )
@@ -586,7 +590,7 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
     ]
     assert again.failure(records[1:4]) == [
         f'the backend restarted: input {kept.id} output value was not persisted',
-        'the backend restarted: the held state it reads is gone',
+        'the backend restarted: the driver it reads is gone',
         f'the backend restarted: input {state.id} failed',
     ]
 
