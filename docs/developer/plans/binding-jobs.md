@@ -200,7 +200,8 @@ class Binding(Protocol[P, O]):
     def compute(self, params: P) -> O: ...                               # a plain request
 
 class StageBinding(Binding[P, O], Protocol):                            # PipelineBinding
-    def stage(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Callable[[P], O]: ...
+    def stage(self, fixed: Mapping[str, Any], blanks: Collection[str]
+              ) -> Callable[[Mapping[str, Any]], O]: ...        # called with the blanks' values
 
 class AccumulatorBinding(Binding[P, O], Protocol):                      # DriverBinding
     def start(self, fixed: Mapping[str, Any]) -> Driver[O]: ...
@@ -211,7 +212,8 @@ class Driver(Protocol[O]):
 ```
 
 `stage` gets the fixed parameters by name, and a blank is absent, so a strategy that reads a blank in the fixed part fails at once.
-The callable it returns gets the full plain request, which the backend has already validated.
+The callable it returns gets the values of the blanks only, by name, as a driver's `push` gets only the new rows: the fixed values are in the stage, and nothing passes or checks them again.
+The backend validates the full plain request, and makes its record, before each call.
 `start` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
 A push names each table by its parameter name, and gives its rows as the models the client pushed.
 
@@ -469,7 +471,7 @@ Settles cost 4.
 
 ### D. The protocol passes model instances (assumed)
 
-`compute`, and the callable `stage` returns, are `Callable[[IofQParams], IofQOutputs]`, which is what a function binding is.
+`compute` is `Callable[[IofQParams], IofQOutputs]`, which is what a function binding is; the callable `stage` returns takes the blanks' values and returns `IofQOutputs` too.
 With `WorkflowSpec` generic in its outputs model as well as its params model, a type checker checks `function_binding(IOFQ, iofq)`.
 The output names are checked where the author writes them, `IofQOutputs(iofq=...)`, not in the backend.
 A pipeline's providers take the same models, so a conversion such as `QEdges` to `QBins` never sees the protocol's form.
