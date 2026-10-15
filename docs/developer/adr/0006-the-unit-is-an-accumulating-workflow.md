@@ -10,7 +10,7 @@ What the requirements ask of combining runs:
 
 - SANS sums numerators and denominators separately and divides once ([sans](../../requirements/sans.md)).
 - One I(Q) reads a list of sample runs and a list of can runs.
-- Parameters may differ per run within one sum, and all runs share values such as a beam centre ([users](../../requirements/users.md)).
+- The runs of one sum share their settings, such as a beam centre; a value that differs per run comes with the run's data ([users](../../requirements/users.md)).
 - Spectroscopy adds each run to a grid of up to hundreds of GB, and users look at cuts while it grows ([spectroscopy](../../requirements/spectroscopy.md)).
 
 `ess.reduce.streaming.StreamProcessor`, which esslivedata uses for the live I(Q) of LoKI, holds what such a sum needs and computes the outputs from it.
