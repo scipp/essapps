@@ -39,7 +39,7 @@ So whether it is refused depends only on what its client keeps, not on how far o
 A client chooses per output.
 `client.persist` keeps a value in memory and in the store.
 `persist=` at submission or at `client.freeze` keeps it only in the store, as batch reduction and the trigger loop need.
-A failed write fails a record that was persisted at submission, so a driver sees it like any other failed record.
+A failed write fails a record that was persisted at submission, so a controller sees it like any other failed record.
 The store keys a value by record ID and output name, so a record holds no file name and a write changes no record.
 A persisted output stays readable after an upgrade removes its record's spec version, since the record stays in history.
 
@@ -51,7 +51,7 @@ A persisted output stays readable after an upgrade removes its record's spec ver
 | a client ends | at `close()`, which waits for pending writes, or with its process | at `close()`, or when its *lease*, a time limit that every call renews, runs out |
 | the store | given to `local(store=...)` | the proposal's area |
 
-The service's cap counts the values a client keeps, those its pending requests keep, and its held states.
+The service's cap counts the values a client keeps, those its pending requests keep, and the drivers of its accumulators.
 Values with a persist request count against the proposal until they are written, and the cap never drops them.
 Any other completed value that does not fit is dropped, and reading it raises with the reason.
 
@@ -62,7 +62,7 @@ Each pending record is
 
 - cancelled, unless a persist request names it, or a record named by a persist request reads it, directly or through other pending records;
 - run, if every value it reads is a dataset, is written, or comes from a pending record that runs;
-- failed otherwise, as the record of an accumulator's state is, since its held state is gone.
+- failed otherwise, as the record of an accumulator's state is, since its driver is gone.
 
 ## Alternatives considered
 
@@ -87,7 +87,7 @@ Each pending record is
 To be designed with the service (scipp/essapps#27):
 
 - How the cap per client is set, where a client's values are held when its work spreads over nodes, and how the service notices a client whose process ended.
-- How the service holds an accumulator's held state. One cluster job per accumulator, with a memory size and deadline that its client declares, fits a spectroscopy volume of hundreds of GB. That rests on items Assumed or Open in [spectroscopy](../../requirements/spectroscopy.md), and on whether the service may submit cluster jobs ([systems](../../requirements/systems.md)). Most held states are small, such as 0.34 MB for LoKI's I(Q).
+- How the service holds an accumulator's driver. One cluster job per accumulator, with a memory size and deadline that its client declares, fits a spectroscopy volume of hundreds of GB. That rests on items Assumed or Open in [spectroscopy](../../requirements/spectroscopy.md), and on whether the service may submit cluster jobs ([systems](../../requirements/systems.md)). Most drivers hold little, such as 0.34 MB for LoKI's I(Q).
 - A memory bound for every request. The plain request over two plus two LoKI runs needs 7.5 to 9.9 GB. Only the binding knows what a request needs.
 - What a finish records besides the status, such as the software environment.
 - When values are dropped from the store before history (system story H1), and by whom.

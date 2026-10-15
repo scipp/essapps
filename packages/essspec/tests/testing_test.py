@@ -1,23 +1,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Each check passes for a binding that keeps its symmetry and fails for one
-with a bug that breaks it.
+Each check passes for a binding or driver that keeps its symmetry and fails
+for one with a bug that breaks it.
 
 The toy spec has two tables of rows ``{'x': float}``, ``sample`` and ``can``,
-and outputs ``diff = scale * (sum of sample x - sum of can x)``.
+and outputs ``diff = scale * (sum of sample x - sum of can x)``. The checks
+call only ``compute``, ``make_stage``, and drivers, so the fakes here have no
+spec.
 """
 
-import functools
-import operator
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pytest
 import scipp as sc
 
-from ess.spec import Function, HeldState, combine
 from ess.spec.testing import (
     assert_close,
     check_arrival_and_order,
@@ -25,48 +25,62 @@ from ess.spec.testing import (
     check_one_row,
 )
 
-Rows = Mapping[str, Mapping[str, Any]]
+Row = Mapping[str, Any]
 
 
-def subtract(sample: list[Rows], can: list[Rows], scale: float) -> dict[str, float]:
+@dataclass(frozen=True)
+class Calls:
+    """Plain requests and stages that call ``function`` with every value."""
+
+    function: Callable[..., Mapping[str, Any]]
+
+    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self.function(**params)
+
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+        return lambda values: self.function(**fixed, **values)
+
+
+def subtract(sample: list[Row], can: list[Row], scale: float) -> dict[str, float]:
     total = sum(r['x'] for r in sample) - sum(r['x'] for r in can)
     return {'diff': scale * total}
 
 
 class Sums:
-    def __init__(self, scale: float) -> None:
-        self.scale = scale
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        self.scale = fixed.get('scale', 1.0)
         self.sums = {'sample': 0.0, 'can': 0.0}
 
-    def push(self, rows: Rows) -> None:
-        for table, row in rows.items():
+    def push(self, table: str, rows: Sequence[Row]) -> None:
+        for row in rows:
             self.sums[table] += row['x']
 
     def outputs(self) -> Mapping[str, float]:
         return {'diff': self.scale * (self.sums['sample'] - self.sums['can'])}
 
 
-class KeepsLastRow(Sums):
+class KeepsLastPush(Sums):
     """Breaks arrival: each push replaces what was pushed before into its table."""
 
-    def push(self, rows: Rows) -> None:
-        for table, row in rows.items():
-            self.sums[table] = row['x']
+    def push(self, table: str, rows: Sequence[Row]) -> None:
+        self.sums[table] = sum(row['x'] for row in rows)
 
 
 class StartsAtFirstSample(Sums):
     """
-    Breaks order: the total starts at the first sample row, as a held state
-    that takes its shape from the first sample would, and drops the cans
-    pushed before it.
+    Breaks order: the total starts at the first sample row, as a driver that
+    takes its shape from the first sample would, and drops the cans pushed
+    before it.
     """
 
-    def __init__(self, scale: float) -> None:
-        super().__init__(scale)
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        super().__init__(fixed)
         self.total: float | None = None
 
-    def push(self, rows: Rows) -> None:
-        for table, row in rows.items():
+    def push(self, table: str, rows: Sequence[Row]) -> None:
+        for row in rows:
             if table == 'sample':
                 self.total = row['x'] + (self.total or 0.0)
             elif self.total is not None:
@@ -76,57 +90,24 @@ class StartsAtFirstSample(Sums):
         return {'diff': None if self.total is None else self.scale * self.total}
 
 
-class Subtracting:
-    def __init__(self, held: type[Sums] = Sums) -> None:
-        self._held = held
-
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        return functools.partial(subtract, **fixed)
-
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-        return self._held(**fixed)
-
-
-class RemembersFirstCall(Subtracting):
-    """Breaks caching: a stage holds the outputs of its first call."""
-
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        held: list[Mapping[str, Any]] = []
-
-        def call(**values: Any) -> Mapping[str, Any]:
-            if not held:
-                held.append(subtract(**fixed, **values))
-            return held[0]
-
-        return call
-
-
 class JoinsInPlace:
     """
     Breaks the rows: joins the lists of one table ``parts`` by adding in
     place to the first row's list, not to a copy of it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.joined: list[float] | None = None
 
-    def push(self, rows: Rows) -> None:
-        row = rows['parts']
-        if self.joined is None:
-            self.joined = row['x']
-        else:
-            self.joined += row['x']
+    def push(self, table: str, rows: Sequence[Row]) -> None:
+        for row in rows:
+            if self.joined is None:
+                self.joined = row['x']
+            else:
+                self.joined += row['x']
 
     def outputs(self) -> Mapping[str, Any]:
         return {'x': self.joined}
-
-
-class Joining:
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        return combine(operator.add).stage(fixed, blanks)
-
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-        return JoinsInPlace()
 
 
 TABLES = {
@@ -136,86 +117,88 @@ TABLES = {
 
 
 def test_arrival_and_order_pass_for_sums_kept_per_table() -> None:
-    check_arrival_and_order(Subtracting(), {'scale': 2.0}, TABLES)
+    check_arrival_and_order(Sums, {'scale': 2.0}, TABLES)
 
 
-def test_arrival_fails_for_a_held_state_that_keeps_only_the_last_row() -> None:
+def test_arrival_fails_for_a_driver_that_keeps_only_the_last_push() -> None:
     with pytest.raises(
-        AssertionError, match=r"arrival, table by table, state 2 .* 'diff'"
+        AssertionError, match=r"arrival, one row per push, table by table, state 2 "
     ):
-        check_arrival_and_order(Subtracting(KeepsLastRow), {'scale': 2.0}, TABLES)
+        check_arrival_and_order(KeepsLastPush, {'scale': 2.0}, TABLES)
 
 
-def test_order_fails_for_a_held_state_that_drops_rows_of_a_table_pushed_first() -> None:
-    with pytest.raises(AssertionError, match='arrival, tables reversed, state 1 '):
+def test_order_fails_for_a_driver_that_drops_rows_of_a_table_pushed_first() -> None:
+    with pytest.raises(
+        AssertionError, match='arrival, one push per table, reversed, state 2 '
+    ):
+        check_arrival_and_order(StartsAtFirstSample, {'scale': 2.0}, TABLES)
+
+
+def test_arrival_fails_for_a_driver_that_modifies_the_rows() -> None:
+    with pytest.raises(
+        AssertionError,
+        match=r"rows after pushing them, one push per table, 'parts'\[0\]",
+    ):
         check_arrival_and_order(
-            Subtracting(StartsAtFirstSample), {'scale': 2.0}, TABLES
+            JoinsInPlace, {}, {'parts': [{'x': [1.0]}, {'x': [2.0]}]}
         )
 
 
-def test_arrival_fails_for_a_held_state_that_modifies_the_rows() -> None:
-    with pytest.raises(
-        AssertionError, match=r"rows after pushing them, table by table, 'parts'\[0\]"
-    ):
-        check_arrival_and_order(Joining(), {}, {'parts': [{'x': [1.0]}, {'x': [2.0]}]})
-
-
-def test_states_whose_plain_request_raises_are_not_read() -> None:
-    def ratio(sample: list[Rows], can: list[Rows]) -> dict[str, float]:
-        return {'ratio': sum(r['x'] for r in sample) / sum(r['x'] for r in can)}
-
-    class Ratio:
-        def __init__(self) -> None:
-            self.sums = {'sample': 0.0, 'can': 0.0}
-
-        def push(self, rows: Rows) -> None:
-            for table, row in rows.items():
-                self.sums[table] += row['x']
-
+def test_states_that_a_driver_refuses_are_not_read() -> None:
+    class Ratio(Sums):
         def outputs(self) -> Mapping[str, float]:
             return {'ratio': self.sums['sample'] / self.sums['can']}
 
-    class Ratios:
-        def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-            return functools.partial(ratio, **fixed)
-
-        def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-            return Ratio()
-
-    check_arrival_and_order(Ratios(), {}, TABLES)
+    check_arrival_and_order(Ratio, {}, TABLES)
     with pytest.raises(ZeroDivisionError):
-        check_arrival_and_order(Ratios(), {}, {'sample': [{'x': 1.0}], 'can': []})
+        check_arrival_and_order(Ratio, {}, {'sample': [{'x': 1.0}], 'can': []})
 
 
 def test_caching_passes_for_a_stage_that_computes_each_call() -> None:
     calls = [{'scale': 1.0}, {'scale': 2.0}, {'scale': 1.0}]
-    check_caching(Subtracting(), TABLES, calls)
+    check_caching(Calls(subtract), TABLES, calls)
+
+
+class RemembersFirstCall(Calls):
+    """Breaks caching: a stage holds the outputs of its first call."""
+
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+        held: list[Mapping[str, Any]] = []
+
+        def call(values: Mapping[str, Any]) -> Mapping[str, Any]:
+            if not held:
+                held.append(self.function(**fixed, **values))
+            return held[0]
+
+        return call
 
 
 def test_caching_fails_for_a_stage_that_holds_the_outputs_of_its_first_call() -> None:
     calls = [{'scale': 1.0}, {'scale': 2.0}]
     with pytest.raises(AssertionError, match=r"caching, call 2 \{'scale': 2.0\}"):
-        check_caching(RemembersFirstCall(), TABLES, calls)
+        check_caching(RemembersFirstCall(subtract), TABLES, calls)
 
 
-def single(sample: float, can: float | None, scale: float) -> dict[str, float]:
-    return {'diff': scale * (sample - (can or 0.0))}
+def single(sample: float, can: float, scale: float) -> dict[str, float]:
+    return {'diff': scale * (sample - can)}
 
 
 def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs() -> None:
     check_one_row(
-        single,
-        Subtracting(),
-        {'sample': 5.0, 'can': None, 'scale': 2.0},
-        {'sample': [{'x': 5.0}], 'can': [], 'scale': 2.0},
+        Calls(single),
+        Calls(subtract),
+        {'sample': 5.0, 'can': 1.0, 'scale': 2.0},
+        {'sample': [{'x': 5.0}], 'can': [{'x': 1.0}], 'scale': 2.0},
     )
 
 
 def test_one_row_fails_if_the_outputs_differ() -> None:
     with pytest.raises(AssertionError, match=r"one-row, 'diff': 10.0, expected 8.0"):
         check_one_row(
-            single,
-            Subtracting(),
+            Calls(single),
+            Calls(subtract),
             {'sample': 5.0, 'can': 1.0, 'scale': 2.0},
             {'sample': [{'x': 5.0}], 'can': [], 'scale': 2.0},
         )
@@ -225,8 +208,8 @@ def test_one_row_fails_if_the_outputs_differ() -> None:
     'make', [lambda v: np.array(v), lambda v: sc.array(dims=['q'], values=v)]
 )
 def test_arrays_are_compared_up_to_rtol(make: Any) -> None:
-    def returning(values: list[float]) -> Function:
-        return lambda: {'y': make(values)}
+    def returning(values: list[float]) -> Calls:
+        return Calls(lambda: {'y': make(values)})
 
     check_one_row(returning([1.0, 2.0]), returning([1.0, 2.0 + 1e-14]), {}, {})
     with pytest.raises(AssertionError, match="one-row, 'y'"):
@@ -274,20 +257,17 @@ def first_half_copied(data: Any) -> dict[str, Any]:
 def test_one_row_fails_for_an_output_that_shares_memory_with_a_value(
     data: Any,
 ) -> None:
-    check_one_row(first_half_copied, first_half_copied, {'data': data}, {'data': data})
+    copied, viewed = Calls(first_half_copied), Calls(first_half)
+    check_one_row(copied, copied, {'data': data}, {'data': data})
     with pytest.raises(
         AssertionError, match=r"^one-row, single-run: output \['half'\]\S* shares"
     ):
-        check_one_row(first_half, first_half_copied, {'data': data}, {'data': data})
+        check_one_row(viewed, copied, {'data': data}, {'data': data})
 
 
 def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> None:
     def masked(data: sc.DataArray, scale: float) -> dict[str, Any]:
         return {'out': sc.DataArray(data.data * scale, masks=dict(data.masks))}
-
-    class Masking:
-        def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-            return lambda **values: masked(**fixed, **values)
 
     data = sc.DataArray(
         sc.array(dims=['q'], values=[1.0, 2.0]),
@@ -295,4 +275,4 @@ def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> N
     )
     shared = r"(?s)^caching, call 1 .*, plain: output \['out'\]\.masks\['m'\]"
     with pytest.raises(AssertionError, match=shared):
-        check_caching(Masking(), {'data': data}, [{'scale': 2.0}])
+        check_caching(Calls(masked), {'data': data}, [{'scale': 2.0}])

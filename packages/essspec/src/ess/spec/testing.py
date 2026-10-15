@@ -4,48 +4,44 @@
 Checks of the symmetries that a workflow author promises, for a package's tests.
 
 Each check computes the same outputs in two ways and compares them, so it
-needs no known result. With a single-run binding ``single`` and a multi-run
-binding ``multi`` of one reduction::
+needs no known result. With a single-run binding ``single`` (a
+``PipelineBinding``), a multi-run binding ``multi`` (a ``DriverBinding``) of
+one reduction, and the function ``make_driver`` that ``multi`` makes its
+drivers with::
 
-    binning = {'binning': {'bins': 100}}
+    reduction = {'reduction': {'bins': 2}}
     check_one_row(
         single,
         multi,
-        {'sample': {'file': run_611}, 'can': None, **binning},
-        {'sample_runs': [{'file': run_611}], 'can_runs': [], **binning},
+        {'sample': {'file': run_101}, 'can': {'file': run_110}, **reduction},
+        {'sample': [{'file': run_101}], 'can': [{'file': run_110}], **reduction},
     )
-    tables = {
-        'sample_runs': [{'file': run_611}, {'file': run_612}],
-        'can_runs': [{'file': run_614}],
-    }
-    calls = [{'binning': {'bins': n}} for n in (50, 100, 50)]
-    check_caching(multi, tables, calls)
-    check_arrival_and_order(multi, binning, tables)
+    check_caching(single, {'sample': ..., 'can': ...}, [{'reduction': ...}, ...])
+    check_arrival_and_order(make_driver, reduction, {'sample': [...], 'can': [...]})
 
-Values are those the binding receives: data read and defaults filled in.
-Outputs are compared up to ``rtol``, since adding in another order rounds
-differently, with :func:`assert_close`. :func:`check_one_row` and
-:func:`check_caching` also check that no output shares memory with a value
-the workflow was given. A failed check raises ``AssertionError`` naming the
-symmetry and the call. The symmetries are those
-of docs/developer/README.md (Symmetries).
+Values are those the binding receives: data read. Outputs are compared up to
+``rtol``, since adding in another order rounds differently, with
+:func:`assert_close`. :func:`check_one_row` and :func:`check_caching` also
+check that no output shares memory with a value the workflow was given. A
+failed check raises ``AssertionError`` naming the symmetry and the call. The
+symmetries are those of docs/developer/README.md (Symmetries).
 """
 
 from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
 
-from .binding import Binding, Function, HeldStateBinding
+from .binding import Binding, Driver, StageBinding
 
 Row = Mapping[str, Any]
 
 
 def check_one_row(
-    single: Binding | Function,
-    multi: Binding | Function,
+    single: Binding,
+    multi: Binding,
     single_values: Mapping[str, Any],
     multi_values: Mapping[str, Any],
     *,
@@ -56,18 +52,17 @@ def check_one_row(
     the single-run binding.
 
     ``multi_values`` are ``single_values`` with each run's group as a table of
-    one row of the same model, and a group left out (``None``) as an empty
-    table.
+    one row of the same model.
     """
-    expected = _plain(single, single_values)
-    actual = _plain(multi, multi_values)
+    expected = single.compute(single_values)
+    actual = multi.compute(multi_values)
     _check_no_shared_memory(expected, single_values, where='one-row, single-run')
     _check_no_shared_memory(actual, multi_values, where='one-row, multi-run')
     assert_close(actual, expected, rtol=rtol, where='one-row')
 
 
 def check_caching(
-    binding: Binding,
+    binding: StageBinding,
     fixed: Mapping[str, Any],
     calls: Sequence[Mapping[str, Any]],
     *,
@@ -77,16 +72,16 @@ def check_caching(
     Caching: each call through one stage gives the outputs of the plain
     request with the same values.
 
-    The stage is made with ``fixed`` and the fields of the calls as blanks, and
-    called in the order given. Repeat a call after others, as in
-    bins 50, 100, and 50 again, to find a stage whose
-    calls change what it holds.
+    The stage is made with ``fixed`` and the parameters of the calls as
+    blanks, and called in the order given. Repeat a call after others, as in
+    bins 50, 100, and 50 again, to find a stage whose calls change what it
+    holds.
     """
-    call = binding.stage(fixed, tuple(calls[0]))
+    call = binding.make_stage(fixed, tuple(calls[0]))
     for n, values in enumerate(calls, start=1):
         given = {**fixed, **values}
-        expected = binding.stage(given, ())()
-        actual = call(**values)
+        expected = binding.compute(given)
+        actual = call(values)
         where = f'caching, call {n} {values}'
         _check_no_shared_memory(expected, given, where=f'{where}, plain')
         _check_no_shared_memory(actual, given, where=f'{where}, staged')
@@ -94,74 +89,90 @@ def check_caching(
 
 
 def check_arrival_and_order(
-    binding: HeldStateBinding,
+    make_driver: Callable[[Mapping[str, Any]], Driver],
     fixed: Mapping[str, Any],
     tables: Mapping[str, Sequence[Row]],
     *,
     rtol: float = 1e-12,
 ) -> None:
     """
-    Arrival and order: after each push, a held state gives the outputs of the
-    plain request whose tables hold the rows pushed so far.
+    Arrival and order: after each push, a driver gives the outputs that one
+    push of each table's rows so far gives.
 
-    ``tables`` holds every table field the held state fills, with its rows;
-    ``fixed`` holds every other parameter. The rows are pushed into a new held
-    state for each of several schedules, each table's rows in their order:
-    table by table, the tables reversed, a row of each table per push, and one
-    row per push alternating between the tables. Every schedule ends with the
-    same rows, so arrival in all of them is order too.
+    ``make_driver`` makes a driver from ``fixed``, the values that are not
+    tables, as for a ``DriverBinding``. ``tables`` holds the rows of each
+    table. The rows are pushed into a new driver for each of several
+    schedules, each table's rows in their order: one push per table, the
+    tables reversed, one row per push table by table, and one row per push
+    alternating between the tables. Every schedule ends with the same rows,
+    so arrival in all of them is order too.
 
-    A state whose plain request raises is not read, as the framework would
-    refuse to read it; the state with every row is always read. The check
-    fails if a push modifies the rows it was given.
+    The expected outputs come from a new driver with one push per table that
+    has rows so far. A state whose expected outputs raise is not read, since
+    a driver may refuse a state; the state with every row is always read. The
+    check fails if a push modifies the rows it was given.
+
+    The check compares the driver with itself under other push schedules, so
+    it does not prove that the outputs are right. Only a comparison with an
+    independent reference does, such as :func:`check_one_row` against the
+    single-run binding, if the package writes one.
     """
     pristine = copy.deepcopy(tables)
     for name, schedule in _schedules(tables):
-        held = binding.held_state(fixed)
+        driver = make_driver(fixed)
         pushed: dict[str, list[Row]] = {t: [] for t in tables}
-        for n, push in enumerate(schedule, start=1):
-            held.push({t: tables[t][i] for t, i in push.items()})
-            for t, i in push.items():
-                pushed[t].append(pristine[t][i])
-            plain = {**fixed, **copy.deepcopy(pushed)}
+        for n, (table, start, stop) in enumerate(schedule, start=1):
+            driver.push(table, list(tables[table][start:stop]))
+            pushed[table].extend(pristine[table][start:stop])
             try:
-                expected = binding.stage(plain, ())()
+                expected = _one_push_per_table(make_driver, fixed, pushed)
             except Exception:
                 if n == len(schedule):
                     raise
                 continue
             where = f'arrival, {name}, state {n} of pushes {schedule[:n]}'
-            assert_close(held.outputs(), expected, rtol=rtol, where=where)
+            assert_close(driver.outputs(), expected, rtol=rtol, where=where)
         assert_close(
             tables, pristine, rtol=0.0, where=f'rows after pushing them, {name}'
         )
 
 
+def _one_push_per_table(
+    make_driver: Callable[[Mapping[str, Any]], Driver],
+    fixed: Mapping[str, Any],
+    tables: Mapping[str, Sequence[Row]],
+) -> Mapping[str, Any]:
+    driver = make_driver(fixed)
+    for table, rows in tables.items():
+        if rows:
+            driver.push(table, copy.deepcopy(list(rows)))
+    return driver.outputs()
+
+
 def _schedules(
     tables: Mapping[str, Sequence[Row]],
-) -> list[tuple[str, list[dict[str, int]]]]:
+) -> list[tuple[str, list[tuple[str, int, int]]]]:
     """
-    Named push schedules over the rows of ``tables``, each push as the index
-    of its row in each table it fills; schedules that push the same are listed
-    once.
+    Named push schedules over the rows of ``tables``, each push as its table
+    and the slice of its rows; schedules that push the same are listed once.
     """
-    names = list(tables)
+    names = [t for t in tables if tables[t]]
     longest = max((len(rows) for rows in tables.values()), default=0)
 
-    def by_table(order: Sequence[str]) -> list[dict[str, int]]:
-        return [{t: i} for t in order for i in range(len(tables[t]))]
+    def whole(order: Sequence[str]) -> list[tuple[str, int, int]]:
+        return [(t, 0, len(tables[t])) for t in order]
 
     candidates = {
-        'table by table': by_table(names),
-        'tables reversed': by_table(names[::-1]),
-        'a row of each table per push': [
-            {t: i for t in names if i < len(tables[t])} for i in range(longest)
+        'one push per table': whole(names),
+        'one push per table, reversed': whole(names[::-1]),
+        'one row per push, table by table': [
+            (t, i, i + 1) for t in names for i in range(len(tables[t]))
         ],
-        'alternating tables': [
-            {t: i} for i in range(longest) for t in names if i < len(tables[t])
+        'one row per push, alternating tables': [
+            (t, i, i + 1) for i in range(longest) for t in names if i < len(tables[t])
         ],
     }
-    unique: dict[str, tuple[str, list[dict[str, int]]]] = {}
+    unique: dict[str, tuple[str, list[tuple[str, int, int]]]] = {}
     for name, schedule in candidates.items():
         unique.setdefault(repr(schedule), (name, schedule))
     return list(unique.values())
@@ -219,12 +230,6 @@ def _scipp_arrays(value: Any, at: str) -> Iterator[tuple[str, Any]]:
         yield from _arrays(dict(value.masks), f'{at}.masks')
     elif isinstance(value, sc.Dataset):
         yield from _arrays(dict(value.items()), at)
-
-
-def _plain(code: Binding | Function, values: Mapping[str, Any]) -> Mapping[str, Any]:
-    if isinstance(code, Binding):
-        return code.stage(values, ())()
-    return code(**values)
 
 
 def assert_close(

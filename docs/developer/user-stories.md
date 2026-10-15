@@ -30,9 +30,11 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 Each param is a group (a flat model) or a table (a list of one); `Run` (a field `file`) serves as both.
 
-The binding of `IOFQ` is the function `iofq`.
-`NORMALIZE`, `BACKGROUND`, and `VOLUME` are bound to `Summing`, a toy `StreamProcessor`: it sums the counts of each table's runs, and computes the outputs from the sums, so a push into an accumulator adds to the sums instead of keeping the rows.
-`PARTS_SUM` is bound to `combine(operator.add)`.
+`IOFQ` and `VANADIUM`, which the stories stage, are bound to the functions `iofq` and `vanadium` by a toy binding that serves plain requests and stages.
+`NORMALIZE`, `BACKGROUND`, and `VOLUME` are bound with `DriverBinding` to `Summing`, a toy driver: it sums the counts of each table's runs, and computes the outputs from the sums, so a push into an accumulator adds to the sums instead of keeping the rows.
+`STITCH` is bound with `DriverBinding` to a driver that keeps the rows and stitches them at each read.
+`PARTS_SUM` is bound with `function_binding` to a function that sums each field over the rows of `parts`.
+The other toy specs are bound with `function_binding`.
 No toy spec returns an output that shares memory with an input.
 A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
 
@@ -265,10 +267,10 @@ Actor: user in a notebook. Goal: runs 611 and 612 are summed; 613 finishes and i
 r611, r612, r613 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0]), measure(613, [3.0, 1.0])
 total = client.accumulator(Template(NORMALIZE, params={'scaling': Scaling(scale=2.0)}, blanks=('runs',)))
 for run in (r611, r612):
-    total.push({'runs': Run(file=run)})
+    total.push('runs', [Run(file=run)])
 first = client.output(total, 'normalized')                # runs 611 and 612
 
-total.push({'runs': Run(file=r613)})                       # 611 and 612 are not reduced again
+total.push('runs', [Run(file=r613)])                      # 611 and 612 are not reduced again
 added = client.output(total, 'normalized')                # all three
 
 rows = [Run(file=run) for run in (r611, r613)]
@@ -371,7 +373,7 @@ assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
 ```
 
-The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its binding is a function, so the held state keeps the rows and stitches them again (README.md, "What a binding provides").
+The stitch fits scale factors over all angles at once, so it cannot add one angle at a time. An accumulator over `STITCH` still gives what the plain request gives at each read: its driver keeps the rows and stitches them again at each read (README.md, "What a binding provides").
 
 ### C5. Vanadium and sample tuned together
 
@@ -395,7 +397,7 @@ normalization = reduced[-1].request.params['corrections']['normalization']
 assert normalization == client.latest('vanadium').ref('normalization')
 ```
 
-The notebook is the driver: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
+The notebook is the controller: it reruns the sample after each vanadium change. Its client keeps the outputs it reads later; a label keeps no values. That the change comes back quickly is system story C5.
 
 ## D. Batch
 
@@ -535,7 +537,7 @@ for n in range(1, 301):
 cuts, pushed = [], []
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-    volume.push({'runs': Run(file=run)})                        # added once the previous cut is copied
+    volume.push('runs', [Run(file=run)])                       # added once the previous cut is copied
     pushed.append(run)
     cuts.append(client.output(volume, 'counts', select={'q': 0}))   # a copy of the cut; no record
 total = client.freeze(volume, persist=True)                    # the last state, written once
@@ -640,7 +642,7 @@ stale = [r for r in user.records(label='iofq') if r.request.params['reduction'][
 assert [r.request.datasets() for r in stale] == [[first]]       # to reprocess, if the user wants
 ```
 
-The second loop stands in for the driving server replacing the rule. It learns that run 1 is handled from the records under `iofq`.
+The second loop stands in for a running trigger loop whose rule is replaced. It learns that run 1 is handled from the records under `iofq`.
 
 ## F. Publication and provenance
 
@@ -695,8 +697,8 @@ That the recorded environment can be installed again is system story F2.
 Actor: workflow developer. Goal: run a workflow defined in a notebook without installing it.
 
 ```python
-draft = iofq                                                  # IOFQ's binding, being edited
-dev = local(proposal='p1', datasets=datasets, bind={IOFQ: draft})   # a backend in this process
+draft = iofq                                                  # IOFQ's function, being edited
+dev = local(proposal='p1', datasets=datasets, bind=[function_binding(IOFQ, draft)])   # a backend in this process
 result = dev.compute(IOFQ, IofQParams(sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0]))))
 
 assert dev.output(result, 'iofq').values.tolist() == [3.0, 7.0]
@@ -744,5 +746,5 @@ What the design leaves open or defers, with the stories each item affects.
 - **Looks that compute** (B4, D7): a selection only indexes; a projection or a thick slice summed waits for the plotting work; README.md open question 4.
 - **Persist at submission** (D1, D2, D3, D6, E1 to E4): whether `persist=` should also keep the values for the client; README.md open question 6.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
-- **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two held states; README.md open question 1.
+- **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.

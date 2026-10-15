@@ -185,7 +185,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        volume.push({'runs': Run(file=run)})  # added once the previous cut is copied
+        volume.push('runs', [Run(file=run)])  # added once the previous cut is copied
         pushed.append(run)
         cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
     total = client.freeze(volume, persist=True)

@@ -19,7 +19,7 @@ from ess.dispatch import (
     apply,
 )
 from ess.dispatch.testing import FakeDatasets, FakeStore
-from ess.spec import Array, NexusFile, WorkflowSpec
+from ess.spec import Array, NexusFile, WorkflowSpec, function_binding
 
 
 class Run(BaseModel):
@@ -73,11 +73,15 @@ def datasets() -> FakeDatasets:
 def client(datasets: FakeDatasets) -> Iterator[Client]:
     backend = Backend(
         datasets,
-        {
-            LOAD: lambda sample: {'value': sample['file']},
-            SUBTRACT: lambda sample, can: {'value': sample['file'] - can['file']},
-            MEASURE: lambda sample, can: {'value': sample['nexus'] - can['nexus']},
-        },
+        [
+            function_binding(LOAD, lambda sample: {'value': sample['file']}),
+            function_binding(
+                SUBTRACT, lambda sample, can: {'value': sample['file'] - can['file']}
+            ),
+            function_binding(
+                MEASURE, lambda sample, can: {'value': sample['nexus'] - can['nexus']}
+            ),
+        ],
         store=FakeStore(),
     )
     yield Client(backend, proposal='p1', submitter='anna')

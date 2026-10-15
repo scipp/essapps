@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A sciline pipeline behind a spec, in plain requests, through stages, and in
-accumulators.
+A sciline pipeline behind a spec, in plain requests and through stages; it
+makes no accumulators.
 """
 
 from collections.abc import Iterator
@@ -12,7 +12,7 @@ import pytest
 import sciline
 from pydantic import BaseModel, Field
 
-from ess.dispatch import Backend, Client, Status, Template, dataset
+from ess.dispatch import Backend, Client, Status, SubmitError, Template, dataset
 from ess.dispatch.testing import FakeDatasets
 from ess.spec import Array, NexusFile, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
@@ -109,16 +109,18 @@ def client(pipeline: sciline.Pipeline) -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1')
     datasets.measure(1, 1.0)
     binding = PipelineBinding(
+        SHIFT,
         pipeline,
         params={'sample.file': Run, 'shift.offset': Offset, 'annotation.note': Note},
         outputs={'value': Shifted},
     )
     summing = PipelineBinding(
+        TOTAL,
         pipeline,
         params={'sample.file': Run, 'offsets': Offsets},
         outputs={'total': Total},
     )
-    backend = Backend(datasets, {SHIFT: binding, TOTAL: summing})
+    backend = Backend(datasets, [binding, summing])
     yield Client(backend, proposal='p1', submitter='anna')
     backend.close()
 
@@ -138,26 +140,21 @@ def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None
     assert loaded == [1.0, 1.0]  # once for the stage, once for the plain request
 
 
-def test_an_accumulator_loads_its_run_once_across_reads(
-    client: Client, loaded: list[float]
+def test_a_pipeline_takes_a_table_whole_and_makes_no_accumulators(
+    client: Client,
 ) -> None:
-    summed = client.accumulator(
-        Template(
-            TOTAL, params={'sample': {'file': dataset(run=1)}}, blanks=('offsets',)
-        )
-    )
-    reads = []
-    for offset in (0.5, 1.5, 2.5):
-        summed.push({'offsets': {'offset': offset}})
-        reads.append(client.output(summed, 'total'))
     offsets = [{'offset': x} for x in (0.5, 1.5, 2.5)]
     plain = client.compute(
         TOTAL, {'sample': {'file': dataset(run=1)}, 'offsets': offsets}
     )
 
-    assert reads == [10.5, 22.0, 34.5]
     assert client.output(plain, 'total') == 34.5
-    assert loaded == [1.0, 1.0]  # once for the accumulator, once for the plain request
+    with pytest.raises(SubmitError, match='its binding makes no accumulators'):
+        client.accumulator(
+            Template(
+                TOTAL, params={'sample': {'file': dataset(run=1)}}, blanks=('offsets',)
+            )
+        )
 
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
@@ -177,11 +174,12 @@ def test_a_parameter_without_a_sciline_key_fails_the_record(
     datasets = FakeDatasets(proposal='p1')
     datasets.measure(1, 1.0)
     binding = PipelineBinding(
+        SHIFT,
         pipeline,
         params={'sample.file': Run, 'shift.offset': Offset},
         outputs={'value': Shifted},
     )
-    backend = Backend(datasets, {SHIFT: binding})
+    backend = Backend(datasets, [binding])
     client = Client(backend, proposal='p1', submitter='anna')
 
     record = client.compute(SHIFT, {'sample': {'file': dataset(run=1)}})

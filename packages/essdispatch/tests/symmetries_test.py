@@ -3,34 +3,31 @@
 """
 The symmetries of docs/developer/README.md on a toy package that offers a
 single-run and a multi-run spec of one reduction, as
-docs/developer/three-ways-to-run-a-spec.html shows them.
+docs/developer/three-ways-to-run-a-spec.html shows them: a sciline pipeline of
+one sample run and one can run behind the single-run spec, and a driver over
+the same pipeline behind the multi-run spec.
 
 A run holds counts per pixel. A run's I(Q) is its counts summed into ``bins``
 bins over the pixels (the numerator) divided by its total counts (the
-denominator); the can's I(Q) is subtracted. Over several runs of a kind, the
-numerators and the denominators are summed before dividing, so a held state
-keeps the sums and not an I(Q).
+denominator); the can's I(Q) is subtracted if there is a can run. Over
+several runs of a kind, the numerators and the denominators are summed before
+dividing.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any
+from typing import Any, NewType
 
 import numpy as np
 import pytest
+import sciline
 import scipp as sc
 import scipp.testing
 from pydantic import BaseModel, Field
 
 from ess.dispatch import Client, SubmitError, Template, dataset, local
 from ess.dispatch.testing import FakeDatasets
-from ess.spec import (
-    Array,
-    Function,
-    HeldState,
-    NexusFile,
-    WorkflowSpec,
-)
-from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
+from ess.spec import Array, DriverBinding, NexusFile, WorkflowSpec
+from ess.spec.pipeline import PipelineBinding
 
 
 class SampleRow(BaseModel):
@@ -54,8 +51,8 @@ class IofQParams(BaseModel):
 
 
 class MultiIofQParams(BaseModel):
-    sample_runs: list[SampleRow]
-    can_runs: list[CanRow] = []
+    sample: list[SampleRow]
+    can: list[CanRow]
     reduction: Reduction = Field(default_factory=Reduction)
 
 
@@ -78,105 +75,99 @@ IOFQ = _spec('iofq', IofQParams)
 IOFQ_MULTI = _spec('iofq-multi', MultiIofQParams)
 
 
-def _parts(run: Any, bins: int) -> np.ndarray:
-    """A run's numerator per bin, followed by its denominator."""
-    counts = np.asarray(run, dtype=float)
-    return np.append(counts.reshape(bins, -1).sum(axis=1), counts.sum())
+SampleFile = NewType('SampleFile', list)
+CanFile = NewType('CanFile', list)
+Bins = NewType('Bins', int)
+SampleNumerator = NewType('SampleNumerator', np.ndarray)
+SampleDenominator = NewType('SampleDenominator', float)
+CanNumerator = NewType('CanNumerator', np.ndarray)
+CanDenominator = NewType('CanDenominator', float)
+IofQ = NewType('IofQ', sc.Variable)
 
 
-def _iofq(sample: np.ndarray, can: np.ndarray | None) -> dict[str, sc.Variable]:
-    result = sample[:-1] / sample[-1]
-    if can is not None:
-        result = result - can[:-1] / can[-1]
-    return {'iofq': sc.array(dims=['q'], values=result)}
+def _counts(run: list | None) -> np.ndarray:
+    """A run's counts per pixel; no run counts nothing."""
+    return np.asarray([] if run is None else run, dtype=float)
+
+
+def sample_numerator(run: SampleFile, bins: Bins) -> SampleNumerator:
+    return SampleNumerator(_counts(run).reshape(bins, -1).sum(axis=1))
+
+
+def sample_denominator(run: SampleFile) -> SampleDenominator:
+    return SampleDenominator(_counts(run).sum())
+
+
+def can_numerator(run: CanFile, bins: Bins) -> CanNumerator:
+    return CanNumerator(_counts(run).reshape(bins, -1).sum(axis=1))
+
+
+def can_denominator(run: CanFile) -> CanDenominator:
+    return CanDenominator(_counts(run).sum())
 
 
 def iofq(
-    sample: Mapping[str, Any],
-    can: Mapping[str, Any] | None,
-    reduction: Mapping[str, Any],
-) -> dict[str, sc.Variable]:
-    bins = reduction['bins']
-    return _iofq(
-        _parts(sample['file'], bins), None if can is None else _parts(can['file'], bins)
-    )
+    sample_num: SampleNumerator,
+    sample_den: SampleDenominator,
+    can_num: CanNumerator,
+    can_den: CanDenominator,
+) -> IofQ:
+    can = np.divide(can_num, can_den, out=np.zeros_like(can_num), where=can_den > 0)
+    return IofQ(sc.array(dims=['q'], values=sample_num / sample_den - can))
 
 
-class Sums:
-    def __init__(self, reduction: Mapping[str, Any]) -> None:
-        self._bins = reduction['bins']
-        self._sums: dict[str, np.ndarray] = {}
+SANS = sciline.Pipeline(
+    [sample_numerator, sample_denominator, can_numerator, can_denominator, iofq]
+)
+SINGLE = PipelineBinding(
+    IOFQ,
+    SANS,
+    params={'sample.file': SampleFile, 'can.file': CanFile, 'reduction.bins': Bins},
+    outputs={'iofq': IofQ},
+)
 
-    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
-        for table, row in rows.items():
-            parts = _parts(row['file'], self._bins)
-            if table in self._sums:
-                self._sums[table] += parts
-            else:
-                self._sums[table] = parts
+
+class IofQDriver:
+    """
+    Sums the numerator and the denominator of each table's runs, and divides
+    once, at a read.
+    """
+
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        wf = SANS.copy()
+        wf[Bins] = fixed['reduction']['bins']
+        parts = {
+            'sample': (SampleFile, (SampleNumerator, SampleDenominator)),
+            'can': (CanFile, (CanNumerator, CanDenominator)),
+        }
+        self._contribute = {
+            table: (key, sciline.Stage(wf, inputs=(key,), outputs=summed))
+            for table, (key, summed) in parts.items()
+        }
+        summed = [key for _, keys in parts.values() for key in keys]
+        self._finalize = sciline.Stage(wf, inputs=summed, outputs=(IofQ,))
+        self._sums: dict[Any, Any] = {}
+
+    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        key, stage = self._contribute[table]
+        for row in rows:
+            for k, part in stage.compute({key: row['file']}).items():
+                self._sums[k] = self._sums[k] + part if k in self._sums else part
 
     def outputs(self) -> Mapping[str, Any]:
-        return _iofq(self._sums['sample_runs'], self._sums.get('can_runs'))
+        return {'iofq': self._finalize.compute(self._sums)[IofQ]}
 
 
-class MultiIofQ:
-    """The multi-run binding: a held state of sums, and a plain request over them."""
-
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        def call(**values: Any) -> Mapping[str, Any]:
-            params = {**fixed, **values}
-            held = self.held_state({'reduction': params['reduction']})
-            for table in ('sample_runs', 'can_runs'):
-                for row in params[table]:
-                    held.push({table: row})
-            return held.outputs()
-
-        return call
-
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-        return Sums(**fixed)
+MULTI = DriverBinding(IOFQ_MULTI, IofQDriver)
 
 
-def test_the_multi_run_binding_keeps_the_symmetries_its_author_promises() -> None:
-    sample, can = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]], [[1.0, 1.0, 1.0, 1.0]]
-    tables = {
-        'sample_runs': [{'file': run} for run in sample],
-        'can_runs': [{'file': run} for run in can],
-    }
-    check_one_row(
-        iofq,
-        MultiIofQ(),
-        {
-            'sample': {'file': sample[0]},
-            'can': {'file': can[0]},
-            'reduction': {'bins': 2},
-        },
-        {
-            'sample_runs': tables['sample_runs'][:1],
-            'can_runs': tables['can_runs'],
-            'reduction': {'bins': 2},
-        },
-    )
-    reductions = [{'reduction': {'bins': n}} for n in (2, 1, 2)]
-    check_caching(MultiIofQ(), tables, reductions)
-    check_arrival_and_order(MultiIofQ(), {'reduction': {'bins': 2}}, tables)
-
-
-@pytest.fixture(
-    params=[MultiIofQ(), MultiIofQ().stage({}, ())],
-    ids=['held state', 'plain function'],
-)
-def client(request: pytest.FixtureRequest) -> Iterator[Client]:
-    """
-    A client whose multi-run binding accumulates, or is a plain function whose
-    rows the framework keeps.
-    """
+@pytest.fixture
+def client() -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1')
     datasets.measure(611, [1.0, 3.0, 2.0, 6.0])
+    datasets.measure(612, [2.0, 6.0, 4.0, 12.0])  # twice 611: the same I(Q)
     datasets.measure(614, [1.0, 1.0, 1.0, 1.0])
-    with local(
-        proposal='p1', datasets=datasets, bind={IOFQ: iofq, IOFQ_MULTI: request.param}
-    ) as client:
+    with local(proposal='p1', datasets=datasets, bind=[SINGLE, MULTI]) as client:
         yield client
 
 
@@ -191,7 +182,7 @@ def _single(client: Client) -> sc.Variable:
 
 
 def _one_row(client: Client) -> sc.Variable:
-    tables = {'sample_runs': [{'file': SAMPLE}], 'can_runs': [{'file': CAN}]}
+    tables = {'sample': [{'file': SAMPLE}], 'can': [{'file': CAN}]}
     return client.output(client.compute(IOFQ_MULTI, tables), 'iofq')
 
 
@@ -207,28 +198,27 @@ def _through_a_stage(client: Client) -> sc.Variable:
     return client.output(client.compute(stage, {'reduction': {'bins': 2}}), 'iofq')
 
 
-def _pushed(*pushes: Mapping[str, Any]) -> Callable[[Client], sc.Variable]:
+def _pushed(*pushes: tuple[str, list[Any]]) -> Callable[[Client], sc.Variable]:
     def read(client: Client) -> sc.Variable:
-        acc = client.accumulator(
-            Template(IOFQ_MULTI, blanks=('sample_runs', 'can_runs'))
-        )
-        for push in pushes:
-            acc.push(push)
+        acc = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
+        for table, rows in pushes:
+            acc.push(table, rows)
         return client.output(acc, 'iofq')
 
     return read
 
 
+SAMPLES = [{'file': SAMPLE}, {'file': dataset(run=612)}]
+
 WAYS = {
     'one-row': _one_row,
     'caching': _through_a_stage,
-    'arrival': _pushed({'sample_runs': {'file': SAMPLE}, 'can_runs': {'file': CAN}}),
-    'order, sample first': _pushed(
-        {'sample_runs': {'file': SAMPLE}}, {'can_runs': {'file': CAN}}
+    'arrival': _pushed(('sample', SAMPLES), ('can', [{'file': CAN}])),
+    'arrival, one row per push': _pushed(
+        ('sample', SAMPLES[:1]), ('sample', SAMPLES[1:]), ('can', [{'file': CAN}])
     ),
-    'order, can first': _pushed(
-        {'can_runs': {'file': CAN}}, {'sample_runs': {'file': SAMPLE}}
-    ),
+    'order, sample first': _pushed(('sample', SAMPLES), ('can', [{'file': CAN}])),
+    'order, can first': _pushed(('can', [{'file': CAN}]), ('sample', SAMPLES)),
 }
 
 
@@ -258,12 +248,17 @@ def test_a_call_through_a_stage_makes_the_record_of_the_plain_request(
 
 
 def test_pushes_and_reads_of_an_accumulator_make_no_record(client: Client) -> None:
-    _pushed({'sample_runs': {'file': SAMPLE}}, {'can_runs': {'file': CAN}})(client)
+    _pushed(('sample', [{'file': SAMPLE}]), ('can', [{'file': CAN}]))(client)
     assert client.records() == []
 
 
-def test_a_single_run_spec_has_no_table_for_an_accumulator(client: Client) -> None:
-    with pytest.raises(SubmitError, match='table fields'):
+def test_a_pipeline_makes_no_accumulators_and_a_driver_no_stages(
+    client: Client,
+) -> None:
+    with pytest.raises(SubmitError, match='its binding makes no accumulators'):
         client.accumulator(
             Template(IOFQ, params={'can': {'file': CAN}}, blanks=('sample',))
         )
+    tables = {'sample': [{'file': SAMPLE}], 'can': [{'file': CAN}]}
+    with pytest.raises(SubmitError, match='its binding makes no stages'):
+        client.stage(Template(IOFQ_MULTI, params=tables, blanks=('reduction',)))
