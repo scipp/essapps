@@ -451,7 +451,8 @@ exp = function_binding(EXPORT, export)
 `DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` goes without a replacement: the workflow package chooses its driver.
 `PipelineBinding` gets its spec, and takes the keys from the spec's types, with `keys` only for an adapter.
 The kind of strategy is named by the class, not implied by whether `accumulate` is given.
-`HeldStateBinding.held_state` becomes `AccumulatorBinding.start`, and only a `StageBinding` has `stage`.
+The protocols in `ess.spec.binding` change with them: `Binding` keeps only `compute`; the protocol `StageBinding` adds `stage`, implemented by `PipelineBinding`; and the protocol `AccumulatorBinding`, implemented by `DriverBinding`, replaces `HeldStateBinding`, with `start` for its `held_state`.
+The backend calls the protocols, not the classes, so that essdispatch imports no sciline, and its tests use fakes of their own.
 
 A binding that knows its spec makes the `bind` mapping redundant:
 
