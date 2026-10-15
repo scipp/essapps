@@ -615,36 +615,36 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 1. A: is "a binding is a strategy, called in the spec's terms" the right description, with "binding" the name of the whole?
 
-> Simon:
+> Simon: Maybe, if we explain it more clearly, the sentence is to dense, average reader would not know what "in the spec's terms" is supposed to mean.
 
 2. B: should a binding take its spec, so that `bind` becomes a list?
 
-> Simon:
+> Simon: Don't care too much about `bind`, the real value (or question) is whether bindings benefit from knowing their spec.
 
 3. B: three bindings, `PipelineBinding` (plain requests and stages, over a function that makes a pipeline from the fixed values), `DriverBinding` (plain requests and accumulators, over a function that makes a driver from the fixed values), and `function_binding` (plain requests); the framework needs no particular driver?
 
-> Simon:
+> Simon: agree
 
 4. C: the bindings in `ess.spec`, and both keep-the-rows and `combine(op)` removed, so that only a package's driver accumulates? A spec bound to a driver has no stage, so a workflow that needs every row at once, such as `STITCH`, chooses between accumulating and tuning over fixed rows.
 
-> Simon:
+> Simon: agree, but location of binding protocols and implementations might be up for debate. `ess.spec` should be importanble in client app implementations, and those do not need to know about bindings, right?
 
 5. Types: the run types (`SampleRun`, `CanRun`) are shared by the spec's types and the workflow's keys. Today ess.reduce defines them, in a module whose import runs `ess/reduce/__init__.py` and loads the science stack. Do they move to the spec side, `ess.spec` or a light module of ess.reduce, with ess.reduce importing them; or do specs use run types of their own, and the instrument's glue adapts? And for a table that a pipeline takes whole: is its key the field's `list[...]` type, or a type that names the list?
 
-> Simon:
+> Simon: Not sure this matters here. Instrument packages would likely each define a `spec` module, such as `ess.loki.spec` where such types may be defined. Or we may standardize in `ess.spec`. I think this will just follow naturally and we can make it "fit" in the end?
 
 6. Strategies: a driver push names one table and carries a list of its rows, `push(table, rows)`. The client's push may still name several tables, meaning that their rows enter one state; it reads, as the driver push did, as if the rows belonged together. Keep it, or make each client push name one table too, with states then visible between the pushes of a sample and its can?
 
-> Simon:
+> Simon: Make client push name one table too. Symmetry is good. Old concerns about cost are handled better with the amendmend anyway, given that we allow pushing a *list* of rows (and we should update the client interface).
 
 7. Who writes the binding for an instrument: the workflow package, or the instrument's glue in `essdispatchinstruments`? With types as keys, a workflow package that takes the spec's types needs no glue but values users never see.
 
-> Simon:
+> Simon: I think this will likely be a spectrum. Realistically we will be starting with workflows that do not (yet) take spec types as keys, and then gradually move conversion into providers. So the answer is likely "both".
 
 8. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
 
-> Simon:
+> Simon: Yes, definitely. Giving matching/non-clashing names across sciline, technique packages, backend, and client/app is of utmost importance.
 
 9. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
 
-> Simon:
+> Simon: I think the convention was most important during an earlier state of this document, when we still provided a Mapping[str, Key] for all the model fields. Now we do not, so one motivation went away. But I think we can still justify recommending the convention, if nothing else then for clarity?
