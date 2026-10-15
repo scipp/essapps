@@ -23,6 +23,8 @@ The binding gets both instances: `compute(params, inputs) -> outputs`.
 The models are ordinary pydantic models.
 They carry no annotations for the framework: what the framework needs, it reads from the field types.
 
+A multi-run spec is made from the single-run spec by naming the fields that become tables: `IOFQ.tabulate(tables={'sample': ('sample',), 'can': ('can',)})`.
+
 ## Terms
 
 | Term | Meaning |
@@ -30,9 +32,9 @@ They carry no annotations for the framework: what the framework needs, it reads 
 | literal | A value that has a JSON form and that the client knows: a number, a string, an enum, a model of such values. |
 | data | A value given by reference, which the backend fetches: a file, an array, a model holding one, or any other output of a record, such as a fitted scale factor. |
 | group | A model of literals as the value of a parameter. |
-| table | A list as the value of a parameter or an input; each element is a *row*. |
 | parameter, input | A field of the params model, or of the inputs model. |
 | name | The name of a parameter or an input. A spec's names are distinct across params and inputs. |
+| table, column, row | A *table* is a set of list fields, its *columns*, of equal length, pushed together; each index is a *row*. A column is a parameter or an input. A table of one column is a list field. |
 | request phase, call phase | The *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 
 ## Why
@@ -46,8 +48,8 @@ Params are the same in both phases; inputs exist as a model only in the call pha
 **Per-run values come with the data.**
 The runs of one sum are reduced with one set of settings; a value that differs per run, such as a motor position, comes with the run's data or from an earlier result ([users.md](../../requirements/users.md)).
 A sample's thickness is one value per sample, for every run summed for it ([sans.md](../../requirements/sans.md)).
-So no literal varies per row of a table, and inputs hold data only.
-An accumulator's template is then params and fixed inputs, all known to the client, and each push gives references only.
+A correction to a run's metadata applies to the run, for every reduction that reads it ([data.md](../../requirements/data.md)).
+So inputs hold data only, and a literal never has to travel with a run.
 
 **esslivedata splits the same way.**
 Its params model holds configuration and never data, which arrive as streams.
@@ -80,21 +82,16 @@ class IofQInputs(BaseModel, arbitrary_types_allowed=True):
     can: CanFile | None = None
     beam_centre: BeamCentre | None = None
 
-class MultiIofQInputs(BaseModel, arbitrary_types_allowed=True):
-    sample: list[SampleFile] = Field(min_length=1)   # a table
-    can: list[CanFile] = []
-    beam_centre: BeamCentre | None = None
-
 IofQ = NewType('IofQ', sc.DataArray)
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: Annotated[IofQ, ArraySpec(dims=('Q',), unit='dimensionless')]   # a hint, see Outputs
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, inputs=IofQInputs, outputs=IofQOutputs)
-IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, ..., params=IofQParams, inputs=MultiIofQInputs, outputs=IofQOutputs)
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables={'sample': ('sample',), 'can': ('can',)})
 ```
 
-The multi-run spec names each table as the single-run spec names the input, with the same element type.
+`IOFQ_MULTI` takes `sample: list[SampleFile]` with at least one element, `can: list[CanFile]` defaulting to empty, and `beam_centre`, `IofQParams`, and `IofQOutputs` as `IOFQ` does.
 A workflow without data declares no inputs model and gets `NoInputs`, as one without configuration gets `NoParams`.
 
 ## The design
@@ -104,34 +101,71 @@ A workflow without data declares no inputs model and gets `NoInputs`, as one wit
 Checked when the spec is made:
 
 - The names of params and inputs are distinct.
-- Each parameter is a group, or a table of groups. Every value in the params model has a JSON form.
-- Each input is a data value, possibly optional, or a table of data values (`list[T]`), or a collection (`dict[str, T]`). A data value is any type but a list or dict: a file (`Path`, or a `NewType` of it) or an object (a scipp type, a `NewType` of one, a model).
+- Each parameter is a group, or a list of groups. Every value in the params model has a JSON form.
+- Each input is a data value, possibly optional, a list of data values, or a collection (`dict[str, T]`). A data value is any type but a list or dict: a file (`Path`, or a `NewType` of it) or an object (a scipp type, a `NewType` of one, a model).
 - A default of an input is `None`, or an empty list or dict.
-- The inputs model, and a model used as a data value, may have field validators; the inputs model has no model validators (see Validation).
 - Each output is a data value, possibly optional, or a collection of them.
+
+Stated in the docs:
+
+- A model validator of the params or inputs model runs for plain requests and stage calls, not for an accumulator, which never makes a whole instance: its rows go to the driver one push at a time. A check of one value belongs to the value's type, as `BeamCentre` checks its data.
+- A check across params and inputs, such as a transmission mode that requires a transmission run, is the binding's: it fails when the request runs. Validation in the request phase never proves that a workflow will succeed.
+
+### Multi-run specs
+
+`tabulate` makes a spec from another one by naming its tables, each a tuple of columns:
+
+```python
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1,
+                           tables={'sample': ('sample',), 'can': ('can',)})
+```
+
+Each column, a parameter or an input of type `T`, becomes a `list[T]` on its own side: with at least one element if it is required, and empty by default if it is optional.
+The other fields are as in the spec tabulated.
+A column belongs to one table.
+The columns of a table have equal length; a push gives one row of each column at a time:
+
+```python
+SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
+                           tables={'sample': ('sample', 'sample_transmission')})   # two columns
+acc.push('sample', [{'sample': dataset(run=611), 'sample_transmission': dataset(run=601)}])
+
+SLICES = SANS.tabulate(name='sans-slices', version=1, tables={'slices': ('time_range',)})
+acc.push('slices', [TimeRange(start=0, stop=60)])   # a column of params: the same runs, sliced by time
+```
+
+A push into a table of one column gives values; into a table of several columns, dicts by column.
+A list field that a spec declares itself is a table of one column.
+
+With one row in each table, a request of the tabulated spec is a request of the spec tabulated.
+So `ess.spec.testing.check_one_row(single, multi, params, inputs)` turns a request of `IOFQ` into its one-row request of `IOFQ_MULTI` and compares the outputs of the two bindings, for any package.
+
+The models `tabulate` makes have no static type.
+A client gives inputs as dicts of references in any case, and a driver gets values.
+If a column is a parameter, the params model is made too, and a client passes a dict for that spec's params.
 
 ### Requests and records
 
-A request is a spec, params, and inputs:
+A request is a spec, params, and inputs, given by keyword:
 
 ```python
-record = client.submit(IOFQ, IofQParams(reduction=Reduction(bins=4)),
+record = client.submit(IOFQ, params=IofQParams(reduction=Reduction(bins=4)),
                        inputs={'sample': dataset(run=60339), 'beam_centre': centre.ref('centre')})
 ```
 
 `params` is an instance or a dict of its fields, and may be left out when every parameter has a default.
-`inputs` is a dict by name; each value is a reference, a table a list of references.
+`inputs` is a dict by name; each value is a reference, a list a list of references.
 `record.request` holds both, in JSON's types, with defaults filled in.
 Every reference of the request is in `record.request.inputs`.
 `Request.inputs()`, which lists the records a request reads, is renamed `upstream()`.
 
 A file is always given by reference, `dataset(path=...)` for a file named by its path: a string where a file is expected is refused.
-The dataset source reads it, so access rules, the identity in the record, and provenance hold for every file.
+The dataset source reads it, so access rules, corrections of the run's metadata, the identity in the record, and provenance hold for every file.
 
 ### Templates, stages, and accumulators
 
-A template is a spec, params, inputs, and blanks.
-A blank is a whole parameter or a whole input, named by its name.
+A template is a spec, params, inputs, and blanks, all but the spec given by keyword.
+A blank is a whole parameter or a whole input, or a table, named by its name.
 A template records on which side each blank is, from the `WorkflowSpec`, or, for a template made from a request, from the part of the request that holds the name; filling it then needs no spec.
 
 ```python
@@ -146,15 +180,12 @@ acc = client.accumulator(Template(IOFQ_MULTI, params=IofQParams(reduction=Reduct
 acc.push('sample', [dataset(run=611), dataset(run=612)])
 ```
 
-An accumulator's blanks are input tables, and a push gives references only.
-
-> Simon: Is this restriction actually necessary? I can imagine an accumulator where we set a param, such as a time range, resulting in loading/processing/accumulating that from the same fixed datasets for the specified time range. Does anything get more complicated if we drop this restriction?
-
+An accumulator's blanks are tables, of params or of inputs.
 `apply`, `Lookup`, and a rule's series fill a blank input with the dataset itself, `{blank: ref}`; their `dataset_field` goes.
 
 ### Validation
 
-The request phase checks everything that can be checked on references, on the whole request.
+The request phase checks everything that can be checked without data, on the whole request.
 The call phase checks each data value by its field once, when it is read.
 
 | What | Request phase | Call phase |
@@ -162,20 +193,13 @@ The call phase checks each data value by its field once, when it is read.
 | params | the params model, by the client when it builds the instance, and by the backend at submit | the values from the record |
 | inputs of a plain request | names, required inputs, each value a reference or a list of them; each reference readable and fitting its field | `IofQInputs.model_validate` on the data |
 | a template | each fixed parameter by its own field; fixed inputs as above | each fixed input by its field, once, when the stage or the driver is made |
-| a stage call | the plain request it makes, as above | each blank input by its field |
-| a push | each reference readable and fitting the table's element type | each value by the element type, at the push |
+| a stage call | the plain request it makes, as above | the inputs model on the fixed and the blank data |
+| a push | literals by their column's type; each reference readable and fitting its column | each value by its column's type, at the push |
 | a state, at a pin or a read | its plain request, as above | (none beyond the pushes) |
 
 A reference *fits* a field when the type of the output it names is the field's type, or a subclass of it; a `NewType` fits only itself.
 A dataset reference fits a file field.
 So feeding an I(Q) into a beam-centre input is refused at submit, although both hold scipp objects.
-
-The inputs model has no model validators because an accumulator never makes an inputs instance: its rows go to the driver one push at a time.
-
-> Simon: We could still allow model validators and document the limitation that when used with an accumulator then the model may not get validated as a whole (validation left to the driver).
-
-A check of one value belongs to the value's type, as `BeamCentre` checks its data.
-A check across params and inputs has no model to live in (question 2).
 
 ### The inputs factory
 
@@ -206,14 +230,12 @@ class AccumulatorBinding(Binding[P, I, O], Protocol):
     def make_accumulator(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Driver[O]: ...
 
 class Driver(Protocol[O]):
-    def push(self, table: str, values: Sequence[Any]) -> None: ...   # data of one input table
+    def push(self, table: str, rows: Sequence[Any]) -> None: ...   # values, or dicts by column
     def outputs(self) -> O: ...
 ```
 
 `make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data.
-
-> Simon: Wondering whether we should require model nesting in `Inputs`, just like for `Params`. Can't think of a strong reason either way right now, but maybe there is? Should we attempt to make the model symmetric to what might be an `Outputs` model, i.e., no nesting, such that we can directly connect outputs->inputs? But what if we want a table that has two columns of inputs? It seems this is almost precluded without nesting (but is there actually a strong requirement for this)? Maybe these thoughts are a hint that building the table-spec in an "orthogonal" manner to the inputs/params (instead of using lists) is the right kind of idea after all?
-
+A push gives the driver a parameter's rows as groups and an input's as data.
 A function binding is `def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs`.
 
 Each name's type is its sciline key: `Reduction`, `SampleFile`, `BeamCentre`; for `X | None` the key is `X`.
@@ -235,9 +257,9 @@ It is an `Annotated` marker that pydantic ignores; an instance of a pydantic mod
 
 ### The serialized spec
 
-`SerializedWorkflowSpec` holds `params_schema`, `inputs_schema`, and `outputs_schema`.
+`SerializedWorkflowSpec` holds `params_schema`, `inputs_schema`, `outputs_schema`, and the tables.
 The params schema is the params model's JSON schema.
-The inputs and outputs schemas are made by the framework from the field types: each value is "a reference to a `<type name>`", a table a list of them, with an output's hint.
+The inputs and outputs schemas are made by the framework from the field types: each value is "a reference to a `<type name>`", a list a list of them, with an output's hint.
 A form shows params; a picker per input shows inputs.
 
 ### Values that differ per run
@@ -245,58 +267,58 @@ A form shows params; a picker per input shows inputs.
 They come with the data:
 
 - **In the run's file.** The workflow reads them as it reads the run, such as a motor position from the NeXus logs.
-- **From an earlier result.** A record whose output holds the value per run, such as a table of thicknesses that a person filled in for a batch, is an input of the reduction. The driver looks up each run's value by the run's identity.
-
-> Simon: Second item would require supporting a common table over multiple inputs, see nesting question above. Or do I misunderstand?
+- **Corrected.** A correction of a run's metadata is held apart from the file, by the dataset source or the catalogue, and `dataset(run=611)` names the run with its corrections. Every reduction that reads the run sees them.
+- **From an earlier result.** A record whose output maps runs to values, such as a table of thicknesses that a person filled in, is one input of the reduction. The driver looks up each run's value by the run's identity, which it reads from the file.
 
 ## What changes
 
 - **essspec.**
-  - `WorkflowSpec[P, I, O]` gains `inputs`; `NoInputs`; the model rules above.
+  - `WorkflowSpec[P, I, O]` gains `inputs` and `tables`; `NoInputs`; `tabulate`; the model rules above.
+  - `ess.spec.testing.check_one_row`, for any tabulated spec.
   - `DataField`, `Format`, `Array()`, `NexusFile`, `OpaqueFile`, `data_fields`, `ref_fields`, and literal-or-reference unions go. A file type is a `NewType` of `Path`; `ess.spec` may offer shared ones.
   - `ArraySpec` becomes a frozen dataclass, an output hint.
-  - `group_fields` and `table_fields` describe params; inputs have no groups.
   - The binding protocol takes `P`, `I`, and returns `O` (binding-jobs.md, D).
 - **essdispatch.**
   - Requests, records, templates, and the log hold `params` and `inputs`; a template records the side of each blank.
   - Reference walking reads `inputs` only, by position.
   - `InputsFactory`; the backend validates in the two phases above and calls the binding with instances.
+  - A push into a table of several columns gives dicts by column; the backend splits each row to its sides.
   - A reference fits a field by type (`_agree`).
-  - `Template(spec, params, inputs, blanks)` replaces `Template.from_spec`.
+  - `submit` and `Template(spec, *, params, inputs, blanks)` take all but the spec by keyword; `Template.from_spec` goes.
   - `apply`, `Lookup`, and rules fill a blank input with the dataset; `dataset_field` goes.
   - `Request.inputs()` is renamed `upstream()`.
+  - Dataset sources hold corrections of a run's metadata: not designed here.
 - **ADR 0007.** Today an instrument's `specs.py` needs only essspec, so that GUIs and remote clients import it without scipp (0007:68, 0007:104). It changes to allow scipp on the spec side, for data types, and still keeps scippnexus, sciline, and ess.reduce out. scipp needs only numpy and imports in about 130 ms. The command-line tool and web frontends read `SerializedWorkflowSpec` and need neither.
-- **ADR 0001.** Its section "Data fields: inputs are parameters" is rewritten in place as this split.
+- **ADR 0001.** Its section "Data fields: inputs are parameters" is rewritten in place as this split, with `tabulate`.
 - **binding-jobs.md.** Rewritten for the protocol above; `RunInput` and its `sciline.Scope` go, since each input has a type of its own.
-- **README.** Requests, templates, stages, accumulators, and the one-row convention as above. A row is a data value; the multi-run spec of a reduction with a transmission run takes it as an input of its own, not as part of a row.
+- **README.** Requests, templates, stages, accumulators, and multi-run specs as above.
+- **Requirements.** [users.md](../../requirements/users.md) and [sans.md](../../requirements/sans.md): per-run values come with the data; [data.md](../../requirements/data.md): corrections of a run's metadata apply to the run.
 - **Tests.** Every request is written with `inputs=`. A fake dataset source returns floats, so test specs type their inputs as the fake's values.
 
 ## Left for later
 
+- **One spec for one run and for many.** The tables could be declared on the single-run spec itself, as the inputs it may take pushed, with no second spec. Its binding would then make both stages and drivers.
 - **Loading a dataset as an object.** A dataset reference fits a file field; for an object field, the dataset source loads it when a workflow needs that.
 - **A literal or a reference for one value**, such as a beam centre typed in or computed. The spec offers a parameter and an optional input, and a provider chooses; or the package offers two specs.
 - **A param per dataset in a batch**, such as each sample's thickness in a batch of single-run requests. It comes with the run's data, or `apply` gains a function that makes the params of each request.
-- **A multi-run spec derived from the single-run spec**, such as `IOFQ.tabulate('sample', 'can')`.
+- **How a dataset source holds corrections**, and how a record names them.
 - **Streams as inputs**, for esslivedata.
 
 ## Alternatives considered
 
 - **One model, data fields typed as data, validation switched by phase.** Every validator runs on references in the request phase, and the client cannot build a typed request.
 - **`DataField` annotations on data fields**, marking what the framework resolves, its format, and its array structure. Field types tell the framework the same, and the author writes no metadata for the framework.
-- **Literals in rows**, such as a thickness per run, with the rows of the multi-run spec zipped from params and inputs of the single-run spec. Needs a third part of the spec besides params and inputs, and literals whose kind the framework tells from a value's shape or from where its column came from. Per-run values come with the data instead.
-- **Groups of inputs**, pairing a run with its transmission run in one row. The runs of one sample share one transmission run ([sans.md](../../requirements/sans.md)), so nothing pairs per row; a group would make a model a group or a data value depending on its use.
+- **Multi-run models written by hand**, `MultiIofQInputs` next to `IofQInputs`. Repeats the single-run model, and the one-row symmetry holds only by convention.
+- **A literal per run, typed in with the sum**, such as a thickness per row. A correction of a run belongs to the run, not to one request that reads it: each request would repeat it, and two could disagree.
+- **Groups of inputs**, pairing a run with its transmission run in a model. Columns of a table pair them; a group would make a model a group or a data value depending on its use.
 - **Requests as one dict by name**, params and inputs together. Unambiguous, since the names are distinct, but the client cannot pass a typed `IofQParams`.
 
 ## Questions
 
-1. Inputs without groups: each input is a data value or a table of them, and the transmission run is an input of its own. Agreed?
+1. Push shape: a table of one column takes values, `push('sample', [ref])`, and a table of several columns dicts by column. Or dicts always, so that a push keeps its shape when a column is added (which changes the spec's version anyway)?
 
-> Simon: Unclear, see above.
+> Simon:
 
-2. A check across a parameter and an input, such as a transmission mode that requires a transmission run (esslivedata, `loki/specs.py`), has no model to live in. Options: a `check(params, inputs)` function on the spec, run in the request phase on the request; design such specs so that the input decides, a transmission run given or not; or leave it to the binding, which fails after the request is accepted. Which?
+2. A list field that a spec declares itself, without `tabulate`, is a table of one column. Keep this, for specs without a single-run form, or require `tabulate` for every table?
 
-> Simon: Leave it to binding. We can never fully validate anyway, so there is *always* a chance that a workflow raises in the middle of processing.
-
-3. Client API: `submit(spec, params, inputs=...)` and `Template(spec, params, inputs, blanks)`, with blanks, stage calls, and pushes by name. Agreed?
-
-> Simon: Agreed, should be made kw-only aside from the spec arg.
+> Simon:

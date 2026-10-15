@@ -45,6 +45,7 @@ Open: how large runs will be, and how files or the catalogue will say what role 
 - Instrument and run number name a run: a run number does not repeat within an instrument. *Simon, 2026-10-05; confirm with the NICOS team.*
 - In user operation, raw files land at `/ess/raw/<instrument>/<year>/<proposal>/raw/<proposal>_<run>.hdf`. *Seen in the `file_name` attribute of a 2025 ODIN commissioning file; confirm with the ECDC file-writer team.*
 - A file does not change after the file writer reports it finished. *Simon, 2026-10-05; confirm with the ECDC file-writer team.*
+- Some metadata in files will be missing or wrong, and users will correct it. A correction applies to the run, for every reduction that reads it, and is kept apart from the file. *Simon, 2026-10-15*
 - Users will name the runs of every role by run number or a SciCat identifier; this may evolve over time into something more automated. *Simon, 2026-10-05; ask instrument scientists.*
 - The embargo lasts 3 years, and raw files are kept forever. *Simon, 2026-10-05, from memory; confirm with the ESS data policy owner.*
 
