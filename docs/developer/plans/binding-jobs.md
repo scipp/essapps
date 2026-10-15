@@ -24,7 +24,7 @@ The workflow author provides one of three things, and each serves some of the cl
 | a function (`function_binding`) | call it | refused | refused |
 
 A *driver* is a stateful object with `push(rows)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the code that calls `sciline.Stage`s and pushes into accumulators.
-The workflow package writes it; `ess.spec` provides none.
+The workflow package chooses it: its own code, or a generic one such as ess.reduce's `StreamProcessor`; the framework needs no particular driver.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
 A stage exists only over a sciline pipeline, since only there does it hold anything.
 
@@ -165,7 +165,7 @@ Today's protocol has `Binding.stage` on every binding, and `HeldStateBinding` ad
    With `PipelineBinding`, that is a provider in the workflow package that takes a dict, so the workflow package knows the protocol's form.
 8. **A table of paths to keys cannot say everything a mapping must say.**
    esslivedata's factories (see Prior art) also set values that users never see, such as `CorrectForGravity(False)`, and change the pipeline and its outputs depending on an enum field: one transmission mode inserts a provider and adds the output `transmission_fraction`.
-   `PipelineBinding` has no place for either; such values go into the pipeline the workflow package hands over.
+   `PipelineBinding` has no place for either; such values go into the pipeline the binding is given.
 9. **Accumulation is one recipe, fixed in the binding.**
    `AccumulatingPipelineBinding` sums the accumulated keys of each row.
    That fits SANS, but not binning each run's events into a held grid (spectroscopy), keeping each run's contribution so that one can be removed (README open question 2), or a loop over banks within each run.
@@ -207,18 +207,30 @@ A blank is a whole parameter, so a `sciline.Stage` is cut at exactly the keys of
 
 **The workflow takes the models as inputs.**
 A provider takes a model apart, or converts it, inside the pipeline: `filename` turns a `RunInput[SampleRun]` into a `Filename[SampleRun]`, and `bins` a `Reduction` into `Bins`.
-For a real reduction, a model such as `QBins` (start, stop, number of bins) is useful to any user of the workflow, with or without the framework:
+For a real reduction, a model such as `ess.spec.parameters.QEdges` (start, stop, number of bins, scale, unit) is useful to any user of the workflow, with or without the framework.
+esssans's key `QBins` holds the bin edges as a `sc.Variable`, and a provider makes them from the model:
 
 ```python
-QEdges = NewType('QEdges', sc.Variable)    # the bin edges that workflows take today
+from ess.spec.conversions import edges_to_variable
+from ess.spec.parameters import QEdges
 
-def setup_qedges(bins: QBins) -> QEdges:
-    return QEdges(sc.linspace('Q', bins.start, bins.stop, bins.num + 1, unit='1/angstrom'))
+def q_bins(edges: QEdges) -> QBins:
+    return QBins(edges_to_variable(edges, dim='Q'))
 ```
 
-The conversion is a provider of the workflow, so the mapping needs no functions (amendment F), and a user without the framework sets either key: `wf[QBins] = QBins(...)`, or `wf[QEdges] = edges` directly.
+The conversion is a provider of the workflow, so the mapping needs no functions (amendment F), and a user without the framework sets either key: `wf[QEdges] = QEdges(...)`, or `wf[QBins] = edges` directly.
 
-A model that serves several run types gets a key per run type, as `RunInput[RunType]` does.
+A parameter that chooses a source of data, such as the detector bank or the incident monitor, is a value like any other, mapped to its key (`'detector': NeXusDetectorName`).
+Which dataset or stream then supplies a data field, the *routing*, is not part of the params model or the mapping (amendment E).
+
+**Where the models live.**
+`ess.spec` holds the models that many workflows share, such as `QEdges`, and is meant to be the one home of params models for essapps and esslivedata.
+A workflow package depends on `ess.spec` ([ADR 0007](../adr/0007-packages-split-by-dependencies.md)), so its providers take these models.
+A model that belongs to one workflow, such as SANS's transmission options, lives either in the workflow package, in a module that imports nothing heavy, or in the instrument's `specs.py`, with the providers that take it in the instrument's glue (question 5).
+
+**One model, several parameters.**
+A model that serves several parameters gets a key per parameter: per run type, as `RunInput[RunType]` does, or per axis, for two axes of a Q map that share one model.
+A provider that needs two parameters, such as an axis and its edges, takes both keys.
 A generic pydantic model, `class Run(BaseModel, Generic[RunType])` with keys `Run[SampleRun]`, would also do, and sciline supports it, but not with run types made by `NewType`, as ess.reduce makes them.
 pydantic names both `Run[SampleRun]` and `Run[CanRun]` as `Run[NewType]`, and sciline's dask scheduler names its tasks by the key's name, so both keys become one task and get one value, without an error ([scipp/sciline#250](https://github.com/scipp/sciline/issues/250)).
 `RunInput` with `sciline.Scope` as its first base avoids this (pydantic warns about the order of bases).
@@ -271,8 +283,8 @@ A plain request, and the tables fixed by an accumulator's template, are one push
 A client's push is one driver push.
 A changed fixed value means a new driver.
 
-The workflow package writes its driver.
-For the toy SANS reduction, it sums each run's numerator and denominator per run type with `sciline.Reduced`, and divides once:
+The workflow package chooses its driver.
+For the toy SANS reduction, it writes one that sums each run's numerator and denominator per run type with `sciline.Reduced`, and divides once:
 
 ```python
 class IofQDriver:
@@ -324,10 +336,12 @@ Whether recomputing every row at each read is acceptable is the workflow's choic
 A driver need not use sciline.
 Its keys are whatever its mapping names: sciline keys for a sciline driver, strings for code written by hand.
 
-`ess.spec` provides no driver.
-sciline ADR 0003 defers a generic driver until packages repeat the same driver code, and the cases of cost 9 each need code of their own.
-`StreamProcessor` of ess.reduce is close to the driver protocol, with `accumulate` for `push` and `finalize` for `outputs`, though its `accumulate` takes one chunk, not lists of rows; [ADR 0006](../adr/0006-the-unit-is-an-accumulating-workflow.md) records why essapps does not import it.
-Its context keys, rolling windows, and `clear()` have no counterpart here, since each would break the arrival symmetry.
+The framework calls `push` and `outputs` and nothing else, so it needs no particular driver.
+A package writes its own, as above, or uses a generic one, and generic drivers may in time be collected in a library module; the design does not depend on which.
+`StreamProcessor` of ess.reduce is one: `accumulate` is `push`, and `finalize` is `outputs`.
+It takes one value per key, so a small adapter pushes a list of rows one at a time.
+Its context keys, rolling windows, and `clear()` stay unused, since each would break the arrival symmetry.
+The framework itself does not import it ([ADR 0006](../adr/0006-the-unit-is-an-accumulating-workflow.md)); a package's driver may.
 
 **The driver's promises.**
 The backend does not check them; `check_arrival_and_order` tests the first two.
@@ -435,7 +449,7 @@ multi = DriverBinding(IOFQ_MULTI, make_driver, params=keys, outputs={'iofq': Iof
 exp = function_binding(EXPORT, export)
 ```
 
-`DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` goes without a replacement: the workflow package writes its driver (section 2).
+`DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` goes without a replacement: the workflow package chooses its driver (section 2).
 `PipelineBinding` gets its spec, and its mapping names whole parameters (section 1).
 The kind of strategy is named by the class, not implied by whether `accumulate` is given.
 `HeldStateBinding.held_state` becomes `AccumulatorBinding.start`, and only a `StageBinding` has `stage`.
@@ -455,7 +469,7 @@ Settles costs 2, 3, 9, and 10.
 `FunctionBinding` moves from `ess.dispatch.bindings` to `ess.spec`, next to `PipelineBinding` and `DriverBinding`.
 `ess.spec.testing` then checks every strategy, and a package tests any binding without `ess.dispatch`.
 
-Two generic drivers are removed, since how rows combine is the workflow's choice:
+The framework keeps no driver of its own, since how rows combine is the workflow's choice; two go:
 
 - The keep-the-rows held state (`open_held_state`, `ess.dispatch.bindings`), which the backend uses today for any binding without a held state of its own. A workflow that needs every row at once writes a driver that keeps them, as `StitchDriver` does.
 - `combine(op)` (`ess.spec.combine`), a binding that folds the rows of a table with `op`. Its readers are tests in essspec and essdispatch (`combine_test.py`, `testing_test.py`, `client_test.py`, `persist_test.py`, `stories/conftest.py`), the README's story S4, and [three-ways-to-run-a-spec.html](../three-ways-to-run-a-spec.html). The tests use fakes of their own, and story S4 becomes a function over a list.
@@ -478,7 +492,7 @@ driver.outputs()                                      # -> IofQOutputs
 So `compute`, and the callable `stage` returns, are `Callable[[IofQParams], IofQOutputs]`, which is what a function binding is.
 With `WorkflowSpec` generic in its outputs model as well as its params model, a type checker checks `function_binding(IOFQ, iofq)`.
 The output names are checked where the author writes them, `IofQOutputs(iofq=...)`, not in the backend.
-A pipeline's providers take the same models (section 1), so a conversion such as `QBins` to `QEdges` never sees the protocol's form.
+A pipeline's providers take the same models (section 1), so a conversion such as `QEdges` to `QBins` never sees the protocol's form.
 Settles costs 1 and 7.
 
 Alternatives considered:
@@ -496,6 +510,7 @@ Alternatives considered:
 
 This note writes a data field as the value a workflow takes: `Run.file: Path` for a workflow that loads, `Parts.numerator: sc.Variable` for one that does not.
 A request and a record hold references instead: a dataset name, or another record's output.
+The params name the source of each data field; the *routing*, which dataset or stream supplies it, stays apart from the params model and the mapping.
 E is how the backend gets from a request's references to the workflow's values, and from the workflow's outputs to the record's references.
 Outputs are the harder case: nearly every output is a data field.
 
@@ -507,12 +522,12 @@ What a solution must give:
 - no copy of a large array, in inputs or in outputs;
 - references in records, so that history and provenance stay small.
 
-Options to weigh against it, listed only: a handle type that holds a reference and, in the backend, the value; two forms of each model, generic over the type of its data fields; `model_construct` with values in fields typed as references; data passed apart from the params instance, as esslivedata passes streams.
+Options to weigh against it, listed only: a handle type that holds a reference and, in the backend, the value; two forms of each model, generic over the type of its data fields; `model_construct` with values in fields typed as references.
 
 ### F. Conversions are providers of the workflow
 
-A conversion, such as `QBins` to a bin-edge array, is a provider that takes the model (section 1).
-The mapping holds no functions; esslivedata's `QEdges.get_edges()` becomes the body of such a provider.
+A conversion, such as `QEdges` to the bin edges of `QBins`, is a provider that takes the model (section 1).
+The mapping holds no functions; `edges_to_variable`, or esslivedata's `QEdges.get_edges()`, becomes the body of such a provider.
 Settles cost 7, with D.
 
 ### G. A table or code (open)
@@ -522,7 +537,7 @@ A mapping can be a table, as in B, or code that configures the pipeline from the
 ```python
 def configure(pipeline: sciline.Pipeline, params: SansWorkflowParams) -> sciline.Pipeline:
     pipeline = pipeline.copy()
-    pipeline[QBins] = params.q_bins
+    pipeline[QBins] = edges_to_variable(params.q_edges, dim='Q')
     pipeline[CorrectForGravity] = CorrectForGravity(False)   # a value users never see
     if params.transmission.mode is TransmissionMode.constant:
         pipeline[TransmissionFraction[SampleRun]] = sc.scalar(1.0)
@@ -536,43 +551,48 @@ A table says which key each parameter sets, and the strategies need exactly that
 From code alone, the binding cannot know which keys a blank or a row sets.
 
 With models as inputs, a provider that takes `Transmission` can choose a value by its mode, but it cannot change which providers the graph has.
+esslivedata has a second case: its wavelength lookup-table workflow sets `PulseStride` from the params, or leaves it to another provider, depending on `pulse.auto_stride`.
 A middle way gives a parameter a function and the keys it may set or insert:
 
 ```python
-params={'q_bins': QBins,                                              # a key, as above
+params={'q_edges': QEdges,                                            # a key, as above
         'transmission': (configure_transmission, {TransmissionFraction[SampleRun]})}
 ```
 
 The `sciline.Stage` is then cut at the declared keys.
-Values that users never see belong in the pipeline that the workflow package hands over, as today.
+Values that users never see are set in the pipeline the binding is given, by the workflow package or by the instrument's glue.
 An output that exists only for some values of a field, such as `transmission_fraction`, is an optional output of the spec.
 
 ## Prior art: esslivedata
 
-esslivedata solves the same problem for live data.
-Each instrument is a package with `specs.py`, the params and outputs models, which the dashboard imports, and `factories.py`, the sciline glue, which only the backend loads.
+esslivedata solves the same problem for live data, and `ess.spec` is meant to hold its params models too.
+Each instrument has `specs.py`, the params and outputs models, which the dashboard imports, and `factories.py`, the sciline glue, which only the backend loads.
+Some factory code works around limits of today's base workflows and is meant to go, so it shows what is needed now, not what a mapping must allow.
 In terms of the three jobs:
 
 | Job | esslivedata |
 |---|---|
 | 1 mapping | code: a factory per spec sets each sciline key from the params by hand (`wf[QBins] = params.q_edges.get_edges()`), sets values users never see (`wf[CorrectForGravity] = CorrectForGravity(False)`), and changes the graph and the outputs by an enum field (`config/instruments/loki/factories.py`) |
-| 2 strategy | chosen by the same factory: it returns a `StreamProcessorWorkflow`, given dynamic keys, accumulators, and target keys; other strategies are other implementations of its `Workflow` protocol |
+| 2 strategy | chosen by the same factory: nearly always a `StreamProcessorWorkflow`, given dynamic keys, accumulators, and target keys; other strategies are other implementations of its `Workflow` protocol |
 | 3 protocol | `factory(source_name=..., params=SansWorkflowParams(...), aux_source_names=...)`, then `accumulate(data)` and `finalize() -> dict` on the workflow it returns |
 
 What carries over:
 
 - **The factory gets the params model instance.** The backend validates the wire dict into the model and passes it; `attach_factory` checks the factory's `params` type hint against the spec when it is registered. This is amendment D, in use.
-- **It works there because data are not params.** A workflow's data arrive as streams, named by source; no field of the params model holds a reference. In essapps, runs are fields of the params model, which is why E is open.
+- **Parameters are read whole.** Every factory reads top-level parameters, `params.q_edges` or `params.beam_center`, and none maps a field of a group to a key on its own (section 1).
+- **A model is already a sciline input.** The bifrost detector ratemeter sets `wf[DetectorRatemeterRegionParams] = params.region`, and a provider takes the model.
+- **One model serves several parameters.** The bifrost elastic Q map has two axes, `axis1` and `axis2`, of one model; its custom variant combines `axis1` and `axis1_edges` into one key, `CutAxis1`. With whole parameters, that is a provider with two inputs.
+- **The choice of source is passed beside the params.** `source_name` and `aux_source_names`, the user's choice of detector and monitors, are arguments of the factory, and the factory also routes each stream to its key. In `ess.spec` they become parameters, and the routing stays apart from the params (amendment E).
 - **The mapping is code** (cost 8, amendment G), and the factory mixes it with the choice of strategy. Its conversions, such as `get_edges()`, are called in the factory, where amendment F puts them in providers.
-- **Outputs are matched by name, unchecked.** The factory's target keys map output names to keys; nothing checks the names against the outputs model, and no instance of the outputs model is made. The same holds in essapps today (cost 2).
-- **The workflow it returns is a driver.** `accumulate` and `finalize` are `push` and `outputs` of section 2, over chunks of a stream where essapps pushes rows of tables.
+- **Outputs are matched by name, unchecked.** The factory's target keys map output names to keys; nothing checks the names against the outputs model, and no instance of the outputs model is made. The same holds in essapps today (cost 2). The outputs model holds the data itself (`IofQOutputs.i_of_q: sc.DataArray`), as this note writes outputs.
+- **The workflow it returns is a driver.** `accumulate` and `finalize` are `push` and `outputs` of section 2, over one chunk per stream where essapps pushes lists of rows. One generic driver serves every sciline factory; only workflows without sciline are written by hand.
 
 ## Where the jobs live
 
 | Job | Written by | Lives in | Tested by |
 |---|---|---|---|
 | 1 mapping | the workflow author, or the instrument's glue | the workflow package, or `essdispatchinstruments` (ADR 0007) | the checks when the binding is made |
-| models and conversions | the workflow author | the workflow package (question 5) | the package's own tests, without the framework |
+| models and conversions | shared models: their authors; the rest: the workflow author | shared models: `ess.spec`; the rest: the workflow package or the instrument's specs (question 5) | the package's own tests, without the framework |
 | 2 strategy | the framework: `PipelineBinding`, `DriverBinding`, `function_binding`; the workflow package: its driver | `ess.spec`; the package | `ess.spec`'s tests, once; the package's own, with `check_arrival_and_order` |
 | 3 protocol | the framework | declared in `ess.spec.binding`, called by `ess.dispatch.backend` | essdispatch's tests |
 
@@ -598,7 +618,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-3. B: three bindings, `PipelineBinding` (plain requests and stages), `DriverBinding` (plain requests and accumulators, over a function that makes a driver from the fixed values), and `function_binding` (plain requests); no driver in `ess.spec`?
+3. B: three bindings, `PipelineBinding` (plain requests and stages), `DriverBinding` (plain requests and accumulators, over a function that makes a driver from the fixed values), and `function_binding` (plain requests); the framework needs no particular driver?
 
 > Simon:
 
@@ -606,7 +626,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-5. Section 1: the specs are built from the workflow package's models, such as `Run` and `QBins`. ADR 0007 says an instrument's `specs.py` needs only essspec, so that GUIs and remote clients import it without the science stack. Importing the models from a workflow package runs its `__init__.py`, and a model with an `sc.Variable` field needs scipp. Do the models move to a light module the workflow package and the specs share, or does ADR 0007's promise go, with remote clients reading `SerializedWorkflowSpec` only?
+5. Section 1: where does a model that belongs to one workflow live? (a) In the workflow package, in a module that imports nothing heavy; but importing it runs the package's `__init__.py`, which for esssans imports scipp, so an instrument's `specs.py` no longer needs only essspec (ADR 0007), unless the `__init__.py` changes. (b) In the instrument's `specs.py`, with the providers that take it in the instrument's glue; ADR 0007 holds, but a user of the workflow without the framework does not get those providers. Or each package chooses?
 
 > Simon:
 
@@ -618,7 +638,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-8. G: a table, code, or a function per parameter with the keys it declares? Do you know of a real reduction, other than esslivedata's transmission mode, whose graph depends on a field?
+8. G: a table, code, or a function per parameter with the keys it declares? Do you know of a real reduction, other than esslivedata's transmission mode and pulse stride, whose graph depends on a field?
 
 > Simon:
 
