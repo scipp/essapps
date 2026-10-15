@@ -200,25 +200,26 @@ class Binding(Protocol[P, O]):
     def compute(self, params: P) -> O: ...                               # a plain request
 
 class StageBinding(Binding[P, O], Protocol):                            # PipelineBinding
-    def stage(self, fixed: Mapping[str, Any], blanks: Collection[str]
-              ) -> Callable[[Mapping[str, Any]], O]: ...        # called with the blanks' values
+    def make_stage(self, fixed: Mapping[str, Any], blanks: Collection[str]
+                   ) -> Callable[[Mapping[str, Any]], O]: ...   # called with the blanks' values
 
 class AccumulatorBinding(Binding[P, O], Protocol):                      # DriverBinding
-    def start(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Driver[O]: ...
+    def make_accumulator(self, fixed: Mapping[str, Any], blanks: Collection[str]
+                         ) -> Driver[O]: ...
 
 class Driver(Protocol[O]):
     def push(self, table: str, rows: Sequence[BaseModel]) -> None: ...   # rows of one table
     def outputs(self) -> O: ...
 ```
 
-`stage` and `start` get the fixed parameters by name and the names of the blanks.
+`make_stage` and `make_accumulator` get the fixed parameters by name and the names of the blanks.
 A parameter that is in neither takes its default from the spec; the binding fills it in.
-When the stage or the driver is made, the binding checks that `fixed` and `blanks` do not overlap, that both name only parameters of the spec, and that each parameter without a default is in one of them; `start` also checks that each blank is a table.
-So a caller, such as a test, names what changes and leaves out what keeps its default: `binding.stage({'sample': run}, blanks=('reduction',))`.
+When the stage or the driver is made, the binding checks that `fixed` and `blanks` do not overlap, that both name only parameters of the spec, and that each parameter without a default is in one of them; `make_accumulator` also checks that each blank is a table.
+So a caller, such as a test, names what changes and leaves out what keeps its default: `binding.make_stage({'sample': run}, blanks=('reduction',))`.
 A strategy that reads a blank in the fixed part fails at once, since a blank is not in `fixed`.
 The callable it returns gets the values of the blanks only, by name, as a driver's `push` gets only the new rows: the fixed values are in the stage, and nothing passes or checks them again.
 The backend validates the full plain request, and makes its record, before each call.
-`start` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
+`make_accumulator` gets the fixed parameters by name too: a state may be an invalid request until it is read, such as one with sample rows and no can row yet, so there is no valid `MultiIofQParams` to pass.
 A push names one table by its parameter name, and gives its rows as the models the client pushed.
 It never names two tables: rows of different tables have nothing to do with each other, and a push of two would read as if they did.
 Rows that belong together are one row of a model with several fields, such as `class Measurement(BaseModel): sample: Run; can: Run`.
@@ -227,23 +228,29 @@ The names follow one scheme per kind of thing:
 
 | Kind | Named for | Names |
 |---|---|---|
-| protocols, which the backend calls, and their methods | the client object they serve | `Binding.compute` (a plain request), `StageBinding.stage`, `AccumulatorBinding.start` (question 9) |
+| protocols, which the backend calls, and their methods | the client object they serve | `Binding.compute` (a plain request), `StageBinding.make_stage`, `AccumulatorBinding.make_accumulator` |
 | classes, which the author uses | what the author provides | `PipelineBinding`, `DriverBinding`, `function_binding` |
 | what a protocol method returns | what it is | a stage callable, a `Driver` |
 
-`StageBinding` and `AccumulatorBinding` are factories for the computing half of a client's stage or accumulator.
+`make_stage` and `make_accumulator` are factories for the computing half of a client's stage or accumulator.
 The other half, the template, its log, states, pins, and records, is the backend's.
 So a client's accumulator has one driver behind it, and a client's stage one callable.
+A plain request has no client object that lasts beyond it, so there is nothing to make: `compute` is the computation itself.
+It is on every binding because it is the one action all three serve; for a `PipelineBinding` it is a stage with no blanks, called once, and for a `DriverBinding` an accumulator with no blanks, read once.
 
 What the backend calls for each client action:
 
 | Client action | `PipelineBinding` | `DriverBinding` | `function_binding` |
 |---|---|---|---|
 | plain request | `compute(params)` | `compute(params)` | `compute(params)` |
-| stage | `stage(fixed, blanks)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
-| accumulator | refused when the accumulator is made | `start(fixed, blanks)`, then `push` per client push and `outputs()` per state read | refused when the accumulator is made |
+| stage | `make_stage(fixed, blanks)` at the first call, then the returned callable at each call | refused when the stage is made | refused when the stage is made |
+| accumulator | refused when the accumulator is made | `make_accumulator(fixed, blanks)`, then `push` per client push and `outputs()` per state read | refused when the accumulator is made |
 
-The protocol carries the backend's promises to the binding: a push never while the outputs of the state before it are in use, and a call through a stage only with a valid plain request.
+The protocol carries the backend's promises to the binding:
+
+- `compute`, `make_stage`, and the callable `make_stage` returns may each be called from several threads at once, and none of them modifies the values it is given. A `PipelineBinding` sets values on a copy of its pipeline; a function is safe because its author promises it is pure. The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
+- A driver's `push` and `outputs` are called from one thread at a time, and a push never while the outputs of the state before it are in use.
+- A call through a stage gets the blanks' values of a valid plain request.
 The client never sees the protocol.
 The author of a function or a driver writes against it, in the spec's models; the author of a sciline pipeline does not.
 
@@ -326,13 +333,13 @@ It is a driver in the sense of sciline ADR 0003, holds everything stateful, and 
 ```python
 multi = DriverBinding(IOFQ_MULTI, functools.partial(IofQDriver, pipeline))
 
-driver = binding.start({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))   # no rows yet
+driver = binding.make_accumulator({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))
 driver.push('sample', [run_101, run_102])                   # two rows of the sample table
 driver.push('can', [can_110])
 driver.outputs()                                            # -> IofQOutputs
 ```
 
-`start` makes the driver from the values that are not tables, and pushes the rows of any table in `fixed`, so `compute(params)` of a `DriverBinding` is `start(dict(params), blanks=()).outputs()`.
+`make_accumulator` makes the driver from the values that are not tables, and pushes the rows of any table in `fixed`, so `compute(params)` of a `DriverBinding` is `make_accumulator(dict(params), blanks=()).outputs()`.
 A push may carry several rows of its table, so that a driver can work on them together, such as loading runs in parallel.
 A plain request, and the tables fixed by an accumulator's template, are one push per table, of all its rows.
 A client's push may name several tables, so that their rows enter one state; the backend makes it one driver push per table, and reads the outputs only after the last, so the driver need not know.
@@ -403,7 +410,6 @@ The backend does not check them; `check_arrival_and_order` tests the first two.
 - An output that the spec declares optional may be left out.
 - A driver may refuse a state, such as one with no can row yet, by raising in `outputs()`; the read fails, and later pushes may make the state valid.
 - A failing `push` stops the accumulator.
-- `push` and `outputs` are called from one thread at a time.
 
 ### Use without the framework
 
@@ -449,7 +455,7 @@ The README's "What a binding provides", ADR 0006, and [roles/workflow-authors.ip
 The Symmetries table splits "Kept by" into the strategy and what it is given.
 The README's section Drivers calls the client code that decides what to submit and push a *driver*, which clashes with sciline's driver.
 The two are the halves of one loop: the client's code decides which rows arrive, and the package's driver adds them.
-One of them needs another name (question 10).
+One of them needs another name (question 9).
 Settles cost 5.
 
 ### B. Three bindings, each of which takes its spec
@@ -463,7 +469,7 @@ exp = function_binding(EXPORT, export)
 `DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` goes without a replacement: the workflow package chooses its driver.
 `PipelineBinding` gets its spec, and takes the keys from the spec's types, with `keys` only for an adapter.
 The kind of strategy is named by the class, not implied by whether `accumulate` is given.
-The protocols in `ess.spec.binding` change with them: `Binding` keeps only `compute`; the protocol `StageBinding` adds `stage`, implemented by `PipelineBinding`; and the protocol `AccumulatorBinding`, implemented by `DriverBinding`, replaces `HeldStateBinding`, with `start` for its `held_state`.
+The protocols in `ess.spec.binding` change with them: `Binding` keeps only `compute`; the protocol `StageBinding` adds `make_stage`, implemented by `PipelineBinding`; and the protocol `AccumulatorBinding`, implemented by `DriverBinding`, replaces `HeldStateBinding`, with `make_accumulator` for its `held_state`.
 The backend calls the protocols, not the classes, so that essdispatch imports no sciline, and its tests use fakes of their own.
 
 A binding that knows its spec makes the `bind` mapping redundant:
@@ -490,7 +496,7 @@ Settles cost 4.
 
 ### D. The protocol passes model instances (assumed)
 
-`compute` is `Callable[[IofQParams], IofQOutputs]`, which is what a function binding is; the callable `stage` returns takes the blanks' values and returns `IofQOutputs` too.
+`compute` is `Callable[[IofQParams], IofQOutputs]`, which is what a function binding is; the callable `make_stage` returns takes the blanks' values and returns `IofQOutputs` too.
 With `WorkflowSpec` generic in its outputs model as well as its params model, a type checker checks `function_binding(IOFQ, iofq)`.
 The output names are checked where the author writes them, `IofQOutputs(iofq=...)`, not in the backend.
 A pipeline's providers take the same models, so a conversion such as `QEdges` to `QBins` never sees the protocol's form.
@@ -498,13 +504,13 @@ Settles costs 1 and 7.
 
 Alternatives considered:
 
-- **Defaults for every parameter that can be a blank**, so that `stage` gets `IofQParams(**fixed)`.
+- **Defaults for every parameter that can be a blank**, so that `make_stage` gets `IofQParams(**fixed)`.
   Required parameters, such as `sample`, become optional: a request without them is no longer refused, and a form no longer marks them required.
   A blank holds a value that is never used, so a strategy that reads it computes a wrong result without an error.
   The params model's own validators run on these values.
 - **Staging from the full instance of the first call.**
-  `stage` gets a valid instance, but its blank fields hold the first call's values, which the fixed part must not use; `check_caching` catches a strategy that does.
-  It does not extend to `start`, for the reason in Protocol.
+  `make_stage` gets a valid instance, but its blank fields hold the first call's values, which the fixed part must not use; `check_caching` catches a strategy that does.
+  It does not extend to `make_accumulator`, for the reason in Protocol.
 - **Dicts, as today.** Every provider that takes a group would take a dict.
 
 ### E. From references to the values a workflow takes (open, decided after this interface)
@@ -621,14 +627,10 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-9. A: should `AccumulatorBinding.start` be named `accumulator`, so that each method is named for the client object it serves, as `stage` is? `stage` returns a callable, and `accumulator` would return a `Driver`.
+9. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
 
 > Simon:
 
-10. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
-
-> Simon:
-
-11. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
+10. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
 
 > Simon:
