@@ -1,7 +1,7 @@
 # A spec has params and inputs
 
 **Status: proposal**, for the second PR of issue #69.
-It rewrites [ADR 0001](../../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md) (essspec), section "Data fields: inputs are parameters", changes [ADR 0007](../adr/0007-packages-split-by-dependencies.md), and the [README](../README.md) sections from Specs and bindings to Stages and accumulators.
+It rewrites [ADR 0001](../../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md) (essspec) in place, since that ADR decides what a spec consists of, changes [ADR 0007](../adr/0007-packages-split-by-dependencies.md), and the [README](../README.md) sections from Specs and bindings to Stages and accumulators.
 The binding amendments that wait for this split, D (model instances in the protocol), F (conversions are providers), G (the pipeline is made from the fixed values), and the spec's types as sciline keys, are in [binding-jobs.md](binding-jobs.md); this note says how they fit.
 
 ## In short
@@ -34,7 +34,7 @@ A multi-run spec is made from the single-run spec by naming the fields that beco
 | group | A model of literals as the value of a parameter. |
 | parameter, input | A field of the params model, or of the inputs model. |
 | name | The name of a parameter or an input. A spec's names are distinct across params and inputs. |
-| table, column, row | A *table* is a set of list fields, its *columns*, of equal length, pushed together; each index is a *row*. A column is a parameter or an input. A table of one column is a list field. |
+| table, column, row | A *table* is a set of list fields, its *columns*, of equal length, pushed together; each index is a *row*. A column is a parameter or an input. The spec declares its tables; a list field that is no column is a value like any other. |
 | request phase, call phase | The *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 
 ## Why
@@ -123,19 +123,23 @@ IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1,
 Each column, a parameter or an input of type `T`, becomes a `list[T]` on its own side: with at least one element if it is required, and empty by default if it is optional.
 The other fields are as in the spec tabulated.
 A column belongs to one table.
-The columns of a table have equal length; a push gives one row of each column at a time:
+The columns of a table have equal length.
+A push gives values for the columns of one table, by column name, as lists of equal length:
 
 ```python
 SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
                            tables={'sample': ('sample', 'sample_transmission')})   # two columns
-acc.push('sample', [{'sample': dataset(run=611), 'sample_transmission': dataset(run=601)}])
+acc.push(sample=[dataset(run=611)], sample_transmission=[dataset(run=601)])
 
 SLICES = SANS.tabulate(name='sans-slices', version=1, tables={'slices': ('time_range',)})
-acc.push('slices', [TimeRange(start=0, stop=60)])   # a column of params: the same runs, sliced by time
+acc.push(time_range=[TimeRange(start=0, stop=60)])   # a column of params: the same runs, sliced by time
 ```
 
-A push into a table of one column gives values; into a table of several columns, dicts by column.
-A list field that a spec declares itself is a table of one column.
+The columns name their table, since each belongs to one; a push whose columns are not all the columns of one table is refused.
+A blank and a driver's push name the table, where the whole table is meant.
+
+`tabulate` fills the field `tables` of `WorkflowSpec`, which a spec without a single-run form sets itself: `WorkflowSpec(..., tables={'runs': ('runs',)})`.
+A list field makes a table only when `tables` names it; otherwise it is a value like any other, and the spec has no accumulator over it.
 
 With one row in each table, a request of the tabulated spec is a request of the spec tabulated.
 So `ess.spec.testing.check_one_row(single, multi, params, inputs)` turns a request of `IOFQ` into its one-row request of `IOFQ_MULTI` and compares the outputs of the two bindings, for any package.
@@ -177,7 +181,7 @@ requests = apply(batch, samples, client.datasets)                # batch: each d
 
 acc = client.accumulator(Template(IOFQ_MULTI, params=IofQParams(reduction=Reduction(bins=100)),
                                   blanks=('sample', 'can')))
-acc.push('sample', [dataset(run=611), dataset(run=612)])
+acc.push(sample=[dataset(run=611), dataset(run=612)])
 ```
 
 An accumulator's blanks are tables, of params or of inputs.
@@ -230,12 +234,12 @@ class AccumulatorBinding(Binding[P, I, O], Protocol):
     def make_accumulator(self, fixed: Mapping[str, Any], blanks: Collection[str]) -> Driver[O]: ...
 
 class Driver(Protocol[O]):
-    def push(self, table: str, rows: Sequence[Any]) -> None: ...   # values, or dicts by column
+    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None: ...   # lists of equal length
     def outputs(self) -> O: ...
 ```
 
 `make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data.
-A push gives the driver a parameter's rows as groups and an input's as data.
+A push gives the driver the columns of one table: a parameter's values as groups, an input's as data.
 A function binding is `def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs`.
 
 Each name's type is its sciline key: `Reduction`, `SampleFile`, `BeamCentre`; for `X | None` the key is `X`.
@@ -282,14 +286,14 @@ They come with the data:
   - Requests, records, templates, and the log hold `params` and `inputs`; a template records the side of each blank.
   - Reference walking reads `inputs` only, by position.
   - `InputsFactory`; the backend validates in the two phases above and calls the binding with instances.
-  - A push into a table of several columns gives dicts by column; the backend splits each row to its sides.
+  - `Accumulator.push(**columns)` takes the columns of one table by name; the backend splits them to their sides. A table is what the spec's `tables` declares, never a list field alone.
   - A reference fits a field by type (`_agree`).
   - `submit` and `Template(spec, *, params, inputs, blanks)` take all but the spec by keyword; `Template.from_spec` goes.
   - `apply`, `Lookup`, and rules fill a blank input with the dataset; `dataset_field` goes.
   - `Request.inputs()` is renamed `upstream()`.
   - Dataset sources hold corrections of a run's metadata: not designed here.
 - **ADR 0007.** Today an instrument's `specs.py` needs only essspec, so that GUIs and remote clients import it without scipp (0007:68, 0007:104). It changes to allow scipp on the spec side, for data types, and still keeps scippnexus, sciline, and ess.reduce out. scipp needs only numpy and imports in about 130 ms. The command-line tool and web frontends read `SerializedWorkflowSpec` and need neither.
-- **ADR 0001.** Its section "Data fields: inputs are parameters" is rewritten in place as this split, with `tabulate`.
+- **ADR 0001.** Rewritten in place. "Data fields: inputs are parameters" becomes "Params and inputs", opening with the two phases; "One params model per workflow", "Params are groups and tables of flat models", "Shared parameter vocabulary, scipp-free", and "Convergence with esslivedata" follow it, with `tabulate` in the section on tables.
 - **binding-jobs.md.** Rewritten for the protocol above; `RunInput` and its `sciline.Scope` go, since each input has a type of its own.
 - **README.** Requests, templates, stages, accumulators, and multi-run specs as above.
 - **Requirements.** [users.md](../../requirements/users.md) and [sans.md](../../requirements/sans.md): per-run values come with the data; [data.md](../../requirements/data.md): corrections of a run's metadata apply to the run.
@@ -312,13 +316,3 @@ They come with the data:
 - **A literal per run, typed in with the sum**, such as a thickness per row. A correction of a run belongs to the run, not to one request that reads it: each request would repeat it, and two could disagree.
 - **Groups of inputs**, pairing a run with its transmission run in a model. Columns of a table pair them; a group would make a model a group or a data value depending on its use.
 - **Requests as one dict by name**, params and inputs together. Unambiguous, since the names are distinct, but the client cannot pass a typed `IofQParams`.
-
-## Questions
-
-1. Push shape: a table of one column takes values, `push('sample', [ref])`, and a table of several columns dicts by column. Or dicts always, so that a push keeps its shape when a column is added (which changes the spec's version anyway)?
-
-> Simon: Dict always, or maybe kwargs?
-
-2. A list field that a spec declares itself, without `tabulate`, is a table of one column. Keep this, for specs without a single-run form, or require `tabulate` for every table?
-
-> Simon: I see no reason to require `tabulate`, other than that it could return an object that lets the framework determine the table inputs without having to parse the model. Do whichever is easier now, seems like this can be extended in the future. Maybe removing support for `list` support would be harder/breaking, so maybe we skip that (or at least, skip the special meaning of `list` params, workflow are still allowed to have those, but it does not suffice to turn it into an accumulating workflow).
