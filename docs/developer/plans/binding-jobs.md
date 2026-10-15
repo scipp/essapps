@@ -172,11 +172,15 @@ The shared mapping is a convention that saves writing a second one; nothing depe
 A package whose specs name their parameters differently, such as `sample` and `sample_runs` in [roles/toy_sans.py](../roles/toy_sans.py), writes two mappings, and each binding checks its own against its own spec.
 Either way, the one-row symmetry is the author's promise: the pipeline computes the single-run spec and the driver computes the multi-run spec, so it holds if the driver computes what the pipeline computes.
 
+> Simon: What is this sentence saying? Yes, a "nice" workflow author will do this, but the framework should not really care, because technically there is no connection between IOFQ and IOFQ_MULTI, right? This is more of a recommended convention.
+
 The author of the pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
 
 ### 2. Strategy
 
 The author provides a sciline pipeline, a driver, or a function; the table in In short says which client actions each serves.
+
+> Simon: I do not really understand that table as certain cells do not make sense, such as (`PipelineBinding`, Accumulator) -- accumulation happens in drivers, and pipelines do not accumulate.
 
 **A sciline pipeline** serves a spec without tables, or a spec whose tables the pipeline takes whole, as lists.
 A plain request computes the outputs from the pipeline with every value set.
@@ -198,9 +202,20 @@ driver.push({RunData[SampleRun]: run_102})
 driver.outputs()                                 # -> {IofQ: ...}
 ```
 
+> Simon: I wonder if we should slightly generalize this to allow pushing multiple rows in a single `push`. This would allow for drivers to optimize internally.
+
 The keys of a row tell the driver which table it belongs to: rows of different tables set different keys, which the binding checks when it is made.
 A row with several fields, such as a run and its own transmission run, is one push with several keys.
 A client push that names several tables becomes one driver push per table; the order symmetry makes that split invisible.
+
+> Simon: I wonder if we made our lives overly complicated here. Above we defined:
+>     keys = {'sample.file': RunData[SampleRun], 'can.file': RunData[CanRun], 'reduction.bins': Bins}
+> If we had several fields, in `sample`, we'd have a third one here. Essentially this is flattening the nested structure, which then has to be reassambled by call convention (caller: remember to pass the correct subsets of keys, framework: check that all fields for a row were passed in the same push).
+> My hunch is that we can avoid a ton of trouble here (and I think this is mentioned in amendment F):
+> - The `params` mapping (and maybe `outputs`, I have not thought about this one yet) should not reference nested structure.
+> - A "row" is thus just naturally pushing a single row (from a dict or the specific row model), the three sentences in the text above almost become moot.
+> - Same applies for regular fields. A typical field might be `QBins` and the sciline pipeline has a param corresponding to the entire `QBins` model, not at subfield.
+
 A plain request and the tables fixed by an accumulator's template take the same calls: the binding makes a driver and pushes every row it is given.
 A changed fixed value means a new driver.
 
