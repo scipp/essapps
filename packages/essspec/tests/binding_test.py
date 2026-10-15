@@ -44,19 +44,26 @@ SUM = WorkflowSpec(
 )
 
 
-class Recording:
-    """Sums the values pushed, times the scale; ``made`` and ``pushes`` record calls."""
+class Recorder:
+    """Makes drivers that sum the values pushed, times the scale, and records calls."""
 
-    made: list[Mapping[str, Any]]
-    pushes: list[tuple[str, list[Any]]]
+    def __init__(self) -> None:
+        self.made: list[Mapping[str, Any]] = []
+        self.pushes: list[tuple[str, list[Any]]] = []
 
-    def __init__(self, fixed: Mapping[str, Any]) -> None:
-        Recording.made.append(fixed)
-        self._factor = fixed['scale']['factor']
+    def make_driver(self, fixed: Mapping[str, Any]) -> 'Summing':
+        self.made.append(fixed)
+        return Summing(self, fixed['scale']['factor'])
+
+
+class Summing:
+    def __init__(self, recorder: Recorder, factor: float) -> None:
+        self._recorder = recorder
+        self._factor = factor
         self._total = 0.0
 
     def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
-        Recording.pushes.append((table, list(rows)))
+        self._recorder.pushes.append((table, list(rows)))
         self._total += sum(row['value'] for row in rows)
 
     def outputs(self) -> Mapping[str, Any]:
@@ -64,28 +71,29 @@ class Recording:
 
 
 @pytest.fixture
-def binding() -> DriverBinding:
-    Recording.made, Recording.pushes = [], []
-    return DriverBinding(SUM, Recording)
+def recorder() -> Recorder:
+    return Recorder()
+
+
+@pytest.fixture
+def binding(recorder: Recorder) -> DriverBinding:
+    return DriverBinding(SUM, recorder.make_driver)
 
 
 def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
-    binding: DriverBinding,
+    binding: DriverBinding, recorder: Recorder
 ) -> None:
     binding.make_accumulator({'scale': {'factor': 3.0}}, ('parts', 'extra'))
-    assert Recording.made == [{'scale': {'factor': 3.0}}]
-    assert Recording.pushes == []
+    assert recorder.made == [{'scale': {'factor': 3.0}}]
+    assert recorder.pushes == []
 
 
-def test_each_fixed_table_is_one_push_also_without_rows(
-    binding: DriverBinding,
+def test_each_fixed_table_with_rows_is_one_push(
+    binding: DriverBinding, recorder: Recorder
 ) -> None:
     driver = binding.make_accumulator({'parts': [{'value': 1.0}, {'value': 2.0}]}, ())
-    assert Recording.made == [{'scale': {'factor': 2.0}}]
-    assert Recording.pushes == [
-        ('parts', [{'value': 1.0}, {'value': 2.0}]),
-        ('extra', []),
-    ]
+    assert recorder.made == [{'scale': {'factor': 2.0}}]
+    assert recorder.pushes == [('parts', [{'value': 1.0}, {'value': 2.0}])]
     assert driver.outputs() == {'total': 6.0}
 
 

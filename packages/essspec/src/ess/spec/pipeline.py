@@ -10,13 +10,13 @@ This is the only module of ``ess.spec`` that imports sciline (extra
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any
 
 import sciline
 
 from ._workflow_spec import WorkflowSpec
-from .binding import fixed_values
+from .binding import StageCall, fixed_values
 
 Key = Any
 
@@ -34,7 +34,8 @@ class PipelineBinding:
     ``sciline.Stage``, which computes what does not depend on them on the
     first call and holds it. A plain request is a stage with no blanks, called
     once. A key that no output depends on is not fed: its value cannot change
-    the outputs.
+    the outputs. ``fixed`` and ``blanks`` are checked by ``fixed_values`` of
+    :mod:`ess.spec.binding`, and a parameter without a key is refused.
 
     The author of the pipeline promises that it is pure: it modifies no input,
     and returns the same results for the same inputs.
@@ -67,7 +68,7 @@ class PipelineBinding:
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    ) -> StageCall:
         values = fixed_values(self.spec, fixed, blanks)
         blank_keys = self._keys.of(blanks)
         pipeline = self._keys.set(self._pipeline, values)

@@ -111,6 +111,11 @@ def check_arrival_and_order(
     has rows so far. A state whose expected outputs raise is not read, since
     a driver may refuse a state; the state with every row is always read. The
     check fails if a push modifies the rows it was given.
+
+    The check compares the driver with itself under other push schedules, so
+    it does not prove that the outputs are right. Only a comparison with an
+    independent reference does, such as :func:`check_one_row` against the
+    single-run binding, if the package writes one.
     """
     pristine = copy.deepcopy(tables)
     for name, schedule in _schedules(tables):

@@ -44,6 +44,9 @@ from pydantic import TypeAdapter
 from ._workflow_spec import WorkflowSpec
 from .data import table_fields
 
+StageCall = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+"""What ``make_stage`` returns: the outputs from the values of the blanks."""
+
 
 @runtime_checkable
 class Binding(Protocol):
@@ -70,7 +73,7 @@ class Binding(Protocol):
 class StageBinding(Binding, Protocol):
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    ) -> StageCall:
         """
         A callable that computes the outputs from the values of ``blanks``,
         by name, with the values of ``fixed``.
@@ -78,8 +81,9 @@ class StageBinding(Binding, Protocol):
         The callable gets the values of the blanks only, and gives what
         :meth:`compute` gives with the same values. It may compute what
         depends only on ``fixed`` once, and hold it. A parameter in neither
-        ``fixed`` nor ``blanks`` takes the spec's default; ``fixed_values``
-        lists what is refused.
+        ``fixed`` nor ``blanks`` takes the spec's default. An implementation
+        raises ``ValueError`` for ``fixed`` and ``blanks`` that do not fit
+        the spec.
 
         This method and the callable may be called from several threads at
         once, and neither modifies the values it is given. The callable may
@@ -116,7 +120,7 @@ class Driver(Protocol):
     """
 
     def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
-        """Add rows of the table named, in order."""
+        """Add rows of the table named, in order; ``rows`` is never empty."""
         ...
 
     def outputs(self) -> Mapping[str, Any]:
@@ -131,12 +135,12 @@ class AccumulatorBinding(Binding, Protocol):
     ) -> Driver:
         """
         A driver that takes pushes into the tables ``blanks``, made with the
-        values of ``fixed``.
+        values of ``fixed``, with the rows of any table in ``fixed`` in it.
 
-        The rows of each table in ``fixed`` are pushed. A parameter in
-        neither ``fixed`` nor ``blanks`` takes the spec's default;
-        ``fixed_values`` lists what is refused, and a blank that is not a
-        table is refused too.
+        A parameter in neither ``fixed`` nor ``blanks`` takes the spec's
+        default. An implementation raises ``ValueError`` for ``fixed`` and
+        ``blanks`` that do not fit the spec, and for a blank that is not a
+        table.
 
         It may be called from several threads at once, and does not modify
         the values it is given.
@@ -180,9 +184,11 @@ class DriverBinding:
 
     ``make_driver`` makes a driver from the fixed values that are not tables,
     by name. It may be called from several threads at once. An accumulator
-    gets a driver of its own, with each table in its fixed values pushed, all
-    rows in one push, also a table without rows. A plain request is an
-    accumulator with no blanks, read once.
+    gets a driver of its own, with the rows of each table in its fixed values
+    in one push; a table without rows, or ``None``, is not pushed. A plain
+    request is an accumulator with no blanks, read once. ``fixed`` and
+    ``blanks`` are checked by :func:`fixed_values`, and each blank must be a
+    table.
     """
 
     spec: WorkflowSpec[Any]
@@ -203,8 +209,8 @@ class DriverBinding:
         values = fixed_values(self.spec, fixed, blanks)
         driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
         for table in tables:
-            if table in values:
-                driver.push(table, values[table] or [])  # None: an empty table
+            if rows := values.get(table):
+                driver.push(table, rows)
         return driver
 
 

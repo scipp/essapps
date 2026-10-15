@@ -20,6 +20,7 @@ from .binding import (
     Driver,
     DriverBinding,
     StageBinding,
+    StageCall,
     function_binding,
 )
 from .data import (
@@ -64,6 +65,7 @@ __all__ = [
     'Ref',
     'SerializedWorkflowSpec',
     'StageBinding',
+    'StageCall',
     'WorkflowSpec',
     'as_ref',
     'data_fields',
