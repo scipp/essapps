@@ -14,7 +14,7 @@ The spec defines the types of its parameters and outputs.
 A workflow uses these types as its sciline keys, or an adapter in the instrument's glue translates them to the workflow's own keys.
 Either way, the spec imports nothing from the workflow.
 
-The workflow author provides one of three things, and each serves some of the client's actions:
+The workflow author provides one of three things, the first two as a function that makes them from the fixed values, and each serves some of the client's actions:
 
 | The author provides | Plain request | Stage | Accumulator |
 |---|---|---|---|
@@ -29,7 +29,7 @@ Only a driver accumulates: the framework never decides how rows combine, not eve
 A stage exists only over a sciline pipeline, since only there does it hold anything.
 
 This note lists what today's bindings cost, describes the design, and proposes amendments.
-A to D and F settle costs; E is decided after this interface, and G stays open.
+A to D, F, and G settle costs; E is decided after this interface.
 
 ## Terms
 
@@ -248,7 +248,7 @@ What the backend calls for each client action:
 
 The protocol carries the backend's promises to the binding:
 
-- `compute`, `make_stage`, and the callable `make_stage` returns may each be called from several threads at once, and none of them modifies the values it is given. A `PipelineBinding` sets values on a copy of its pipeline; a function is safe because its author promises it is pure. The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
+- `compute`, `make_stage`, and the callable `make_stage` returns may each be called from several threads at once, and none of them modifies the values it is given. A `PipelineBinding` sets values on a pipeline made for the request or the stage; a function is safe because its author promises it is pure. The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
 - A driver's `push` and `outputs` are called from one thread at a time, and a push never while the outputs of the state before it are in use.
 - A call through a stage gets the blanks' values of a valid plain request.
 The client never sees the protocol.
@@ -291,7 +291,7 @@ An existing workflow takes its own keys, such as `Filename[SampleRun]` or a `QBi
 The instrument's glue then translates: with providers that take the spec's types and return the workflow's keys, such as `filename` and `q_bins` above, inserted into the pipeline; or, where a value needs no conversion, with a `keys` argument that names the workflow's key for a parameter:
 
 ```python
-PipelineBinding(IOFQ, pipeline, keys={'reduction': ReductionSettings})
+PipelineBinding(IOFQ, make_pipeline, keys={'reduction': ReductionSettings})
 ```
 
 **A parameter that chooses a source of data**, such as the detector bank or the incident monitor, is a value like any other, with its own type.
@@ -305,14 +305,18 @@ The one-row symmetry is the package's own: `check_one_row` is a test the package
 ### Strategies
 
 **A sciline pipeline** serves a spec without tables, or a spec whose tables the pipeline takes whole, as lists.
-A plain request sets each parameter's key to its value and computes each output's key.
-A stage is a handle to a `sciline.Stage` cut at the keys of the blanks: the part that does not depend on the blanks is computed once, and each call computes the rest.
+`PipelineBinding` takes a function that makes the pipeline from the fixed values, as `DriverBinding` takes one that makes a driver.
+A plain request makes the pipeline from all values, sets each parameter's key to its value, and computes each output's key.
+A stage makes the pipeline from the fixed values, and is a handle to a `sciline.Stage` cut at the keys of the blanks: the part that does not depend on the blanks is computed once, and each call computes the rest.
+Each request and each stage gets a pipeline of its own, so the copy that makes them safe to run in parallel is in the author's code, where it can be seen.
 Tuning a parameter over fixed rows, such as the bins over a hundred runs, needs a pipeline that takes the table as a list; such a pipeline is staged as any other.
 What key a table that a pipeline takes whole sets, the field's `list[...]` type or a type that names the list, is open (question 5).
-When a `PipelineBinding` is made, it checks that the parameters have distinct keys, that each is a key of the pipeline, and that each output's key can be computed.
+When a `PipelineBinding` is made, it checks that the parameters have distinct keys.
+When a stage or a request makes its pipeline, the binding checks that each parameter's key is a key of the pipeline, and that each required output's key can be computed; an optional output is computed if its key can be.
+These checks wait until then because the graph may depend on the fixed values (amendment G).
 
 ```python
-single = PipelineBinding(IOFQ, pipeline)
+single = PipelineBinding(IOFQ, lambda fixed: pipeline.copy())   # a graph that depends on no field
 ```
 
 The author of a pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
@@ -455,19 +459,19 @@ The README's "What a binding provides", ADR 0006, and [roles/workflow-authors.ip
 The Symmetries table splits "Kept by" into the strategy and what it is given.
 The README's section Drivers calls the client code that decides what to submit and push a *driver*, which clashes with sciline's driver.
 The two are the halves of one loop: the client's code decides which rows arrive, and the package's driver adds them.
-One of them needs another name (question 9).
+One of them needs another name (question 8).
 Settles cost 5.
 
 ### B. Three bindings, each of which takes its spec
 
 ```python
-single = PipelineBinding(IOFQ, pipeline)
+single = PipelineBinding(IOFQ, make_pipeline)
 multi = DriverBinding(IOFQ_MULTI, make_driver)
 exp = function_binding(EXPORT, export)
 ```
 
 `DriverBinding` replaces `AccumulatingPipelineBinding`, and `accumulate` goes without a replacement: the workflow package chooses its driver.
-`PipelineBinding` gets its spec, and takes the keys from the spec's types, with `keys` only for an adapter.
+`PipelineBinding` gets its spec, takes a function that makes the pipeline from the fixed values, and takes the keys from the spec's types, with `keys` only for an adapter.
 The kind of strategy is named by the class, not implied by whether `accumulate` is given.
 The protocols in `ess.spec.binding` change with them: `Binding` keeps only `compute`; the protocol `StageBinding` adds `make_stage`, implemented by `PipelineBinding`; and the protocol `AccumulatorBinding`, implemented by `DriverBinding`, replaces `HeldStateBinding`, with `make_accumulator` for its `held_state`.
 The backend calls the protocols, not the classes, so that essdispatch imports no sciline, and its tests use fakes of their own.
@@ -535,22 +539,36 @@ Options to weigh against it, listed only: a handle type that holds a reference a
 
 A conversion, such as `QEdges` to the bin edges of `QBins`, is a provider that takes the model (Types).
 `edges_to_variable`, or esslivedata's `QEdges.get_edges()`, becomes the body of such a provider.
+Alternatively, this can be handled in an adapter layer (which could be the driver implementation) where the workflow author performs the conversions. This is not a concern of the framework.
 Settles cost 7, with D.
 
-### G. A graph that depends on a field (open)
+### G. The graph is made from the fixed values
 
 esslivedata's LOKI factory inserts a provider and adds the output `transmission_fraction` depending on `params.transmission.mode`; its wavelength lookup-table workflow sets `PulseStride`, or leaves it to another provider, depending on `pulse.auto_stride`.
-With types as keys, a provider that takes `TransmissionOptions` can choose a value by its mode, but it cannot change which providers the graph has.
+A provider that takes `TransmissionOptions` can choose a value by its mode, but it cannot change which providers the graph has.
 
-A driver or a function does what it likes, so only a `PipelineBinding` is affected.
-It could take a function that configures the pipeline from the fixed values, with the keys it may set or insert declared, so that a `sciline.Stage` can still be cut at the blanks:
+So a `PipelineBinding` takes a function that makes the pipeline from the fixed values, as a `DriverBinding` takes one that makes a driver:
 
 ```python
-PipelineBinding(SANS, pipeline, configure=(configure_transmission, {TransmissionFraction[SampleRun]}))
+def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+    wf = base.copy()
+    wf[CorrectForGravity] = CorrectForGravity(False)          # a value users never see
+    if fixed['transmission'].mode is TransmissionMode.constant:
+        wf[TransmissionFraction[SampleRun]] = sc.scalar(1.0)
+    else:
+        wf.insert(transmission_from_monitor)                  # the graph depends on a field
+    return wf
+
+sans = PipelineBinding(SANS, make_pipeline)
 ```
 
-Values that users never see are set in the pipeline the binding is given, by the workflow package or by the instrument's glue.
+The graph may depend on fixed parameters only.
+A parameter that changes the graph cannot be a blank: the function does not get the blanks, so it fails when it reads one, and the stage is refused when it is made.
+Over a graph that changes from call to call, a stage would have nothing to cache; such a parameter is varied by plain requests, or by a driver.
+Since the key of each blank is its type, the `sciline.Stage` is cut at the blanks whatever the function inserts.
+Values that users never see are set in this function, by the workflow package or by the instrument's glue.
 An output that exists only for some values of a field, such as `transmission_fraction`, is an optional output of the spec.
+Settles cost 8.
 
 ## Prior art: esslivedata
 
@@ -581,7 +599,7 @@ What carries over:
 |---|---|---|---|
 | parameter and output types | shared types: their authors; the rest: the spec's author | the spec side: `ess.spec`, the spec's module (question 5) | validation tests of the spec |
 | pipeline, conversions, driver | the workflow author | the workflow package | the package's own tests, with `check_arrival_and_order`, without the framework |
-| adapter, values users never see | the instrument's glue, where the workflow does not take the spec's types | `essdispatchinstruments` (ADR 0007) | the checks when the binding is made |
+| adapter, values users never see | the instrument's glue, where the workflow does not take the spec's types | `essdispatchinstruments` (ADR 0007) | the checks when a stage or a request makes its pipeline |
 | strategies: `PipelineBinding`, `DriverBinding`, `function_binding` | the framework | `ess.spec` | `ess.spec`'s tests, once |
 | protocol | the framework | declared in `ess.spec.binding`, called by `ess.dispatch.backend` | essdispatch's tests |
 
@@ -603,7 +621,7 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-3. B: three bindings, `PipelineBinding` (plain requests and stages), `DriverBinding` (plain requests and accumulators, over a function that makes a driver from the fixed values), and `function_binding` (plain requests); the framework needs no particular driver?
+3. B: three bindings, `PipelineBinding` (plain requests and stages, over a function that makes a pipeline from the fixed values), `DriverBinding` (plain requests and accumulators, over a function that makes a driver from the fixed values), and `function_binding` (plain requests); the framework needs no particular driver?
 
 > Simon:
 
@@ -623,14 +641,10 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-8. G: does `PipelineBinding` take a configuring function with declared keys, or does a workflow whose graph depends on a field use a driver or a function? Do you know of a real reduction, other than esslivedata's transmission mode and pulse stride, whose graph depends on a field?
+8. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
 
 > Simon:
 
-9. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
-
-> Simon:
-
-10. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
+9. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
 
 > Simon:
