@@ -1,111 +1,231 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The binding protocol: the code behind a spec.
+Bindings: what the backend calls to compute a spec's requests.
 
-A binding is staged with the values that stay fixed and returns a callable
-over the rest, the blanks, each a field of the params model: a group or a
-table. It may compute what depends only on the fixed
-values when staged or on the first call, and hold it; a request outside a
-stage is staged with no blanks and called once::
+A binding is what the backend calls to compute a spec's requests. The
+workflow author makes it from a pipeline, a driver, or a function, each for
+one spec::
 
-    binding.stage(values, ())()                      # a plain request
-    call = binding.stage(fixed, ('binning',))        # a stage
-    call(binning={'bins': 100})
+    single = PipelineBinding(IOFQ, pipeline, params=..., outputs=...)
+    multi = DriverBinding(IOFQ_MULTI, make_driver)
+    export = function_binding(EXPORT, export_csv)
 
-How a binding computes is invisible in the records: a call through a stage
-returns what the plain request returns. A framework accepts a plain
-:data:`Function` too, as a binding that computes nothing ahead.
+``PipelineBinding`` is in :mod:`ess.spec.pipeline`, which needs sciline. Each
+binding serves some of a client's actions:
 
-An accumulator keeps a held state, made for the values of every field but the
-tables it fills. A binding of a spec with table fields may make held states,
-like ``ess.reduce.streaming.StreamProcessor``::
+=====================  =============  ==============  ==================
+binding                plain request  stage           accumulator
+=====================  =============  ==============  ==================
+``PipelineBinding``    ``compute``    ``make_stage``  refused
+``DriverBinding``      ``compute``    refused         ``make_accumulator``
+``function_binding``   ``compute``    refused         refused
+=====================  =============  ==============  ==================
 
-    held = binding.held_state({'scaling': {'scale': 2.0}})  # what depends on it
-    held.push({'runs': {'file': run_611}})   # a row per named table, data read
-    held.outputs()                          # {'normalized': ...}, every output
+The protocols name what the backend calls: :class:`Binding` for a plain
+request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
+for an accumulator. Values pass by parameter name, with data read: a group as
+a dict of its fields, and a table as a list of such dicts, its rows. Outputs
+come back by name.
 
-Its outputs after rows are pushed in order are those of the plain request
-whose tables hold these rows, with the same other values. It may add each push
-in place, and its outputs may share memory with what it holds: the caller is
-done with the outputs of a state before it pushes the next rows (see
-:meth:`HeldState.outputs`). A binding without ``held_state`` works in an
-accumulator too: the framework keeps the rows and computes the plain request
-over them when a state is read.
+A *driver* (:class:`Driver`) is the object behind an accumulator: rows are
+pushed into it, one table at a time, and it gives the outputs over the rows so
+far. The workflow package writes it; only a driver accumulates.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-Function = Callable[..., Mapping[str, Any]]
-"""
-Takes parameter values by field name, with data read, and returns the outputs.
+from pydantic import TypeAdapter
 
-It gets every field of the params model, defaults filled in, so it declares no
-defaults of its own. A group comes as a dict of its fields and a table as a
-list of such dicts, so that read data takes the place of each reference.
-"""
+from ._workflow_spec import WorkflowSpec
+from .data import table_fields
 
 
 @runtime_checkable
 class Binding(Protocol):
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        """
-        A callable over ``blanks`` that computes the outputs with ``fixed``.
+    @property
+    def spec(self) -> WorkflowSpec[Any]:
+        """The spec whose requests the binding computes."""
+        ...
 
-        Both this method and the callable may be called from several threads
-        at once. Neither may modify the values it is given, and the callable
-        may return the same object in several calls: records made through one
+    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        """
+        The outputs of a plain request, by name.
+
+        ``params`` holds each parameter's value by name, with data read. A
+        parameter left out takes the spec's default. An output that the spec
+        declares optional may be left out.
+
+        It may be called from several threads at once, and does not modify
+        ``params``.
+        """
+        ...
+
+
+@runtime_checkable
+class StageBinding(Binding, Protocol):
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+        """
+        A callable that computes the outputs from the values of ``blanks``,
+        by name, with the values of ``fixed``.
+
+        The callable gets the values of the blanks only, and gives what
+        :meth:`compute` gives with the same values. It may compute what
+        depends only on ``fixed`` once, and hold it. A parameter in neither
+        ``fixed`` nor ``blanks`` takes the spec's default; ``fixed_values``
+        lists what is refused.
+
+        This method and the callable may be called from several threads at
+        once, and neither modifies the values it is given. The callable may
+        return the same object in several calls, so records made through one
         stage share what does not depend on the blanks.
         """
         ...
 
 
-class HeldState(Protocol):
-    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
-        """
-        Add one row to each named table field, with data read.
+class Driver(Protocol):
+    """
+    The object behind an accumulator: rows are pushed into it, and it gives
+    the outputs over the rows so far.
 
-        The rows of one push enter one state, so a binding may add them at
-        once. It may modify what it holds in place, and so change an output
-        returned before it, but not the rows. A held state that starts from
-        the first row's values copies them, so that adding in place never
-        changes the output they came from. Whether a push needs memory for a
-        second copy of what it holds is the binding's choice: binning a run's
-        events into a held grid needs none, histogramming the run and adding
-        the histogram needs one.
-        """
+    The caller calls :meth:`push` and :meth:`outputs` from one thread at a
+    time, and pushes only once it is done with the outputs of the state
+    before. A driver promises:
+
+    - :meth:`outputs` gives the outputs of every row pushed so far, however
+      the rows were grouped into pushes, and whatever the order of pushes
+      into different tables.
+    - Within a table, the rows keep the order in which they were pushed.
+    - :meth:`push` does not modify a row. A driver that adds in place copies
+      the first contribution, so that adding never changes a value that
+      another record returned.
+    - :meth:`outputs` may share memory with what the driver holds; the
+      caller reads them before the next push.
+    - An output that the spec declares optional may be left out.
+    - A driver may refuse a state, such as one with no can row yet, by
+      raising in :meth:`outputs`; later pushes may make the state valid.
+
+    A push that raises stops the accumulator, since the driver may hold part
+    of its rows.
+    """
+
+    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Add rows of the table named, in order."""
         ...
 
     def outputs(self) -> Mapping[str, Any]:
-        """
-        Every output of the spec over the rows pushed so far.
-
-        They may share memory with what the held state holds. An output the
-        spec declares optional may be left out. The caller calls this once per
-        state that is read, keeps what it returns until the next push, and
-        pushes only once every reader of these outputs is done.
-        """
+        """The outputs over the rows pushed so far, by name."""
         ...
 
 
 @runtime_checkable
-class HeldStateBinding(Binding, Protocol):
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
+class AccumulatorBinding(Binding, Protocol):
+    def make_accumulator(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Driver:
         """
-        A new held state with nothing pushed.
+        A driver that takes pushes into the tables ``blanks``, made with the
+        values of ``fixed``.
 
-        ``fixed`` holds every parameter but the tables it fills, with data
-        read and defaults filled in. Each value is typed by its own field and
-        that field's validators; the params model's own validators run on
-        the plain request of a state when it is read. Its ``push`` and
-        ``outputs`` are called from one thread at a time.
+        The rows of each table in ``fixed`` are pushed. A parameter in
+        neither ``fixed`` nor ``blanks`` takes the spec's default;
+        ``fixed_values`` lists what is refused, and a blank that is not a
+        table is refused too.
 
-        The held state keeps what it holds for each table apart, so that the
-        order of pushes into different tables does not change a state. A
-        binding that cannot do so for the tables ``fixed`` leaves out raises,
-        as it may for any values it refuses; the accumulator then stops.
+        It may be called from several threads at once, and does not modify
+        the values it is given.
         """
         ...
+
+
+def fixed_values(
+    spec: WorkflowSpec[Any], fixed: Mapping[str, Any], blanks: Collection[str]
+) -> dict[str, Any]:
+    """
+    The values of ``fixed``, with the default of each parameter in neither
+    ``fixed`` nor ``blanks``.
+
+    A default comes as the backend passes values: a group as a dict of its
+    fields. Raises ``ValueError`` if a parameter is both fixed and blank, if
+    either names a parameter the spec lacks, or if a parameter without a
+    default is in neither.
+    """
+    fields = spec.params.model_fields
+    if both := fixed.keys() & set(blanks):
+        raise ValueError(f'{sorted(both)}: both fixed and blank')
+    if unknown := (fixed.keys() | set(blanks)) - fields.keys():
+        raise ValueError(f'{sorted(unknown)}: not parameters of {spec.name}')
+    left = {n: f for n, f in fields.items() if n not in fixed and n not in blanks}
+    if missing := [n for n, f in left.items() if f.is_required()]:
+        raise ValueError(f'{missing}: neither fixed nor blank, and without a default')
+    defaults = {
+        name: TypeAdapter(field.annotation).dump_python(
+            field.get_default(call_default_factory=True, validated_data={})
+        )
+        for name, field in left.items()
+    }
+    return {**defaults, **fixed}
+
+
+@dataclass(frozen=True)
+class DriverBinding:
+    """
+    A driver behind a spec over tables: plain requests and accumulators.
+
+    ``make_driver`` makes a driver from the fixed values that are not tables,
+    by name. It may be called from several threads at once. An accumulator
+    gets a driver of its own, with each table in its fixed values pushed, all
+    rows in one push, also a table without rows. A plain request is an
+    accumulator with no blanks, read once.
+    """
+
+    spec: WorkflowSpec[Any]
+    make_driver: Callable[[Mapping[str, Any]], Driver]
+
+    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self.make_accumulator(params, ()).outputs()
+
+    def make_accumulator(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> Driver:
+        tables = table_fields(self.spec.params)
+        if not_tables := sorted(set(blanks) - tables.keys()):
+            raise ValueError(
+                f'{not_tables}: the blanks of an accumulator are tables of '
+                f'{self.spec.name}, {sorted(tables)}'
+            )
+        values = fixed_values(self.spec, fixed, blanks)
+        driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
+        for table in tables:
+            if table in values:
+                driver.push(table, values[table] or [])  # None: an empty table
+        return driver
+
+
+@dataclass(frozen=True)
+class _FunctionBinding:
+    spec: WorkflowSpec[Any]
+    function: Callable[..., Mapping[str, Any]]
+
+    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self.function(**fixed_values(self.spec, params, ()))
+
+
+def function_binding(
+    spec: WorkflowSpec[Any], function: Callable[..., Mapping[str, Any]]
+) -> Binding:
+    """
+    A function behind a spec: plain requests only.
+
+    ``function`` takes each parameter by name, with data read and defaults
+    filled in, and returns the outputs by name. It must be pure: the backend
+    may call it from several threads at once, and it does not modify its
+    arguments.
+    """
+    return _FunctionBinding(spec, function)
