@@ -760,6 +760,17 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
 def test_a_stage_needs_a_binding_that_makes_stages(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
         client.stage(Template(TOTAL, blanks=('parts',)))
+    with pytest.raises(SubmitError, match=r'^total/v1: its binding makes no stages$'):
+        client.stage(Template(TOTAL, params={'speed': 1.0}, blanks=('parts',)))
+
+
+def test_bind_is_a_list_of_bindings(datasets: FakeDatasets) -> None:
+    def load(sample: dict[str, Any]) -> dict[str, Any]:
+        return {'value': sample['file'], 'extra': 0.0}
+
+    for bind in ({LOAD: load}, [load]):
+        with pytest.raises(TypeError, match='bind is a list of bindings'):
+            Backend(datasets, bind)  # type: ignore[arg-type]
 
 
 # What a client keeps
@@ -1455,18 +1466,29 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
         assert str(pushed.value) == str(refused.value)
 
 
-def test_a_row_refused_in_a_push_is_located_by_its_index_in_the_push(
+def test_a_row_refused_in_a_push_is_located_by_its_index_in_the_table(
     client: Client,
 ) -> None:
-    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
-    rows = [{'value': load.ref('value')}, {'weight': 2.0}]
+    loads = [client.compute(LOAD, {'sample': {'file': dataset(run=n)}}) for n in (1, 2)]
+    rows = [{'value': loads[0].ref('value')}, {'value': loads[1].ref('value')}]
     weighted = client.accumulator(Template(WEIGHTED, blanks=('rows',)))
-    with pytest.raises(SubmitError, match=r'rows\.1\.value') as refused:
-        client.submit(WEIGHTED, {'rows': rows})
+    weighted.push('rows', rows[:1])
+    with pytest.raises(SubmitError, match=r'rows\.2\.value') as refused:
+        client.submit(WEIGHTED, {'rows': [*rows, {'weight': 2.0}]})
     with pytest.raises(SubmitError) as pushed:
-        weighted.push('rows', rows)
+        weighted.push('rows', [rows[1], {'weight': 2.0}])
+    with pytest.raises(SubmitError, match=r"^rows\[2\]: \['other'\]: not fields"):
+        weighted.push('rows', [rows[1], {'other': 1.0}])
 
     assert str(pushed.value) == str(refused.value)
+
+
+def test_a_push_takes_a_list_of_rows(client: Client) -> None:
+    load = client.compute(LOAD, {'sample': {'file': dataset(run=1)}})
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('rows',)))
+    for row in ({'value': load.ref('value')}, Weighted(value=load.ref('value'))):
+        with pytest.raises(TypeError, match='rows is a list of rows of rows'):
+            weighted.push('rows', row)  # type: ignore[arg-type]
 
 
 class Files(BaseModel):

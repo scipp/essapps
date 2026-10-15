@@ -14,7 +14,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ess.spec import DatasetRef, DriverBinding, WorkflowSpec, table_fields
+from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec, table_fields
 
 from .datasets import Selector
 
@@ -127,7 +127,9 @@ class StagedFunction:
     A binding that makes stages, over a function that takes each parameter by
     name and returns the outputs by name. A stage holds nothing: each call
     calls the function. ``staged`` lists the blanks of each stage made, and
-    ``fail_next`` makes the next stage fail.
+    ``fail_next`` makes the next stage fail. Neither is guarded against
+    calls from several threads at once, which is fine for tests that read
+    them after the calls.
     """
 
     spec: WorkflowSpec[Any]
@@ -140,7 +142,7 @@ class StagedFunction:
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    ) -> StageCall:
         if self.fail_next:
             self.fail_next = False
             raise OSError('staging failed')
@@ -178,6 +180,10 @@ def kept_rows(
     """
     A ``DriverBinding`` whose drivers keep the rows (:class:`KeptRows`):
     ``function`` takes each parameter by name, a table as a list of its rows.
+
+    A fake for tests that need an accumulator over a plain function, not a
+    recommended driver: each read computes over every row again. A package
+    writes its own driver, which decides how rows combine.
     """
     tables = tuple(table_fields(spec.params))
     return DriverBinding(spec, functools.partial(KeptRows, function, tables))

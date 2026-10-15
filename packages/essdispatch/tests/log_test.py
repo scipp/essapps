@@ -305,6 +305,24 @@ def test_outputs_are_not_in_the_log(
         again.output(load, 'value')
 
 
+def test_a_push_of_several_rows_with_references_reads_back_as_written(
+    tmp_path: Path, start: Callable[[Path], Client]
+) -> None:
+    client = start(tmp_path / 'log')
+    loads = [client.compute(LOAD, {'sample': {'file': dataset(run=n)}}) for n in (1, 2)]
+    total = _total(client)
+    total.push('values', [load.refs('value') for load in loads])
+
+    (pushed,) = [e for e in Log.read(tmp_path / 'log') if isinstance(e, Pushed)]
+    assert pushed == Pushed(
+        accumulator=total.id,
+        table='values',
+        rows=[load.refs('value') for load in loads],
+    )
+    assert all(isinstance(row['value'], OutputRef) for row in pushed.rows)
+    assert client.output(total, 'value') == 3.0
+
+
 def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     tmp_path: Path,
     start: Callable[[Path], Client],

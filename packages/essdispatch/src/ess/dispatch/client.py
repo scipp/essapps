@@ -199,6 +199,10 @@ class Accumulator:
         controller that should skip a run whose reduction failed waits for
         that record before it pushes.
         """
+        if isinstance(rows, BaseModel | Mapping) or not isinstance(rows, Sequence):
+            raise TypeError(
+                f'rows is a list of rows of {table}, such as [row], not {rows!r}'
+            )
         self._push(table, as_values(list(rows)))
 
     def ref(self, output: str) -> AccumulatorRef:

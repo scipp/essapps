@@ -189,6 +189,7 @@ from ess.spec import (
     OutputRef,
     Ref,
     StageBinding,
+    StageCall,
     WorkflowSpec,
     data_fields,
     distinct_row_tables,
@@ -265,9 +266,6 @@ def _check_storable(field: str, value: Any) -> Any:
 _OMITTED = object()
 """The value of an optional output that a driver left out."""
 
-_StageCall = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-"""What ``StageBinding.make_stage`` returns."""
-
 
 def _not_returned(record_id: str, output: str) -> LookupError:
     return LookupError(
@@ -308,12 +306,15 @@ def _refuse_repeated(table: str, rows: Sequence[Row]) -> None:
             raise SubmitError(f'{table}[{i}]: repeats {table}[{first}]')
 
 
-def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
+def _check_cells(
+    params: type[BaseModel], values: Mapping[str, Any], first: int = 0
+) -> None:
     """
     Refuse a group, or a row of a table, with a field its model lacks.
 
     Validating it would drop such a field silently; it is refused instead, as
-    a parameter the spec lacks is.
+    a parameter the spec lacks is. A row is named by its index in its table,
+    ``first`` for the first row given.
     """
     for field, group in group_fields(params).items():
         cells = values.get(field)
@@ -329,7 +330,8 @@ def _check_cells(params: type[BaseModel], values: Mapping[str, Any]) -> None:
                 extra := set(cells) - set(row.model_fields)
             ):
                 raise SubmitError(
-                    f'{field}[{i}]: {sorted(extra)}: not fields of {row.__name__}'
+                    f'{field}[{first + i}]: {sorted(extra)}: '
+                    f'not fields of {row.__name__}'
                 )
 
 
@@ -414,7 +416,7 @@ class _Stage:
         self.blanks = blanks
         self.fixed = fixed
         self.reads = _output_reads(fixed)
-        self.call: _StageCall | None = None
+        self.call: StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
 
@@ -598,7 +600,14 @@ class Backend:
         self._store = store
         self._specs: dict[SpecId, WorkflowSpec[Any]] = {}
         self._bindings: dict[SpecId, Binding] = {}
+        if isinstance(bind, Mapping):
+            raise TypeError('bind is a list of bindings, each of which names its spec')
         for binding in bind:
+            if not isinstance(binding, Binding):
+                raise TypeError(
+                    f'bind is a list of bindings, such as a PipelineBinding, '
+                    f'a DriverBinding, or a function_binding, not {binding!r}'
+                )
             if (spec_id := SpecId.of(binding.spec)) in self._specs:
                 raise ValueError(f'two specs are bound as {spec_id}')
             self._specs[spec_id] = binding.spec
@@ -952,18 +961,20 @@ class Backend:
         params: Mapping[str, Any],
         blanks: tuple[str, ...],
         proposal: str,
+        first: int = 0,
     ) -> dict[str, Any]:
         """
         ``params`` with dataset names resolved; needs no lock.
 
         Refuses a param or blank the spec lacks, and a row of a table with a
-        field its row model lacks.
+        field its row model lacks; ``first`` is the index in its table of the
+        first row given.
         """
         spec = self.spec(spec_id)
         unknown = (set(params) | set(blanks)) - set(spec.params.model_fields)
         if unknown:
             raise SubmitError(f'{sorted(unknown)}: not parameters of {spec_id}')
-        _check_cells(spec.params, params)
+        _check_cells(spec.params, params, first)
         return {
             field: map_refs(value, self._resolver(field, proposal))
             for field, value in params.items()
@@ -1285,7 +1296,7 @@ class Backend:
         )
         return call(self._read({k: values[k] for k in stage.blanks}))
 
-    def _staged(self, stage: _Stage, make: Callable[[], _StageCall]) -> _StageCall:
+    def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
         The stage's callable; ``make`` stages the binding, outside the
         backend's lock, if no call has yet.
@@ -1763,10 +1774,12 @@ class Backend:
         released.
         """
         spec_id, blanks = template.spec, template.blanks
-        fixed = self._check_template(template, self._client(client).proposal)
+        proposal = self._client(client).proposal
+        self.spec(spec_id)  # an unknown spec is refused as such
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
             raise SubmitError(f'{spec_id}: its binding makes no stages')
+        fixed = self._check_template(template, proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
@@ -1949,9 +1962,10 @@ class Backend:
         them; needs no lock.
 
         A push of no rows is refused. Each row is checked by its table's row
-        model alone, and refused as the request over that one row would refuse
-        it. Rules on the whole table, such as its length, and the params
-        model's own validators apply when a state is read (see
+        model alone, and refused as the state's plain request would refuse it:
+        named by its index in the table, counting the rows pushed before.
+        Rules on the whole table, such as its length, and the params model's
+        own validators apply when a state is read (see
         :meth:`_check_state`). A row comes back as that request holds it:
         names resolved and defaults filled in. The driver gets it typed from
         that form, as the binding of the state's plain request does: a tuple,
@@ -1960,6 +1974,8 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             acc = self._accumulator(caller, accumulator_id)
+            pushed = self._views.pushes.get(accumulator_id, ())
+            first = sum(len(p.rows) for p in pushed if p.table == table)
         spec_id, blanks = acc.template.spec, acc.template.blanks
         if table not in blanks:
             raise SubmitError(
@@ -1969,7 +1985,7 @@ class Backend:
         if not rows:
             raise SubmitError(f'a push into {table} has no rows')
         (resolved,) = self._resolve(
-            spec_id, {table: list(rows)}, (), caller.proposal
+            spec_id, {table: list(rows)}, (), caller.proposal, first
         ).values()
         model = table_fields(self._specs[spec_id].params)[table]
         stored: list[Row] = []
@@ -1979,7 +1995,7 @@ class Backend:
                 stored.append(_check_storable(table, dict(model.model_validate(row))))
                 typed.append(dict(model.model_validate(stored[-1])))
         except ValidationError as error:
-            at = (table, len(typed))
+            at = (table, first + len(typed))
             problems = '; '.join(validation_problems(error, at=at))
             raise SubmitError(f'{spec_id}: {problems}') from None
         return stored, typed

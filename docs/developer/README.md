@@ -556,6 +556,7 @@ The author of the pipeline promises that it is pure: it modifies no input, and r
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
 `DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
+A table without rows is not pushed, so a driver never gets a push of no rows.
 A plain request is an accumulator with no blanks, read once.
 For the toy SANS reduction, a driver sums each run's numerator and denominator per table, and divides once:
 
