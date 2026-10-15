@@ -223,6 +223,16 @@ A push names one table by its parameter name, and gives its rows as the models t
 It never names two tables: rows of different tables have nothing to do with each other, and a push of two would read as if they did.
 Rows that belong together are one row of a model with several fields, such as `class Measurement(BaseModel): sample: Run; can: Run`.
 
+The names follow one scheme per kind of thing:
+
+| Kind | Named for | Names |
+|---|---|---|
+| protocols, which the backend calls | the client action they serve | `Binding` (plain request), `StageBinding`, `AccumulatorBinding` |
+| classes, which the author uses | what the author provides | `PipelineBinding`, `DriverBinding`, `function_binding` |
+| what a protocol method returns | what it is | a stage callable, a `Driver` |
+
+A client's accumulator is the template, its pushes, states, pins, and records, kept by the backend; the driver is the binding's state behind it, one per accumulator.
+
 What the backend calls for each client action:
 
 | Client action | `PipelineBinding` | `DriverBinding` | `function_binding` |
@@ -437,7 +447,7 @@ The README's "What a binding provides", ADR 0006, and [roles/workflow-authors.ip
 The Symmetries table splits "Kept by" into the strategy and what it is given.
 The README's section Drivers calls the client code that decides what to submit and push a *driver*, which clashes with sciline's driver.
 The two are the halves of one loop: the client's code decides which rows arrive, and the package's driver adds them.
-One of them needs another name (question 9).
+One of them needs another name (question 10).
 Settles cost 5.
 
 ### B. Three bindings, each of which takes its spec
@@ -609,10 +619,14 @@ Records, the other symmetries, and the backend's promises to a binding do not ch
 
 > Simon:
 
-9. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
+9. A: should `AccumulatorBinding.start` be named `driver`, so that each method is named for what it returns, as `stage` is?
 
 > Simon:
 
-10. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
+10. A: "driver" means the client code that submits and pushes in the README, and the package's object that adds rows in sciline. Keep "driver" for sciline's meaning, as one vocabulary across sciline, ess.reduce, and essapps, and rename the README's (for example to *client loop*)?
+
+> Simon:
+
+11. One-row: should the convention, the multi-run spec naming each table as the single-run spec names the group, with the same row type, be recommended in the docs? Going further, deriving the single-run spec (`IOFQ_MULTI.single_run()`), or letting the backend accept a group where a table is expected, as a table of one row, would be the first thing that depends on the one-row symmetry. Worth it, or a step too far?
 
 > Simon:
