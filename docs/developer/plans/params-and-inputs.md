@@ -147,6 +147,9 @@ acc.push('sample', [dataset(run=611), dataset(run=612)])
 ```
 
 An accumulator's blanks are input tables, and a push gives references only.
+
+> Simon: Is this restriction actually necessary? I can imagine an accumulator where we set a param, such as a time range, resulting in loading/processing/accumulating that from the same fixed datasets for the specified time range. Does anything get more complicated if we drop this restriction?
+
 `apply`, `Lookup`, and a rule's series fill a blank input with the dataset itself, `{blank: ref}`; their `dataset_field` goes.
 
 ### Validation
@@ -168,6 +171,9 @@ A dataset reference fits a file field.
 So feeding an I(Q) into a beam-centre input is refused at submit, although both hold scipp objects.
 
 The inputs model has no model validators because an accumulator never makes an inputs instance: its rows go to the driver one push at a time.
+
+> Simon: We could still allow model validators and document the limitation that when used with an accumulator then the model may not get validated as a whole (validation left to the driver).
+
 A check of one value belongs to the value's type, as `BeamCentre` checks its data.
 A check across params and inputs has no model to live in (question 2).
 
@@ -205,6 +211,9 @@ class Driver(Protocol[O]):
 ```
 
 `make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data.
+
+> Simon: Wondering whether we should require model nesting in `Inputs`, just like for `Params`. Can't think of a strong reason either way right now, but maybe there is? Should we attempt to make the model symmetric to what might be an `Outputs` model, i.e., no nesting, such that we can directly connect outputs->inputs? But what if we want a table that has two columns of inputs? It seems this is almost precluded without nesting (but is there actually a strong requirement for this)? Maybe these thoughts are a hint that building the table-spec in an "orthogonal" manner to the inputs/params (instead of using lists) is the right kind of idea after all?
+
 A function binding is `def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs`.
 
 Each name's type is its sciline key: `Reduction`, `SampleFile`, `BeamCentre`; for `X | None` the key is `X`.
@@ -237,6 +246,8 @@ They come with the data:
 
 - **In the run's file.** The workflow reads them as it reads the run, such as a motor position from the NeXus logs.
 - **From an earlier result.** A record whose output holds the value per run, such as a table of thicknesses that a person filled in for a batch, is an input of the reduction. The driver looks up each run's value by the run's identity.
+
+> Simon: Second item would require supporting a common table over multiple inputs, see nesting question above. Or do I misunderstand?
 
 ## What changes
 
@@ -280,12 +291,12 @@ They come with the data:
 
 1. Inputs without groups: each input is a data value or a table of them, and the transmission run is an input of its own. Agreed?
 
-> Simon:
+> Simon: Unclear, see above.
 
 2. A check across a parameter and an input, such as a transmission mode that requires a transmission run (esslivedata, `loki/specs.py`), has no model to live in. Options: a `check(params, inputs)` function on the spec, run in the request phase on the request; design such specs so that the input decides, a transmission run given or not; or leave it to the binding, which fails after the request is accepted. Which?
 
-> Simon:
+> Simon: Leave it to binding. We can never fully validate anyway, so there is *always* a chance that a workflow raises in the middle of processing.
 
 3. Client API: `submit(spec, params, inputs=...)` and `Template(spec, params, inputs, blanks)`, with blanks, stage calls, and pushes by name. Agreed?
 
-> Simon:
+> Simon: Agreed, should be made kw-only aside from the spec arg.
