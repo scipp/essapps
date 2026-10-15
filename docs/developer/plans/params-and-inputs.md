@@ -108,16 +108,16 @@ A workflow without data declares no inputs model and gets `NoInputs`, as one wit
 
 Checked when the spec is made:
 
-- The names of params and inputs are distinct, and so are their types: each parameter and each input has a type of its own within the spec, since the type is the sciline key. Two parameters of one model, such as two axes of a Q map, get a `NewType` each: `Axis1 = NewType('Axis1', QAxis)`.
+- The names of params, inputs, and outputs are distinct, and so are their types: each parameter, input, and output has a type of its own within the spec, since the type is the sciline key. `tabulate` checks this again for the lists it makes. Two parameters of one model, such as two axes of a Q map, get a `NewType` each: `Axis1 = NewType('Axis1', QAxis)`.
 - Each parameter is a group, or a list of groups. Every value in the params model has a JSON form.
-- Each input is a data value, possibly optional, a list of data values, or a collection (`dict[str, T]`). A data value is any type but a list or dict: a file (`Path`, or a `NewType` of it) or an object (a scipp type, a model, a `NewType` of either).
-- A default of an input is `None`, or an empty list or dict.
+- Each input is a data value, possibly optional, or a list of data values. A data value is any type but a list, a dict, or a union, after its `NewType`s are removed: a file (`Path`, or a `NewType` of it) or an object (a scipp type, a model, a `NewType` of either).
+- A default of an input is `None`, or an empty list.
 - Each output is a data value, possibly optional, or a collection of them.
 
 Stated in the docs:
 
 - A check of one value belongs to the value's type, as `BeamCentre` checks its data. The params and inputs models have no field validators.
-- A model validator of the params model runs in the request phase of every request. A model validator of the inputs model runs in the call phase of a plain request only: a stage holds its fixed data in the form its binding made of them, and an accumulator's rows go to the driver one push at a time, so neither makes a whole inputs instance. A state's request, submitted again as a plain request, runs them.
+- A model validator of the params model runs in the request phase of every request, and on the params of an accumulator's state at a pin or a read. A model validator of the inputs model runs in the call phase of a plain request only: a stage holds its fixed data in the form its binding made of them, and an accumulator's rows go to the driver one push at a time, so neither makes a whole inputs instance. A state's request, submitted again as a plain request, runs them.
 - A check across params and inputs, such as a transmission mode that requires a transmission run, is the binding's: it fails when the request runs. Validation in the request phase never proves that a workflow will succeed.
 
 ### Multi-run specs
@@ -131,15 +131,17 @@ SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
                            tables={'sample': ('sample_geometry',), 'can': ()})   # a parameter attached to each sample run
 FREIA_MULTI = FREIA.tabulate(name='freia-multi', version=1,
                              tables={'angle': ('direct_beam',)})                 # a direct beam per angle
-SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))   # the same runs, sliced by time
+SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))   # the same runs, added up over the slices pushed
 ```
 
-Each field named becomes a `list` of its type as written, on its own side: `sample: SampleFile` becomes `list[SampleFile]`, `sample_geometry: SampleGeometry | None` becomes `list[SampleGeometry | None]`.
-A table whose index is required has at least one row; one whose index is optional is empty by default.
+Each field named becomes a `list` on its own side.
+An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
+An attached column keeps its type as written: `sample_geometry: SampleGeometry | None` becomes `list[SampleGeometry | None]`.
 The other fields, the outputs model, and the field validators of the types are as in the spec tabulated; its model validators are not carried over.
 `SANS_MULTI` takes a geometry per sample run, given where the file's is missing or wrong, and FREIA a direct beam with the slit settings of each angle ([reflectometry.md](../../requirements/reflectometry.md)).
+`SLICES` adds up the time slices pushed into one result; one result per slice ([sans.md](../../requirements/sans.md)) is a batch of `SANS` requests.
 
-A push gives the index and its columns by name, as lists of equal length; a column left out is `None` in each row:
+A push gives the index and its columns by name, as lists of equal length; a column left out takes its field's default in each row, and a column without a default is given in every push:
 
 ```python
 acc.push(sample=[dataset(run=611), dataset(run=612)])
@@ -148,13 +150,15 @@ acc.push(time_range=[TimeRange(start=0, stop=60)])                 # an index on
 ```
 
 A push names one table, through its index; a push of an attached column without its index is refused, and so is an index value the table already holds.
+Index values are compared as the record holds them: a dataset by the identity the dataset source gives it, so `dataset(run=611)` and `dataset(path=...)` of the same file are one value; a reference to an output by record, output, and key; a literal by equality.
 A blank names a table by its index, and the driver gets the index's name as the table's.
+A template fixes a whole table or leaves it blank: a column is never fixed or left open alone, and a push into a table the template fixes is refused.
 
 `tabulate` fills the field `tables` of `WorkflowSpec`.
 A spec whose outputs differ from those of its single-run form, such as a stitch of all angles, or that has no single-run form, declares its tables itself: `WorkflowSpec(..., tables={'angle': ()})`.
 A list field makes a table only when `tables` names it; otherwise it is a value like any other, and the spec has no accumulator over it.
 
-With one row in each table, a request of the tabulated spec is a request of the spec tabulated.
+With one row in each table whose index is given, and none where it is left out, a request of the tabulated spec is a request of the spec tabulated.
 So `ess.spec.testing.check_one_row(single_binding, multi_binding, params, inputs)` turns a request of `IOFQ` into its one-row request of `IOFQ_MULTI`, computes both, and compares the outputs, with `scipp.testing.assert_allclose` for scipp objects.
 
 The models `tabulate` makes have no static type.
@@ -172,15 +176,15 @@ record = client.submit(IOFQ, params=IofQParams(reduction=Reduction(bins=4)),
 
 `dataset(run=...)` names a dataset; `record.ref(name)` names an output of a record.
 `params` is an instance or a dict of its fields, and may be left out when every parameter has a default.
-`inputs` is a dict by name; each value is a reference, a list a list of references.
+`inputs` is a dict by name; each value is a reference, or a list of references for a list field.
 `record.request` holds both, in JSON's types, with defaults filled in, and every reference of the request is in `record.request.inputs`.
 So `Request.inputs()`, which lists the records a request reads, is renamed `upstream()`.
 
 A file is always given by reference, `dataset(path=...)` for a file named by its path: a string where a file is expected is refused.
 The dataset source reads it, so access rules, the identity in the record, and provenance hold for every file.
 
-In the JSON form of a request, a reference carries the key `$ref`, which no field name can be.
-The framework finds references in a request, a record, or the log without the spec, as a remote client that holds only the serialized spec must.
+Every value in the inputs of a request is a reference or a list of references, and params hold none.
+So the framework finds the references of a request, a record, or the log without the spec, as a remote client that holds only the serialized spec must.
 
 ### Templates, stages, and accumulators
 
@@ -207,19 +211,24 @@ A batch with parameters that differ per request is a list of requests, each with
 
 The request phase checks what can be checked without data, on what is new.
 The call phase checks each data value by its field once, when it is read.
+The *table rules* are: the columns of a table have equal length, a table with a required index has a row, and the index values are distinct.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a plain request | the params model; names and required inputs; each value a reference or a list of them, readable and fitting its field | the inputs model on the data |
-| a template | each fixed value by its own field; each fixed reference readable and fitting | each fixed input by its field, once, when the stage or the driver is made |
-| a stage call | the params model on the fixed and the given parameters; each given reference readable and fitting | each given input by its field |
-| a push | each literal by its column's type; each reference readable and fitting its column; no index value twice | each data value by its column's type, at the push |
-| a state, at a pin or a read | the rules on whole tables, such as a minimum length | (none) |
+| a plain request | the params model; names and required inputs; each value a reference or a list of them, readable and fitting its field; the table rules | the inputs model on the data |
+| a template | each fixed value by its own field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed input by its field, once, when the stage or the driver is made |
+| a stage call | the params model on the fixed and the given parameters; each given reference readable and fitting; the table rules on given tables | each given input by its field |
+| a push | each literal by its column's type; each reference readable and fitting its column; the table rules on the table with the push | each data value by its column's type, at the push |
+| a state, at a pin or a read | the params model on the state's params; a required index has a row | (none) |
 
 A data value that fails its check at a push stops the accumulator, as any failing push does.
 
-**Fit.** A reference fits a field when the output's type, with its `NewType`s removed one by one, reaches the field's type or a subclass of it; or when the field's type, with its `NewType`s removed, reaches the output's type or a superclass of it.
+**Fit.** A reference fits a field when the type of the data it names fits the field's type.
+Both types are first taken apart: `| None` is removed on both sides; a reference with a key names one element, of the output's element type; a list field takes each reference by its element type.
+Then the data's type fits when, with its `NewType`s removed one by one, it reaches the field's type or a subclass of it; or when the field's type, with its `NewType`s removed, reaches the data's type or a superclass of it.
+Generic aliases, such as `list[int]`, fit only themselves.
 So an `IofQ` output fits a field typed `sc.DataArray`, as an export takes it; a `Parts` output fits fields typed `SampleParts = NewType('SampleParts', Parts)` and `CanParts`, as a sum takes them; and an `IofQ` does not fit a `Transmission` field, two `NewType`s of `sc.DataArray`.
+A plain `sc.DataArray` output fits a `Transmission` field: a role narrows a general output, by design.
 A dataset reference fits a file field.
 
 ### The inputs factory
@@ -255,13 +264,13 @@ class Driver(Protocol[O]):
     def outputs(self) -> O: ...
 ```
 
-`make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data.
+`make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data; a fixed table comes under its index's name as its columns, as a push gives them.
 A push gives the driver one table by its index's name: a parameter's values as groups, an input's as data.
 A function binding is `def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs`.
 
 A field's sciline key is its type as written: `Reduction`, `SampleFile`, `CanFile | None`.
 sciline asks for the key `CanFile | None` where a provider takes `CanFile | None`; esssans does the same with types such as `NewType('DirectBeam', sc.DataArray | None)`.
-`keys=` on `PipelineBinding` names the key of a parameter, an input, or an output of a workflow that takes keys of its own; `None` sets no key, for a field that `make_pipeline` uses itself, such as a list of runs that it maps over:
+`keys=` on `PipelineBinding` names the key of a parameter, an input, or an output of a workflow that takes keys of its own; for a parameter or an input, `None` sets no key, for a field that `make_pipeline` uses itself, such as a list of runs that it maps over:
 
 ```python
 PipelineBinding(IOFQ, make_pipeline,
@@ -278,7 +287,7 @@ The backend stores each output value under its record and name; `Record.outputs`
 
 `SerializedWorkflowSpec` holds `params_schema`, `inputs_schema`, `outputs_schema`, and the tables.
 The params schema is the params model's JSON schema.
-The inputs and outputs schemas are made by the framework from the field types: each value is "a reference to a `<type name>`", a list a list of them.
+The inputs and outputs schemas are made by the framework from the field types: each value is "a reference to a `<type name>`", a list field a list of them.
 A form shows params; a picker per input shows inputs.
 
 ## What changes
@@ -286,8 +295,7 @@ A form shows params; a picker per input shows inputs.
 - **essspec.**
   - `WorkflowSpec[P, I, O]` gains `inputs` and `tables`; `NoInputs`; `tabulate`; the model rules above.
   - `ess.spec.testing.check_one_row`, for any tabulated spec.
-  - `DataField`, `Format`, `Array()`, `ArraySpec`, `NexusFile`, `OpaqueFile`, `data_fields`, `ref_fields`, and literal-or-reference unions go. A file type is a `NewType` of `Path`; `ess.spec` may offer shared ones.
-  - References serialize with `$ref`.
+  - `DataField`, `Format`, `Array()`, `ArraySpec`, `NexusFile`, `OpaqueFile`, `data_fields`, `ref_fields`, literal-or-reference unions, and `dict` inputs go; an output may still be a `dict`, and a reference with a key names one element of it. A file type is a `NewType` of `Path`; `ess.spec` may offer shared ones.
   - The binding protocol takes `P` and `I`, and returns `O`.
 - **essdispatch.**
   - Requests, records, templates, and the log hold `params` and `inputs`. Stage calls and fills take `params=` and `inputs=`.
