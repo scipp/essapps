@@ -29,7 +29,7 @@ It gives the outputs of the plain request over the first n pushes.
 The `Accumulator` class of sciline and of `StreamProcessor` holds one key and is part of a driver, not an accumulator in this sense.
 
 **The caller chooses how rows arrive, and the workflow package's driver chooses how a state is computed.**
-A *driver* is an object with `push(table, rows)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
+A *driver* is an object with `push(table, columns)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 An accumulator exists only over a `DriverBinding`, which makes a driver from the template's fixed values and pushes each client push into it (README, [What a binding provides](../README.md#what-a-binding-provides)).
 The same binding computes a plain request with a driver of its own and one push per table, so both give the same outputs.
 A driver for SANS holds a numerator and a summed monitor per table.
@@ -50,21 +50,24 @@ So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-som
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
-A row is a flat model, and it is what the reduction repeats per run: a run, or the runs that belong together.
+A row is what the reduction repeats per run: a value of the table's index, such as a run, and the value of each column attached to it, such as that run's own transmission run.
 Structure below a row, such as detector banks, belongs to the driver, so that the per-run work runs once per row, not once per bank.
 The framework cannot tell a bank index from a per-run value, so nothing checks this rule for workflow authors.
 Records, checks, pushes, and the forms of apps stay the same for every technique.
 
 **Two examples.**
 *One table with two columns.*
-Suppose each sample run had its own transmission run, unlike in esssans.
-The two are fields of one row, and one push gives both to the driver.
-Two aligned tables could be paired wrongly.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` as the input `transmission: TransmissionFile | None`.
+In the multi-run spec, the transmission run is a column attached to the index `sample`.
+So the two are in one row, and one push gives both to the driver.
+Two tables of their own could be paired wrongly.
 
 ```python
-iofq = client.accumulator(Template.from_spec(IOFQ_MULTI, sample=BLANK, can=cans))  # can runs fixed
-iofq.push('sample', [Sample(file=dataset(run=611), transmission=dataset(run=610))])
-iofq.push('sample', [Sample(file=dataset(run=613), transmission=dataset(run=612))])
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1,
+                           tables={'sample': ('transmission',), 'can': ()})
+iofq = client.accumulator(Template(IOFQ_MULTI, inputs={'can': cans}, blanks=('sample',)))  # can runs fixed
+iofq.push(sample=[dataset(run=611)], transmission=[dataset(run=610)])
+iofq.push(sample=[dataset(run=613)], transmission=[dataset(run=612)])
 ```
 
 *Two independent tables.*
@@ -77,19 +80,19 @@ So a driver over esssans cannot sum the can runs on their own.
 Masks per run type would fix this in esssans.
 
 ```python
-iofq = client.accumulator(Template.from_spec(IOFQ_MULTI, sample=BLANK, can=BLANK))
-iofq.push('sample', [Sample(file=dataset(run=611))])
-iofq.push('can', [Run(file=dataset(run=614))])
-iofq.push('sample', [Sample(file=dataset(run=613)), Sample(file=dataset(run=615))])  # one push, one state
+iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
+iofq.push(sample=[dataset(run=611)])           # transmission left out: None in the row
+iofq.push(can=[dataset(run=614)])
+iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
 ```
 
 ## Alternatives considered
 
 - **Combining the outputs of requests**, with a per-run spec, a sum, and a finalizing spec. Each partial sum becomes a record. Two tables of runs, shared parameters next to per-run ones, and the finalizing step would each need a mechanism of their own.
-- **List parameters, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
+- **List fields, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record would not mean the sum of its runs, and a growing total is copied at every step.
 - **The framework keeps the rows for a binding without a driver**, and computes the plain request over all of them at each read. How rows combine would be decided in two places, and a framework strategy would serve workflows that never chose it. A workflow that needs every row at once writes a driver that keeps them.
-- **A push that names several tables**, whose rows enter one state. It reads as if the rows belonged together. Rows that belong together are one row of a model with several fields.
+- **A push that names several tables**, whose rows enter one state. It reads as if the rows belonged together. Values that belong together are one row of one table: an index value and the values of its attached columns.
 - **Records that name a state**, by a reference to an accumulator and a push count, or as a snapshot from `client.submit(acc)`. This adds a third kind of reference, which provenance and rerunning a record would have to resolve into pushes. A snapshot's value changes at the next push.
 - **Accumulating with `StreamProcessor`** from essreduce, as in the spike. Of `StreamProcessor`, an accumulator needs only the static part, the dynamic keys, the summed accumulators, and finalize. The context keys, rolling windows, and `clear()` of `StreamProcessor` would break the arrival symmetry. Importing it loads essreduce, with scippneutron, scippnexus, scipy, and dask. A package's driver may still adapt it: `accumulate` is `push`, and `finalize` is `outputs`. The framework itself does not import it.
 - **Nested tables**, such as rows that hold a table of banks. The framework would need a push per level, and rules on which work repeats at which level.

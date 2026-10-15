@@ -27,130 +27,166 @@ problem; a rewrite of the essreduce widget layer
 workflow factories, and widget concerns inside the spec, so the spec could not
 outlive or precede any particular implementation.
 
-The goal is the minimal layer that lets a *generic* user interface — ipywidgets,
-a web dashboard, a command-line tool, or a GUI application — be generated from a workflow
-description alone. Compute is deliberately abstracted away: the same spec must
-make sense whether the workflow runs as a local sciline pipeline, behind a web
-service, or as a cluster job. Compute is not part of this work, but it shapes
-the design: nothing implementation-bound may appear in the spec.
+The goal is the minimal layer that lets a *generic* user interface —
+ipywidgets, a web dashboard, a command-line tool, or a GUI application — be
+generated from a workflow description alone. Compute is deliberately abstracted
+away: the same spec must make sense whether the workflow runs as a local
+sciline pipeline, behind a web service, or as a cluster job. Compute is not
+part of this work, but it shapes the design: nothing implementation-bound may
+appear in the spec.
 
 ## Decision
 
-A new package `essspec`, imported as `ess.spec`, defines the spec layer. It
-is developed in scipp/essapps while it changes with the framework (see
-ADR 0007 of scipp/essapps, `docs/developer/adr/0007-packages-split-by-dependencies.md`).
+A new package `essspec`, imported as `ess.spec`, defines the spec layer. It is
+developed in scipp/essapps while it changes with the framework (see ADR 0007 of
+scipp/essapps, `docs/developer/adr/0007-packages-split-by-dependencies.md`).
 Its only dependency beyond the standard library is pydantic. The pieces that
-need scipp or sciline are kept in two submodules, `conversions` and
-`pipeline`, which the package does not import. The package also holds the
-bindings and their protocol (`ess.spec.binding`), the other half of the
-contract with workflow packages; the spec itself does not refer to them.
+need scipp or sciline are kept in two submodules, `conversions` and `pipeline`,
+which the package does not import. A module that defines specs may import scipp
+for the types of its data values, but never sciline or a workflow package (ADR
+0007 of scipp/essapps). The package also holds the bindings and their protocol
+(`ess.spec.binding`), the other half of the contract with workflow packages;
+the spec itself does not refer to them.
 
-A binding is what the backend calls to compute a spec's requests. The
-workflow author makes it from a pipeline, a driver, or a function, each for
-one spec: `PipelineBinding(spec, pipeline, params=..., outputs=...)` (in
-`ess.spec.pipeline`) serves plain requests and stages, `DriverBinding(spec,
-make_driver)` plain requests and accumulators, and `function_binding(spec,
-func)` plain requests. The backend calls them through protocols named for the
-client action they serve: `Binding.compute`, `StageBinding.make_stage`, and
-`AccumulatorBinding.make_accumulator`, which returns a *driver* with
-`push(table, rows)` and `outputs()`. A binding takes its spec, so it can check
-what it is given and fill in defaults when a test or a notebook calls it
+A binding is what the backend calls to compute a spec's requests. The workflow
+author makes it from a pipeline, a driver, or a function, each for one spec:
+`PipelineBinding(spec, make_pipeline, keys=...)` (in `ess.spec.pipeline`)
+serves plain requests and stages, `DriverBinding(spec, make_driver)` plain
+requests and accumulators, and `function_binding(spec, func)` plain requests.
+The backend calls them through protocols named for the client action they
+serve: `Binding.compute(params, inputs) -> outputs`, `StageBinding.make_stage`,
+and `AccumulatorBinding.make_accumulator`, which returns a *driver* with
+`push(table, columns)` and `outputs()`. A binding takes its spec, so it can
+check what it is given and fill in defaults when a test or a notebook calls it
 directly. `ess.spec.testing` checks the symmetries that a binding keeps.
 
 ### The spec is pure interface: no factory, no keys, no registry
 
 `WorkflowSpec` holds identity (`name`, `version`), display metadata (`title`,
-`description`, both mandatory), a params model, an outputs model, and an
-optional `code_revision`. Nothing else. In particular it holds *no* workflow
-factory and *no* sciline keys: a spec describes *what a user can configure and
-what they get back*, not how it is computed. Binding a spec to the code
-that computes it is a parallel mechanism: `ess.spec.binding` defines it, and
-a caller of a remote service that holds the same spec needs no
-binding at all. This is what keeps the spec valid across local, service, and
-cluster execution.
+`description`, both mandatory), a params model, an inputs model, an outputs
+model, its tables, and an optional `code_revision`. Nothing else. In particular
+it holds *no* workflow factory and *no* keys of a workflow: a spec describes
+*what a user can configure, which data they give, and what they get back*, not
+how it is computed. A `PipelineBinding` uses each field's type as its sciline
+key, or the key that its `keys=` names, so the spec imports nothing from the
+workflow. Binding a spec to the code that computes it is a parallel mechanism:
+`ess.spec.binding` defines it, and a caller of a remote service that holds the
+same spec needs no binding at all. This is what keeps the spec valid across
+local, service, and cluster execution.
 
 One requirement follows for workflow packages: the module that defines a spec
 must be importable without importing the workflow code. A service then loads
 and validates every spec it knows without importing sciline pipelines or
-instrument code, and the process that binds a spec to code is the only one
-that pays for that import. esslivedata already separates the two for this
-reason.
+instrument code, and the process that binds a spec to code is the only one that
+pays for that import. esslivedata already separates the two for this reason.
 
 How specs are enumerated (module-level tuples, entry points, esslivedata's
 per-instrument registration) is out of scope. Any mechanism works against the
 same spec type; prescribing one here would recreate the catalog problem that
-sank the `ess.schemas` plan. Entry points split by role, specs in one group
-and factories in another under the same name, are the natural fit for the
+sank the `ess.schemas` plan. Entry points split by role, specs in one group and
+factories in another under the same name, are the natural fit for the
 requirement above and are expected to become the convention once the first
 service adopts this spec.
 
-### One params model per workflow
+### Params and inputs
 
-Parameters are a single pydantic model class per workflow
-(`params: type[BaseModel]`), not per-key entries in a registry. This enables
-cross-parameter validation, gives JSON Schema for free, and removes the
-implementation coupling of key-addressed parameters. The graph-derived
-"select outputs, then see only relevant parameters" feature of
-`ess.reduce.workflow.get_parameters` does not survive: it treats output
-selection as workflow slicing, which only the sciline implementation can
-express. If output-dependent parameter sets are needed, they are distinct
-workflows (distinct specs).
+A request goes through two phases. The *request phase* is what the client and
+the backend do with a request before any data is read: validate, log, record,
+pin. The *call phase* starts when the backend reads data for the binding. In
+the request phase a data value is a *reference*, plain data that names data
+existing elsewhere. In the call phase it is the data. One model cannot type
+both phases:
 
-The field defaults to `NoParams` (a closed model with no fields), so consumers
-never branch on params being absent, and sending parameters to a workflow that
-takes none is a validation error rather than silently ignored.
+- A field typed as a reference gives the binding references.
+- A union of the reference and the data is wrong in both phases. It needs a
+  validator that accepts anything that is not plain data, and it hides that
+  member from the JSON Schema.
+- A field typed as the data, with validation switched by phase, holds a
+  reference where its type says `Path`.
 
-Value defaults belong to the workflow's params model, set by the workflow
-author next to the field's title and description, never to the shared
-vocabulary in `ess.spec.parameters`, whose sensible values depend on the
-workflow and instrument. A default makes the field optional in a request, so a
-framework that records provenance persists the validated model, in which every
-default has been filled in, rather than the request as submitted.
+Only data differ between the phases, so a spec splits its fields there, into
+three ordinary pydantic models:
 
-### Outputs are a typed model in the same vocabulary
+| Model | Holds | In a request | When the workflow runs |
+|---|---|---|---|
+| params | configuration: literals only | the values | the same values |
+| inputs | data only | a reference per value | the data the references name |
+| outputs | results | (none) | the data the workflow returns |
 
-Outputs are likewise a pydantic model class (`outputs: type[BaseModel]`,
-mandatory). Field title and description are the display metadata; a field may
-be optional when the workflow does not always produce it; declaration order is
-meaningful (consumers show outputs in order, primary output first). Array and
-file outputs are data fields (next section). A small value that a workflow
-computes as a scipp object, such as a beam centre, is a 0-d data field: the
-object carries its unit, and the field's `ArraySpec` may constrain it. A value
-meant to be read or typed by a user, such as a scale factor, may instead be a
-`Quantity`, a scalar or short vector with a unit, as plain data in the record.
+A *literal* is a value that has a JSON form and that the client knows: a
+number, a string, an enum, a model of such values. A *data value* is a value
+that the backend fetches, given by reference: a file, an array, a model holding
+one, or any other output of a record, such as a fitted scale factor. A field of
+the params model is a *parameter*, and a field of the inputs model an *input*.
 
-An earlier form of this decision declared outputs as a dictionary of
-structural descriptions, with arrays typed by `ArraySpec` and everything else
-untyped. That broke "outputs can be inputs" for exactly the values that most
-often feed the next workflow. With both sides as models over one vocabulary,
-chaining is a type check between an output field and a parameter field, and
-where a framework stores an output (inline in a record, or in a data store) is
-decided by the field's type and is not a spec concept. Output *selection*
-(choosing which sciline targets to compute) is still not modeled: like
-parameter slicing, it is an implementation notion. Livedata-specific output
-machinery (`OutputView`, `Temporality`, windowing) stays in esslivedata.
+```python
+class Reduction(BaseModel):                       # a group: a model of literals
+    bins: int = 2
 
-### Data fields: inputs are parameters
+SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
+CanFile = NewType('CanFile', Path)
+IofQ = NewType('IofQ', sc.DataArray)
 
-There is no separate input section. A parameter or output that holds data
-rather than a literal is a **data field**: a field of type `Ref`, annotated
-with the `Format` of the bytes (raw NeXus file, scipp object, opaque file) and,
-for scipp data, an `ArraySpec` describing dims, unit, coordinate units, and
-whether the data is binned. The `binned` flag tells consumers which outputs are
-event data that must not be plotted directly. A scalar with a unit is the 0-d
-case.
+class BeamCentre(BaseModel, arbitrary_types_allowed=True):
+    value: sc.Variable
 
-A reference is plain data naming data that exists elsewhere: an output of an
-earlier run (`OutputRef`: record, output name, optionally one element of a
-collection by key), a dataset the framework did not compute (`DatasetRef`:
-one identity string), or an output of an accumulator (`AccumulatorRef`:
-accumulator and output name), which only a request holds: the framework
-replaces it, when it accepts the request, by an output of a record of the
-accumulator's state. A field may be a union of a literal and a reference,
-for values a user may type in or take from a previous run. Collections,
-`list[...]` and `dict[str, ...]` of one declared type, are allowed on both
-sides, and a reference may name one element of a collection output, but not a
-field of a group, a row, or a cell of a table (next section).
+    @field_validator('value')
+    @classmethod
+    def _xy(cls, value: sc.Variable) -> sc.Variable: ...   # checks the data, in the call phase
+
+class IofQParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+class IofQInputs(BaseModel):
+    sample: SampleFile
+    can: CanFile | None = None
+    beam_centre: BeamCentre | None = None
+
+class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
+    iofq: IofQ
+
+IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, inputs=IofQInputs, outputs=IofQOutputs)
+```
+
+The client builds and validates a params instance, and a type checker checks
+it. The backend reads each reference and builds the inputs instance from the
+data, so every field of it holds the type it declares. The binding gets both
+instances: `compute(params, inputs) -> outputs`.
+
+The models carry no annotations for the framework: what the framework needs, it
+reads from the field types (`ess.spec.field_types`). A file is `Path` or a
+`NewType` of it, and the binding gets a local path; any other data value it
+gets as the object. `WorkflowSpec` checks these rules when it is made:
+
+- The names of params, inputs, and outputs are distinct, and so are their
+  types, since a field's type is its sciline key. Two parameters of one model,
+  such as two axes of a Q map, get a `NewType` each.
+- Each parameter is a *group*, a model of literals, or a list of groups. Every
+  value in the params model has a JSON form, and none is a file.
+- Each input is a data value, possibly optional, or a list of data values. A
+  data value is any type but a list, a dict, or a union, once its `NewType`s
+  are removed. The default of an input is `None` or an empty list.
+- Each output is a data value, possibly optional, or a list or a dict of data
+  values.
+
+Inputs hold data only, because a value that differs per run comes with the run.
+The runs of one sum are reduced with one set of settings. A value that differs
+per run, such as a motor position, is in the run's file. A value that the file
+lacks or has wrong is given next to the run, as a column of the run's table
+(see the section on tables), so the request and its record hold it. esslivedata
+splits the same way: its params model holds configuration, and a value that
+changes during a stream arrives on a stream of its own.
+
+**References.** A reference names an output of an earlier record (`OutputRef`:
+record, output name, and optionally the key of one element of a list or dict
+output), a dataset the framework did not compute (`DatasetRef`: one identity
+string), or an output of an accumulator (`AccumulatorRef`: accumulator and
+output name). Only a request holds an `AccumulatorRef`: the framework replaces
+it, when it accepts the request, by an output of a record of the accumulator's
+state. Every value in the inputs of a request is a reference or a list of
+references, and params hold none. So a framework finds the references of a
+request without the spec, as a remote client that holds only the serialized
+spec must.
 
 The identity string is opaque to the spec and interpreted only by the framework
 that minted it. The spec has no use for the kind of identity, a catalogue PID,
@@ -165,111 +201,132 @@ normalizes before a reference enters a record. Records therefore hold
 references that only their own framework can resolve; sharing records between
 frameworks needs an agreed encoding, which this ADR does not fix.
 
-The spec says nothing about how a workflow gets at the bytes. Whether a
-reference becomes a local path or an in-memory object is decided where the
-workflow is called, by the framework that calls the binding, and the workflow asks there for the form it wants: a path for a NeXus file it
-loads by component, an object for a curve it fits. A framework that adds an
-in-memory fast path for chained runs therefore changes no spec and no workflow
-interface. An earlier form of this decision typed a data field as a union of the
-reference and the materialized value, a path or a scipp object, so that one
-model served both the request and the call. That made the model wrong in both
-phases, needed a validator that accepted anything not plain data, hid that
-member from the JSON Schema, and put a materialization instruction into what
-was meant to be pure interface.
+**Fit.** A reference *fits* a field when the type of the data it names can be
+the field's value (`ess.spec.fits`). `| None` is removed on both sides. The
+data's type fits when, with its `NewType`s removed one by one, it reaches the
+field's type or a subclass of it; or when the field's type, with its `NewType`s
+removed, reaches the data's type or a superclass of it. So an `IofQ` output
+fits a field typed `sc.DataArray`, and a plain `sc.DataArray` output fits a
+`Transmission` field, since a role narrows a general output. An `IofQ` does not
+fit a `Transmission` field, two `NewType`s of `sc.DataArray`. A dataset
+reference fits a file field. A framework checks fit in the request phase, so
+that a chain of requests is refused before anything runs.
 
-The format serves the consumers of the spec: a framework compares the
-producer's output annotation with the consumer's parameter annotation before
-chaining, a picker lists candidates of matching format, a UI selects a plotter
-from the `ArraySpec`. A dataset's format is not checked at submission; a dataset
-that is not what the field declares fails when the workflow reads it. Every
-difference between an input and a parameter — resolution, provenance, which
-widget a UI shows — is behaviour a framework selects by the field's type; the
-spec only declares the type. Helpers find the data fields of a model and the
-references in a plain request value, so a framework never re-derives the
-annotation's meaning. The structural check of a scipp object against its
-`ArraySpec` needs scipp and lives in `ess.spec.conversions`, called by
-whoever runs the workflow on the outputs it returns.
+**Checks.** A check of one value belongs to the value's type, as the field
+validator of `BeamCentre` checks its data; the params and inputs models have no
+field validators. A model validator of the params model runs in the request
+phase of every request. A model validator of the inputs model runs in the call
+phase of a plain request only: a stage holds its fixed data in the form its
+binding made of them, and an accumulator's rows go to the driver one push at a
+time, so neither makes a whole inputs instance. A check across params and
+inputs, such as a transmission mode that requires a transmission run, is the
+binding's, and fails when the request runs. Validation in the request phase
+never proves that a workflow will succeed.
 
-### Params are groups and tables of flat models
+### One params model and one inputs model per workflow
 
-Each field of a params model is a **group**, a flat pydantic model, or a
-**table**, `list[Row]` with `Row` a flat model. A flat model's fields hold
-literals or data fields, collections of them included, but never a model and
-never a table. Settings that belong together, such as the edges of a Q
-histogram, are one group; a sum over runs of numerator and denominator pairs,
-or SANS sample runs each paired with its transmission run, is one table:
+Parameters are a single pydantic model class per workflow (`params:
+type[BaseModel]`), and so are inputs (`inputs: type[BaseModel]`), not per-key
+entries in a registry. This enables cross-field validation, gives JSON Schema
+for free, and removes the implementation coupling of key-addressed parameters.
+The graph-derived "select outputs, then see only relevant parameters" feature
+of `ess.reduce.workflow.get_parameters` does not survive: it treats output
+selection as workflow slicing, which only the sciline implementation can
+express. If output-dependent parameter sets are needed, they are distinct
+workflows (distinct specs).
+
+The fields default to `NoParams` and `NoInputs` (closed models with no fields),
+so consumers never branch on either being absent, and sending parameters or
+inputs to a workflow that takes none is a validation error rather than silently
+ignored.
+
+Value defaults belong to the workflow's params model, set by the workflow
+author next to the field's title and description, never to the shared
+vocabulary in `ess.spec.parameters`, whose sensible values depend on the
+workflow and instrument. A default makes the field optional in a request, so a
+framework that records provenance persists the validated request, in which
+every default has been filled in, rather than the request as submitted. An
+input has no default but `None` or an empty list: the data a workflow reads are
+named in each request.
+
+### Outputs are data values
+
+Outputs are likewise a pydantic model class (`outputs: type[BaseModel]`,
+mandatory). Field title and description are the display metadata; a field may
+be optional when the workflow does not always produce it, and the workflow
+leaves it out by returning `None`; declaration order is meaningful (consumers
+show outputs in order, primary output first). Each output is a data value with
+a type of its own, such as `iofq: IofQ`, or a list or a dict of them, and a
+reference with a key names one element.
+
+Outputs and inputs share one kind of type, so "outputs can be inputs" is a fit
+check between an output's type and an input's type. Where a framework stores an
+output is not a spec concept. Output *selection* (choosing which sciline
+targets to compute) is not modeled: like parameter slicing, it is an
+implementation notion. Livedata-specific output machinery (`OutputView`,
+`Temporality`, windowing) stays in esslivedata.
+
+### Groups, and tables named by their index
+
+Each parameter is a group, such as `QEdges`, or a list of groups. A form shows
+a section per group, with a widget per field, and a picker per input. The
+models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
+groups that specs share. A field of plain numbers states its unit in its
+declaration or in a unit field beside it, as the edges models do; a data value
+carries its own unit.
+
+A *table* is a set of list fields of equal length, pushed together into an
+accumulator. Its *index* is the field that names it, such as the run. Its other
+*columns* are attached to the index, such as a correction of each run. Index
+and columns are parameters or inputs. Each position is a *row*. As in a pandas
+DataFrame, the index values of a table are distinct. `tabulate` makes a
+multi-run spec from a single-run spec by naming the indexes, each with the
+columns attached to it:
 
 ```python
-class Sample(BaseModel):
-    file: NexusFile
-    transmission: NexusFile
-
-
-class Params(BaseModel):
-    samples: list[Sample]
-    q_edges: QEdges
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
+SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
+                           tables={'sample': ('sample_geometry',), 'can': ()})
 ```
 
-A group and a row are the same kind of model, and differ only in how many a
-field holds. A single-run spec takes `sample: Sample` where a multi-run spec
-of the same reduction takes `sample: list[Sample]`: the multi-run spec names
-each table as the single-run spec names the group, with the same row type.
-The framework knows of no link between the two specs, and whether an empty
-table stands for an optional run left out is the binding's choice. The
-models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
-groups that specs share.
+Each field named becomes a `list` on its own side. An index loses `| None`:
+`sample: SampleFile` becomes `list[SampleFile]` with at least one row, and
+`can: CanFile | None` becomes `list[CanFile]`, empty by default. An attached
+column keeps its type as written: `sample_geometry: SampleGeometry | None`
+becomes `list[SampleGeometry | None]`, and a column of that type left out is
+`None` in each row. The other fields, the outputs model, and the field
+validators of the types are those of the spec tabulated. Its model validators
+are not carried over, since they read fields whose types change. The models
+that `tabulate` makes have no static type.
 
-A binding gets a group, like a row, as a dict of its fields, with data read in
-place of each reference, and a table as a list of such dicts
-(`ess.spec.binding`). A model instance would hold data
-in fields declared as references. A binding that wants the model, such as a
-`QEdges` for `edges_to_variable`, validates the dict again:
-`QEdges.model_validate(values['q_edges'])`.
+`tabulate` fills the field `tables` of `WorkflowSpec`, which maps each index to
+its attached columns. A spec without a single-run form, such as a stitch of all
+angles, declares its tables itself: `WorkflowSpec(..., tables={'angle': ()})`.
+A list field makes a table only when `tables` names it.
 
-A form has one shape to handle: a section per group with a widget per field,
-and a table per table field with one row per element, one column per field of
-`Row`, and a picker in each data-field cell. A UI can fill a row from one
-earlier record by matching output names to column names. A model nested any
-deeper is one no generic form can show, and a field at the root that is neither
-a group nor a table would need a section of its own; `WorkflowSpec` refuses both
-when it is constructed. This is the shape esslivedata's forms already require of
-its params models. The alternative to a table, one list per quantity
-(`samples: list[NexusFile]`, `transmissions: list[NexusFile]`), forces callers
-to transpose and lets the lists misalign by position.
+With one row in each table whose index is given, and none where it is left out,
+a request of the tabulated spec is a request of the spec tabulated.
+`ess.spec.testing.check_one_row` checks that a package's single-run and
+multi-run bindings agree on such requests.
 
-An outputs model is not constrained at its root, since a reference names an
-output by its field: a field may be a data field, a literal, a flat model such
-as a `Quantity`, or a table. Its groups and rows are flat, as those of a params
-model are.
-
-Units belong to the column, not to each row, and likewise to the field of a
-group. A data field constrains the unit through its `ArraySpec`, and its data
-carries its own unit. A `Quantity` holds its unit in its value, so it is a model
-and cannot be a field of a group or a row; a field of plain numbers states its
-unit in its declaration or in a unit field beside it, as the edges models do. A
-`Quantity` at the root of a params model is a group of its own. A row that needs
-a computed value with a unit, such as the beam centre of each sample run,
-references a 0-d data field.
-
-Neither a group nor a table is a data field: `group_fields` and `table_fields`
-find them with their model, and `data_fields` of that model gives the data
-fields inside. In JSON Schema a group refers (`$ref`) to its model under
-`$defs`, and a table is an array whose items refer to the row model; the fields
-inside carry their `dataField` key. A reference names a whole output field,
-never a field of a group, a row, or a cell.
+A binding's `compute` gets the params and inputs instances. `make_stage` and
+`make_accumulator` get the fixed values by name, a parameter as its group and
+an input as its data, and a fixed table under its index's name as its columns.
+A push gives the driver one table in the same form.
 
 ### Two forms, one-way projection
 
-`WorkflowSpec` is the in-process form: it holds the params and outputs model
-*classes*, so same-process consumers get full pydantic validation including
-custom validators. `spec.serialize()` projects onto `SerializedWorkflowSpec`,
-a plain-data pydantic model with both models as JSON Schema
-(`model_json_schema()`), which round-trips through JSON and is what a service
-announces to remote consumers. Data fields appear in the schema under a
-`dataField` key with their format and array structure; the schema is the
-entire cross-process surface, sufficient to
-render a form, offer a picker for data fields, and select a plotter for an
-output.
+`WorkflowSpec` is the in-process form: it holds the model *classes*, so
+same-process consumers get full pydantic validation including custom
+validators. `spec.serialize()` projects onto `SerializedWorkflowSpec`, a
+plain-data pydantic model that round-trips through JSON and is what a service
+announces to remote consumers. It holds the params model's JSON Schema
+(`params_schema`), the tables, and a schema of the inputs and one of the
+outputs (`inputs_schema`, `outputs_schema`). The framework makes the last two
+from the field types: each value names the type of its data in `dataType`, and
+a list field is an array of them. The serialized spec is the entire
+cross-process surface, sufficient to render a form for the params and a picker
+per input.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
 deserialized spec would be a lie about its own validation. Instead, validation
@@ -299,14 +356,14 @@ development branch is honest about what ran. The interface version stays
 
 ### Shared parameter vocabulary, scipp-free
 
-`ess.spec.parameters` provides constrained unit enums, range/edges
-models with cross-field validation (`stop > start`, log-scale positivity) —
-the models previously duplicated between esslivedata and package-specific
-code — and `Quantity`. They contain no scipp: conversion of validated values
-into scipp objects (`edges_to_variable`, `range_to_variables`) lives in
-`ess.spec.conversions`, imported by workflow implementations only. This
-keeps the vocabulary JSON-Schema-clean and the spec layer importable without
-touching scipp. Value defaults (start/stop/bin counts) are set by workflow
+`ess.spec.parameters` provides constrained unit enums, range/edges models with
+cross-field validation (`stop > start`, log-scale positivity) — the models
+previously duplicated between esslivedata and package-specific code — and
+`Quantity`. They contain no scipp: conversion of validated values into scipp
+objects (`edges_to_variable`, `range_to_variables`) lives in
+`ess.spec.conversions`, called by providers of the workflow that take the
+model. This keeps every parameter JSON-Schema-clean, and `ess.spec` importable
+without scipp. Value defaults (start/stop/bin counts) are set by workflow
 authors at the use site, not by the vocabulary — sensible values are a
 workflow/instrument decision, and a generic default is a wrong default.
 
@@ -316,44 +373,66 @@ Explicit goal: `ess.livedata.config.workflow_spec.WorkflowSpec` eventually
 inherits from this spec, adding its live-data fields (`instrument`, `group`,
 `source_names`, `aux_sources`, reset flags). The base spec's field names and
 semantics (`name`, `version`, `title`, `description`, `params`, `outputs`) are
-a strict subset of esslivedata's today for exactly this reason, and
-esslivedata already declares outputs as a model class with title and
-description as field metadata. The remaining difference is field types:
-esslivedata's outputs are `sc.DataArray` fields with default-factory templates
-used for plotter selection; here they are data fields constrained by
-`ArraySpec`, which serializes. The migration (already planned independently in
-scipp/esslivedata#889) changes field types only; esslivedata's `Temporality`
-annotation coexists with the data-field annotation in the same `Annotated`.
-The import edge is small: essspec depends only on pydantic, and the
-esslivedata dashboard is decoupled via the serialized-spec announcement, not
-via imports. esslivedata adopts it once essspec has moved to scipp/ess (ADR
-0007 of scipp/essapps).
+those of esslivedata's today for exactly this reason, and esslivedata already
+declares outputs as a model class with title and description as field metadata.
+
+esslivedata's params model holds configuration and never data, which arrive as
+streams, so a live-data spec takes `NoInputs` until streams are inputs. A value
+that changes during a stream, such as a motor position, arrives on a stream of
+its own and is set as a *context key* of `StreamProcessor`, never taken from
+the params; here, such a value comes with the run. esslivedata's outputs are
+`sc.DataArray` fields with default-factory templates used for plotter
+selection. Here each output is typed by its data, such as `IofQ`, with no
+template. A hint of dims and units for a UI, before any data exist, can be
+added as an `Annotated` marker on the output's type once a requirement needs
+it, next to esslivedata's `Temporality` annotation.
+
+The import edge is small: essspec depends only on pydantic, and the esslivedata
+dashboard is decoupled via the serialized-spec announcement, not via imports.
+esslivedata adopts it once essspec has moved to scipp/ess (ADR 0007 of
+scipp/essapps).
 
 ## Consequences
 
 - Generic UIs (including a command-line interface) can be generated from
   `WorkflowSpec` alone, and from `SerializedWorkflowSpec` across process
   boundaries, with no knowledge of the workflow implementation.
-- A framework that chains workflows validates a reference by looking up the
-  producer's output field and comparing its data-field annotation with the
-  consumer's; how strict that comparison is (format only, or full `ArraySpec`
-  compatibility) is the framework's rule.
-- A workflow receives references and resolves them through whatever runs it;
-  the contract for that resolution belongs to the framework that calls the
-  binding, not to the spec. A runner calls `check_array` on array outputs at completion.
-- essspec depends on pydantic; installing it pulls in no science stack.
+- A framework that chains workflows checks in the request phase that the
+  producer's output type fits the consumer's input type.
+- A binding gets data, never references: the backend reads each reference in
+  the call phase, as a local path for a file field and as the object for any
+  other.
+- A client passes a typed params instance, and gives inputs as a dict of
+  references by name.
+- essspec depends on pydantic; installing it pulls in no science stack. A spec
+  module with scipp types imports scipp, which needs only numpy.
 - `ess.reduce.parameter`, `ess.reduce.workflow`, and the widgets built on them
   are meant to be superseded by this vocabulary; removing them, in a later hard
   break, is essreduce's decision, and they are untouched for now. The
   graph-derived parameter discovery they provide would be dropped, not ported.
-- `ess.nmx.configurations` and esslivedata migrate to the shared vocabulary
-  and spec incrementally, per package, with no coordination requirement — a
-  package that never migrates costs the others nothing.
-- Spec enumeration remains to be designed when a concrete consumer needs
-  it; the spec layer does not constrain it beyond being addressable by
-  `(name, version)` and importable without workflow code.
+- `ess.nmx.configurations` and esslivedata migrate to the shared vocabulary and
+  spec incrementally, per package, with no coordination requirement — a package
+  that never migrates costs the others nothing.
+- Spec enumeration remains to be designed when a concrete consumer needs it;
+  the spec layer does not constrain it beyond being addressable by `(name,
+  version)` and importable without workflow code.
 
 Foreseen extensions, each one optional spec field or one field-level
 annotation, deliberately not added until a consumer exists: declared failure
-reasons, an intermediate flag for retention, and declared keys of a collection
-output.
+reasons, an intermediate flag for retention, declared keys of a collection
+output, and dims and units of an output for a UI.
+
+## Alternatives considered
+
+- **Annotations on the fields that hold data**, marking what the framework
+  resolves, the format of the bytes, and the array structure. The field types tell the
+  framework the same, and the author writes no metadata for the framework.
+- **Multi-run models written by hand**, `MultiIofQInputs` next to `IofQInputs`.
+  They repeat the single-run model, and the one-row symmetry holds only by
+  convention.
+- **Rows as models**, pairing a run with its transmission run in a model of two
+  fields. The columns of a table pair them; a model would be a group or a data
+  value depending on its use.
+- **Tables named apart from their fields.** A second namespace, which blanks,
+  pushes, and the driver would mix with the names of fields. The index names
+  its table instead.

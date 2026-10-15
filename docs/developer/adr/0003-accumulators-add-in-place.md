@@ -54,7 +54,8 @@ All outputs of a state are computed at once, the first time a pin needs them, si
 Two pins of one state compute once.
 
 **Checks at pin, not at push.**
-A push checks each row by its row model alone, and a state's plain request is checked when the state is first pinned.
+A push checks each value by its column's type alone, and that its index values are new to the table.
+A state's params model, and that each required index has a row, are checked when the state is first pinned.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
 Opening an accumulator types each fixed value by its own field alone, since a params-model validator that needs rows would refuse the empty tables.
 So a validator that reads several values must not change one, because the driver got the values typed one by one.
