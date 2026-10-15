@@ -317,8 +317,8 @@ They come with the data:
 
 1. Push shape: a table of one column takes values, `push('sample', [ref])`, and a table of several columns dicts by column. Or dicts always, so that a push keeps its shape when a column is added (which changes the spec's version anyway)?
 
-> Simon:
+> Simon: Dict always, or maybe kwargs?
 
 2. A list field that a spec declares itself, without `tabulate`, is a table of one column. Keep this, for specs without a single-run form, or require `tabulate` for every table?
 
-> Simon:
+> Simon: I see no reason to require `tabulate`, other than that it could return an object that lets the framework determine the table inputs without having to parse the model. Do whichever is easier now, seems like this can be extended in the future. Maybe removing support for `list` support would be harder/breaking, so maybe we skip that (or at least, skip the special meaning of `list` params, workflow are still allowed to have those, but it does not suffice to turn it into an accumulating workflow).
