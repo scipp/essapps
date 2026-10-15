@@ -14,7 +14,7 @@ from ess.spec import (
     WorkflowSpec,
     function_binding,
 )
-from ess.spec.binding import by_name, fixed_values
+from ess.spec.binding import fixed_values
 
 
 class Scale(BaseModel):
@@ -107,30 +107,10 @@ def binding(recorder: Recorder) -> DriverBinding:
 SAMPLE_TABLE = {'sample': [5.0, 7.0], 'weight': [None, Weight(w=2.0)]}
 
 
-def test_by_name_gives_a_parameter_as_its_group_and_an_input_as_its_data() -> None:
-    params = SubParams(weight=Weight(w=2.0))
-    assert by_name(SUB, params, SubInputs(sample=5.0)) == {
-        'scale': Scale(),
-        'weight': Weight(w=2.0),
-        'sample': 5.0,
-        'can': None,
-    }
-
-
-def test_by_name_gives_a_table_under_its_index_as_its_columns() -> None:
-    params = SUB_MULTI.params(weight=SAMPLE_TABLE['weight'])
-    inputs = SUB_MULTI.inputs(sample=SAMPLE_TABLE['sample'])
-    assert by_name(SUB_MULTI, params, inputs) == {
-        'scale': Scale(),
-        'sample': SAMPLE_TABLE,
-        'can': {'can': []},
-    }
-
-
 def test_fixed_values_fill_in_defaults_and_a_table_without_rows() -> None:
     assert fixed_values(SUB_MULTI, {'scale': Scale(factor=3.0)}, ('sample',)) == {
         'scale': Scale(factor=3.0),
-        'can': {'can': []},
+        'can': [],
     }
     assert fixed_values(SUB, {'sample': 5.0}, ('weight',)) == {
         'scale': Scale(),
@@ -139,17 +119,27 @@ def test_fixed_values_fill_in_defaults_and_a_table_without_rows() -> None:
     }
 
 
+def test_fixed_values_take_a_table_as_its_columns() -> None:
+    assert fixed_values(SUB_MULTI, SAMPLE_TABLE, ('can',)) == {
+        'scale': Scale(),
+        **SAMPLE_TABLE,
+    }
+
+
 @pytest.mark.parametrize(
     ('fixed', 'blanks', 'reason'),
     [
-        ({'sample': SAMPLE_TABLE}, ('sample',), r"\['sample'\]: both fixed and blank"),
-        (
-            {'speed': 1.0},
-            ('sample',),
-            r"\['speed'\]: not parameters, inputs, or tables",
-        ),
+        (SAMPLE_TABLE, ('sample',), r"\['sample', 'weight'\]: both fixed and blank"),
+        ({'weight': [None]}, ('sample',), r"\['weight'\]: both fixed and blank"),
+        ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters or inputs"),
         ({}, ('weight',), r"\['weight'\]: not parameters, inputs, or tables"),
         ({}, ('can',), r"\['sample'\]: neither fixed nor blank"),
+        ({'sample': [5.0]}, ('can',), r"sample: a table is fixed whole, \['weight'\]"),
+        (
+            {'sample': [5.0], 'weight': [None, None]},
+            ('can',),
+            'sample: the columns of a table have equal length',
+        ),
     ],
 )
 def test_fixed_values_refuse_names_that_do_not_fit(
@@ -170,7 +160,7 @@ def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
 def test_each_fixed_table_with_rows_is_one_push_of_its_columns(
     binding: DriverBinding, recorder: Recorder
 ) -> None:
-    driver = binding.make_accumulator({'sample': SAMPLE_TABLE}, ('can',))
+    driver = binding.make_accumulator(SAMPLE_TABLE, ('can',))
     assert recorder.pushes == [('sample', SAMPLE_TABLE)]
     driver.push('can', {'can': [1.0]})
     assert driver.outputs() == SubOutputs(diff=2.0 * (5.0 + 14.0 - 1.0))

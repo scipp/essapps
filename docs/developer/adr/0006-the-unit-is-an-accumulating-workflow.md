@@ -30,7 +30,7 @@ The `Accumulator` class of sciline and of `StreamProcessor` holds one key and is
 
 **The caller chooses how rows arrive, and the workflow package's driver chooses how a state is computed.**
 A *driver* is an object with `push(table, columns)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
-An accumulator exists only over a `DriverBinding`, which makes a driver from the template's fixed values and pushes each client push into it (README, [What a binding provides](../README.md#what-a-binding-provides)).
+An accumulator exists only over a binding that makes drivers, such as `DriverBinding`, which makes a driver from the template's fixed values and pushes each client push into it (README, [What a binding provides](../README.md#what-a-binding-provides)).
 The same binding computes a plain request with a driver of its own and one push per table, so both give the same outputs.
 A driver for SANS holds a numerator and a summed monitor per table.
 Its author promises the outputs of the plain request, however the rows were grouped into pushes, as `StreamProcessor` asks its users to promise that the workflow is linear in the inputs that change per chunk.

@@ -86,7 +86,25 @@ class PartsOutputs(BaseModel):
     parts: dict[str, float]
 
 
+class PiecesOutputs(BaseModel):
+    pieces: list[float]
+
+
+class Item(BaseModel):
+    value: Any = None
+
+
+class Box(BaseModel):
+    item: Item = Field(default_factory=Item)
+
+
+class BoxParams(BaseModel):
+    box: Box = Field(default_factory=Box)
+
+
 SPLIT = _spec('split', outputs=PartsOutputs)
+PIECES = _spec('pieces', outputs=PiecesOutputs)
+ANYTHING = _spec('anything', params=BoxParams)  # a box of any value
 SCALED = _spec('scaled', params=ScaledParams)
 SUM = SCALED.tabulate(name='sum', version=1, tables={'sample': ('scale',)})
 
@@ -104,6 +122,11 @@ def total(params: Any, inputs: Any) -> ValueOutputs:
 def split(params: NoParams, inputs: LoadInputs) -> PartsOutputs:
     value = read_dataset(inputs.sample)
     return PartsOutputs(parts={'whole': value, 'half': value / 2})
+
+
+def pieces(params: NoParams, inputs: LoadInputs) -> PiecesOutputs:
+    value = read_dataset(inputs.sample)
+    return PiecesOutputs(pieces=[value, value / 2])
 
 
 class Gate:
@@ -144,6 +167,8 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(UNTYPED, lambda p, i: {'value': 1.0}),
         function_binding(SUM, total),
         function_binding(SPLIT, split),
+        function_binding(PIECES, pieces),
+        function_binding(ANYTHING, lambda p, i: ValueOutputs(value=0.0)),
     ]
     backend = Backend(datasets, bindings)
     yield backend
@@ -252,33 +277,37 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     assert client.records() == [a]
 
 
-def test_a_value_that_cannot_be_stored_is_refused(datasets: FakeDatasets) -> None:
-    class Item(BaseModel):
-        value: Any
+def _boxed(value: Any) -> Request:
+    return Request(
+        ANYTHING,
+        params={'box': {'item': {'value': value}}},
+        inputs={'sample': dataset(run=1)},
+    )
 
-    class AnyParams(BaseModel):
-        item: Item
 
-    spec = _spec('anything', params=AnyParams)
-    binding = function_binding(spec, lambda p, i: ValueOutputs(value=0.0))
-    backend = Backend(datasets, [binding])
-    client = Client(backend, proposal='p1', submitter='anna')
-    sample = {'sample': dataset(run=1)}
-    try:
-        with pytest.raises(SubmitError, match=r'^second: item: cannot be stored'):
-            client.submit(
-                {
-                    'first': Request(
-                        spec, params={'item': {'value': 1}}, inputs=sample
-                    ),
-                    'second': Request(
-                        spec, params={'item': {'value': len}}, inputs=sample
-                    ),
-                }
-            )
-        assert client.records() == []
-    finally:
-        backend.close()
+def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored'):
+        client.submit({'first': _boxed(1), 'second': _boxed(len)})
+    assert client.records() == []
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('-inf'), float('nan')])
+def test_a_value_that_is_not_finite_is_refused(client: Client, value: float) -> None:
+    with pytest.raises(SubmitError, match=r'^box: not finite; has no JSON form$'):
+        client.submit(_boxed(value))
+
+
+def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
+    typo = Request(
+        ANYTHING,
+        params={'box': {'item': {'valeu': 1}}},
+        inputs={'sample': dataset(run=1)},
+    )
+
+    with pytest.raises(
+        SubmitError, match=r"^box\.item: \['valeu'\]: not fields of Item"
+    ):
+        client.submit(typo)
 
 
 def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
@@ -312,6 +341,22 @@ def test_a_reference_to_another_proposal_is_refused(
 def test_an_unknown_dataset_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='unknown dataset run:9'):
         client.submit(load(9))
+
+
+def test_a_dataset_of_another_proposal_is_refused(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    datasets.measure(4, 4.0, proposal='p2')
+
+    with pytest.raises(
+        SubmitError, match=r'^sample: dataset run:4 belongs to proposal p2$'
+    ):
+        client.submit(load(4))
+
+
+def test_a_list_input_takes_a_list_of_references(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^sample: .* is not a list of references$'):
+        client.submit(SUM, inputs={'sample': dataset(run=1)})
 
 
 def test_a_file_given_as_a_string_is_refused(client: Client) -> None:
@@ -474,6 +519,20 @@ def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
 
     with pytest.raises(SubmitError, match='element of an output without elements'):
         client.submit(ADD, inputs=operands(element, a.ref('value')))
+
+
+def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> None:
+    split = client.submit(PIECES, inputs={'sample': dataset(run=2)})
+    whole, half = (
+        split.ref('pieces').model_copy(update={'key': k}) for k in ('0', '1')
+    )
+    named = split.ref('pieces').model_copy(update={'key': 'half'})
+
+    assert client.output(client.compute(ADD, inputs=operands(whole, half))) == {
+        'value': 3.0
+    }
+    with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of a list'):
+        client.submit(ADD, inputs=operands(named, half))
 
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:

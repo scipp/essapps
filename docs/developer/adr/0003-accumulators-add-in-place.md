@@ -57,8 +57,8 @@ Two pins of one state compute once.
 A push checks each value by its column's type alone, and that its index values are new to the table.
 A state's params model, and that each required index has a row, are checked when the state is first pinned.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
-Opening an accumulator types each fixed value by its own field alone, since a params-model validator that needs rows would refuse the empty tables.
-So a validator that reads several values must not change one, because the driver got the values typed one by one.
+Opening an accumulator validates each fixed value by its own field alone, since a params-model validator that needs rows would refuse the empty tables.
+So a validator that reads several values must not change one, because the driver got the values validated one by one.
 
 **A failed push stops the accumulator**, since skipping it would make state n differ from the plain request over the first n pushes.
 
@@ -90,5 +90,5 @@ Lifting the first rule later breaks no code.
 - A slow reader delays the next addition, not the controller's `push` call.
 - A failure to add reaches the controller at its next push or pin, not from `push` itself.
 - A binding must not return an output that shares memory with an input, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
-- The first pin of each state checks its plain request, about 1.3 ms at 300 rows and 4 ms at 1000. Story D7 pins after every push, so its total grows with the square of the pushes, to 0.2 s for 300 and 2 s for 1000.
+- The first pin of each state checks the state's params model, in time proportional to the rows of tables on the params side.
 - A request that reads two accumulators holds back the next push of both until it has run.

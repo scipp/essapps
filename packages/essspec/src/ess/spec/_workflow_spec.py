@@ -38,10 +38,12 @@ framework: what the framework needs, it reads from the field types (see
   object (a scipp type, a model, a ``NewType`` of either). The default of an
   input is ``None`` or an empty list.
 - Each output is a data value, possibly optional, or a list or a dict of them.
+- The params and inputs models have no field validators: a check of one value
+  belongs to the value's type, such as a field validator of a group or of a
+  model that is a data value.
+- The index of a table is required, or empty by default.
 
-A check of one value belongs to the value's type, such as a field validator of
-a model that is a data value; the params and inputs models have no field
-validators of their own. A check across fields is a model validator. One of
+A check across fields is a model validator. One of
 the params model runs in the request phase of every request; one of the
 inputs model runs in the call phase of a plain request only. A check across
 params and inputs is the binding's: it fails when the request runs.
@@ -66,7 +68,7 @@ Two forms exist, related by a one-way projection:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any, Literal, Self, get_origin
 
 from annotated_types import MinLen
@@ -81,7 +83,15 @@ from pydantic import (
 from pydantic.errors import PydanticInvalidForJsonSchema
 from pydantic.fields import FieldInfo
 
-from .field_types import base, element, is_data_value, is_file, optional, type_name
+from .field_types import (
+    base,
+    element,
+    is_data_value,
+    is_file,
+    optional,
+    type_name,
+    value_type,
+)
 
 Side = Literal['params', 'inputs']
 
@@ -245,6 +255,27 @@ class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen
                 return index
         return None
 
+    def blank_fields(self, blanks: Collection[str]) -> frozenset[str]:
+        """
+        The parameters and inputs that ``blanks`` leave open: a blank that is
+        an index stands for every column of its table, the index among them.
+        """
+        return frozenset(
+            name
+            for blank in blanks
+            for name in (self.columns(blank) if blank in self.tables else (blank,))
+        )
+
+    def split(self, values: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """
+        ``values`` by name, split by side into the parameters and the inputs;
+        ``KeyError`` for a name that is neither.
+        """
+        sides: dict[Side, dict[str, Any]] = {'params': {}, 'inputs': {}}
+        for name, value in values.items():
+            sides[self.side(name)][name] = value
+        return sides['params'], sides['inputs']
+
     def tabulate(
         self,
         *,
@@ -262,17 +293,20 @@ class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen
             SANS.tabulate(name='sans-multi', version=1,
                           tables={'sample': ('sample_geometry',), 'can': ()})
 
-        Each field named becomes a ``list`` on its own side. An index loses
-        ``| None``: ``sample: SampleFile`` becomes ``list[SampleFile]`` with
-        at least one row, and ``can: CanFile | None`` becomes
-        ``list[CanFile]``, empty by default; an index with another default has
-        one row of it by default. An attached column keeps its type
-        as written, ``list[SampleGeometry | None]``, and has no default: the
-        framework fills a column left out with ``None`` in each row. The other
-        fields, the outputs, and the field validators of the types are as in
-        this spec. A model with a field named is made anew, without this
-        spec's model validators, which read fields whose types change; a
-        model without one is kept. The new models have no static type.
+        Each field named becomes a ``list`` on its own side. An index is
+        required, or optional with default ``None``, and loses ``| None``:
+        ``sample: SampleFile`` becomes ``list[SampleFile]`` with at least one
+        row, and ``can: CanFile | None`` becomes ``list[CanFile]``, empty by
+        default. An attached column keeps its type as written,
+        ``list[SampleGeometry | None]``, and has no default. Where its type
+        is optional, as here, the framework fills a column left out with
+        ``None`` in each row; a column of another type is given. Title,
+        description, examples (each as one row), and ``json_schema_extra`` of
+        a field named are kept. The other fields, the outputs, and the field
+        validators of the types are as in this spec. A model with a field
+        named is made anew, without this spec's model validators, which read
+        fields whose types change; a model without one is kept. The new
+        models have no static type.
 
         With one row in each table whose index is given, and none where it is
         left out, a request of the new spec is a request of this one (see
@@ -287,6 +321,15 @@ class WorkflowSpec[P: BaseModel, I: BaseModel, O: BaseModel](_SpecFields, frozen
             raise ValueError(f'{unknown}: not parameters or inputs of {self.name}')
         if lists := sorted(n for n in names if element(self.field(n).annotation)):
             raise ValueError(f'{lists}: lists already, cannot be columns')
+        if defaulted := sorted(
+            index
+            for index in named
+            if not self.field(index).is_required()
+            and self.field(index).get_default(call_default_factory=True) is not None
+        ):
+            raise ValueError(
+                f'{defaulted}: an index is required, or optional with default None'
+            )
         attached = {n for columns in named.values() for n in columns}
         return WorkflowSpec(
             name=name,
@@ -344,14 +387,6 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     )
 
 
-def _core(annotation: Any) -> Any:
-    """The type of one value of a field: ``| None``, list, and dict removed."""
-    tp, _ = optional(annotation)
-    if (item := element(tp)) is not None:
-        tp, _ = optional(item)
-    return tp
-
-
 def _distinct(*models: type[BaseModel]) -> list[str]:
     """Refuse a name, or a type, of two fields of the spec."""
     problems = []
@@ -361,38 +396,48 @@ def _distinct(*models: type[BaseModel]) -> list[str]:
         for name, field in model.model_fields.items():
             if (other := names.setdefault(name, model.__name__)) != model.__name__:
                 problems.append(f'{name}: a field of both {other} and {model.__name__}')
-            core = _core(field.annotation)
-            if (first := keys.setdefault(core, name)) != name:
+            tp = value_type(field.annotation)
+            if (first := keys.setdefault(tp, name)) != name:
                 problems.append(
-                    f'{first} and {name}: both of type {type_name(core)}; give '
+                    f'{first} and {name}: both of type {type_name(tp)}; give '
                     'each a NewType of its own'
                 )
     return problems
 
 
-def _value_type(annotation: Any) -> Any | None:
+def _one_or_list(annotation: Any) -> bool:
     """
-    ``X`` if ``annotation`` is ``X``, ``X | None``, ``list[X]``, or
-    ``list[X | None]``, else ``None``.
+    Whether ``annotation`` is ``X``, ``X | None``, ``list[X]``, or
+    ``list[X | None]``: the shapes of a parameter and of an input.
     """
     tp, is_optional = optional(annotation)
-    if (item := element(tp)) is None:
-        return tp
-    if get_origin(tp) is not list or is_optional:
-        return None
-    return optional(item)[0]
+    return element(tp) is None or (get_origin(tp) is list and not is_optional)
+
+
+def _no_field_validators(model: type[BaseModel]) -> list[str]:
+    """Refuse a field validator of the params or the inputs model itself."""
+    if validators := model.__pydantic_decorators__.field_validators:
+        return [
+            f'{model.__name__}: no field validators, {sorted(validators)}; a '
+            "check of one value belongs to the value's type"
+        ]
+    return []
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
-    problems = []
+    problems = _no_field_validators(model)
     for name, field in model.model_fields.items():
-        group = base(_value_type(field.annotation))
-        if not (isinstance(group, type) and issubclass(group, BaseModel)):
+        group = base(value_type(field.annotation))
+        if not (
+            _one_or_list(field.annotation)
+            and isinstance(group, type)
+            and issubclass(group, BaseModel)
+        ):
             problems.append(
                 f'{model.__name__}.{name}: a parameter is a group, a model of '
                 'literals, possibly optional, or a list of groups'
             )
-        elif _holds_file(group):
+        elif _holds_file(group, set()):
             problems.append(
                 f'{model.__name__}.{name}: a parameter holds no file; a file is '
                 'an input'
@@ -407,21 +452,29 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     return problems
 
 
-def _holds_file(tp: Any) -> bool:
-    """Whether a type, or a field of a model in it, is a file."""
+def _holds_file(tp: Any, seen: set[type[BaseModel]]) -> bool:
+    """
+    Whether a type, or a field of a model in it, is a file; ``seen`` holds the
+    models looked into already, so that a recursive model ends.
+    """
     tp = base(tp)
     if is_file(tp):
         return True
     if isinstance(tp, type) and issubclass(tp, BaseModel):
-        return any(_holds_file(f.annotation) for f in tp.model_fields.values())
-    return any(_holds_file(arg) for arg in getattr(tp, '__args__', ()))
+        if tp in seen:
+            return False
+        seen.add(tp)
+        return any(_holds_file(f.annotation, seen) for f in tp.model_fields.values())
+    return any(_holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
 def _inputs_problems(model: type[BaseModel]) -> list[str]:
-    problems = []
+    problems = _no_field_validators(model)
     for name, field in model.model_fields.items():
-        tp = _value_type(field.annotation)
-        if tp is None or not is_data_value(tp):
+        if not (
+            _one_or_list(field.annotation)
+            and is_data_value(value_type(field.annotation))
+        ):
             problems.append(
                 f'{model.__name__}.{name}: an input is a data value, possibly '
                 'optional, or a list of data values'
@@ -441,7 +494,7 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
         f'{model.__name__}.{name}: an output is a data value, possibly '
         'optional, or a list or a dict of them'
         for name, field in model.model_fields.items()
-        if not is_data_value(_core(field.annotation))
+        if not is_data_value(value_type(field.annotation))
     ]
 
 
@@ -454,14 +507,21 @@ def _tables_problems(spec: WorkflowSpec[Any, Any, Any]) -> list[str]:
                 problems.append(f'{name}: a column of two tables')
             seen.add(name)
             try:
-                annotation = spec.field(name).annotation
+                field = spec.field(name)
             except KeyError as error:
                 problems.append(error.args[0])
                 continue
-            if get_origin(annotation) is not list:
+            if get_origin(field.annotation) is not list:
                 problems.append(f'{name}: a column of a table is a list')
-            elif name == index and optional(element(annotation))[1]:
+            elif name == index and optional(element(field.annotation))[1]:
                 problems.append(f'{index}: the index of a table holds no None')
+            elif name == index and not field.is_required():
+                default = field.get_default(call_default_factory=True)
+                if not (isinstance(default, list) and not default):
+                    problems.append(
+                        f'{index}: the index of a table is required, or empty by '
+                        'default'
+                    )
     return problems
 
 
@@ -473,34 +533,27 @@ def _tabulated(
         return model
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
-        meta = {'title': info.title, 'description': info.description}
-        if name in indexes:
-            core, _ = optional(info.annotation)
-            if info.is_required():
-                fields[name] = (list[core], Field(min_length=1, **meta))
-            else:
-                rows = _default_rows(info)
-                fields[name] = (list[core], Field(default_factory=rows, **meta))
-        elif name in attached:
+        if name not in indexes and name not in attached:
+            fields[name] = (info.annotation, info)
+            continue
+        meta = {
+            'title': info.title,
+            'description': info.description,
+            'json_schema_extra': info.json_schema_extra,
+            # An example of a column is one row of it.
+            'examples': None if info.examples is None else [[e] for e in info.examples],
+        }
+        if name in attached:
             fields[name] = (list[info.annotation], Field(**meta))
         else:
-            fields[name] = (info.annotation, info)
+            core, _ = optional(info.annotation)
+            rows = (
+                {'min_length': 1} if info.is_required() else {'default_factory': list}
+            )
+            fields[name] = (list[core], Field(**rows, **meta))
     return create_model(
         f'Tabulated{model.__name__}', __config__=model.model_config, **fields
     )
-
-
-def _default_rows(info: FieldInfo) -> Callable[[], list[Any]]:
-    """
-    The default of an index: no row for a default of ``None``, or one row of
-    the default, so that the one-row symmetry holds for an index left out.
-    """
-
-    def rows() -> list[Any]:
-        default = info.get_default(call_default_factory=True, validated_data={})
-        return [] if default is None else [default]
-
-    return rows
 
 
 def _data_schema(model: type[BaseModel]) -> dict[str, Any]:

@@ -142,16 +142,10 @@ class FakeStore:
 def instances(spec: Spec, values: Mapping[str, Any]) -> tuple[BaseModel, BaseModel]:
     """
     Instances of the spec's params and inputs models from ``values`` by name,
-    as a stage or a driver takes them: each table under its index.
+    as a stage or a driver takes them.
     """
-    sides: dict[str, dict[str, Any]] = {'params': {}, 'inputs': {}}
-    for name, value in values.items():
-        for column, cells in (value if name in spec.tables else {name: value}).items():
-            sides[spec.side(column)][column] = cells
-    return (
-        spec.params.model_validate(sides['params']),
-        spec.inputs.model_validate(sides['inputs']),
-    )
+    params, inputs = spec.split(values)
+    return spec.params.model_validate(params), spec.inputs.model_validate(inputs)
 
 
 @dataclass
@@ -201,19 +195,17 @@ class KeptRows:
         self._spec = spec
         self._function = function
         self._fixed = fixed
-        self._tables: dict[str, dict[str, list[Any]]] = {
-            index: {name: [] for name in spec.columns(index)} for index in spec.tables
+        self._columns: dict[str, list[Any]] = {
+            name: [] for index in spec.tables for name in spec.columns(index)
         }
 
     def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
         for name, column in columns.items():
-            self._tables[table][name].extend(column)
+            self._columns[name].extend(column)
 
     def outputs(self) -> BaseModel:
-        tables = {
-            i: {n: list(c) for n, c in t.items()} for i, t in self._tables.items()
-        }
-        return self._function(*instances(self._spec, {**self._fixed, **tables}))
+        columns = {n: list(c) for n, c in self._columns.items()}
+        return self._function(*instances(self._spec, {**self._fixed, **columns}))
 
 
 def kept_rows(spec: Spec, function: Callable[[Any, Any], BaseModel]) -> DriverBinding:

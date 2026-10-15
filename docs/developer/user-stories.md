@@ -28,15 +28,15 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `EXPORT` | | `result: sc.Variable` | `text: str` | the values, separated by commas | writing a file for another program |
 | `IOFQ_V2` | `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`) | as `IOFQ` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
 
-Each parameter is a group, a model of literals.
+Each parameter is a group, a model of literals, possibly optional, or a list of groups.
 Each input is a data value: a file, given by a dataset reference, or an output of another record, given by a reference to it.
 Every field has a type of its own within its spec.
 Each `...File` is a `NewType` of `Path`, such as `SampleFile = NewType('SampleFile', Path)`, and a dataset reference fits each of them.
-An output without a type in the table has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
+An output without a type in the list of toy specs has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
 `Parts` is a model of two `sc.Variable`s.
 A reference to an output fits an input when the output's type fits the input's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, and every curve fits `EXPORT`'s `result: sc.Variable`.
 The list inputs of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with its runs as the index and no attached columns.
-These specs have no single-run form, so each declares its tables with `tables=`.
+`tabulate` makes none of these specs, so each declares its tables with `tables=`.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
 `IOFQ` and `VANADIUM`, which the stories stage, are bound to the functions `iofq` and `vanadium` by a toy binding that serves plain requests and stages.
@@ -45,7 +45,7 @@ These specs have no single-run form, so each declares its tables with `tables=`.
 `PARTS_SUM` is bound with `function_binding` to a function that sums each field of `Parts` over the list `parts`.
 The other toy specs are bound with `function_binding`.
 No toy spec returns an output that shares memory with an input.
-A story may add a toy spec to this table; it must take runs directly and be checkable by hand.
+A story may add a toy spec to the list of toy specs; it must take runs directly and be checkable by hand.
 
 ## Conventions
 

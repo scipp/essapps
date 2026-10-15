@@ -13,7 +13,7 @@ whatever runs the workflow.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -97,13 +97,35 @@ def as_ref(value: Any) -> Ref | None:
     return None
 
 
-def walk_refs(value: Any, path: str = '') -> Iterator[tuple[str, Ref]]:
-    """Yield every reference in a plain (JSON-shaped) value, with its path."""
-    if (ref := as_ref(value)) is not None:
-        yield path, ref
-    elif isinstance(value, dict):
-        for k, v in value.items():
-            yield from walk_refs(v, f'{path}.{k}' if path else str(k))
-    elif isinstance(value, list):
-        for i, v in enumerate(value):
-            yield from walk_refs(v, f'{path}[{i}]')
+def iter_refs(inputs: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
+    """
+    Each reference in the inputs of a request, with its place, such as
+    ``sample`` or ``runs[2]``.
+
+    The inputs are by name, each a reference, ``None``, or a list of these; a
+    reference is a :data:`Ref` or its plain (JSON) form. Any other value is
+    skipped, for the validation of the inputs to refuse.
+    """
+    for name, value in inputs.items():
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                if (ref := as_ref(item)) is not None:
+                    yield f'{name}[{i}]', ref
+        elif (ref := as_ref(value)) is not None:
+            yield name, ref
+
+
+def map_refs(inputs: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
+    """
+    The inputs of a request, by name, with each reference replaced by
+    ``fn(ref)``; the inputs are as :func:`iter_refs` takes them, and any other
+    value is kept.
+    """
+
+    def one(value: Any) -> Any:
+        return value if (ref := as_ref(value)) is None else fn(ref)
+
+    return {
+        name: [one(v) for v in value] if isinstance(value, list) else one(value)
+        for name, value in inputs.items()
+    }

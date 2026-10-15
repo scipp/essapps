@@ -50,8 +50,8 @@ class SubOutputs(BaseModel):
     diff: Diff | None
 
 
-def _spec(name: str, **models: type[BaseModel]) -> WorkflowSpec[Any, Any, Any]:
-    return WorkflowSpec(name=name, version=1, title=name, description=name, **models)
+def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any, Any]:
+    return WorkflowSpec(name=name, version=1, title=name, description=name, **fields)
 
 
 SUB = _spec('sub', params=SubParams, inputs=SubInputs, outputs=SubOutputs)
@@ -151,9 +151,24 @@ class StartsAtFirstSample(Sums):
         return SubOutputs(diff=None if total is None else self.factor * total)
 
 
+Part = NewType('Part', object)
+Joined = NewType('Joined', object)
+
+
+class PartsInputs(BaseModel):
+    parts: list[Part]
+
+
+class JoinedOutputs(BaseModel):
+    joined: Joined | None
+
+
+PARTS = _spec('parts', inputs=PartsInputs, outputs=JoinedOutputs, tables=['parts'])
+
+
 class JoinsInPlace:
     """
-    Breaks the rows: joins the lists of one table ``parts`` by adding in
+    Breaks the rows: joins the lists of the table ``parts`` by adding in
     place to the first row's list, not to a copy of it.
     """
 
@@ -167,8 +182,8 @@ class JoinsInPlace:
             else:
                 self.joined += value
 
-    def outputs(self) -> Mapping[str, Any]:
-        return {'parts': self.joined}
+    def outputs(self) -> JoinedOutputs:
+        return JoinedOutputs(joined=self.joined)
 
 
 FIXED = {'scale': Scale(factor=2.0)}

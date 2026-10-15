@@ -145,8 +145,9 @@ class Accumulator:
     earlier rows are not computed again. The outputs of a state are computed
     all at once, at the first pin that needs them, and kept until the next
     push is added; no output is computed for a state that nobody pins. The
-    first pin of a state also validates its plain request, which takes time
-    in proportion to the rows.
+    first pin of a state also checks its plain request: the params model,
+    its own validators included, and a row in each table with a required
+    index.
 
     A push, and a submission that pins, return once logged, so a controller
     does not slow down when the backend falls behind. A controller that should
@@ -181,7 +182,8 @@ class Accumulator:
 
         A parameter is given as a group, a model or a dict, and an input by
         reference. A column left out is ``None`` in each row if its type
-        allows it, and a column without a default is given in every push. A
+        allows it, and a column whose element type is not optional is given in
+        every push. A
         push names one table, through its index: a column without its index
         is refused, and so are an index of a table the template fixes, an
         index value the table holds already or that the push repeats, and a

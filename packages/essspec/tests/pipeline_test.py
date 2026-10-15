@@ -128,28 +128,30 @@ CAN_PARTS = (CanNumerator, CanDenominator)
 
 
 class IofQDriver:
-    """A driver of ``IOFQ_MULTI``; refuses a state without a sample run."""
+    """
+    A driver of ``IOFQ_MULTI``, made from the pipelines and keys of the
+    single-run binding; refuses a state without a sample run.
+    """
 
-    def __init__(self, make_pipeline: MakePipeline, fixed: Mapping[str, Any]) -> None:
-        with_can = make_pipeline({})
-        without = make_pipeline({'can': None})
-        for wf in (with_can, without):
-            wf[Reduction] = fixed['reduction']
+    def __init__(self, single: PipelineBinding, fixed: Mapping[str, Any]) -> None:
+        keys = single.keys
+        with_can = single.pipeline({'reduction': fixed['reduction']})
+        without = single.pipeline({'reduction': fixed['reduction'], 'can': None})
         self._contribute = {
-            'sample': (
-                SampleFile,
-                sciline.Stage(with_can, inputs=(SampleFile,), outputs=SAMPLE_PARTS),
-            ),
-            'can': (
-                CanFile | None,
-                sciline.Stage(with_can, inputs=(CanFile | None,), outputs=CAN_PARTS),
-            ),
+            table: (
+                keys[table],
+                sciline.Stage(with_can, inputs=(keys[table],), outputs=parts),
+            )
+            for table, parts in (('sample', SAMPLE_PARTS), ('can', CAN_PARTS))
         }
+        self._outputs = (keys['iofq'], keys['can_iofq'])
         self._finalize = {
             True: sciline.Stage(
-                with_can, inputs=SAMPLE_PARTS + CAN_PARTS, outputs=(IofQ, CanIofQ)
+                with_can, inputs=SAMPLE_PARTS + CAN_PARTS, outputs=self._outputs
             ),
-            False: sciline.Stage(without, inputs=SAMPLE_PARTS, outputs=(IofQ,)),
+            False: sciline.Stage(
+                without, inputs=SAMPLE_PARTS, outputs=self._outputs[:1]
+            ),
         }
         self._sums: dict[Any, np.ndarray] = {}
 
@@ -161,14 +163,8 @@ class IofQDriver:
 
     def outputs(self) -> IofQOutputs:
         results = self._finalize[CanNumerator in self._sums].compute(self._sums)
-        return IofQOutputs(iofq=results[IofQ], can_iofq=results.get(CanIofQ))
-
-
-@pytest.fixture
-def make_driver(
-    make_pipeline: MakePipeline,
-) -> Callable[[Mapping[str, Any]], IofQDriver]:
-    return lambda fixed: IofQDriver(make_pipeline, fixed)
+        iofq, can_iofq = self._outputs
+        return IofQOutputs(iofq=results[iofq], can_iofq=results.get(can_iofq))
 
 
 @pytest.fixture
@@ -177,8 +173,8 @@ def single(make_pipeline: MakePipeline) -> PipelineBinding:
 
 
 @pytest.fixture
-def multi(make_driver: Callable[[Mapping[str, Any]], IofQDriver]) -> DriverBinding:
-    return DriverBinding(IOFQ_MULTI, make_driver)
+def multi(single: PipelineBinding) -> DriverBinding:
+    return DriverBinding(IOFQ_MULTI, lambda fixed: IofQDriver(single, fixed))
 
 
 SAMPLES = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]]
@@ -266,7 +262,6 @@ def test_a_stage_refuses_values_that_do_not_fit(single: PipelineBinding) -> None
 def test_the_bindings_keep_the_symmetries(
     single: PipelineBinding,
     multi: DriverBinding,
-    make_driver: Callable[[Mapping[str, Any]], IofQDriver],
     samples: list[Path],
     cans: list[Path],
 ) -> None:
@@ -277,7 +272,7 @@ def test_the_bindings_keep_the_symmetries(
     runs = {'sample': samples[0], 'can': cans[0]}
     check_caching(single, runs, [reduction(2), reduction(1), reduction(2)])
     tables = {'sample': {'sample': samples}, 'can': {'can': cans}}
-    check_arrival_and_order(make_driver, reduction(2), tables)
+    check_arrival_and_order(multi.make_driver, reduction(2), tables)
 
 
 def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
@@ -301,11 +296,32 @@ def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
 def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
     multi: DriverBinding, samples: list[Path], cans: list[Path], loaded: list[Path]
 ) -> None:
-    driver = multi.make_accumulator({'can': {'can': cans}, **reduction(2)}, ('sample',))
+    driver = multi.make_accumulator({'can': cans, **reduction(2)}, ('sample',))
     for sample in samples:
         driver.push('sample', {'sample': [sample]})
         driver.outputs()
     assert loaded == cans + samples
+
+
+def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
+    assert dict(single.keys) == {
+        'reduction': Reduction,
+        'sample': SampleFile,
+        'can': CanFile | None,
+        'iofq': IofQ,
+        'can_iofq': CanIofQ,
+    }
+    with pytest.raises(TypeError):
+        single.keys['iofq'] = SampleIofQ  # type: ignore[index]
+
+
+def test_pipeline_sets_each_fixed_value_at_its_key(
+    single: PipelineBinding, samples: list[Path]
+) -> None:
+    pipeline = single.pipeline({**reduction(4), 'sample': samples[0], 'can': None})
+    np.testing.assert_allclose(pipeline.compute(IofQ), iofq(SAMPLES[0], 4))
+    with pytest.raises(ValueError, match=r"\['iofq'\]: not parameters or inputs"):
+        single.pipeline({'iofq': None})
 
 
 # Keys of a workflow's own: the pipeline reads a ``Filename`` and computes a
@@ -356,12 +372,13 @@ def test_a_table_sets_the_key_of_each_column_to_its_list(samples: list[Path]) ->
     inputs = TOTAL_MULTI.inputs(sample=samples)
     assert binding.compute(IofQParams(), inputs) == expected
     stage = binding.make_stage({}, ('sample',))
-    assert stage({'sample': {'sample': samples}}) == expected
+    assert stage({'sample': samples}) == expected
+    check_caching(binding, {}, [{'sample': samples}, {'sample': samples[:1]}])
 
 
 def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -> None:
     def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-        counts = sum(load(path) for path in fixed['sample']['sample'])
+        counts = sum(load(path) for path in fixed['sample'])
         return sciline.Pipeline([total], params={Counts: counts})
 
     binding = PipelineBinding(
@@ -380,8 +397,11 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
     [
         ({'speed': Total}, r"\['speed'\]: not fields of total"),
         ({'total': None}, r"\['total'\]: an output is computed as a key"),
-        ({'sample': CanFile | None}, 'total: two fields have one key'),
-        ({'sample': Filename, 'total': Filename}, 'total: two fields have one key'),
+        ({'sample': CanFile | None}, 'total: sample and can: two fields have one key'),
+        (
+            {'sample': Filename, 'total': Filename},
+            'total: sample and total: two fields have one key',
+        ),
     ],
 )
 def test_keys_that_do_not_fit_the_spec_are_refused(

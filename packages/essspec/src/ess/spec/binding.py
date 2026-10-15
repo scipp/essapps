@@ -25,14 +25,16 @@ The protocols name what the backend calls: :class:`Binding` for a plain
 request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator. A plain request passes model instances,
 ``compute(params, inputs) -> outputs``. A stage or an accumulator is made from
-some values only, so these pass by name: a parameter as its group, an input
-as its data, and a table under its index's name as its columns, by name, as
-lists of equal length::
+some values only, so these pass by name, params and inputs in one mapping: a
+parameter as its group, an input as its data, and a table as its columns,
+each under its own name, as lists of equal length::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,
-     'sample': {'sample': [path_611, path_612], 'sample_geometry': [None, g]}}
+     'sample': [path_611, path_612], 'sample_geometry': [None, g]}
 
-An output that the spec declares optional is left out by being ``None``.
+Blanks name a parameter or an input, but a table by its index, which stands
+for all its columns (see :meth:`WorkflowSpec.blank_fields`). An output that
+the spec declares optional is left out by being ``None``.
 
 A *driver* (:class:`Driver`) is the object behind an accumulator: tables are
 pushed into it, and it gives the outputs over the rows so far. The workflow
@@ -80,6 +82,9 @@ class StageBinding[P: BaseModel, I: BaseModel, O: BaseModel](
         """
         A callable that computes the outputs from the values of ``blanks``,
         by name, with the values of ``fixed``.
+
+        The callable takes a value of each field that the blanks leave open,
+        a blank table as its columns.
 
         The callable gets the values of the blanks only, and gives what
         :meth:`compute` gives with the same values. It may compute what
@@ -158,56 +163,45 @@ class AccumulatorBinding[P: BaseModel, I: BaseModel, O: BaseModel](
         ...
 
 
-def by_name(
-    spec: WorkflowSpec[Any, Any, Any], params: Any, inputs: Any
-) -> dict[str, Any]:
-    """
-    The values of ``params`` and ``inputs``, instances of the spec's models,
-    by name, as ``make_stage`` and ``make_accumulator`` take them: each table
-    under its index as its columns.
-    """
-    values = {**dict(params), **dict(inputs)}
-    tables = {
-        index: {name: values[name] for name in spec.columns(index)}
-        for index in spec.tables
-    }
-    columns = {name for table in tables.values() for name in table}
-    return {**{n: v for n, v in values.items() if n not in columns}, **tables}
-
-
 def fixed_values(
     spec: WorkflowSpec[Any, Any, Any],
     fixed: Mapping[str, Any],
     blanks: Collection[str],
 ) -> dict[str, Any]:
     """
-    The values of ``fixed``, with the default of each parameter or input in
-    neither ``fixed`` nor ``blanks``.
+    The values of ``fixed``, by name, with the default of each parameter or
+    input in neither ``fixed`` nor ``blanks``.
 
-    Names are those of parameters and inputs, but a table is named by its
-    index, and its default is its columns without rows. Raises ``ValueError``
+    ``fixed`` names parameters and inputs, a table as its columns, and
+    ``blanks`` names parameters and inputs, a table by its index. A table in
+    neither has no rows: an empty list in each column. Raises ``ValueError``
     if a name is both fixed and blank, if either names no parameter, input,
-    or table of the spec, or if one without a default is in neither.
+    or table of the spec, if a blank names an attached column, if a table is
+    fixed in part or with columns of unequal length, or if one without a
+    default is in neither.
     """
-    attached = {c for index in spec.tables for c in spec.tables[index]}
-    fields = {
-        name: info
-        for model in (spec.params, spec.inputs)
-        for name, info in model.model_fields.items()
-        if name not in attached
-    }
-    if both := fixed.keys() & set(blanks):
-        raise ValueError(f'{sorted(both)}: both fixed and blank')
-    if unknown := (fixed.keys() | set(blanks)) - fields.keys():
-        raise ValueError(
-            f'{sorted(unknown)}: not parameters, inputs, or tables of {spec.name}'
-        )
-    left = {n: f for n, f in fields.items() if n not in fixed and n not in blanks}
-    if missing := [n for n, f in left.items() if f.is_required()]:
+    fields = spec.params.model_fields | spec.inputs.model_fields
+    attached = {c for columns in spec.tables.values() for c in columns}
+    if unknown := sorted(fixed.keys() - fields.keys()):
+        raise ValueError(f'{unknown}: not parameters or inputs of {spec.name}')
+    if unknown := sorted(set(blanks) - (fields.keys() - attached)):
+        raise ValueError(f'{unknown}: not parameters, inputs, or tables of {spec.name}')
+    left_open = spec.blank_fields(blanks)
+    if both := sorted(fixed.keys() & left_open):
+        raise ValueError(f'{both}: both fixed and blank')
+    for index in spec.tables:
+        columns = spec.columns(index)
+        if given := [c for c in columns if c in fixed]:
+            if missing := [c for c in columns if c not in fixed]:
+                raise ValueError(f'{index}: a table is fixed whole, {missing} missing')
+            if len({len(fixed[c]) for c in given}) > 1:
+                raise ValueError(f'{index}: the columns of a table have equal length')
+    left = {n: f for n, f in fields.items() if n not in fixed and n not in left_open}
+    if missing := [n for n, f in left.items() if f.is_required() and n not in attached]:
         raise ValueError(f'{missing}: neither fixed nor blank, and without a default')
     defaults = {
-        name: {c: [] for c in spec.columns(name)}
-        if name in spec.tables
+        name: []
+        if spec.table_of(name) is not None
         else info.get_default(call_default_factory=True, validated_data={})
         for name, info in left.items()
     }
@@ -219,10 +213,10 @@ class DriverBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     """
     A driver behind a spec over tables: plain requests and accumulators.
 
-    ``make_driver`` makes a driver from the fixed values that are not tables,
-    by name. It may be called from several threads at once. An accumulator
-    gets a driver of its own, with each table in its fixed values in one
-    push; a table without rows is not pushed. A plain request is an
+    ``make_driver`` makes a driver from the fixed values that are not columns
+    of a table, by name. It may be called from several threads at once. An
+    accumulator gets a driver of its own, with each table in its fixed values
+    in one push; a table without rows is not pushed. A plain request is an
     accumulator with no blanks, read once. ``fixed`` and ``blanks`` are
     checked by :func:`fixed_values`, and each blank must be a table.
     """
@@ -231,7 +225,7 @@ class DriverBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     make_driver: Callable[[Mapping[str, Any]], Driver[O]]
 
     def compute(self, params: P, inputs: I) -> O:
-        return self.make_accumulator(by_name(self.spec, params, inputs), ()).outputs()
+        return self.make_accumulator({**dict(params), **dict(inputs)}, ()).outputs()
 
     def make_accumulator(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
@@ -243,10 +237,11 @@ class DriverBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
                 f'{self.spec.name}, {sorted(tables)}'
             )
         values = fixed_values(self.spec, fixed, blanks)
-        driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
+        columns = {c for index in tables for c in self.spec.columns(index)}
+        driver = self.make_driver({n: v for n, v in values.items() if n not in columns})
         for index in tables:
-            if (columns := values.get(index)) and columns[index]:
-                driver.push(index, columns)
+            if values.get(index):
+                driver.push(index, {c: values[c] for c in self.spec.columns(index)})
         return driver
 
 

@@ -22,11 +22,11 @@ The workflow author provides one of three things, the first two as a function th
 | a driver (`DriverBinding`) | make a driver, push every table, read the outputs | refused | a driver that takes the client's pushes |
 | a function (`function_binding`) | call it | refused | refused |
 
-A *driver* is a stateful object with `push(table, columns)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the code that calls `sciline.Stage`s and pushes into accumulators.
+A *driver* is a stateful object with `push(table, columns)` and `outputs()`, in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245): the code that calls `sciline.Stage`s and pushes into sciline Accumulators.
 It is written for one spec.
 The workflow package chooses it: its own code, or a generic one behind an adapter, such as ess.reduce's `StreamProcessor`; the framework needs no particular driver.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
-A stage exists only over a sciline pipeline, since only there does it hold anything.
+Of the three bindings, only `PipelineBinding` makes stages, since a stage over a function holds nothing.
 
 ## Terms
 
@@ -35,20 +35,20 @@ Defined in the [README](../README.md) and in [params-and-inputs.md](params-and-i
 | Term | Meaning |
 |---|---|
 | params, inputs, outputs | The three models of a spec. *Params* hold configuration, literals that the client gives by value. *Inputs* hold data, which a request gives by reference and the binding gets as the data. *Outputs* hold the results. |
-| parameter, input, group | A *parameter* is a field of the params model, and an *input* a field of the inputs model. A parameter is a *group*, a model of literals such as `Reduction`, or a list of groups. |
+| parameter, input, group | A *parameter* is a field of the params model, and an *input* a field of the inputs model. A parameter is a *group*, a model of literals such as `Reduction`, possibly optional, or a list of groups. |
 | table, index, column, row | A *table* is a set of list fields of equal length, pushed together. Its *index* is the field that names it, such as `sample`; its other *columns* are attached to the index. Each position is a *row*. |
 | template, fixed, blank | A *template* is a request with some parameters, inputs, or tables left out, the *blanks*; the others are *fixed*. A blank is a whole parameter or input, never a field of a group; a table is a blank by its index. |
 | plain request | A request with every value given. |
 | stage | A template the backend keeps for a client, called with values for its blanks. |
 | accumulator, push | An *accumulator* is a template whose blanks are tables, kept by the backend for a client. Each *push* gives it rows of one table. *State n* is the accumulator after n pushes. |
 | key | A sciline key, such as `Filename[SampleRun]`. |
-| spec side, workflow side | The *spec side* is the modules that define specs and their types: `ess.spec` for types that many specs share, and the module of a spec. It needs no workflow package ([ADR 0007](../adr/0007-packages-split-by-dependencies.md)). The *workflow side* is the workflow package and the instrument's glue; it imports the spec side. |
+| spec modules, workflow code | The *spec modules* define specs and their types: `ess.spec` for types that many specs share, and the module of a spec. They need no workflow package ([ADR 0007](../adr/0007-packages-split-by-dependencies.md)). The *workflow code* is the workflow package and the instrument's glue; it imports the spec modules. |
 | symmetries | Changes a caller may make without changing the outputs: *caching* (a call through a stage against the plain request), *arrival* (rows pushed one at a time against all at once), *order* (the order of pushes into different tables), *one-row* (the multi-run spec with one row per table against the single-run spec). |
 
 ## The example
 
 A toy SANS reduction, with a single-run spec and the multi-run spec made from it.
-The spec side defines the types and the specs:
+The spec modules define the types and the specs:
 
 ```python
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
@@ -76,7 +76,7 @@ IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 
 `IOFQ_MULTI` takes `sample: list[SampleFile]` with at least one row and `can: list[CanFile]`, empty by default.
 Each table has its index only.
 
-The workflow side imports these types and uses them as keys.
+The workflow code imports these types and uses them as keys.
 `reduce_run` computes the numerator and denominator of one run (a `Parts`), and `subtract` divides each and subtracts the can, if there is one:
 
 ```python
@@ -126,12 +126,12 @@ class Driver(Protocol[O]):
 ```
 
 `compute` gets instances of the spec's models.
-`make_stage` and `make_accumulator` get values *by name*: a parameter as its group, an input as its data, and a table under its index's name as its columns, the index among them:
+`make_stage` and `make_accumulator` get values *by name*, params and inputs in one mapping: a parameter as its group, an input as its data, and each column of a table under its own name, as a list:
 
 ```python
 binding.make_stage({'sample': path_611, 'can': None}, blanks=('reduction',))
 binding.make_accumulator({'reduction': Reduction(bins=2)}, blanks=('sample', 'can'))
-multi.make_accumulator({'reduction': Reduction(bins=2), 'sample': {'sample': [path_611]}},
+multi.make_accumulator({'reduction': Reduction(bins=2), 'sample': [path_611]},
                        blanks=('can',))                    # the table 'sample' fixed, with one row
 ```
 
@@ -206,7 +206,7 @@ Two inputs of one kind of data, such as the sample run and the can run, get a `N
 Two parameters that share a model, such as two axes of a Q map, do the same: `Axis1 = NewType('Axis1', QAxis)`.
 A provider that needs two parameters, such as an axis and its edges, takes both keys.
 
-The types live on the spec side, and the workflow side imports them.
+The types live in the spec modules, and the workflow code imports them.
 So the spec stays importable without the workflow package (ADR 0007), and a workflow package that takes these types is usable without the framework: `wf[Reduction] = Reduction(bins=2)`.
 Where the types live, in `ess.spec`, in the spec's module, or in an instrument package's spec module such as `ess.loki.spec`, follows from who shares them.
 
@@ -243,7 +243,7 @@ Where a value needs a conversion, the glue inserts a provider that takes the spe
 
 ### Strategies
 
-**A sciline pipeline** serves a spec without tables, or a spec whose list fields the pipeline takes whole.
+**A sciline pipeline** serves any spec: a table sets the key of each of its columns to its list, so the pipeline takes a table whole.
 `PipelineBinding` takes a function that makes the pipeline from the fixed values, as `DriverBinding` takes one that makes a driver.
 A plain request makes the pipeline from all values, sets each field's key to its value, and computes each output's key.
 A stage makes the pipeline from the fixed values, and is a handle to a `sciline.Stage` cut at the keys of the blanks: the part that does not depend on the blanks is computed once, and each call computes the rest.
@@ -289,7 +289,7 @@ draft = function_binding(IOFQ, iofq_draft)          # in place of `single`, whil
 
 **A driver** serves a spec with tables.
 It is a driver in the sense of sciline ADR 0003, holds everything stateful, and is written for one spec.
-`DriverBinding` pairs the spec with a function that makes a driver from the fixed values that are not tables:
+`DriverBinding` pairs the spec with a function that makes a driver from the fixed values that are not columns of a table:
 
 ```python
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)
@@ -300,7 +300,7 @@ driver.push('can', {'can': [path_110]})
 driver.outputs()                                            # -> IofQOutputs
 ```
 
-`make_accumulator` makes the driver from the values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
+`make_accumulator` makes the driver from the values that are not columns of a table, and pushes the rows of each table in `fixed`, one push per table.
 A table without rows is not pushed, so a driver never gets a push of no rows.
 So `compute(params, inputs)` of a `DriverBinding` is `make_accumulator` with every value fixed and no blanks, read once.
 A push may carry several rows of its table, so that a driver can work on them together, such as loading runs in parallel.
@@ -311,7 +311,7 @@ It calls the functions that the pipeline's providers call, so that one row in ea
 
 ```python
 class IofQDriver:
-    def __init__(self, fixed: Mapping[str, Any]) -> None:   # the fixed values that are not tables
+    def __init__(self, fixed: Mapping[str, Any]) -> None:   # the fixed values that are not columns
         self._bins = fixed['reduction'].bins
         self._sums: dict[str, Parts] = {}                    # per table
 
@@ -344,11 +344,12 @@ class StitchDriver:
 stitch = DriverBinding(STITCH, functools.partial(StitchDriver, pipeline))
 ```
 
+A driver over the graph of the single-run spec gets the graph and its keys from the single-run binding, `single.pipeline(fixed)` and `single.keys`, so that it sets no key by hand.
 Whether recomputing every row at each read is acceptable is the workflow's choice, not the framework's.
 
 A driver need not use sciline.
 The framework calls `push` and `outputs` and nothing else, so it needs no particular driver.
-A package writes its own, as above, or uses a generic one, and generic drivers may in time be collected in a library module; the design does not depend on which.
+A package writes its own, as above, or uses a generic one.
 `StreamProcessor` of ess.reduce is one: `accumulate` is `push`, and `finalize` is `outputs`.
 It takes one value per key, by key, so an adapter names the key of each column and pushes the rows one at a time.
 Its context keys, rolling windows, and `clear()` stay unused, since each would break the arrival symmetry.
@@ -395,17 +396,17 @@ driver.outputs().iofq
 |---|---|---|---|
 | caching | the `sciline.Stage` cut at the blanks | a pure pipeline | `check_caching(binding, fixed, calls)`: a call through a stage gives the plain request. Mostly tests `ess.spec`. |
 | arrival, order | the driver | its promises | `check_arrival_and_order(make_driver, fixed, tables)`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. Both go through the driver, so it does not prove the outputs are right. |
-| one-row | the package | that the driver computes what the pipeline computes | `check_one_row(single, multi, params, inputs)`: the binding of the tabulated spec, with one row in each table whose index is given and none where it is left out, gives the outputs of the binding of the spec tabulated. The only check against an independent reference; more rows are the package's own tests. |
+| one-row | the package | that the driver computes what the pipeline computes | `check_one_row(single, multi, params, inputs)`: the binding of the multi-run spec, with one row in each table whose index is given and none where it is left out, gives the outputs of the binding of the single-run spec. The only check against an independent reference; more rows are the package's own tests. |
 
 `check_arrival_and_order` takes a function that makes a driver, the fixed values by name, and the tables as `{index: {column: list}}`, so a package tests its driver without a spec.
-`tabulate` makes the one-row symmetry a property of the two specs: `IOFQ_MULTI` has a table for each field of `IOFQ` it names, with the same element type, so a pipeline over `IOFQ` and a driver over `IOFQ_MULTI` use the same keys.
+`tabulate` makes the one-row symmetry a property of the two specs: `IOFQ_MULTI` has a table for each field of `IOFQ` it names, whose element type is the field's type, without `| None` for an index, so a pipeline over `IOFQ` and a driver over `IOFQ_MULTI` use the same keys.
 A can left out of an `IOFQ` request is a table without rows in `IOFQ_MULTI`.
 
 ## Prior art: esslivedata
 
 esslivedata solves the same problem for live data, and `ess.spec` is meant to hold its params models too.
 Each instrument has `specs.py`, the params and outputs models, which the dashboard imports, and `factories.py`, the sciline glue, which only the backend loads.
-Some factory code works around limits of today's base workflows and is meant to go, so it shows what is needed now, not what a binding must allow.
+Some factory code works around limits of the base workflows, so it shows what those workflows need, not what a binding must allow.
 
 | | esslivedata |
 |---|---|
@@ -428,7 +429,7 @@ What carries over:
 
 | What | Written by | Lives in | Tested by |
 |---|---|---|---|
-| parameter, input, and output types | shared types: their authors; the rest: the spec's author | the spec side: `ess.spec`, the spec's module, or an instrument package's spec module | validation tests of the spec |
+| parameter, input, and output types | shared types: their authors; the rest: the spec's author | the spec modules: `ess.spec`, the spec's module, or an instrument package's spec module | validation tests of the spec |
 | pipeline, conversions, driver | the workflow author | the workflow package | the package's own tests, with `check_arrival_and_order`, without the framework |
 | `keys=`, values users never see | the instrument's glue, where the workflow does not take the spec's types | `essdispatchinstruments` (ADR 0007) | the checks when a stage or a request makes its pipeline |
 | strategies: `PipelineBinding`, `DriverBinding`, `function_binding` | the framework | `ess.spec` | `ess.spec`'s tests, once |

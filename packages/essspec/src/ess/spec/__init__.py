@@ -4,11 +4,14 @@
 The specs of workflows, which UIs and backends read, and the bindings that
 the backend calls to compute a spec's requests.
 
-See :mod:`ess.spec._workflow_spec` for the design, :mod:`~.refs` for the
-references a request gives its inputs by, :mod:`~.field_types` for what the
-framework reads from field types, :mod:`~.binding` for bindings and their
-protocols, and ADR 0001 (docs/developer/adr in the package) for the
-rationale.
+The package exports the specs, the references a request gives its inputs by,
+the bindings and their protocols, and :class:`Quantity`. See
+:mod:`ess.spec._workflow_spec` for the design and ADR 0001
+(docs/developer/adr in the package) for the rationale. The helpers are in
+their modules: :mod:`~.field_types` for what the framework reads from field
+types, such as :func:`~.field_types.fits`, :mod:`~.refs` for finding the
+references of a request, and :mod:`~.binding` for the values a binding is
+made with.
 
 The package does not import :mod:`~.conversions` (needs scipp),
 :mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`
@@ -25,9 +28,8 @@ from .binding import (
     StageCall,
     function_binding,
 )
-from .field_types import fits, is_file
 from .parameters import Quantity
-from .refs import AccumulatorRef, DatasetRef, OutputRef, Ref, as_ref, walk_refs
+from .refs import AccumulatorRef, DatasetRef, OutputRef, Ref
 
 __all__ = [
     'AccumulatorBinding',
@@ -45,9 +47,5 @@ __all__ = [
     'StageBinding',
     'StageCall',
     'WorkflowSpec',
-    'as_ref',
-    'fits',
     'function_binding',
-    'is_file',
-    'walk_refs',
 ]

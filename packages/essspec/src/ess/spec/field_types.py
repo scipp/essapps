@@ -7,8 +7,9 @@ A spec's models carry no annotations for the framework: what the framework
 needs, it reads from the field types. A field's type is built from a few
 pieces, which these functions take apart::
 
-    CanFile | None          optional(...) -> (CanFile, True)
-    list[SampleFile]        element(...)  -> SampleFile
+    CanFile | None          optional(...)   -> (CanFile, True)
+    list[SampleFile]        element(...)    -> SampleFile
+    list[CanFile | None]    value_type(...) -> CanFile
     IofQ                    supertypes(...) -> [IofQ, sc.DataArray]
 
 with ``IofQ = NewType('IofQ', sc.DataArray)``. :func:`fits` says whether data
@@ -41,6 +42,18 @@ def element(tp: Any) -> Any | None:
     if origin is dict:
         return get_args(tp)[1]
     return None
+
+
+def value_type(annotation: Any) -> Any:
+    """
+    The type of one value of a field: ``X`` of ``X``, ``X | None``,
+    ``list[X]``, ``list[X | None]``, or ``dict[str, X]``, with ``| None``
+    removed before and after the list or dict.
+    """
+    tp, _ = optional(annotation)
+    if (item := element(tp)) is not None:
+        tp, _ = optional(item)
+    return tp
 
 
 def supertypes(tp: Any) -> list[Any]:

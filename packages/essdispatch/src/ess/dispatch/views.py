@@ -190,12 +190,16 @@ class Views:
         into it, in push order, each on its side.
         """
         opened = self.accumulators[accumulator_id]
-        sides = {'params': dict(opened.params), 'inputs': dict(opened.inputs)}
+        params, inputs = dict(opened.params), dict(opened.inputs)
+        copied: set[str] = set()  # the columns copied from the opening's
         for push in self.pushes.get(accumulator_id, [])[:pushes]:
-            for side, columns in (('params', push.params), ('inputs', push.inputs)):
+            for side, columns in ((params, push.params), (inputs, push.inputs)):
                 for name, column in columns.items():
-                    sides[side][name] = [*sides[side][name], *column]
-        return Request(opened.template.spec, **sides)
+                    if name not in copied:
+                        side[name] = list(side[name])
+                        copied.add(name)
+                    side[name].extend(column)
+        return Request(opened.template.spec, params=params, inputs=inputs)
 
     def status(self, record_id: str) -> Status:
         finished = self.finished.get(record_id)

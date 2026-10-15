@@ -51,9 +51,9 @@ def check_one_row(
     rtol: float = 1e-12,
 ) -> None:
     """
-    One-row: the binding of a tabulated spec, with one row in each table
+    One-row: the binding of a multi-run spec, with one row in each table
     whose index is given and none where it is left out, gives the outputs of
-    the binding of the spec tabulated.
+    the binding of the single-run spec that ``tabulate`` made it from.
 
     ``params`` and ``inputs`` are a request of ``single``, instances of its
     spec's models; the request of ``multi`` is made from them.
@@ -72,9 +72,9 @@ def one_row(
     spec: WorkflowSpec[Any, Any, Any], params: BaseModel, inputs: BaseModel
 ) -> tuple[BaseModel, BaseModel]:
     """
-    The request of the tabulated ``spec`` with one row in each table whose
-    index is given in the request ``params`` and ``inputs`` of the spec
-    tabulated, and none where it is ``None``.
+    The request of the multi-run ``spec`` with one row in each table whose
+    index is given in the request ``params`` and ``inputs`` of the
+    single-run spec, and none where it is ``None``.
     """
     values = {**dict(params), **dict(inputs)}
     for index in spec.tables:
@@ -88,13 +88,8 @@ def _models(
     spec: WorkflowSpec[Any, Any, Any], values: Mapping[str, Any]
 ) -> tuple[BaseModel, BaseModel]:
     """Instances of the spec's params and inputs models from ``values``, by name."""
-    sides: dict[str, dict[str, Any]] = {'params': {}, 'inputs': {}}
-    for name, value in values.items():
-        sides[spec.side(name)][name] = value
-    return (
-        spec.params.model_validate(sides['params']),
-        spec.inputs.model_validate(sides['inputs']),
-    )
+    params, inputs = spec.split(values)
+    return spec.params.model_validate(params), spec.inputs.model_validate(inputs)
 
 
 def check_caching(
@@ -108,19 +103,18 @@ def check_caching(
     Caching: each call through one stage gives the outputs of the plain
     request with the same values.
 
-    The stage is made with ``fixed`` and the names of the first call as
-    blanks, and called in the order given. Values are by name, as
-    ``make_stage`` takes them. Repeat a call after others, as in bins 50,
-    100, and 50 again, to find a stage whose calls change what it holds.
+    The stage is made with ``fixed`` and the blanks the names of the first
+    call leave open, a table's columns by its index, and called in the order
+    given. Values are by name, as ``make_stage`` takes them. Repeat a call
+    after others, as in bins 50, 100, and 50 again, to find a stage whose
+    calls change what it holds.
     """
     spec = binding.spec
-    call = binding.make_stage(fixed, tuple(calls[0]))
+    blanks = tuple(n for n in calls[0] if spec.table_of(n) in (None, n))
+    call = binding.make_stage(fixed, blanks)
     for n, values in enumerate(calls, start=1):
         given = fixed_values(spec, {**fixed, **values}, ())
-        flat: dict[str, Any] = {}
-        for key, value in given.items():
-            flat.update(value if key in spec.tables else {key: value})
-        params, inputs = _models(spec, flat)
+        params, inputs = _models(spec, given)
         expected = binding.compute(params, inputs)
         actual = call(values)
         where = f'caching, call {n} {values}'
@@ -141,17 +135,19 @@ def check_arrival_and_order(
     push of each table's rows so far gives.
 
     ``make_driver`` makes a driver from ``fixed``, the values that are not
-    tables, as for a ``DriverBinding``. ``tables`` holds the columns of each
-    table by its index. The rows are pushed into a new driver for each of
+    tables, as for a ``DriverBinding``, so a package tests its driver without
+    a spec. ``tables`` holds the columns of each table by its index. The rows
+    are pushed into a new driver for each of
     several schedules, each table's rows in their order: one push per table,
     the tables reversed, one row per push table by table, and one row per
     push alternating between the tables. Every schedule ends with the same
     rows, so arrival in all of them is order too.
 
     The expected outputs come from a new driver with one push per table that
-    has rows so far. A state whose expected outputs raise is not read, since
-    a driver may refuse a state; the state with every row is always read. The
-    check fails if a push modifies the values it was given.
+    has rows so far. A state
+    whose expected outputs raise is not read, since a driver may refuse a
+    state; the state with every row is always read. The check fails if a
+    push modifies the values it was given.
 
     The check compares the driver with itself under other push schedules, so
     it does not prove that the outputs are right. Only a comparison with an

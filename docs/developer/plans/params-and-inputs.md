@@ -1,6 +1,6 @@
 # A spec has params and inputs
 
-**Status: proposal**, for the second PR of issue #69.
+**Status: implemented** on the branch `69-params-and-inputs` (issue #69).
 
 It rewrites [ADR 0001](../../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md) (essspec) in place, since that ADR decides what a spec consists of.
 It also changes [ADR 0007](../adr/0007-packages-split-by-dependencies.md) and the [README](../README.md) sections from Specs and bindings to Stages and accumulators.
@@ -141,7 +141,7 @@ The other fields, the outputs model, and the field validators of the types are a
 `SANS_MULTI` takes a geometry per sample run, given where the file's is missing or wrong, and FREIA a direct beam with the slit settings of each angle ([reflectometry.md](../../requirements/reflectometry.md)).
 `SLICES` adds up the time slices pushed into one result; one result per slice ([sans.md](../../requirements/sans.md)) is a batch of `SANS` requests.
 
-A push gives the index and its columns by name, as lists of equal length; a column left out takes its field's default in each row, and a column without a default is given in every push:
+A push gives the index and its columns by name, as lists of equal length; a column left out is `None` in each row if its element type is optional, and is given in every push otherwise:
 
 ```python
 acc.push(sample=[dataset(run=611), dataset(run=612)])
@@ -231,19 +231,19 @@ So an `IofQ` output fits a field typed `sc.DataArray`, as an export takes it; a 
 A plain `sc.DataArray` output fits a `Transmission` field: a role narrows a general output, by design.
 A dataset reference fits a file field.
 
-### The inputs factory
+### Checks and the call phase
 
-The backend turns references into an inputs instance:
+The backend holds the request-phase checks of each spec (`ess.dispatch.checks`):
 
 ```python
-factory = InputsFactory(IofQInputs, datasets, store)
-factory.check(request_inputs)                  # request phase
-inputs = factory.make(request_inputs)          # call phase: an IofQInputs
+checks = Checks(IOFQ, datasets)
+request = checks.request(request, proposal)     # request phase: names, params model, references, tables
+inputs = IOFQ.inputs.model_validate(read(request.inputs))   # call phase: an IofQInputs
 ```
 
-`check` walks the request alongside the model's fields: an inputs value is a reference or a list of references by its position.
-`make` reads each reference, as the field's type asks: a local path for a file field, the object for any other.
-The fixed inputs of a stage or an accumulator are made field by field, the same way.
+The checks walk the inputs alongside the model's fields: an inputs value is a reference or a list of references by its position.
+The call phase reads each reference, as the field's type asks: a local path for a file field, the object for any other.
+The fixed inputs of a stage or an accumulator are validated field by field, the same way.
 
 ### The binding protocol
 
@@ -264,7 +264,7 @@ class Driver(Protocol[O]):
     def outputs(self) -> O: ...
 ```
 
-`make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data; a fixed table comes under its index's name as its columns, as a push gives them.
+`make_stage` and `make_accumulator` take the fixed values by name, a parameter as its group and an input as its data; each column of a fixed table comes under its own name, as a model holds it.
 A push gives the driver one table by its index's name: a parameter's values as groups, an input's as data.
 A function binding is `def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs`.
 
@@ -299,7 +299,7 @@ A form shows params; a picker per input shows inputs.
   - The binding protocol takes `P` and `I`, and returns `O`.
 - **essdispatch.**
   - Requests, records, templates, and the log hold `params` and `inputs`. Stage calls and fills take `params=` and `inputs=`.
-  - `InputsFactory`; the backend validates in the two phases above and calls the binding with instances.
+  - `Checks` per spec; the backend validates in the two phases above and calls the binding with instances.
   - `Accumulator.push(**columns)` takes one table by its index and columns; the backend splits them to their sides and refuses an index value the table holds. A table is what the spec's `tables` declares, never a list field alone.
   - A reference fits a field by type (`_agree`).
   - `submit` and `Template(spec, *, params, inputs, blanks)` take all but the spec by keyword; `Template.from_spec` goes.

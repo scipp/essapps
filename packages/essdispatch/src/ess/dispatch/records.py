@@ -11,75 +11,20 @@ which changes once from pending to finished, is asked of the client.
 
 from __future__ import annotations
 
-import functools
-from collections.abc import Callable, Collection, Mapping
-from dataclasses import KW_ONLY, dataclass, field
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
-from ess.spec import (
-    AccumulatorRef,
-    DatasetRef,
-    OutputRef,
-    Ref,
-    WorkflowSpec,
-    as_ref,
-    walk_refs,
-)
+from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
+from ess.spec.refs import iter_refs, map_refs
 
 
 class SubmitError(ValueError):
     """A request that cannot run, refused before any record exists."""
-
-
-def validation_problems(error: ValidationError) -> list[str]:
-    """What a validation error finds wrong, each with its place."""
-    return [
-        f"{'.'.join(map(str, e['loc'])) or 'params'}: {e['msg']}"
-        for e in error.errors()
-    ]
-
-
-def model_of(
-    model: type[BaseModel], names: Collection[str], *, rows: bool = False
-) -> type[BaseModel]:
-    """
-    A model of the fields ``names`` of ``model`` alone, with its config and
-    without its validators, which read whole requests: it validates each value
-    by its own field. A spec's params and inputs models have no field
-    validators; a check of one value belongs to the value's type.
-
-    With ``rows``, each field is a column of rows pushed into a table: it is
-    validated by its type alone, without its constraints on the whole table,
-    such as its length.
-    """
-    return _model_of(model, frozenset(names), rows)
-
-
-@functools.cache
-def _model_of(
-    model: type[BaseModel], names: frozenset[str], rows: bool
-) -> type[BaseModel]:
-    fields: dict[str, Any] = {
-        f: (info.annotation, Field() if rows else info)
-        for f, info in model.model_fields.items()
-        if f in names
-    }
-    return create_model(model.__name__, __config__=model.model_config, **fields)
-
-
-def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
-    """``value`` with each reference in dicts and lists replaced by ``fn(ref)``."""
-    if (ref := as_ref(value)) is not None:
-        return fn(ref)
-    if isinstance(value, dict):
-        return {k: map_refs(v, fn) for k, v in value.items()}
-    if isinstance(value, list):
-        return [map_refs(v, fn) for v in value]
-    return value
 
 
 def as_values(value: Any) -> Any:
@@ -100,9 +45,21 @@ def as_values(value: Any) -> Any:
     return value
 
 
-def as_refs(value: Any) -> Any:
-    """``value`` with references read as references, not dicts."""
-    return map_refs(value, lambda ref: ref)
+def read_refs(inputs: Any) -> Any:
+    """
+    Inputs by name with each reference in its plain (JSON) form read as a
+    :data:`~ess.spec.Ref`; anything but a mapping is left for validation to
+    refuse.
+    """
+    return map_refs(inputs, lambda ref: ref) if isinstance(inputs, Mapping) else inputs
+
+
+Inputs = Annotated[dict[str, Any], BeforeValidator(read_refs)]
+"""
+The inputs of a request by name, each a reference, ``None``, or a list of
+them; so every way of making one, the log's JSON among them, holds
+references as :data:`~ess.spec.Ref`.
+"""
 
 
 def _given(values: Mapping[str, Any] | BaseModel | None) -> dict[str, Any]:
@@ -143,7 +100,7 @@ class Request(BaseModel, frozen=True):
 
     spec: SpecId
     params: dict[str, Any] = Field(default_factory=dict)
-    inputs: dict[str, Any] = Field(default_factory=dict)
+    inputs: Inputs = Field(default_factory=dict)
 
     def __init__(
         self,
@@ -153,12 +110,12 @@ class Request(BaseModel, frozen=True):
         inputs: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
-            spec=SpecId.of(spec), params=_given(params), inputs=as_refs(_given(inputs))
+            spec=SpecId.of(spec), params=_given(params), inputs=_given(inputs)
         )
 
     def upstream(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
-        return [ref for _, ref in walk_refs(self.inputs) if isinstance(ref, OutputRef)]
+        return [ref for _, ref in iter_refs(self.inputs) if isinstance(ref, OutputRef)]
 
     def accumulators(self) -> list[AccumulatorRef]:
         """
@@ -167,15 +124,15 @@ class Request(BaseModel, frozen=True):
         of the state it reads.
         """
         return [
-            ref for _, ref in walk_refs(self.inputs) if isinstance(ref, AccumulatorRef)
+            ref for _, ref in iter_refs(self.inputs) if isinstance(ref, AccumulatorRef)
         ]
 
     def datasets(self) -> list[DatasetRef]:
         """The datasets this request names directly."""
-        return [ref for _, ref in walk_refs(self.inputs) if isinstance(ref, DatasetRef)]
+        return [ref for _, ref in iter_refs(self.inputs) if isinstance(ref, DatasetRef)]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Template:
     """
     A spec, some values, and blanks that each use fills.
@@ -183,25 +140,32 @@ class Template:
     Values are given by side, as a request's are. A blank is a parameter, an
     input, or a table, named by its index; a template fixes a whole table or
     leaves it blank. Naming a field as a blank drops the value given for it,
-    so a template can be made from any request's values or a whole params
-    model, which it keeps as a dict. Change a template with
-    ``dataclasses.replace``.
+    and the backend drops the columns given for a blank table, so a template
+    can be made from any request's values or a whole params model, which it
+    keeps as a dict. Change a template with ``dataclasses.replace``.
     """
 
     spec: SpecId
-    _: KW_ONLY
-    params: dict[str, Any] = field(default_factory=dict)
-    inputs: dict[str, Any] = field(default_factory=dict)
-    blanks: tuple[str, ...] = ()
+    params: dict[str, Any]
+    inputs: Inputs
+    blanks: tuple[str, ...]
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        spec: WorkflowSpec[Any, Any, Any] | SpecId,
+        *,
+        params: Mapping[str, Any] | BaseModel | None = None,
+        inputs: Mapping[str, Any] | None = None,
+        blanks: Collection[str] = (),
+    ) -> None:
         def kept(values: Mapping[str, Any]) -> dict[str, Any]:
-            return {k: v for k, v in values.items() if k not in self.blanks}
+            return {k: v for k, v in values.items() if k not in blanks}
 
-        object.__setattr__(self, 'spec', SpecId.of(self.spec))
-        object.__setattr__(self, 'params', kept(_given(self.params)))
-        object.__setattr__(self, 'inputs', kept(as_refs(_given(self.inputs))))
-        object.__setattr__(self, 'blanks', tuple(self.blanks))
+        blanks = tuple(blanks)
+        object.__setattr__(self, 'spec', SpecId.of(spec))
+        object.__setattr__(self, 'params', kept(_given(params)))
+        object.__setattr__(self, 'inputs', kept(read_refs(_given(inputs))))
+        object.__setattr__(self, 'blanks', blanks)
 
     def fill(
         self,
@@ -237,11 +201,11 @@ class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it.
 
-    ``request`` has every value filled in, in JSON's types: dataset names
-    resolved, the defaults of params and inputs filled, a column left out of
-    a table filled, and each reference to an accumulator replaced by a
-    reference to the record of the state it reads, a record of the plain
-    request of that state.
+    ``request`` has every value filled in, params in JSON's types and inputs
+    as references: dataset names resolved, the defaults of params and inputs
+    filled, a column left out of a table filled, and each reference to an
+    accumulator replaced by a reference to the record of the state it reads,
+    a record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 

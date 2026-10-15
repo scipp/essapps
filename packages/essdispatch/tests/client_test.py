@@ -237,6 +237,26 @@ class WalkParams(StepsParams):
 WALK = _spec('walk', params=WalkParams, tables=('steps',))
 
 
+class PairParams(StepsParams):
+    steps: list[Step] = Field(min_length=2)
+
+
+PAIR = _spec('pair', params=PairParams, tables=('steps',))
+
+
+class FaultyParams(StepsParams):
+    """A table whose model validator has a bug: it raises at two rows."""
+
+    @model_validator(mode='after')
+    def _faulty(self) -> Self:
+        if len(self.steps) == 2:
+            raise TypeError('a bug in a validator')
+        return self
+
+
+FAULTY = _spec('faulty', params=FaultyParams, tables=('steps',))
+
+
 def load_run(params: NoParams, inputs: Sample) -> LoadOutputs:
     run = read_dataset(inputs.sample)
     return LoadOutputs(value=run, extra=-run)
@@ -1071,13 +1091,6 @@ def test_field_validators_apply_at_the_opening_and_model_validators_at_reads(
     assert client.output(walk, 'value') == 6.0
 
 
-class PairParams(StepsParams):
-    steps: list[Step] = Field(min_length=2)
-
-
-PAIR = _spec('pair', params=PairParams, tables=('steps',))
-
-
 def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
     datasets: FakeDatasets,
 ) -> None:
@@ -1090,19 +1103,6 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
         pair.push(steps=[Step(size=2.0)])
 
         assert client.output(pair, 'value') == 3.0
-
-
-class FaultyParams(StepsParams):
-    """A table whose model validator has a bug: it raises at two rows."""
-
-    @model_validator(mode='after')
-    def _faulty(self) -> Self:
-        if len(self.steps) == 2:
-            raise TypeError('a bug in a validator')
-        return self
-
-
-FAULTY = _spec('faulty', params=FaultyParams, tables=('steps',))
 
 
 def test_a_read_whose_validator_raises_holds_back_no_push(
@@ -1312,7 +1312,8 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     load = client.compute(_load(1))
     value, weight = [load.ref('value')], [Weight(value=1.0)]
     pushes = [
-        ({}, {'values': value}),  # a column without a default left out
+        ({}, {'values': value}),  # a column whose element type is not optional
+        ({'weight': weight * 2}, {'values': value}),  # columns of unequal length
         ({'weight': weight}, {'values': [1.0]}),  # a value where a reference goes
         ({'weight': [{'value': 'x'}]}, {'values': value}),  # an invalid literal
         ({'weight': weight}, {'values': [dataset(run=1)]}),  # a dataset, no file
@@ -2276,24 +2277,6 @@ def test_a_read_while_a_push_adds_pins_the_state_after_it(
     assert _listed(client.output(copied, 'value')) == [-1.0]
 
 
-def test_a_push_names_only_columns_of_the_tables_the_accumulator_fills(
-    in_place: Client, loads: list[Record]
-) -> None:
-    client = in_place
-    sides = client.accumulator(
-        Template(SIDES, inputs={'backgrounds': []}, blanks=('samples',))
-    )
-    row = [loads[0].ref('value')]
-
-    fixed = r"^a push names a table of the accumulator by its index, \['samples'\]"
-    with pytest.raises(SubmitError, match=rf"{fixed}, not 'backgrounds'$"):
-        sides.push(backgrounds=row)
-    with pytest.raises(SubmitError, match=r"^\['other'\]: not columns of a table"):
-        sides.push(other=row)
-    sides.push(samples=row)
-    assert _listed(client.output(sides, 'difference')) == [1.0]
-
-
 def test_a_push_of_several_rows_gives_one_state(
     in_place: Client, loads: list[Record]
 ) -> None:
@@ -2424,6 +2407,37 @@ def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(
 # Freeze
 
 
+class GatedParams(StepsParams):
+    """A table whose model validator refuses one row, once ``GATE`` opens."""
+
+    @model_validator(mode='after')
+    def _gated(self) -> Self:
+        if len(self.steps) == 1:
+            GATE.reached.set()
+            GATE.opened.wait(timeout=5)
+            raise ValueError('needs two steps')
+        return self
+
+
+class Gate:
+    """Where GATED's validator waits: it sets ``reached``, and waits for ``opened``."""
+
+    def __init__(self) -> None:
+        self.reached = threading.Event()
+        self.opened = threading.Event()
+
+
+GATE = Gate()
+GATED = _spec('gated', params=GatedParams, tables=('steps',))
+
+
+@pytest.fixture
+def gate() -> Gate:
+    GATE.reached.clear()
+    GATE.opened.clear()
+    return GATE
+
+
 def test_a_freeze_is_the_record_of_the_last_state_computed_once(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
@@ -2547,37 +2561,6 @@ def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
     assert _listed(client.output(sides, 'total')) == [1.0]
     again = client.freeze(sides)
     assert _listed(client.output(again, 'total')) == [1.0]
-
-
-class GatedParams(StepsParams):
-    """A table whose model validator refuses one row, once ``GATE`` opens."""
-
-    @model_validator(mode='after')
-    def _gated(self) -> Self:
-        if len(self.steps) == 1:
-            GATE.reached.set()
-            GATE.opened.wait(timeout=5)
-            raise ValueError('needs two steps')
-        return self
-
-
-class Gate:
-    """Where GATED's validator waits: it sets ``reached``, and waits for ``opened``."""
-
-    def __init__(self) -> None:
-        self.reached = threading.Event()
-        self.opened = threading.Event()
-
-
-GATE = Gate()
-GATED = _spec('gated', params=GatedParams, tables=('steps',))
-
-
-@pytest.fixture
-def gate() -> Gate:
-    GATE.reached.clear()
-    GATE.opened.clear()
-    return GATE
 
 
 def test_a_push_during_a_freeze_that_is_refused_is_logged(

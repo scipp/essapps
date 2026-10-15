@@ -18,9 +18,8 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
-A blank that a dataset fills is an input, such as `sample: SampleFile`, and the dataset reference is its value.
-So a spec that batch reduction fills gives each dataset that a rule or a lookup finds an input of its own, such as `sample` and `can`.
-`apply` fills inputs only.
+A blank that a dataset fills is an input, such as `sample: SampleFile`, and the dataset reference is its value: `apply` fills inputs only.
+So each dataset that a rule or a lookup finds needs an input of its own in the spec, such as `sample` and `can`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
@@ -30,7 +29,7 @@ requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datas
 
 ## Rules
 
-A rule is plain data: a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists, all of them by default.
+A rule is plain data: a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists, every output by default.
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
@@ -39,7 +38,7 @@ rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(r
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each dataset is a row of the template's table blank: the dataset reference is the row's value of the index `runs`.
+Each dataset is a row of the template's blank table: the dataset reference is the row's value of the index `runs`.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python

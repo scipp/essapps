@@ -6,16 +6,24 @@ the columns of a table.
 """
 
 import math
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NewType, Self
 
 import pytest
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ess.dispatch import Client, SubmitError, Template, dataset, local
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import NoInputs, WorkflowSpec
+from ess.spec import (
+    DriverBinding,
+    NoInputs,
+    NoParams,
+    StageCall,
+    WorkflowSpec,
+    function_binding,
+)
 
 SampleFile = NewType('SampleFile', Path)
 
@@ -29,7 +37,7 @@ class Weight(BaseModel):
 
 
 class ScaleParams(BaseModel):
-    scaling: Factor = Field(default_factory=Factor)
+    scaling: Factor | None = None
     weight: Weight | None = None
 
 
@@ -60,31 +68,72 @@ class RangeParams(BaseModel):
         return self
 
 
-SCALE = WorkflowSpec(
-    name='scale',
-    version=1,
-    title='scale',
-    description='a run scaled',
-    params=ScaleParams,
-    inputs=ScaleInputs,
-    outputs=Value,
-)
+class Positive(BaseModel, revalidate_instances='always'):
+    """A data value whose type checks it, also when it is an instance already."""
+
+    value: float
+
+    @field_validator('value')
+    @classmethod
+    def _positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError('not positive')
+        return value
+
+
+class Made(BaseModel):
+    made: Positive
+
+
+class PositiveInputs(BaseModel):
+    positive: Positive
+
+
+class CheckedInputs(BaseModel):
+    """Inputs whose model validator refuses every instance, to show where it runs."""
+
+    sample: list[SampleFile]
+
+    @model_validator(mode='after')
+    def _refused(self) -> Self:
+        raise ValueError('the inputs model refuses')
+
+
+def _spec(
+    name: str,
+    *,
+    params: type[BaseModel] = NoParams,
+    inputs: type[BaseModel] = NoInputs,
+    outputs: type[BaseModel] = Value,
+    tables: Any = (),
+) -> WorkflowSpec[Any, Any, Any]:
+    return WorkflowSpec(
+        name=name,
+        version=1,
+        title=name,
+        description=name,
+        params=params,
+        inputs=inputs,
+        outputs=outputs,
+        tables=tables,
+    )
+
+
+SCALE = _spec('scale', params=ScaleParams, inputs=ScaleInputs)
 TOTAL = SCALE.tabulate(
     name='total', version=1, tables={'sample': ('weight',), 'scaling': ()}
 )
-RANGE = WorkflowSpec(
-    name='range',
-    version=1,
-    title='range',
-    description='the width of a range',
-    params=RangeParams,
-    outputs=Value,
-)
+RANGE = _spec('range', params=RangeParams)
+MAKE = _spec('make', outputs=Made)
+USE = _spec('use', inputs=PositiveInputs)
+USE_MANY = USE.tabulate(name='use-many', version=1, tables=('positive',))
+CHECKED = _spec('checked', inputs=CheckedInputs, tables=('sample',))
 
 
 def scale(params: ScaleParams, inputs: ScaleInputs) -> Value:
+    factor = 1.0 if params.scaling is None else params.scaling.factor
     weight = 1.0 if params.weight is None else params.weight.value
-    return Value(value=read_dataset(inputs.sample) * params.scaling.factor * weight)
+    return Value(value=read_dataset(inputs.sample) * factor * weight)
 
 
 def total(params: Any, inputs: Any) -> Value:
@@ -96,6 +145,42 @@ def total(params: Any, inputs: Any) -> Value:
 
 def width(params: RangeParams, inputs: NoInputs) -> Value:
     return Value(value=params.high.value - params.low.value)
+
+
+def make(params: NoParams, inputs: NoInputs) -> Made:
+    # Skips validation, so that the value reaches the call phase unchecked.
+    return Made.model_construct(made=Positive.model_construct(value=-1.0))
+
+
+def use(params: NoParams, inputs: PositiveInputs) -> Value:
+    return Value(value=inputs.positive.value)
+
+
+def use_many(params: Any, inputs: Any) -> Value:
+    return Value(value=sum(p.value for p in inputs.positive))
+
+
+class Count:
+    """A driver of CHECKED, the number of rows pushed; it makes no inputs instance."""
+
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        self.rows = 0
+
+    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+        self.rows += len(columns[table])
+
+    def outputs(self) -> Value:
+        return Value(value=self.rows)
+
+
+@dataclass(frozen=True)
+class Counting(DriverBinding):
+    """A ``DriverBinding`` that makes stages too: each call a new driver."""
+
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> StageCall:
+        return lambda given: self.make_accumulator({**fixed, **given}, ()).outputs()
 
 
 @pytest.fixture
@@ -115,6 +200,10 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             StagedFunction(SCALE, scale),
             kept_rows(TOTAL, total),
             StagedFunction(RANGE, width),
+            function_binding(MAKE, make),
+            StagedFunction(USE, use),
+            kept_rows(USE_MANY, use_many),
+            Counting(CHECKED, Count),
         ],
     ) as client:
         yield client
@@ -244,34 +333,23 @@ def test_a_push_refuses_an_index_value_the_table_holds(
         acc.push(sample=[dataset(run=2), dataset(run=2)])
 
 
-def test_a_push_refuses_a_column_without_its_index(client: Client) -> None:
+def test_a_push_names_one_blank_table_by_its_index(client: Client) -> None:
     acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
-
-    with pytest.raises(SubmitError, match='pushed without sample'):
-        acc.push(weight=[Weight()])
-
-
-def test_a_push_refuses_a_table_the_template_fixes(client: Client) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
-
-    with pytest.raises(SubmitError, match="not 'scaling'"):
-        acc.push(scaling=[Factor()])
-
-
-def test_a_push_of_no_rows_is_refused(client: Client) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
-
-    with pytest.raises(SubmitError, match='no rows'):
-        acc.push(sample=[])
-    with pytest.raises(SubmitError, match='one table'):
-        acc.push()
-
-
-def test_a_push_checks_each_literal_by_its_column_s_type(client: Client) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
-
-    with pytest.raises(SubmitError, match=r'weight\.0\.value'):
-        acc.push(sample=[dataset(run=1)], weight=[{'value': 'heavy'}])
+    row = [dataset(run=1)]
+    refused = {
+        'pushed without sample': {'weight': [Weight()]},
+        r"by its index, \['sample'\], not 'scaling'": {'scaling': [Factor()]},
+        r"\['other'\]: not columns of a table": {'other': row},
+        r"one table, not of \['sample', 'scaling'\]": {
+            'sample': row,
+            'scaling': [Factor()],
+        },
+        'a push into sample has no rows': {'sample': []},
+        r'one table, not of \[\]': {},
+    }
+    for reason, columns in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            acc.push(**columns)
 
 
 def test_a_state_with_no_row_in_a_required_index_cannot_be_read(
@@ -288,10 +366,44 @@ def test_a_template_leaves_a_whole_table_blank(client: Client) -> None:
         SubmitError, match=r"tables, by their indexes .*, not \['weight'\]"
     ):
         client.accumulator(Template(TOTAL, blanks=('weight',)))
-    with pytest.raises(SubmitError, match='columns of a blank table'):
-        client.accumulator(
-            Template(TOTAL, params={'weight': [Weight()]}, blanks=('sample',))
-        )
+
+
+def test_a_template_drops_the_columns_given_for_a_blank_table(client: Client) -> None:
+    acc = client.accumulator(
+        Template(TOTAL, params={'weight': [Weight()]}, blanks=('sample',))
+    )
+
+    assert acc.template == Template(TOTAL, blanks=('sample',))
+
+
+def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
+    client: Client,
+) -> None:
+    run = [dataset(run=1)]
+    refused = {
+        'weight: 2 rows, but sample has 1': Template(
+            TOTAL,
+            params={'weight': [Weight()] * 2},
+            inputs={'sample': run},
+            blanks=('scaling',),
+        ),
+        'sample: the table has no row': Template(
+            TOTAL, inputs={'sample': []}, blanks=('scaling',)
+        ),
+    }
+    for reason, template in refused.items():
+        with pytest.raises(SubmitError, match=reason):
+            client.accumulator(template)
+
+
+def test_a_table_whose_optional_index_is_left_out_has_no_rows(client: Client) -> None:
+    plain = client.compute(TOTAL, inputs={'sample': [dataset(run=1)]})
+    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
+    acc.push(sample=[dataset(run=1)])
+
+    assert plain.request.params['scaling'] == []
+    assert client.provenance(acc).request == plain.request
+    assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
 
 
 def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
@@ -303,3 +415,32 @@ def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
 
     with pytest.raises(LookupError, match='push 0 failed: file signature not found'):
         client.output(acc, 'value')
+
+
+def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
+    client: Client,
+) -> None:
+    made = client.compute(MAKE).ref('made')
+    stage = client.stage(Template(USE, inputs={'positive': made}))
+    acc = client.accumulator(Template(USE_MANY, blanks=('positive',)))
+    acc.push(positive=[made])
+
+    assert 'not positive' in client.failure(client.compute(stage))
+    with pytest.raises(LookupError, match=r'push 0 failed: (?s:.*)not positive'):
+        client.output(acc, 'value')
+    with pytest.raises(SubmitError, match='the accumulator stopped'):
+        acc.push(positive=[made])
+
+
+def test_the_inputs_model_s_own_validators_run_on_a_plain_request_only(
+    client: Client,
+) -> None:
+    rows = {'sample': [dataset(run=1)]}
+    plain = client.compute(CHECKED, inputs=rows)
+    stage = client.stage(Template(CHECKED, blanks=('sample',)))
+    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
+    acc.push(**rows)
+
+    assert 'the inputs model refuses' in client.failure(plain)
+    assert client.output(client.compute(stage, inputs=rows), 'value') == 1.0
+    assert client.output(acc, 'value') == 1.0

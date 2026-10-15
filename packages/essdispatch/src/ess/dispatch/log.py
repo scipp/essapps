@@ -30,7 +30,6 @@ all of it or none of it.
 
 from __future__ import annotations
 
-import dataclasses
 import fcntl
 import os
 from collections.abc import Iterator
@@ -39,9 +38,9 @@ from io import FileIO
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter
 
-from .records import Request, Status, Template, as_refs
+from .records import Inputs, Request, Status, Template, read_refs
 
 
 class NewRecord(BaseModel, frozen=True):
@@ -114,7 +113,7 @@ class Opened(BaseModel, frozen=True):
     proposal: str
     template: Template
     params: dict[str, Any]
-    inputs: dict[str, Any]
+    inputs: Inputs
 
 
 class Pushed(BaseModel, frozen=True):
@@ -128,7 +127,7 @@ class Pushed(BaseModel, frozen=True):
     accumulator: str
     table: str
     params: dict[str, list[Any]]
-    inputs: dict[str, list[Any]]
+    inputs: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
 
 
 class Persist(BaseModel, frozen=True):
@@ -159,38 +158,6 @@ Event = Annotated[
     Field(discriminator='kind'),
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)
-
-
-def _with_refs(event: Event) -> Event:
-    """The event with references in inputs read as references, not dicts."""
-    match event:
-        case Submitted():
-            records = tuple(
-                r.model_copy(
-                    update={
-                        'request': r.request.model_copy(
-                            update={'inputs': as_refs(r.request.inputs)}
-                        )
-                    }
-                )
-                if isinstance(r, NewRecord)
-                else r
-                for r in event.records
-            )
-            return event.model_copy(update={'records': records})
-        case Opened():
-            inputs = as_refs(event.template.inputs)
-            template = dataclasses.replace(event.template, inputs=inputs)
-            return event.model_copy(
-                update={'template': template, 'inputs': as_refs(event.inputs)}
-            )
-        case Pushed():
-            return event.model_copy(update={'inputs': as_refs(event.inputs)})
-    return event
-
-
-def _parse(line: bytes) -> Event:
-    return _with_refs(_event.validate_json(line))
 
 
 def _complete_lines(data: bytes) -> list[bytes]:
@@ -247,7 +214,7 @@ class Log:
                 self._file.seek(0)
                 lines = _complete_lines(self._file.readall())
                 self._file.truncate(sum(map(len, lines)))
-                self._events = [_parse(line) for line in lines]
+                self._events = [_event.validate_json(line) for line in lines]
             except BaseException:
                 self._file.close()
                 raise
@@ -260,7 +227,8 @@ class Log:
         A log may be writing the file meanwhile, so a last line cut short is
         left out, not dropped from the file.
         """
-        return [_parse(line) for line in _complete_lines(path.read_bytes())]
+        lines = _complete_lines(path.read_bytes())
+        return [_event.validate_json(line) for line in lines]
 
     def close(self) -> None:
         """Let go of the file, if any; the log takes no more events."""
@@ -282,7 +250,7 @@ class Log:
         whether the event was just appended or read from a file.
         """
         line = _event.dump_json(event) + b'\n'
-        stored = _parse(line)
+        stored = _event.validate_json(line)
         if self._file is not None:
             _append_line(self._file, line)
         self._events.append(stored)

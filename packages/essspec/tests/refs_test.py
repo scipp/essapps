@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from ess.spec import AccumulatorRef, DatasetRef, OutputRef, as_ref, walk_refs
+from ess.spec import AccumulatorRef, DatasetRef, OutputRef
+from ess.spec.refs import as_ref, iter_refs, map_refs
 
 OUTPUT_REF = {'record': 'r1', 'output': 'data'}
 DATASET_REF = {'dataset': 'pid-1'}
@@ -26,21 +27,32 @@ def test_dataset_identity_is_an_opaque_string() -> None:
     )
 
 
-def test_walk_refs_finds_references_at_any_depth() -> None:
-    inputs = {
-        'sample': OUTPUT_REF,
-        'runs': [DATASET_REF, {'record': 'f2', 'output': 'file'}],
-        'banks': {'a': {'record': 'r2', 'output': 'banks', 'key': 'a'}},
-        'centre': {'value': 1.0, 'unit': 'm'},
-        'sum': ACCUMULATOR_REF,
-    }
-    assert [(p, str(r)) for p, r in walk_refs(inputs)] == [
+INPUTS = {
+    'sample': OUTPUT_REF,
+    'runs': [DATASET_REF, None, {'record': 'f2', 'output': 'file'}],
+    'can': None,
+    'sum': AccumulatorRef(accumulator='a1', output='data'),
+    'centre': 'not a reference',
+}
+
+
+def test_iter_refs_gives_each_reference_of_the_inputs_with_its_place() -> None:
+    assert [(p, str(r)) for p, r in iter_refs(INPUTS)] == [
         ('sample', 'r1.data'),
         ('runs[0]', 'pid-1'),
-        ('runs[1]', 'f2.file'),
-        ('banks.a', 'r2.banks[a]'),
+        ('runs[2]', 'f2.file'),
         ('sum', 'a1.data'),
     ]
+
+
+def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
+    assert map_refs(INPUTS, str) == {
+        'sample': 'r1.data',
+        'runs': ['pid-1', None, 'f2.file'],
+        'can': None,
+        'sum': 'a1.data',
+        'centre': 'not a reference',
+    }
 
 
 def test_as_ref_decides_what_a_reference_is() -> None:

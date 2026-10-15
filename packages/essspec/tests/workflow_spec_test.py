@@ -38,6 +38,31 @@ IofQ = NewType('IofQ', sc.DataArray)
 Banks = NewType('Banks', sc.DataArray)
 
 
+class Node(BaseModel):
+    """A recursive group."""
+
+    name: str
+    children: list['Node'] = []
+
+
+ReductionOfCan = NewType('ReductionOfCan', Reduction)
+
+
+def validated(name: str, **fields: Any) -> type[BaseModel]:
+    """A model with ``fields`` and a field validator of its first field."""
+
+    def check(cls: type[BaseModel], value: Any) -> Any:
+        return value
+
+    validators = {'_check': field_validator(next(iter(fields)))(classmethod(check))}
+    return pydantic.create_model(
+        name,
+        __config__=pydantic.ConfigDict(arbitrary_types_allowed=True),
+        __validators__=validators,
+        **fields,
+    )
+
+
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample_geometry: SampleGeometry | None = None
@@ -131,6 +156,22 @@ class TestMetadata:
         with pytest.raises(KeyError, match='iofq'):
             IOFQ.side('iofq')
 
+    def test_split_divides_values_by_name_into_params_and_inputs(self) -> None:
+        assert IOFQ.split({'reduction': Reduction(), 'sample': Path('a.nxs')}) == (
+            {'reduction': Reduction()},
+            {'sample': Path('a.nxs')},
+        )
+        with pytest.raises(KeyError, match='iofq'):
+            IOFQ.split({'iofq': None})
+
+    def test_an_index_as_a_blank_leaves_open_every_column_of_its_table(self) -> None:
+        assert IOFQ_MULTI.blank_fields(('sample', 'beam_centre')) == {
+            'sample',
+            'sample_geometry',
+            'beam_centre',
+        }
+        assert IOFQ.blank_fields(('sample',)) == {'sample'}
+
 
 class TestModelRules:
     def test_the_example_spec_is_accepted(self) -> None:
@@ -149,6 +190,9 @@ class TestModelRules:
             {'outputs': model('O', iofq=(list[IofQ], ...))},
             {'outputs': model('O', iofq=(dict[str, IofQ | None], ...))},
             {'outputs': model('O', path=(Path | None, None))},
+            {'params': model('P', reduction=(ReductionOfCan, ...))},
+            {'params': model('P', tree=(Node, ...))},
+            {'inputs': model('I', centre=(validated('Centre', x=(float, ...)), ...))},
         ],
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
@@ -192,10 +236,34 @@ class TestModelRules:
             (
                 {
                     'params': model(
+                        'P', runs=(model('Runs', paths=(list[Path], [])), ...)
+                    )
+                },
+                'P.runs: a parameter holds no file',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', run=(model('Run', path=(Path | None, None)), ...)
+                    )
+                },
+                'P.run: a parameter holds no file',
+            ),
+            (
+                {
+                    'params': model(
                         'P', mask=(model('Mask', values=(sc.Variable, ...)), ...)
                     )
                 },
                 'P: every parameter has a JSON form',
+            ),
+            (
+                {'params': validated('P', reduction=(Reduction, ...))},
+                r"P: no field validators, \['_check'\]",
+            ),
+            (
+                {'inputs': validated('I', sample=(SampleFile, ...))},
+                r"I: no field validators, \['_check'\]",
             ),
             (
                 {'inputs': model('I', runs=(dict[str, SampleFile], {}))},
@@ -291,6 +359,12 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(inputs=model('I', **inputs), tables=tables)
 
+    def test_an_index_is_required_or_empty_by_default(self) -> None:
+        params = model('P', reduction=(list[Reduction], [Reduction()]))
+        with pytest.raises(ValueError, match='reduction: the index of a table is'):
+            spec(params=params, tables=['reduction'])
+        spec(params=model('P', reduction=(list[Reduction], [])), tables=['reduction'])
+
 
 class TestTabulate:
     def test_names_the_tables_and_keeps_the_rest_of_the_metadata(self) -> None:
@@ -348,10 +422,18 @@ class TestTabulate:
         assert slices.params.model_fields['time_range'].annotation == list[TimeRange]
         assert slices.inputs is IofQInputs
 
-    def test_an_index_with_a_default_has_one_row_of_it_by_default(self) -> None:
-        geometry = IOFQ.tabulate(name='geometries', version=1, tables=('reduction',))
-        assert geometry.params.model_fields['reduction'].annotation == list[Reduction]
-        assert geometry.params().reduction == [Reduction()]
+    def test_refuses_an_index_with_a_default_but_none(self) -> None:
+        with pytest.raises(ValueError, match=r"\['reduction'\]: an index is required"):
+            IOFQ.tabulate(name='geometries', version=1, tables=('reduction',))
+
+    def test_keeps_the_display_metadata_of_a_column(self) -> None:
+        sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})
+        runs = spec(inputs=model('I', sample=(SampleFile, sample))).tabulate(
+            name='runs', version=1, tables=('sample',)
+        )
+        field = runs.field('sample')
+        assert field.examples == [[Path('a.nxs')]]
+        assert field.json_schema_extra == {'unit': 'file'}
 
     @pytest.mark.parametrize(
         ('tables', 'reason'),

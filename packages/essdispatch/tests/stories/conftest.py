@@ -27,7 +27,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ess.dispatch import Backend, Client, ClientEnded, Record, SpecId, Status
 from ess.dispatch.log import Log
-from ess.dispatch.records import map_refs
 from ess.dispatch.testing import (
     FakeDatasets,
     FakeStore,
@@ -45,6 +44,7 @@ from ess.spec import (
     WorkflowSpec,
     function_binding,
 )
+from ess.spec.refs import map_refs
 from ess.spec.testing import assert_close
 
 

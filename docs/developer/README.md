@@ -6,14 +6,13 @@ This document shows by example what workflow authors, app authors, and notebooks
 It states each rule once.
 The [ADRs](adr/index.md) give the reasons, and [the requirements](../requirements/README.md) the goals.
 [user-stories.md](user-stories.md) holds the stories this API must express, and [system-stories.md](system-stories.md) what the system must provide beyond it.
-[three-ways-to-run-a-spec.html](three-ways-to-run-a-spec.html) shows the main concepts on two slides.
 [prior-art/](prior-art/README.md) holds studies of other systems.
 The first release combines no runs and tunes no parameters interactively.
 It needs neither the section Stages and accumulators nor the loop over arrivals in Controllers.
 
 ## From a for loop
 
-A notebook today:
+A notebook without the framework:
 
 ```python
 curves = {}
@@ -57,21 +56,24 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | spec | a workflow's name, version, params, inputs, and outputs |
 | params, inputs, outputs | the three models of a spec: configuration, data, and results (see Specs and bindings) |
 | parameter, input | a field of the params model, or of the inputs model |
+| side | whether a name is a parameter, the *params side*, or an input, the *inputs side* |
 | literal | a value that has a JSON form and that the client knows: a number, a string, an enum, a model of such values |
 | data value | a value that the backend fetches, given by reference: a file, an array, a model holding one, or any other output of a record |
-| group | a parameter that holds a model of literals, such as the settings of one reduction step |
+| group | a model of literals as the value of a parameter, such as the settings of one reduction step |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec, its params, and its inputs |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 | logged | recorded by the backend in the proposal's *history*. `submit` and the other calls that start work return once logged. |
 | record | a request as the backend logged it. A record never changes, only its status. |
-| reference | a value of a request's inputs that points to an output or a dataset |
+| reference | a value of a request's inputs that names an output of a record or an accumulator, or a dataset |
 | fits | a reference fits an input when the type of the data it names can be the input's value (see References) |
 | label, member | names under which records are found later |
 | template | a spec with *fixed values* for some parameters and inputs and *blanks* for the others |
+| fixed value | the value a template gives a parameter or an input, by side, as a request does |
+| blank | a parameter, an input, or a table (named by its index) that a template leaves open |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
 | dataset source | where a backend finds datasets |
-| table, index, column, row | a *table* is a set of list fields of equal length, pushed together. Its *index* is the field that names it, such as the sample runs; its other *columns* are attached to the index. A *row* is one position, such as one run and its correction. |
+| table, index, column, row | a *table* is a set of list fields of equal length, named by its *index* and pushed together; its other fields are *columns*, and one position is a *row* (see Combining runs: tables) |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
 | push | one call that gives an accumulator rows of one of its tables |
@@ -109,7 +111,7 @@ A spec has three pydantic models:
 | inputs | data only | a reference per value | the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-Each parameter is a group or a list of groups.
+Each parameter is a group, possibly optional, or a list of groups.
 Each input is a data value, possibly optional, or a list of data values.
 Each output is a data value, possibly optional, or a list or a dict of data values.
 
@@ -146,7 +148,7 @@ The module that defines a spec imports pydantic, `ess.spec`, and scipp for the t
 A workflow without data takes `NoInputs`, as one without configuration takes `NoParams`.
 A request computes every output its spec declares.
 
-A check of one value belongs to the value's type, such as a field validator of `BeamCentre`.
+A check of one value belongs to the value's type, such as a field validator of `BeamCentre`; `WorkflowSpec` refuses field validators of the params and inputs models themselves.
 A check across parameters is a model validator of the params model, and a check across inputs one of the inputs model.
 A check across params and inputs, such as a transmission mode that requires a transmission run, is the binding's, and fails when the request runs.
 
@@ -189,7 +191,7 @@ It may be left out when every parameter has a default.
 `inputs` is a dict by name, and each value is a reference (see References), or a list of references for a list field.
 
 Submitting a request returns a *record*.
-The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` and `record.request.inputs`, in JSON's types.
+The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params`, in JSON's types, and `record.request.inputs`, as references.
 It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
@@ -403,6 +405,7 @@ IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 
 
 Each field named becomes a `list` on its own side, and is the index of a table.
 An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
+An index is required, or optional with default `None`, and `tabulate` refuses any other default.
 The other fields, `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
 A request that gives every row is a plain request:
 
@@ -425,7 +428,7 @@ An attached column keeps its type as written: `sample_geometry` becomes `list[Sa
 A column whose type allows `None` and that a request or a push leaves out is `None` in each row.
 A column of any other type is given with its index every time.
 
-A spec without a single-run form, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables={'runs': ()})`.
+A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables={'runs': ()})`.
 A list field makes a table only when `tables` names it; otherwise it is a value like any other.
 
 The *table rules* are: the columns of a table have equal length, a table with a required index has a row, and the index values are distinct.
@@ -439,9 +442,9 @@ A plain request loads the run again for each value of `reduction.bins`.
 Adding a run to a sum of a hundred runs reduces all hundred again.
 Stages and accumulators keep what such work computes in memory between requests.
 Each needs a binding that serves it (see What a binding provides).
-A stage needs a `PipelineBinding`, which computes the fixed part once.
-An accumulator needs a `DriverBinding`, whose driver adds each run without reducing the earlier ones.
-Making a stage or an accumulator over any other binding is refused.
+A stage needs a binding that makes stages, such as a `PipelineBinding`, which computes the fixed part once.
+An accumulator needs a binding that makes drivers, such as a `DriverBinding`, whose driver adds each run without reducing the earlier ones.
+Making a stage or an accumulator over a binding that does not serve it is refused.
 A client keeps a stage or an accumulator until it releases it or ends.
 
 **Stage.** A *stage* is a template that the backend keeps for a client:
@@ -520,7 +523,7 @@ A push refuses an index value that the table already holds, since pushing a run 
 Index values are compared as the record holds them.
 A dataset compares by the identity the dataset source gives it, so `dataset(run=611)` and `dataset(path=...)` of the same file are one value.
 A reference to an output compares by record, output, and key, and a literal by equality.
-A cell that computes a new record before pushing its output pushes a new value.
+Running again a cell that computes a record and pushes its output is not caught: each run pushes a reference to a new record.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated index value is refused too, including one in a template.
 
@@ -619,8 +622,14 @@ driver.outputs()                                   # once per state that is read
 ```
 
 `compute` gets instances of the params and inputs models, and returns one of the outputs model.
-A stage or an accumulator is made from some values only, so `make_stage` and `make_accumulator` get the values by name: a parameter as its group, an input as its data, and a table under its index's name as its columns, `{column: list}`, the index among them.
-`fixed` holds the fixed values, and `blanks` names the others.
+A stage or an accumulator is made from some values only, so `make_stage` and `make_accumulator` get the values by name, params and inputs in one mapping:
+
+```python
+{'reduction': Reduction(bins=2), 'beam_centre': centre,               # a parameter as its group, an input as its data
+ 'sample': [path_611, path_612], 'sample_geometry': [None, geometry]} # each column of a table under its own name
+```
+
+`fixed` holds the fixed values, and `blanks` names the others, a table by its index.
 A parameter or an input in neither takes the spec's default.
 `compute`, `make_stage`, and the callable it returns may be called from several threads at once, and none modifies the values it is given.
 The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
@@ -641,18 +650,19 @@ For a parameter or an input, `None` in `keys=` sets no key, for a field that `ma
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
+`binding.keys` and `binding.pipeline(fixed)` give the keys and the graph of a `PipelineBinding`, so that the driver of the multi-run spec reuses them ([roles/toy_sans.py](roles/toy_sans.py)).
 
 **A driver.** A *driver* is an object with `push(table, columns)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
-`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
+`DriverBinding` makes a driver from the fixed values that are not columns of a table, and pushes the rows of each table in `fixed`, one push per table.
 A table without rows is not pushed, so a driver never gets a push of no rows.
 A plain request is an accumulator with no blanks, read once.
 For the toy SANS reduction, a driver sums each run's numerator and denominator per table, and divides once:
 
 ```python
 class IofQDriver:
-    def __init__(self, fixed):                    # the fixed values that are not tables
+    def __init__(self, fixed):                    # the fixed values that are not columns of a table
         self._bins = fixed['reduction'].bins
         self._sums = {}                           # per table: numerator and denominator
 
@@ -774,7 +784,7 @@ Each symmetry names a change that a caller may make without changing the outputs
 
 | Symmetry | The caller may change | Unchanged | Kept by | Given |
 |---|---|---|---|---|
-| one-row | the spec tabulated ↔ the tabulated spec, with one row in each table whose index is given and none where it is left out | the outputs | the workflow package | that its driver computes what its pipeline computes |
+| one-row | the single-run spec ↔ the multi-run spec, with one row in each table whose index is given and none where it is left out | the outputs | the workflow package | that its driver computes what its pipeline computes |
 | caching | a call through a stage ↔ the plain request | the record and its outputs | the framework for the record; the `sciline.Stage` of a `PipelineBinding` for the outputs | a pure pipeline |
 | arrival | rows pushed one at a time, or in groups ↔ the same rows in one plain request | the outputs of state n | the driver | the driver's promises |
 | order | the order of pushes into different tables | the outputs once the same rows are in | the driver | the driver's promises |
@@ -783,7 +793,7 @@ Each symmetry names a change that a caller may make without changing the outputs
 Arrival, order, and placement hold up to rounding.
 `ess.spec.testing` checks the symmetries a workflow package keeps, by comparing two calls with the same inputs:
 
-- `check_one_row(single, multi, params, inputs)`: the binding of the tabulated spec, given the one-row request made from `params` and `inputs`, gives the outputs of the binding of the spec tabulated. It is the only check against an independent reference.
+- `check_one_row(single, multi, params, inputs)`: the binding of the multi-run spec, given the one-row request made from `params` and `inputs`, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
 - `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{index: {column: list}}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec. Both sides go through the driver, so it does not prove the outputs are right.
 

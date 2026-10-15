@@ -16,6 +16,7 @@ from ess.spec.field_types import (
     optional,
     supertypes,
     type_name,
+    value_type,
 )
 
 SampleFile = NewType('SampleFile', Path)
@@ -45,6 +46,25 @@ def test_element_of_a_list_or_a_dict() -> None:
     assert element(dict[str, IofQ | None]) == IofQ | None
     assert element(SampleFile) is None
     assert element(list[int] | None) is None
+
+
+@pytest.mark.parametrize(
+    'annotation',
+    [
+        SampleFile,
+        SampleFile | None,
+        list[SampleFile],
+        list[SampleFile | None],
+        list[SampleFile] | None,
+        dict[str, SampleFile],
+    ],
+)
+def test_value_type_is_the_type_of_one_value_of_a_field(annotation: Any) -> None:
+    assert value_type(annotation) is SampleFile
+
+
+def test_value_type_removes_one_list() -> None:
+    assert value_type(list[list[SampleFile]]) == list[SampleFile]
 
 
 def test_supertypes_remove_newtypes_one_by_one() -> None:

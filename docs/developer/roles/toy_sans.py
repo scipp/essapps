@@ -212,28 +212,23 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
 single = PipelineBinding(IOFQ, make_pipeline)
 
 
-KEYS = {'sample': SampleFile, 'transmission': Transmission | None, 'can': CanFile}
-"""The sciline key of each column of ``IOFQ_MULTI``: its field's type in ``IOFQ``."""
-
-
 class IofQDriver:
     """
     The driver of ``IOFQ_MULTI``: it sums each run's numerator and denominator
     per run type, and computes I(Q) once from the sums.
 
     Each run's numerator and denominator come from a ``sciline.Stage`` of the
-    pipeline cut at the keys of its table's columns, and I(Q) from one cut at
-    the sums. A sum is made with ``a + b``, so that no value the driver was
-    given, or a stage returned, is modified.
+    single-run binding's pipeline, cut at the binding's keys of its table's
+    columns, and I(Q) from one cut at the sums. A sum is made with ``a + b``,
+    so that no value the driver was given, or a stage returned, is modified.
     """
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
-        workflow = make_pipeline(fixed)
-        workflow[Reduction] = fixed['reduction']
+        workflow = single.pipeline(fixed)
         self._contribute = {
             index: sciline.Stage(
                 workflow,
-                inputs=[KEYS[name] for name in IOFQ_MULTI.columns(index)],
+                inputs=[single.keys[name] for name in IOFQ_MULTI.columns(index)],
                 outputs=(Numerator[run], Denominator[run]),
             )
             for index, run in (('sample', SampleRun), ('can', CanRun))
@@ -246,8 +241,8 @@ class IofQDriver:
 
     def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
         stage = self._contribute[table]
+        keys = [single.keys[name] for name in columns]
         for row in zip(*columns.values(), strict=True):
-            keys = (KEYS[name] for name in columns)
             parts = stage.compute(dict(zip(keys, row, strict=True)))
             old = self._sums.get(table)
             self._sums[table] = (
