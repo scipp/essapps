@@ -189,7 +189,8 @@ class Accumulator:
         or that the push repeats, and a push of no rows. Index values are
         compared as the record holds them: a dataset by its identity, a
         reference to an output by record, output, and key, and a literal by
-        equality.
+        its JSON form; for an index whose type has a JSON form, also by the
+        values read, before the driver gets the rows.
 
         One push is one push into the binding's driver. A push references
         datasets or outputs of records, never an accumulator. Each value is

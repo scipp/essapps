@@ -21,7 +21,7 @@ from .conftest import (
 )
 
 
-def test_h1_time_slices_found_by_a_first_reduction(
+def test_i1_time_slices_found_by_a_first_reduction(
     client: Client, measure: Measure
 ) -> None:
     run = measure(611, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
@@ -43,7 +43,7 @@ def test_h1_time_slices_found_by_a_first_reduction(
         client.output(slices, 'sliced')
 
 
-def test_h2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -> None:
+def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -> None:
     direct_beam = measure(600, [0.5, 1.5])
     samples = [measure(611, [3.0, 4.0]), measure(612, [5.0, 6.0])]
     can = measure(620, [1.0, 1.0])
@@ -73,7 +73,7 @@ def test_h2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
     assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 
 
-def test_h3_a_correction_computed_for_one_run_and_not_another(
+def test_i3_a_correction_computed_for_one_run_and_not_another(
     client: Client, measure: Measure
 ) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])

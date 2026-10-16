@@ -532,7 +532,7 @@ def centred(params: Any) -> CentredOutputs:
     return CentredOutputs(centred=Centred(_array(samples - cans - params.centre.x)))
 
 
-TOYS: dict[SpecId, Binding[Any, Any, Any]] = {
+TOYS: dict[SpecId, Binding[Any, Any]] = {
     SpecId.of(binding.spec): binding
     for binding in [
         StagedFunction(IOFQ, iofq),

@@ -48,7 +48,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 
 @pytest.mark.xfail(
     reason='publish, scicat, and datasets.add_published are not implemented; '
-    'loading a dataset as the object an input takes is deferred'
+    'loading a dataset as the object a parameter takes is deferred'
 )
 def test_c2_vanadium_from_the_catalogue(
     client: Client, measure: Measure, datasets: FakeDatasets
