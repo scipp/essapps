@@ -16,8 +16,16 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import to_jsonable_python
 
-from ess.spec import NoParams, SerializedWorkflowSpec, WorkflowSpec
+from ess.spec import (
+    AccumulatorRef,
+    DatasetRef,
+    NoParams,
+    OutputRef,
+    SerializedWorkflowSpec,
+    WorkflowSpec,
+)
 
 
 class Reduction(BaseModel):
@@ -576,9 +584,9 @@ class TestTabulate:
         for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
                 runs.params(**{'sample': [Path('run.nxs')], **rows})
-        assert runs.serialize().params_schema['properties']['sample']['items'] == {
-            'dataType': 'SampleFile'
-        }
+        assert runs.serialize().params_schema['properties']['sample']['items'] == (
+            file_ref('SampleFile')
+        )
 
     def test_keeps_the_display_metadata_of_a_column(self) -> None:
         sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})
@@ -610,30 +618,116 @@ class TestTabulate:
             listing.tabulate(name='multi', version=1, tables=('sample',))
 
 
+def file_ref(data_type: str) -> dict[str, Any]:
+    """The schema of a reference to a file, given as a dataset or an output."""
+    kinds = ('OutputRef', 'DatasetRef', 'AccumulatorRef')
+    return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
+
+
+def data_ref(data_type: str) -> dict[str, Any]:
+    """The schema of a reference to data of any other type, an output."""
+    kinds = ('OutputRef', 'AccumulatorRef')
+    return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
+
+
+class ScaledParams(BaseModel):
+    scale: float = Field(default=1.0, gt=0, title='Scale', description='A factor.')
+    mode: Mode = Mode.fast
+
+
 class TestSerialization:
-    def test_a_group_has_its_json_schema(self) -> None:
+    def test_a_group_is_its_json_schema_or_a_reference(self) -> None:
         schema = IOFQ.serialize().params_schema
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
-        assert schema['properties']['reduction'] == {'$ref': '#/$defs/Reduction'}
+        assert schema['properties']['reduction'] == {
+            'anyOf': [{'$ref': '#/$defs/Reduction'}, data_ref('Reduction')],
+            'default': {'bins': 2},
+            'title': 'Reduction',
+        }
         assert schema['$defs']['Reduction'] == Reduction.model_json_schema()
         assert schema['required'] == ['sample']
 
-    def test_data_values_and_outputs_name_the_type_of_each_value(self) -> None:
-        serialized = IOFQ.serialize()
-        properties = serialized.params_schema['properties']
-        assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
-            'sample': {'dataType': 'SampleFile', 'title': 'Sample run'},
-            'can': {
-                'anyOf': [{'dataType': 'CanFile'}, {'type': 'null'}],
-                'default': None,
+    def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
+        defs = IOFQ.serialize().params_schema['$defs']
+        for kind in (OutputRef, DatasetRef, AccumulatorRef):
+            assert defs[kind.__name__] == kind.model_json_schema()
+            assert '@ref' in defs[kind.__name__]['required']
+
+    def test_a_float_and_an_enum_are_their_json_schema_or_a_reference(self) -> None:
+        schema = spec(params=ScaledParams).serialize().params_schema
+        assert schema['properties'] == {
+            'scale': {
+                'anyOf': [
+                    {'type': 'number', 'exclusiveMinimum': 0},
+                    data_ref('float'),
+                ],
+                'default': 1.0,
+                'title': 'Scale',
+                'description': 'A factor.',
             },
-            'beam_centre': {
-                'anyOf': [{'dataType': 'BeamCentre'}, {'type': 'null'}],
-                'default': None,
+            'mode': {
+                'anyOf': [{'$ref': '#/$defs/Mode'}, data_ref('Mode')],
+                'default': 'fast',
+                'title': 'Mode',
             },
         }
-        assert serialized.outputs_schema['properties'] == {
+
+    def test_a_file_or_a_scipp_type_is_a_reference_to_its_type(self) -> None:
+        properties = IOFQ.serialize().params_schema['properties']
+        assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
+            'sample': {**file_ref('SampleFile'), 'title': 'Sample run'},
+            'can': {
+                'anyOf': [file_ref('CanFile'), {'type': 'null'}],
+                'default': None,
+                'title': 'Can',
+            },
+            'beam_centre': {
+                'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
+                'default': None,
+                'title': 'Beam Centre',
+            },
+        }
+
+    def test_a_list_parameter_has_the_forms_per_row(self) -> None:
+        params = model(
+            'P', time_range=(list[TimeRange], Field(min_length=2, title='Slices'))
+        )
+        properties = spec(params=params).serialize().params_schema['properties']
+        assert properties['time_range'] == {
+            'type': 'array',
+            'items': {'anyOf': [{'$ref': '#/$defs/TimeRange'}, data_ref('TimeRange')]},
+            'minItems': 2,
+            'title': 'Slices',
+        }
+
+    def test_tables_are_arrays_and_listed(self) -> None:
+        serialized = IOFQ_MULTI.serialize()
+        properties = serialized.params_schema['properties']
+        assert properties['sample'] == {
+            'type': 'array',
+            'items': file_ref('SampleFile'),
+            'title': 'Sample run',
+            'minItems': 1,
+        }
+        assert properties['can'] == {
+            'type': 'array',
+            'items': file_ref('CanFile'),
+            'default': [],
+            'title': 'Can',
+        }
+        assert properties['sample_geometry']['items'] == {
+            'anyOf': [
+                {'$ref': '#/$defs/SampleGeometry'},
+                data_ref('SampleGeometry'),
+                {'type': 'null'},
+            ]
+        }
+        assert serialized.tables == {'sample': ('sample_geometry',), 'can': ()}
+        assert serialized.params_schema['required'] == ['sample_geometry', 'sample']
+
+    def test_outputs_name_the_type_of_each_value(self) -> None:
+        assert IOFQ.serialize().outputs_schema['properties'] == {
             'iofq': {
                 'dataType': 'IofQ',
                 'title': 'I(Q)',
@@ -651,22 +745,63 @@ class TestSerialization:
             },
         }
 
-    def test_tables_are_arrays_and_listed(self) -> None:
-        serialized = IOFQ_MULTI.serialize()
-        properties = serialized.params_schema['properties']
-        assert properties['sample'] == {
-            'type': 'array',
-            'items': {'dataType': 'SampleFile'},
-            'title': 'Sample run',
-            'minItems': 1,
+    @pytest.mark.parametrize(
+        'params',
+        [
+            {'sample': DatasetRef(dataset='run:loki/1')},
+            {
+                'sample': OutputRef(record='r1', output='file'),
+                'reduction': Reduction(bins=4),
+                'beam_centre': OutputRef(record='r2', output='centre'),
+            },
+            {
+                'sample': DatasetRef(dataset='run:loki/1'),
+                'reduction': OutputRef(record='r1', output='reduction', key='0'),
+                'time_range': AccumulatorRef(accumulator='a1', output='slices'),
+            },
+        ],
+    )
+    def test_the_schema_takes_a_request(self, params: dict[str, Any]) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        schema = IOFQ.serialize().params_schema
+        jsonschema.Draft202012Validator.check_schema(schema)
+        jsonschema.validate(to_jsonable_python(params), schema)
+
+    @pytest.mark.parametrize(
+        'params',
+        [
+            {'sample': 'run.nxs'},
+            {'sample': DatasetRef(dataset='run:loki/1'), 'reduction': {'bins': 'x'}},
+            {'sample': {'@ref': 'dataset'}},
+            {'sample': {'dataset': 'run:loki/1'}},
+            {
+                'sample': DatasetRef(dataset='run:loki/1'),
+                'beam_centre': DatasetRef(dataset='run:loki/2'),
+            },
+        ],
+    )
+    def test_the_schema_refuses_a_malformed_request(
+        self, params: dict[str, Any]
+    ) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(
+                to_jsonable_python(params), IOFQ.serialize().params_schema
+            )
+
+    def test_the_schema_of_tables_takes_rows_of_both_forms(self) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        schema = IOFQ_MULTI.serialize().params_schema
+        rows = {
+            'sample': [DatasetRef(dataset='run:loki/1'), DatasetRef(dataset='2')],
+            'sample_geometry': [
+                SampleGeometry(thickness=0.1),
+                OutputRef(record='r1', output='geometry'),
+            ],
         }
-        assert properties['can'] == {
-            'type': 'array',
-            'items': {'dataType': 'CanFile'},
-            'default': [],
-        }
-        assert serialized.tables == {'sample': ('sample_geometry',), 'can': ()}
-        assert serialized.params_schema['required'] == ['sample_geometry', 'sample']
+        jsonschema.validate(to_jsonable_python(rows), schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({'sample': [], 'sample_geometry': []}, schema)
 
     def test_metadata_is_kept(self) -> None:
         serialized = spec(version=2, code_revision='abc123').serialize()

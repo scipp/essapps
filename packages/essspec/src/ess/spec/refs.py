@@ -27,17 +27,29 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic.config import JsonDict
+
+
+def _kind_required(schema: JsonDict) -> None:
+    """
+    Require ``"@ref"`` in a reference's JSON schema: without it, an object is
+    a literal, not a reference.
+    """
+    required = schema.get('required', [])
+    schema['required'] = ['@ref', *(required if isinstance(required, list) else [])]
 
 
 class _Ref(BaseModel, frozen=True):
     """
     A reference. Its field ``kind`` is the key ``"@ref"`` of its JSON form,
-    in every dump, the log's among them. Each class has one kind, so a
-    reference made in Python does not give it. A field the class lacks is
-    refused.
+    in every dump, the log's among them, and its JSON schema requires it.
+    Each class has one kind, so a reference made in Python does not give it.
+    A field the class lacks is refused.
     """
 
-    model_config = ConfigDict(serialize_by_alias=True, extra='forbid')
+    model_config = ConfigDict(
+        serialize_by_alias=True, extra='forbid', json_schema_extra=_kind_required
+    )
 
 
 class OutputRef(_Ref, frozen=True):

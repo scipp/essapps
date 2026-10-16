@@ -89,7 +89,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Collection, Mapping, Sequence
-from types import NoneType
+from types import NoneType, UnionType
 from typing import Annotated, Any, Self, Union, get_args, get_origin
 
 from annotated_types import MaxLen, MinLen
@@ -116,6 +116,7 @@ from .field_types import (
     type_name,
     value_type,
 )
+from .refs import AccumulatorRef, OutputRef, Ref
 
 
 class NoParams(BaseModel):
@@ -337,9 +338,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema is the JSON Schema of the parameters that take a
-        literal, and has each other parameter as a reference to data of a
-        type, named in ``dataType``, as the outputs schema has each output.
+        The params schema has each value, or each row of a list parameter,
+        in the forms it takes: ``anyOf`` its JSON schema and a reference if it
+        takes a literal, else a reference. A reference's schema is the
+        ``@ref`` object of each kind it may be, with the name of the data type
+        it must fit in ``dataType``, as the outputs schema has each output.
         The projection is one-way: pydantic validators do not survive it, so
         a consumer of the serialized form can validate only optimistically.
         """
@@ -360,10 +363,11 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A form
-    shows the params schema: a parameter that takes a literal by its JSON
-    Schema, and a picker for each other parameter, whose property names the
-    type of the data it takes in ``dataType``, a list parameter as an array
-    of them, an optional one with ``null`` in ``anyOf``.
+    shows the params schema: a group by its fields, with a choice to give it
+    by reference, and a picker for each parameter that takes a reference
+    only, which names the type of the data it takes in ``dataType``; a list
+    parameter as an array of these, an optional one with ``null`` in
+    ``anyOf``.
     """
 
     params_schema: dict[str, Any] = Field(
@@ -616,24 +620,59 @@ def _index_shape(field: FieldInfo) -> bool:
 
 def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
-    The JSON Schema of the parameters that take a literal, with each other
-    parameter as :func:`_data_schema` has it, in the order of the fields.
+    The JSON Schema of the params: that of a model of the same fields, each
+    with its title, description, default, and length constraints, and with
+    its type replaced by the forms it takes (see :func:`_forms`).
     """
     model: type[BaseModel] = spec.params
-    fields = model.model_fields
-    literals: dict[str, Any] = {
-        n: (f.annotation, f) for n, f in fields.items() if spec.takes_literal(n)
-    }
+    fields: dict[str, Any] = {}
+    for name, info in model.model_fields.items():
+        tp = value_type(info.annotation)
+        data_type = Field(json_schema_extra={'dataType': type_name(tp)})
+        ref: Any = (
+            Annotated[Ref, data_type]
+            if is_file(tp)
+            else Annotated[OutputRef | AccumulatorRef, data_type]
+        )
+        fields[name] = (
+            _forms(info.annotation, info.metadata, ref, spec.takes_literal(name)),
+            Field(
+                # Undefined, and so required, if the field is.
+                default=info.get_default(call_default_factory=True),
+                title=info.title,
+                description=info.description,
+            ),
+        )
     schema: dict[str, Any] = create_model(
-        model.__name__, __config__=model.model_config, **literals
+        model.__name__, __config__=model.model_config, **fields
     ).model_json_schema()
-    properties = schema.get('properties', {})
-    schema['properties'] = {
-        n: properties[n] if n in literals else _data_property(f)
-        for n, f in fields.items()
-    }
-    schema['required'] = [n for n, f in fields.items() if f.is_required()]
     return schema
+
+
+def _forms(tp: Any, metadata: Sequence[Any], ref: Any, literal: bool) -> Any:
+    """
+    ``tp`` with its value type ``X`` replaced by ``X | ref`` if it takes a
+    ``literal``, else by ``ref``, so that each value, or each row of a list,
+    takes the forms of ``X``. ``metadata``, the constraints of the field,
+    goes to the list if ``tp`` is one, else to ``X``, so that a constraint of
+    a number, say, is not put on a reference.
+    """
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Annotated:
+        return _forms(args[0], [*metadata, *tp.__metadata__], ref, literal)
+    if origin is list:
+        rows: Any = list[_forms(args[0], [], ref, literal)]  # type: ignore[misc]
+        return Annotated[rows, *metadata] if metadata else rows
+    if origin in (Union, UnionType):
+        return Union[  # noqa: UP007
+            tuple(
+                arg if arg is NoneType else _forms(arg, metadata, ref, literal)
+                for arg in args
+            )
+        ]
+    if not literal:
+        return ref
+    return Union[Annotated[tp, *metadata] if metadata else tp, ref]  # noqa: UP007
 
 
 def _data_schema(model: type[BaseModel]) -> dict[str, Any]:
