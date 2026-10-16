@@ -102,19 +102,27 @@ class ComputedParams(BaseModel):
         return self.reduction.bins
 
 
-class IofQParams(BaseModel, arbitrary_types_allowed=True):
+class IofQSettings(BaseModel, arbitrary_types_allowed=True):
     reduction: Reduction = Field(default_factory=Reduction)
     sample_geometry: SampleGeometry | None = None
     time_range: TimeRange | None = None
+    beam_centre: CentreArray | None = None
+
+
+class IofQParams(IofQSettings):
     sample: SampleFile = Field(title='Sample run')
     can: CanFile | None = None
-    beam_centre: CentreArray | None = None
 
     @model_validator(mode='after')
     def _can_needs_a_centre(self) -> 'IofQParams':
         if self.can is not None and self.beam_centre is None:
             raise ValueError('a can needs a beam centre')
         return self
+
+
+class IofQMultiParams(IofQSettings):
+    sample: list[SampleFile] = Field(min_length=1, title='Sample run')
+    can: list[CanFile | None] = Field(default_factory=list)
 
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
@@ -144,8 +152,8 @@ def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
 
 
 IOFQ = spec()
-IOFQ_MULTI = IOFQ.tabulate(
-    name='sans-iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
+IOFQ_MULTI = spec(
+    name='sans-iofq-multi', params=IofQMultiParams, tables=('sample', 'can')
 )
 
 
@@ -155,10 +163,6 @@ def model(name: str, **fields: Any) -> type[BaseModel]:
     )
 
 
-def annotations(model: type[BaseModel]) -> dict[str, Any]:
-    return {name: f.annotation for name, f in model.model_fields.items()}
-
-
 class SampleRun(BaseModel):
     """A sample run and the geometry given next to it: a group that holds a file."""
 
@@ -166,8 +170,10 @@ class SampleRun(BaseModel):
     geometry: SampleGeometry | None = None
 
 
-RUNS = spec(name='sans-runs', params=model('P', sample=(SampleRun, ...))).tabulate(
-    name='sans-runs-multi', version=1, tables=('sample',)
+RUNS = spec(
+    name='sans-runs',
+    params=model('P', sample=(list[SampleRun], Field(min_length=1))),
+    tables=('sample',),
 )
 
 
@@ -545,43 +551,8 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-
-class TestTabulate:
-    def test_names_the_tables_and_keeps_the_rest_of_the_metadata(self) -> None:
-        assert IOFQ_MULTI.name == 'sans-iofq-multi'
-        assert IOFQ_MULTI.title == IOFQ.title
-        assert IOFQ_MULTI.description == IOFQ.description
-        assert IOFQ_MULTI.tables == ('sample', 'can')
-
-    def test_each_field_named_becomes_a_list_of_its_type_as_written(self) -> None:
-        assert annotations(IOFQ_MULTI.params) == {
-            'reduction': Reduction,
-            'sample_geometry': SampleGeometry | None,
-            'time_range': TimeRange | None,
-            'sample': list[SampleFile],
-            'can': list[CanFile | None],
-            'beam_centre': CentreArray | None,
-        }
-
-    def test_a_table_takes_at_least_one_row(self) -> None:
-        with pytest.raises(pydantic.ValidationError, match='sample'):
-            IOFQ_MULTI.params(sample=[])
-        runs = IOFQ.tabulate(name='runs', version=1, tables=('sample', 'can'))
-        assert runs.params.model_fields['can'].is_required()
-        with pytest.raises(pydantic.ValidationError, match='can'):
-            runs.params(sample=[Path('a.nxs')], can=[])
-
-    def test_a_table_named_empty_is_empty_by_default(self) -> None:
-        params = IOFQ_MULTI.params(sample=[Path('run.nxs')])
-        assert params.can == []
-        assert params.beam_centre is None
-        params = IOFQ_MULTI.params(sample=[Path('run.nxs')], can=[None, Path('b.nxs')])
-        assert params.can == [None, Path('b.nxs')]
-
-    def test_a_row_with_more_than_one_value_is_a_group_that_holds_a_file(
-        self,
-    ) -> None:
-        assert RUNS.params.model_fields['sample'].annotation == list[SampleRun]
+    def test_a_table_may_be_of_groups_given_field_by_field(self) -> None:
+        assert RUNS.takes_inline('sample')
         params = RUNS.params(
             sample=[
                 {'file': Path('a.nxs')},
@@ -593,32 +564,13 @@ class TestTabulate:
             SampleGeometry(thickness=0.2),
         ]
 
-    def test_the_field_validators_of_the_types_still_run(self) -> None:
+    def test_the_field_validators_of_a_group_check_each_row(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='thickness must be'):
             RUNS.params(
                 sample=[{'file': Path('a.nxs'), 'geometry': {'thickness': -1.0}}]
             )
 
-    def test_the_model_validators_are_not_carried_over(self) -> None:
-        with pytest.raises(pydantic.ValidationError, match='a can needs a beam centre'):
-            IofQParams(sample=Path('a.nxs'), can=Path('b.nxs'))
-        IOFQ_MULTI.params(sample=[Path('a.nxs')], can=[Path('b.nxs')])
-
-    def test_the_outputs_are_kept(self) -> None:
-        runs = IOFQ.tabulate(name='runs', version=1, tables=('sample', 'can'))
-        assert runs.outputs is IofQOutputs
-        assert runs.tables == ('sample', 'can')
-
-    def test_a_table_may_be_of_groups(self) -> None:
-        slices = IOFQ.tabulate(name='slices', version=1, tables=('time_range',))
-        assert (
-            slices.params.model_fields['time_range'].annotation
-            == list[TimeRange | None]
-        )
-        assert slices.params.model_fields['sample'].annotation == SampleFile
-        assert slices.takes_inline('time_range')
-
-    def test_the_validators_of_a_field_named_check_each_row(self) -> None:
+    def test_the_validators_of_the_element_type_check_each_row(self) -> None:
         def known(path: Path) -> Path:
             if path.name != 'run.nxs':
                 raise ValueError('unknown run')
@@ -626,12 +578,10 @@ class TestTabulate:
 
         params = model(
             'P',
-            sample=(Annotated[SampleFile, AfterValidator(known)], ...),
-            can=(Annotated[CanFile, AfterValidator(known)] | None, None),
+            sample=(list[Annotated[SampleFile, AfterValidator(known)]], ...),
+            can=(list[Annotated[CanFile, AfterValidator(known)] | None], []),
         )
-        runs = spec(params=params).tabulate(
-            name='runs', version=1, tables=('sample', 'can'), empty=('can',)
-        )
+        runs = spec(params=params, tables=('sample', 'can'))
         runs.params(sample=[Path('run.nxs')], can=[Path('run.nxs')])
         for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
@@ -639,32 +589,6 @@ class TestTabulate:
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
             file_ref('SampleFile')
         )
-
-    def test_keeps_the_display_metadata_of_a_table(self) -> None:
-        sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})
-        runs = spec(params=model('P', sample=(SampleFile, sample))).tabulate(
-            name='runs', version=1, tables=('sample',)
-        )
-        field = runs.params.model_fields['sample']
-        assert field.examples == [[Path('a.nxs')]]
-        assert field.json_schema_extra == {'unit': 'file'}
-
-    def test_refuses_names_that_are_not_fields(self) -> None:
-        with pytest.raises(ValueError, match=r"\['run'\]: not parameters of sans-iofq"):
-            IOFQ.tabulate(name='multi', version=1, tables=('run',))
-
-    def test_refuses_empty_names_that_are_not_tables(self) -> None:
-        with pytest.raises(ValueError, match=r"\['can'\]: empty, but not tables"):
-            IOFQ.tabulate(name='multi', version=1, tables=('sample',), empty=('can',))
-
-    def test_refuses_a_spec_with_tables(self) -> None:
-        with pytest.raises(ValueError, match='sans-iofq-multi has tables already'):
-            IOFQ_MULTI.tabulate(name='multi', version=1, tables=('beam_centre',))
-
-    def test_refuses_a_list_field(self) -> None:
-        listing = spec(params=model('P', sample=(list[SampleFile], ...)))
-        with pytest.raises(ValueError, match=r"\['sample'\]: lists already"):
-            listing.tabulate(name='multi', version=1, tables=('sample',))
 
 
 def file_ref(data_type: str) -> dict[str, Any]:

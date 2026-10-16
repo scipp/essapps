@@ -51,7 +51,7 @@ A reference to an output fits a parameter when the output's type fits the parame
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
-`tabulate` makes `CENTRED_MULTI` from a single-run spec with params `centre: Centre`, `sample: SampleRun`, and `can: CanFile | None`, with `tables=('sample', 'can')` and `empty=('can',)`.
+`CENTRED_MULTI` has the params `centre: Centre`, `sample: list[SampleRun] = Field(min_length=1)`, and `can: list[CanFile | None] = Field(default_factory=list)`, with `tables=('sample', 'can')`.
 So `sample` is a table that needs a row, and `can` is a table that may have no rows.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 

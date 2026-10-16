@@ -63,7 +63,12 @@ So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
 
 ```python
-IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
+class IofQMultiParams(IofQSettings):     # the settings that IofQParams has too
+    sample: list[Sample] = Field(min_length=1)
+    can: list[CanFile] = Field(min_length=1)
+
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
+                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'can': cans}, blanks=('sample',)))  # can runs fixed
 iofq.push(sample=[{'run': dataset(run=611), 'transmission': dataset(run=610)}])
 iofq.push(sample=[{'run': dataset(run=613), 'transmission': dataset(run=612)}])

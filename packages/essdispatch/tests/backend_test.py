@@ -54,6 +54,7 @@ def _spec(
     *,
     params: type[BaseModel] = LoadParams,
     outputs: type[BaseModel] = ValueOutputs,
+    tables: tuple[str, ...] = (),
 ) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
@@ -62,6 +63,7 @@ def _spec(
         description=name,
         params=params,
         outputs=outputs,
+        tables=tables,
     )
 
 
@@ -84,6 +86,10 @@ class ScaledRun(BaseModel):
 
 class ScaledParams(BaseModel):
     sample: ScaledRun
+
+
+class SumParams(BaseModel):
+    sample: list[ScaledRun] = Field(min_length=1)
 
 
 class PartsOutputs(BaseModel):
@@ -135,14 +141,14 @@ PIECES = _spec('pieces', outputs=PiecesOutputs)
 ANYTHING = _spec('anything', params=BoxParams)  # a box of any value
 SCALED = _spec('scaled', params=ScaledParams)
 MODES = _spec('modes', params=ModeParams)
-SUM = SCALED.tabulate(name='sum', version=1, tables=('sample',))
+SUM = _spec('sum', params=SumParams, tables=('sample',))
 
 
 def add(params: AddParams) -> ValueOutputs:
     return ValueOutputs(value=params.a + params.b + params.shift.offset)
 
 
-def total(params: Any) -> ValueOutputs:
+def total(params: SumParams) -> ValueOutputs:
     return ValueOutputs(
         value=sum(
             (1.0 if run.scale is None else run.scale.factor) * read_dataset(run.file)

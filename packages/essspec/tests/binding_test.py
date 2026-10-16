@@ -32,6 +32,12 @@ class SubParams(BaseModel):
     can: CanValue | None = None
 
 
+class SubMultiParams(BaseModel):
+    scale: Scale = Field(default_factory=Scale)
+    sample: list[SampleValue] = Field(min_length=1)
+    can: list[CanValue | None] = Field(default_factory=list)
+
+
 class SubOutputs(BaseModel):
     diff: Diff
 
@@ -44,8 +50,14 @@ SUB = WorkflowSpec(
     params=SubParams,
     outputs=SubOutputs,
 )
-SUB_MULTI = SUB.tabulate(
-    name='sub-multi', version=1, tables=('sample', 'can'), empty=('can',)
+SUB_MULTI = WorkflowSpec(
+    name='sub-multi',
+    version=1,
+    title='Subtract',
+    description='The scaled sample minus the can.',
+    params=SubMultiParams,
+    outputs=SubOutputs,
+    tables=('sample', 'can'),
 )
 
 

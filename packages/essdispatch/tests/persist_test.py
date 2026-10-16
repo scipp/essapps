@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, NewType
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ess.dispatch import (
     Backend,
@@ -70,8 +70,8 @@ class ShiftedOutputs(BaseModel):
     value: Shifted
 
 
-class PartParams(BaseModel):
-    part: Part
+class TotalParams(BaseModel):
+    part: list[Part] = Field(min_length=1)
 
 
 class Value(BaseModel):
@@ -91,7 +91,10 @@ class BoxParams(BaseModel, arbitrary_types_allowed=True):
 
 
 def _spec(
-    name: str, params: type[BaseModel], outputs: type[BaseModel]
+    name: str,
+    params: type[BaseModel],
+    outputs: type[BaseModel],
+    tables: tuple[str, ...] = (),
 ) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
@@ -100,14 +103,13 @@ def _spec(
         description=name,
         params=params,
         outputs=outputs,
+        tables=tables,
     )
 
 
 LOAD = _spec('load', RunParams, Loaded)
 SHIFT = _spec('shift', SourceParams, ShiftedOutputs)
-TOTAL = _spec('part', PartParams, Value).tabulate(
-    name='total', version=1, tables=('part',)
-)
+TOTAL = _spec('total', TotalParams, Value, tables=('part',))
 LIST = _spec('list', RunParams, Listed)  # a value that can be changed in place
 BOX = _spec('box', RunParams, Boxed)  # a value that can be referenced weakly
 UNBOX = _spec('unbox', BoxParams, Value)
@@ -175,7 +177,7 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
         boxes.append(weakref.ref(value := Box(read_dataset(params.sample))))
         return Boxed(value=value)
 
-    def total(params: Any) -> Value:
+    def total(params: TotalParams) -> Value:
         return Value(value=sum(params.part))
 
     def offset(params: OffsetParams) -> ShiftedOutputs:

@@ -45,6 +45,12 @@ class SubParams(BaseModel):
     can: CanValue | None = None
 
 
+class SubMultiParams(BaseModel):
+    scale: Scale = Field(default_factory=Scale)
+    sample: list[SampleValue] = Field(min_length=1)
+    can: list[CanValue | None] = Field(default_factory=list)
+
+
 class SubOutputs(BaseModel):
     diff: Diff | None
 
@@ -54,8 +60,8 @@ def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
 
 
 SUB = _spec('sub', params=SubParams, outputs=SubOutputs)
-SUB_MULTI = SUB.tabulate(
-    name='sub-multi', version=1, tables=('sample', 'can'), empty=('can',)
+SUB_MULTI = _spec(
+    'sub-multi', params=SubMultiParams, outputs=SubOutputs, tables=('sample', 'can')
 )
 
 

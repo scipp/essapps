@@ -126,11 +126,13 @@ class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
     transmission: Transmission | None = None
 
-class IofQParams(BaseModel):
+class IofQSettings(BaseModel):                    # the parameters that all runs share
     reduction: Reduction = Field(default_factory=Reduction)
+    beam_centre: BeamCentre | None = None
+
+class IofQParams(IofQSettings):
     sample: Sample
     can: CanFile | None = None                    # the empty-can run, if any
-    beam_centre: BeamCentre | None = None
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
@@ -443,17 +445,21 @@ A table is a list parameter whose *rows* an accumulator takes a push at a time, 
 Each row is given inline or by reference, as its type allows.
 The rows of a table are distinct.
 
-A *multi-run spec* is made from the *single-run spec* of the same reduction by naming the parameters that become tables:
+A *multi-run spec* combines the runs of the *single-run spec* of the same reduction.
+Its params model shares the other parameters, `reduction` and `beam_centre`, with `IofQParams` through the base model `IofQSettings`, and each table is a list of the single-run type:
 
 ```python
-IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'), empty=('can',))
+class IofQMultiParams(IofQSettings):
+    sample: list[Sample] = Field(min_length=1)
+    can: list[CanFile | None] = Field(default_factory=list)   # a can left out is a table without rows
+
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
+                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
-Each parameter named becomes a `list` of its type as written, with at least one row: `sample: Sample` becomes `list[Sample]`.
-A table named in `empty=` may have no rows, and has none by default: `can: CanFile | None = None` becomes `list[CanFile | None]`, so a can left out is a table without rows.
-The validators and constraints of a parameter named check each row.
-The other parameters, such as `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
-The params model is made anew, without the model validators of `IofQParams`, which read fields whose types change.
+`tables` names the tables.
+A table has at least one row, `Field(min_length=1)`, or, if it may have no rows, a default of `[]`.
+The validators and constraints of the element type check each row.
 A request that gives every row is a plain request:
 
 ```python
@@ -471,12 +477,14 @@ client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611), 'transmi
                                               dataset(run=612)]})
 ```
 
-A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables=('runs',))`, with `runs: list[RunFile] = Field(min_length=1)`, as `tabulate` makes it, so the model, its schema, and the backend agree that the table has a row.
+A multi-run spec may have outputs of its own, such as `STITCH`, a stitch of all angles, or no single-run spec, such as `VOLUME`, which sums counts over runs.
+It is written the same way: `runs: list[RunFile] = Field(min_length=1)`, with `WorkflowSpec(..., tables=('runs',))`, so the model, its schema, and the backend agree that the table has a row.
 A list parameter makes a table only when `tables` names it; otherwise it is a value like any other.
 
 The *table rules* are: the number of rows of a table meets its length constraints, such as a table that needs a row, and the rows of a table are distinct.
 
 **Single-run and multi-run specs.** With one row in each table, a request of `IOFQ_MULTI` is a request of `IOFQ`, and gives the same outputs (the one-row symmetry, see Symmetries).
+The specs agree since `IofQMultiParams` shares the other parameters of `IofQParams` and each of its tables is a list of the single-run type; `check_one_row` checks it.
 A request of `IOFQ` without a can, `can=None`, is the request of `IOFQ_MULTI` with one can row, `can=[None]`; what that row means is the workflow's, here that no can is subtracted.
 `can=[]`, a table without rows, is another request, which a driver may refuse.
 The binding's driver handles structure below a row, such as detector banks, and decides what is summed ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
@@ -574,10 +582,9 @@ A plain request with a repeated row is refused too, including one in a template.
 In the call phase, for a table whose element type has a JSON form, rows are also compared by the JSON form of each row read.
 The backend keeps the rows read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
 So an inline value and a reference to an output whose value is equal are one row, and a time slice is never summed twice.
-`SANS` is a spec like `IOFQ`, with the parameter `time_range: TimeRange`:
+`SLICES` is a spec like `IOFQ`, with the table `time_range: list[TimeRange] = Field(min_length=1)`:
 
 ```python
-SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))
 slicer = client.compute(FIND_SLICES, params={'log': dataset(run=611)})   # outputs slices: list[TimeRange]
 n = len(client.output(slicer, 'slices'))
 acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611)}, blanks=('time_range',)))

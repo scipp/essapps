@@ -87,9 +87,8 @@ instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs; its rows are distinct. A row with more than
 one value, such as a run and the values given next to it, is a group given
-field by field. ``tables`` names the tables; :meth:`WorkflowSpec.tabulate`
-makes a multi-run spec from a single-run one by naming them. A list
-parameter is a table only where ``tables`` names it.
+field by field. ``tables`` names the tables. A list parameter is a table
+only where ``tables`` names it.
 
 Two forms exist, related by a one-way projection:
 
@@ -105,7 +104,7 @@ Two forms exist, related by a one-way projection:
 from __future__ import annotations
 
 import functools
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from types import NoneType, UnionType
 from typing import Annotated, Any, Self, Union, get_args, get_origin
 
@@ -266,58 +265,6 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         :func:`ess.spec.field_types.has_json_form`).
         """
         return has_json_form(self.params, name)
-
-    def tabulate(
-        self,
-        *,
-        name: str,
-        version: int,
-        tables: Sequence[str],
-        empty: Collection[str] = (),
-        title: str | None = None,
-        description: str | None = None,
-    ) -> WorkflowSpec[Any, O]:
-        """
-        A spec over tables, made from this one by naming its parameters that
-        become tables::
-
-            IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
-
-        Each parameter named becomes a ``list`` of its type as written, with
-        at least one row, or, if ``empty`` names it, with none by default:
-        ``sample: Sample`` becomes ``list[Sample]``, and
-        ``can: CanFile | None = None`` with ``empty=('can',)`` becomes
-        ``list[CanFile | None]``, empty by default. The validators and
-        constraints of a parameter named, such as an ``AfterValidator`` or
-        ``Field(gt=0)``, check each row: they are metadata of the element
-        type. Title, description, examples (each as one row), and
-        ``json_schema_extra`` of a parameter named are kept. The other
-        parameters and the outputs are as in this spec. The params model is
-        made anew, without this spec's model validators, which read fields
-        whose types change, and has no static type.
-
-        With one row in each table, a request of the new spec is a request of
-        this one (see :func:`ess.spec.testing.check_one_row`).
-        """
-        if self.tables:
-            raise ValueError(f'{self.name} has tables already')
-        fields = self.params.model_fields
-        if unknown := sorted(set(tables) - fields.keys()):
-            raise ValueError(f'{unknown}: not parameters of {self.name}')
-        if lists := sorted(n for n in tables if element(fields[n].annotation)):
-            raise ValueError(f'{lists}: lists already, cannot be tables')
-        if not_tables := sorted(set(empty) - set(tables)):
-            raise ValueError(f'{not_tables}: empty, but not tables')
-        return WorkflowSpec(
-            name=name,
-            version=version,
-            title=title or self.title,
-            description=description or self.description,
-            code_revision=self.code_revision,
-            params=_tabulated(self.params, tables, empty),
-            outputs=self.outputs,
-            tables=tuple(tables),
-        )
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
@@ -522,36 +469,6 @@ def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
         elif get_origin(field.annotation) is not list:
             problems.append(f'{name}: a table is a list parameter')
     return problems
-
-
-def _tabulated(
-    model: type[BaseModel], tables: Collection[str], empty: Collection[str]
-) -> type[BaseModel]:
-    """``model`` with the fields named as tables, each a list of its type."""
-    fields: dict[str, Any] = {}
-    for name, info in model.model_fields.items():
-        if name not in tables:
-            fields[name] = (info.annotation, info)
-            continue
-        meta = {
-            'title': info.title,
-            'description': info.description,
-            'json_schema_extra': info.json_schema_extra,
-            # An example of a table is one row of it.
-            'examples': None if info.examples is None else [[e] for e in info.examples],
-        }
-        # A row is a value of the field, so the field's validators and
-        # constraints check each row.
-        row = (
-            Annotated[info.annotation, *info.metadata]
-            if info.metadata
-            else info.annotation
-        )
-        rows = {'default_factory': list} if name in empty else {'min_length': 1}
-        fields[name] = (list[row], Field(**rows, **meta))
-    return create_model(
-        f'Tabulated{model.__name__}', __config__=model.model_config, **fields
-    )
 
 
 def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:

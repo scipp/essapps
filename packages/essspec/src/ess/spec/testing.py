@@ -6,7 +6,8 @@ Checks of the symmetries that a workflow author promises, for a package's tests.
 Each check computes the same outputs in two ways and compares them, so it
 needs no known result. With a single-run binding ``single`` (a
 ``PipelineBinding``) of ``IOFQ``, a multi-run binding ``multi`` (a
-``DriverBinding``) of ``IOFQ_MULTI = IOFQ.tabulate(...)``, and the function
+``DriverBinding``) of ``IOFQ_MULTI``, whose tables ``sample`` and ``can`` are
+lists of the types of those parameters of ``IOFQ``, and the function
 ``make_driver`` that ``multi`` makes its drivers with::
 
     params = IofQParams(reduction=Reduction(bins=2), sample=run_101, can=run_110)
@@ -52,8 +53,9 @@ def check_one_row(
 ) -> None:
     """
     One-row: the binding of a multi-run spec, with one row in each table,
-    gives the outputs of the binding of the single-run spec that
-    ``tabulate`` made it from.
+    gives the outputs of the binding of a single-run spec. The two specs
+    agree on the parameters that are not tables, and each table is a list of
+    the type of the parameter of the same name of the single-run spec.
 
     ``params`` is a request of ``single``, an instance of its spec's params
     model; the request of ``multi`` is made from it.

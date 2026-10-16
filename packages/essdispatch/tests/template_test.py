@@ -42,6 +42,11 @@ class ScaleParams(BaseModel):
     sample: WeightedRun
 
 
+class TotalParams(BaseModel):
+    scaling: list[Factor | None] = Field(default_factory=list)
+    sample: list[WeightedRun] = Field(min_length=1)
+
+
 class Value(BaseModel):
     value: float
 
@@ -54,6 +59,12 @@ def _positive(value: float) -> float:
 
 class PositiveParams(BaseModel):
     positive: Annotated[PositiveValue, AfterValidator(_positive)]
+
+
+class PositivesParams(BaseModel):
+    positive: list[Annotated[PositiveValue, AfterValidator(_positive)]] = Field(
+        min_length=1
+    )
 
 
 class Made(BaseModel):
@@ -89,12 +100,10 @@ def _spec(
 
 
 SCALE = _spec('scale', params=ScaleParams)
-TOTAL = SCALE.tabulate(
-    name='total', version=1, tables=('sample', 'scaling'), empty=('scaling',)
-)
+TOTAL = _spec('total', params=TotalParams, tables=('sample', 'scaling'))
 MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
-USE_MANY = USE.tabulate(name='use-many', version=1, tables=('positive',))
+USE_MANY = _spec('use-many', params=PositivesParams, tables=('positive',))
 CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
 
 
@@ -103,7 +112,7 @@ def scale(params: ScaleParams) -> Value:
     return Value(value=_weighted(params.sample) * factor)
 
 
-def total(params: Any) -> Value:
+def total(params: TotalParams) -> Value:
     summed = sum(_weighted(run) for run in params.sample)
     return Value(value=summed * math.prod(f.factor for f in params.scaling))
 
@@ -120,7 +129,7 @@ def use(params: PositiveParams) -> Value:
     return Value(value=params.positive)
 
 
-def use_many(params: Any) -> Value:
+def use_many(params: PositivesParams) -> Value:
     return Value(value=sum(params.positive))
 
 

@@ -2,8 +2,8 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The symmetries of docs/developer/README.md on a toy package that offers a
-single-run spec and the multi-run spec tabulated from it, as
-docs/developer/three-ways-to-run-a-spec.html shows them: a sciline pipeline of
+single-run spec and a multi-run spec with tables of its sample and can runs,
+as docs/developer/three-ways-to-run-a-spec.html shows them: a sciline pipeline of
 one sample run and an optional can run behind the single-run spec, and a
 driver over the same pipeline behind the multi-run spec.
 
@@ -49,6 +49,12 @@ class IofQParams(BaseModel):
     can: CanFile | None = None
 
 
+class IofQMultiParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: list[SampleFile] = Field(min_length=1)
+    can: list[CanFile | None] = Field(default_factory=list)
+
+
 class IofQOutputs(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -63,8 +69,14 @@ IOFQ = WorkflowSpec(
     params=IofQParams,
     outputs=IofQOutputs,
 )
-IOFQ_MULTI = IOFQ.tabulate(
-    name='iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
+IOFQ_MULTI = WorkflowSpec(
+    name='iofq-multi',
+    version=1,
+    title='iofq-multi',
+    description='toy spec iofq-multi',
+    params=IofQMultiParams,
+    outputs=IofQOutputs,
+    tables=('sample', 'can'),
 )
 
 

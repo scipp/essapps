@@ -509,8 +509,8 @@ class SampleRun(Data):
 
 class CentredParams(Data):
     centre: Centre
-    sample: SampleRun
-    can: CanFile | None = None
+    sample: list[SampleRun] = Field(min_length=1)
+    can: list[CanFile | None] = Field(default_factory=list)
 
 
 Centred = NewType('Centred', sc.Variable)
@@ -520,15 +520,15 @@ class CentredOutputs(Data):
     centred: Centred
 
 
-CENTRED_MULTI = _spec('sans-centred', CentredOutputs, params=CentredParams).tabulate(
-    name='sans-centred-multi',
-    version=1,
+CENTRED_MULTI = _spec(
+    'sans-centred-multi',
+    CentredOutputs,
+    params=CentredParams,
     tables=('sample', 'can'),
-    empty=('can',),
 )
 
 
-def centred(params: Any) -> CentredOutputs:
+def centred(params: CentredParams) -> CentredOutputs:
     """
     The sample runs, each times its transmission if given, minus the cans,
     minus the centre.

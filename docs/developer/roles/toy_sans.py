@@ -65,11 +65,19 @@ class Sample(BaseModel):
     )
 
 
-class IofQParams(BaseModel):
+class IofQSettings(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+
+
+class IofQParams(IofQSettings):
     sample: Sample
     can: CanFile
+
+
+class IofQMultiParams(IofQSettings):
+    sample: list[Sample] = Field(min_length=1)
+    can: list[CanFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
@@ -86,12 +94,14 @@ IOFQ = WorkflowSpec(
     params=IofQParams,
     outputs=IofQOutputs,
 )
-IOFQ_MULTI = IOFQ.tabulate(
+IOFQ_MULTI = WorkflowSpec(
     name='toy-sans-iofq-multi',
     version=1,
-    tables=('sample', 'can'),
     title='I(Q) of summed runs',
     description='I(Q) of the summed sample runs, minus that of the summed can runs.',
+    params=IofQMultiParams,
+    outputs=IofQOutputs,
+    tables=('sample', 'can'),
 )
 
 ForwardIntensity = NewType('ForwardIntensity', sc.Variable)

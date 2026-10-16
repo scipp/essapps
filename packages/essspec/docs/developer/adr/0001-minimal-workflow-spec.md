@@ -286,27 +286,36 @@ carries its own unit.
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs. Each row is given inline or by reference, as its
 type allows. The rows of a table are distinct. A *single-run spec* takes one
-run per parameter. `tabulate` makes a *multi-run spec* from it by naming the
-parameters that become tables:
+run per parameter. A *multi-run spec* of the same reduction takes a table in
+place of such a parameter. Its params model is a plain model, and the fields
+the two models have in common are shared by inheritance:
 
 ```python
-IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'),
-                           empty=('can',))
+class IofQSettings(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+
+class IofQParams(IofQSettings):
+    sample: Sample
+    can: CanFile
+
+class IofQMultiParams(IofQSettings):
+    sample: list[Sample] = Field(min_length=1)
+    can: list[CanFile] = Field(min_length=1)
+
+IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title=..., description=...,
+                          params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
-Each parameter named becomes a `list` of its type as written, such as
-`sample: Sample` becoming `list[Sample]` with at least one row; a table named
-in `empty` may have no rows, and has none by default. The docstring of
-`WorkflowSpec.tabulate` states the rules.
-
-`tabulate` fills the field `tables` of `WorkflowSpec`, a tuple of the names of
-the tables. A spec whose outputs differ from those of a single-run spec, such
-as a stitch of all angles, or that has no single-run spec, such as a sum of
-counts over the runs of a scan, declares its tables itself:
-`WorkflowSpec(..., tables=('angle',))`, with
-`angle: list[AngleFile] = Field(min_length=1)`, as `tabulate` makes it, so that
-the model, its schema, and the backend agree that the table has a row. A list
-parameter makes a table only when `tables` names it.
+Each table is a `list` of the single-run type, with `Field(min_length=1)` if
+it needs a row, or `Field(default_factory=list)` if it may have no rows. The
+model states the length constraints, so that the model, its schema, and the
+backend agree that the table has a row. The field `tables` of `WorkflowSpec`
+is a tuple of the names of the tables. A list parameter makes a table only when
+`tables` names it. A spec whose outputs differ from those of a single-run spec,
+such as a stitch of all angles, or that has no single-run spec, such as a sum
+of counts over the runs of a scan, is written the same way:
+`angle: list[AngleFile] = Field(min_length=1)`, with `tables=('angle',)`.
 
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
@@ -459,9 +468,11 @@ output, and dims and units of an output for a UI.
   resolves, the format of the bytes, and the array structure. The field types
   tell the framework the same, and the author writes no metadata for the
   framework.
-- **Multi-run models written by hand**, next to the single-run model. They
-  repeat the single-run model, and the one-row symmetry holds only by
-  convention.
+- **A `tabulate` that derives the multi-run model** from the single-run spec
+  by naming its tables. The model has no static type, drops the model
+  validators of the single-run model, and needs framework rules for where the
+  metadata of a field goes. The one-row symmetry that it would give by
+  construction is checked by `check_one_row`.
 - **A table as several list parameters of equal length**, an *index* such as
   the runs, with *columns* attached to it, such as the transmission of each
   run. The values of one run are then spread over several lists and paired by

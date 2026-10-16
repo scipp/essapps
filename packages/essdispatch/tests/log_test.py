@@ -69,23 +69,23 @@ class Weight(BaseModel):
     factor: float = 1.0
 
 
-class PartParams(BaseModel):
+class TotalParams(BaseModel):
     weight: Weight | None = None
-    part: Part
+    part: list[Part] = Field(min_length=1)
 
 
-PART = WorkflowSpec(
-    name='part',
+TOTAL = WorkflowSpec(
+    name='total',
     version=1,
-    title='part',
-    description='one part of a total',
-    params=PartParams,
+    title='total',
+    description='a total of parts',
+    params=TotalParams,
     outputs=Value,
+    tables=('part',),
 )
-TOTAL = PART.tabulate(name='total', version=1, tables=('part',))
 
 
-def total(params: Any) -> Value:
+def total(params: TotalParams) -> Value:
     factor = 1.0 if params.weight is None else params.weight.factor
     return Value(value=factor * sum(params.part))
 

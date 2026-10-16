@@ -43,18 +43,24 @@ class IofQParams(BaseModel):
     can: CanFile | None = None
 
 
+class IofQMultiParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: list[SampleFile] = Field(min_length=1)
+    can: list[CanFile | None] = Field(default_factory=list)
+
+
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
     can_iofq: CanIofQ | None = None
 
 
-def _spec(name: str, **models: type[BaseModel]) -> WorkflowSpec[Any, Any]:
-    return WorkflowSpec(name=name, version=1, title=name, description=name, **models)
+def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
+    return WorkflowSpec(name=name, version=1, title=name, description=name, **fields)
 
 
 IOFQ = _spec('iofq', params=IofQParams, outputs=IofQOutputs)
-IOFQ_MULTI = IOFQ.tabulate(
-    name='iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
+IOFQ_MULTI = _spec(
+    'iofq-multi', params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can')
 )
 
 
@@ -330,12 +336,20 @@ Total = NewType('Total', float)
 SampleTotal = NewType('SampleTotal', float)
 
 
+class TotalMultiParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: list[SampleFile] = Field(min_length=1)
+    can: CanFile | None = None
+
+
 class TotalOutputs(BaseModel):
     total: SampleTotal
 
 
 TOTAL = _spec('total', params=IofQParams, outputs=TotalOutputs)
-TOTAL_MULTI = TOTAL.tabulate(name='total-multi', version=1, tables=('sample',))
+TOTAL_MULTI = _spec(
+    'total-multi', params=TotalMultiParams, outputs=TotalOutputs, tables=('sample',)
+)
 
 
 def load(filename: Filename) -> Counts:
