@@ -56,17 +56,17 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | spec | a workflow's name, version, params, and outputs |
 | params, outputs | the two models of a spec: everything the workflow takes, and its results (see Specs and bindings) |
 | parameter | a field of the params model |
-| by value, by reference | the two forms of a value in a request: a *literal*, the value itself in its JSON form, or a *reference* to data that exist elsewhere |
-| literal | a value given by value. Its type has a *JSON form*: pydantic makes a JSON schema of it, and it holds no file. |
-| group | a model of literals, such as the settings of one reduction step: the usual type of a parameter given by value |
+| literal | the value itself, such as `Reduction(bins=100)`; the record holds its JSON form. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
+| reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
+| by value, by reference | the two forms of a value in a request: a literal, or a reference |
+| group | a pydantic model with a JSON form, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given by value |
 | data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
+| fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value a literal or a reference |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 | logged | recorded by the backend in the proposal's *history*. `submit` and the other calls that start work return once logged. |
 | record | a request as the backend logged it. A record never changes, only its status. |
-| reference | a value of a request that names an output of a record or an accumulator, or a dataset |
-| fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | label, member | names under which records are found later |
 | template | a spec with *fixed values* for some parameters and *blanks* for the others |
 | fixed value | the value a template gives a parameter, as a request does |
@@ -114,7 +114,7 @@ A spec has two pydantic models:
 class Reduction(BaseModel):                       # a group
     bins: int = 100
 
-class BeamCentre(BaseModel):                      # a group: typed in, or computed by a first reduction
+class BeamCentre(BaseModel):                      # a group: a literal, or an output of a first reduction
     x: float
     y: float
 
@@ -142,26 +142,29 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 
 | A parameter's type | Example | By value | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset, or an output that fits |
+| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | anything else | `Transmission` | no | to an output that fits |
 
-The models are ordinary pydantic models: the framework reads what it needs from the field types.
-Each parameter is a type, possibly optional, or a list of one.
-Each output is a type, possibly optional, or a list or a dict of one.
-A group holds no file, since a file is given by reference to a dataset.
-A default is a value, never a reference: of a type without a JSON form, `None` or an empty list.
+A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
 A workflow that takes nothing has the params model `NoParams`.
 A request computes every output its spec declares.
 
-**Checks.** Each parameter is validated alone, in every phase.
+**Rules.** The models are ordinary pydantic models: the framework reads what it needs from the field types.
+A value *round-trips* when its JSON form reads back as the value.
+`WorkflowSpec` checks these rules when it is made:
+
+- Each parameter is a type, possibly optional, or a list of one.
+- Each output is a type, possibly optional, or a list or a dict of one.
+- A group holds no file.
+- A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
+- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
+
+Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
-`WorkflowSpec` refuses field validators, serializers, computed fields, and aliases on the params model itself, and a `default_factory` that takes the other values.
-A list parameter carries only length constraints, such as `Field(min_length=2)`: a check of one row belongs to the element type.
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
-The params model may state such a check as a model validator, next to the fields it reads, but the framework never calls it: a stage and a driver never get a whole params instance, so the check would hold for some requests of a spec and not for others.
-A binding may run it, `IofQParams.model_validate(dict(params))`.
+A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
 **Binding.** A binding is what the backend calls to compute a spec's requests.
 The workflow author makes it from a pipeline, a driver, or a function, each for one spec.
@@ -203,7 +206,7 @@ A literal is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins
 It may be left out when every parameter has a default.
 
 Submitting a request returns a *record*.
-The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the literals in JSON's types and the references.
+The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the JSON form of each literal, and each reference.
 It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
@@ -228,7 +231,7 @@ Each takes one request or record, a list, or a dict, and returns the same shape.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 
 **Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each literal by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
-A literal must read back from its JSON form as the value, since the log holds that form: a number that is not finite has none.
+A literal must round-trip, since the log holds its JSON form: a number that is not finite does not.
 In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
 If one request of a call is refused, none is submitted.
@@ -244,10 +247,10 @@ The same beam centre is typed in by one user and computed by another:
 
 ```python
 result = client.submit(IOFQ, params={'sample': dataset(run=60339),
-                                     'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # typed in
+                                     'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # a literal
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})       # pending
 result = client.submit(IOFQ, params={'sample': dataset(run=60339),
-                                     'beam_centre': centre.ref('centre')})            # computed
+                                     'beam_centre': centre.ref('centre')})            # a reference
 ```
 
 The backend runs the last request once the one before has completed.
@@ -265,8 +268,10 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
 ```
 
-The framework looks for references at the top of each value and at the top of each element of a list, and nowhere deeper.
-So it finds the references of a request without the spec, and refuses such an object where the spec allows no reference, such as inside a value that is not a list.
+The framework looks for references at two places only: the top of each value, and the top of each element of a value that is a JSON array.
+At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; or the JSON form of a literal, such as a group with extra fields that holds the key `@ref`.
+Deeper inside a value, `@ref` is plain data.
+So the framework finds the references of a request without the spec.
 
 A reference *fits* a parameter when the type of the data it names can be the parameter's value.
 `| None` is removed on both sides.

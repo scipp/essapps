@@ -15,14 +15,16 @@ A spec declares two models:
 | params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-A *reference* names data that exists elsewhere: a dataset, an output of a record, or an output of an accumulator.
+A request gives each value *by value*, as a *literal*, or *by reference*.
+A literal is the value itself; the record holds its JSON form.
+A *reference* names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator.
 Whether a parameter is given by value or by reference is the request's choice, per value.
 The parameter's type decides which of the two it accepts:
 
 | A parameter's type | Example | By value | By reference |
 |---|---|---|---|
+| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre`, `TimeRange` | yes | to an output that fits |
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset, or an output that fits |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
 
 `None` is a value of an optional parameter of any type.
@@ -31,21 +33,23 @@ The binding gets that instance: `compute(params) -> outputs`.
 
 ```python
 client.submit(IOFQ, params={'sample': dataset(run=60339),
-                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # typed in
+                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # a literal
 client.submit(IOFQ, params={'sample': dataset(run=60339),
-                            'beam_centre': finder.ref('centre')})            # computed
+                            'beam_centre': finder.ref('centre')})            # a reference
 ```
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
-| literal | A value given by value, in its JSON form. |
-| JSON form | A type has one when it is not a file and pydantic makes a JSON schema for it (see Rules for the model); a value has one when its JSON reads back as the value. |
-| group | A model of literals, such as `Reduction` or the edges models of `ess.spec.parameters`, holding no file. The usual type of a parameter given by value. |
-| data value | A value of a type without a JSON form: a file, or an object such as a scipp array. Given by reference only. |
 | parameter | A field of the params model. Its *name* is the field's name. |
-| by value, by reference | The two forms of a value in a request: the literal itself, or a reference to data. |
+| JSON form | A type has a JSON form when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
+| literal | The value itself. The record holds its JSON form. |
+| round-trips | A value round-trips when its JSON form reads back as the value. |
+| reference | Names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator. |
+| by value, by reference | The two forms of a value in a request: a literal, or a reference. |
+| group | A pydantic model with a JSON form, such as `Reduction` or the edges models of `ess.spec.parameters`. The usual type of a parameter given by value. |
+| data value | A value of a type without a JSON form: a file, or an object such as a scipp array. Given by reference only. |
 | table, index, column, row | A *table* is a set of list parameters of equal length, pushed together. Its *index* is the parameter that names it, such as the run; its other *columns* are attached to the index, such as a correction of each run. Each position is a *row*. As in a pandas DataFrame, the index values of a table are distinct. |
 | blank | A parameter, or a table (named by its index), that a template leaves open. |
 | fits | A reference fits a parameter when the type of the data it names can be the parameter's value (see Validation). |
@@ -79,10 +83,9 @@ The spec side, which needs no workflow package:
 class Reduction(BaseModel):                       # a group
     bins: int = 2
 
-class BeamCentre(BaseModel):                      # a group: typed in, or output by a finder
+class BeamCentre(BaseModel):                      # a group: a literal, or a finder's output
     x: float
     y: float
-    unit: LengthUnit = LengthUnit.METER
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)
@@ -99,6 +102,9 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs=IofQOutputs)
 IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
+
+class CentreParams(BaseModel):
+    sample: SampleFile
 
 class CentreOutputs(BaseModel):
     centre: BeamCentre
@@ -120,16 +126,18 @@ Checked when the spec is made:
 - Which forms a parameter takes follows from its type, with `| None` removed and, for a list parameter, its element type taken, tested in this order:
 
   ```
-  file:      its NewType chain reaches Path    -> a reference: a dataset, or an output that fits
-  JSON form: TypeAdapter(tp, config=params.model_config).json_schema() succeeds,
-             and it holds no file                -> a literal, or a reference to an output that fits
-  otherwise                                      -> a reference to an output that fits
+  file:      its NewType chain reaches Path              -> a reference to a dataset
+  JSON form: pydantic makes a JSON schema of it, with the
+             params model's config, and it holds no file -> a literal, or a reference to an output that fits
+  otherwise                                              -> a reference to an output that fits
   ```
 
-  A file inside a group, such as a model with a `Path` field, is refused: a file is given by dataset reference, so that the dataset source checks access and the record holds the dataset's identity.
-- A default is a value, never a reference: of a type with a JSON form, a value that reads back from its JSON and whose JSON is not an object with the key `@ref`; of any other type, `None` or an empty list.
-- No parameter sees another: each parameter is validated alone, in every phase. So the params model has no field validators, no serializers, no aliases, and no `default_factory` that takes the other values. A check of one value belongs to the value's type, as `EdgesModel` checks its edges. A list parameter's field carries only length constraints, `Field(min_length=2)`, and no other metadata; a check of one row belongs to the element type.
-- A check across parameters or rows is the binding's or the driver's, and fails when the request runs; in a sciline workflow, a missing parameter fails when the pipeline is built. The params model may state such a check as a model validator, next to the fields it reads, but the framework never calls it: a stage and a driver never get a whole params instance, so it would hold for some requests of a spec and not for others. A binding may run it, `IofQParams.model_validate(dict(params))`, where it has the whole instance. `tabulate` does not carry it over, since its fields become lists.
+  A group holds no file: a file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+- A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
+- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
+
+No parameter sees another: each parameter is validated alone, in every phase, since a stage and a driver never get a whole params instance. A check of one value belongs to the value's type, as `EdgesModel` checks its edges, and a check of one row to the element type.
+A check across parameters or rows is the binding's or the driver's, and fails when the request runs; in a sciline workflow, a missing parameter fails when the pipeline is built. The params model may state such a check as a model validator, next to the fields it reads. A binding may run it, `IofQParams.model_validate(dict(params))`, where it has the whole instance. `tabulate` does not carry it over, since its fields become lists.
 
 Two parameters may share a type. A `PipelineBinding` sets each parameter under its type, so it refuses two with one type unless `keys=` names a key for one; a spec with two axes of a Q map may give each a `NewType`, or map them with `keys=`.
 
@@ -145,8 +153,9 @@ Its JSON form is an object with the key `"@ref"`, which names its kind:
 {"@ref": "accumulator", "accumulator": "a3", "output": "iofq"}
 ```
 
-The framework looks for references, without the spec, at two places only: at the top of each value, and at the top of each element of a value that is an array. It never looks deeper; `@ref` inside a group is plain data.
-The request phase refuses an object with the key `"@ref"` at these places wherever the spec does not allow a reference: a literal of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array, or a group with extra fields that holds such a key.
+The framework looks for references at two places only: the top of each value, and the top of each element of a value that is a JSON array.
+At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; or the JSON form of a literal, such as a group with extra fields that holds the key `@ref`.
+Deeper inside a value, `@ref` is plain data.
 So the framework finds every reference of a request, a record, or the log without the spec, as a remote client that holds only the serialized spec must, and a literal never reads as a reference.
 `@ref` is not a JSON Schema keyword, so an example in a schema that holds a reference stays plain data.
 
@@ -227,8 +236,8 @@ The *table rules* are: the columns of a table have equal length, the number of r
 | a push | each row by its column's element type, as for a request; the table rules on the table with the push | each value read by its column's element type; the index values read distinct from those read before, before the driver gets them |
 | a state, at a pin or a read | the number of rows of each table, by its length constraints | (none) |
 
-A literal must read back from its JSON form as the value, since the log holds that form: a number that is not finite has none.
-In both phases a value is validated by a model of its field alone, made with the params model's config (`checks.model_of`), or for a row by the element type with its metadata: a literal from its JSON (`model_validate_json`, so that a strict enum takes its string), a value read from its object.
+A literal must round-trip, since the log holds its JSON form: a number that is not finite does not.
+In both phases a value is validated by a model of its field alone, made with the params model's config, or for a row by the element type with its metadata (`ess.spec.field_types.validated`): a literal from its JSON (`model_validate_json`, so that a strict enum takes its string), a value read from its object.
 The params instance is then made from the validated values with `model_construct`, which validates nothing again.
 
 **Fit.** A reference fits a parameter when the type of the data it names fits the parameter's type: `| None` is removed on both sides; a reference with a key names one element, of the output's element type; a list parameter takes each reference by its element type.
@@ -262,6 +271,7 @@ A function binding is `def iofq(params: IofQParams) -> IofQOutputs`.
 `SerializedWorkflowSpec` holds `params_schema`, `outputs_schema`, and the tables.
 The framework makes `params_schema` from a model of the same fields, each with its title, description, default, and length constraints, and with its type replaced by the forms it takes: `anyOf` its JSON schema and a reference for a type with a JSON form, a reference otherwise.
 A reference's schema is the `@ref` object, with the name of the data type it must fit.
+The schema refuses a name that is not a parameter (`additionalProperties: false`), and an attached column that the backend fills with `None` when it is left out is not required.
 A form shows a group's fields, with a choice to give it by reference; a picker per data parameter shows references.
 
 ### Three cases the design must carry
@@ -302,12 +312,12 @@ Both drivers get a `BeamCentre`, and pushes of the same runs give the same resul
   - `Quantity` is a group like any other; its docstring stops sending a computed value to the inputs.
 - **essdispatch.**
   - `Request`, `Template`, records, and the log entries (`Opened`, `Pushed`) hold `params` only. The merges of the two sides and the check that a name is given on its side go. A log written by the branch does not read back.
-  - `Checks` checks each value by its form: a literal by its field or element type from its JSON form, a reference by readability and fit. Model validators are never run, on requests or on states; a state is checked by its tables' length constraints.
+  - `Checks` checks each value by its form: a literal by its field or element type from its JSON form, a reference by readability and fit; a file takes a dataset reference only. Model validators are never run, on requests or on states; a state is checked by its tables' length constraints.
   - The call phase validates each value by its field and makes the params instance from them; one helper serves plain requests, stages, and drivers. Distinct index values read are checked before the driver gets a push.
   - `Record.ref(output, key=None)`.
   - `submit`, `Template`, a stage call, and a fill take `params=`.
 - **ADR 0001.** Rewritten in place: "Params and inputs" becomes "Params by value or by reference", opening with the two phases per value.
-- **ADR 0007.** Unchanged: data types still bring scipp to the spec side.
+- **ADR 0007.** "Input" becomes "parameter" in the command-line tool and in the rule that a spec module may import scipp; data types still bring scipp to the spec side.
 - **binding-jobs.md, README, role notebooks (sources in `.scratch/role-notebooks`), `toy_sans.py`, three-ways-to-run-a-spec.html.** One model; `Transmission` and `BeamCentre` given either way.
 - **Tests.** Every request written with `params=`; tests of side errors and of params model validators go; the stories gain the three cases above.
 
@@ -322,19 +332,13 @@ Both drivers get a `BeamCentre`, and pushes of the same runs give the same resul
 ## Decisions
 
 - **The model's name is `params`.** sciline sets files and data on a pipeline as parameters, essreduce's `parameter_registry` holds `FilenameParameter`s, and esslivedata's specs have `params`, which then is the special case with every value given by value.
+- **Distinct index values, also by the values read.** Without it, a literal and a reference that name the same time slice, or references to two records that found the same slices, are two index values, and the slice is summed twice without an error. It costs a set of JSON forms per blank table of an accumulator, and a push that repeats one stops the accumulator. The alternative compares as the record holds the values only, and states that limitation.
 - **A model validator of the params model is the binding's to run.** None of esslivedata's 14 params models has one; its 16 groups with validators each check their own fields. A check across parameters, such as a transmission mode that requires a transmission run, fails in the call phase, also for each request of a batch.
 - **Groups for values both typed and computed, for now.** A beam centre is a group, converted by a provider in each binding. Of the 7 values both typed and computed, 5 are scalars or vectors with a unit that ess workflows already use as sciline keys (beam centre, I0, MValue, CriticalEdge, Alpha). A JSON form for these small scipp values, opt in, `Annotated[BeamCenter, SmallScipp]`, would let such a parameter take a literal with no group and no converter; a probe needed about 40 lines. Under this plan that is a type with a JSON form like any other, so it can come later without a change to the design.
 
-## Open questions
-
-The plan follows the recommendation; a `> Simon:` line overrules it.
-
-1. **Distinct index values by the values read.** Without it, a literal and a reference that name the same time slice, or references to two records that found the same slices, are two index values, and the slice is summed twice without an error. It costs a set of JSON forms per blank table of an accumulator, and a push that repeats one stops the accumulator. The alternative compares as the record holds the values only, and states that limitation.
-   > Simon:
-
 ## Left for later
 
-- **A small-scipp JSON form**, as in open question 3.
+- **A small-scipp JSON form**, as in the decision on groups for values both typed and computed.
 - **A file or a computed result for one parameter**, such as a direct-beam function from a file prepared by an instrument scientist or from a record. sciline does this with one key and a loader provider (`XFilename -> X`). A spec types such a parameter as the object, `direct_beam: DirectBeam | None`, so that a dataset reference loaded by a loader that the binding declares can come later without a new spec version.
 - **One spec for one run and for many.** The tables could be declared on the single-run spec itself, with no second spec.
 - **Filling params per dataset in `apply`**, such as each sample's thickness in a batch. Until then, such a batch is a list of requests.

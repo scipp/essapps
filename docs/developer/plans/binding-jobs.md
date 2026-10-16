@@ -35,9 +35,9 @@ Defined in the [README](../README.md) and in [params-by-value-or-reference.md](p
 | Term | Meaning |
 |---|---|
 | params, outputs | The two models of a spec. *Params* hold everything the workflow takes: settings, files, data. *Outputs* hold the results. |
-| parameter | A field of the params model. A request gives each value of it *by value*, a literal in its JSON form, or *by reference*, to a dataset or an output, as the parameter's type allows; the binding gets the value as its type either way. |
-| group | A model of literals, such as `Reduction`: the usual type of a parameter given by value. |
-| table, index, column, row | A *table* is a set of list fields of equal length, pushed together. Its *index* is the field that names it, such as `sample`; its other *columns* are attached to the index. Each position is a *row*. |
+| parameter | A field of the params model. A request gives each value of it *by value*, as a literal, or *by reference*, as the parameter's type allows: a file by reference to a dataset, and any other type by reference to an output of a record or an accumulator. A literal is the value itself; the record holds its JSON form. The binding gets the value as its type either way. |
+| group | A pydantic model with a JSON form, such as `Reduction`: the usual type of a parameter given by value. |
+| table, index, column, row | A *table* is a set of list parameters of equal length, pushed together. Its *index* is the parameter that names it, such as `sample`; its other *columns* are attached to the index. Each position is a *row*. |
 | template, fixed, blank | A *template* is a request with some parameters or tables left out, the *blanks*; the others are *fixed*. A blank is a whole parameter, never a field of a group; a table is a blank by its index. |
 | plain request | A request with every value given. |
 | stage | A template the backend keeps for a client, called with values for its blanks. |
@@ -186,10 +186,10 @@ The author of a function or a driver writes against it, in the spec's params and
 ### From references to data
 
 A request gives each value by value or by reference: to a dataset, an output of a record, or an output of an accumulator.
-The backend reads each reference in the call phase, when the data is needed, as the field's type asks: a local path for a file field, such as `SampleFile`, and the object for any other, such as a beam centre computed by another record.
+The backend reads each reference in the call phase, when the data is needed, as the field's type asks: a local path for a file parameter, such as `SampleFile`, and the object for any other, such as a beam centre computed by another record.
 It checks each value by its field alone once, a literal from its JSON form and a value read from its object, and builds the params instance of a plain request from them.
 The fixed values of a stage or an accumulator are read field by field, the same way, when the stage or the driver is made, and the values of a push when the push is added.
-So a binding cannot tell a typed-in beam centre from a computed one.
+So a binding cannot tell a beam centre given as a literal from one given by reference.
 So the form a workflow gets is chosen by the spec's types, not by the dataset source.
 Records hold references, so history and provenance stay small.
 

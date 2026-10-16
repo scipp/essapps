@@ -89,7 +89,7 @@ iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
 ## Alternatives considered
 
 - **Combining the outputs of requests**, with a per-run spec, a sum, and a finalizing spec. Each partial sum becomes a record. Two tables of runs, shared parameters next to per-run ones, and the finalizing step would each need a mechanism of their own.
-- **List fields, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
+- **List parameters, with the framework finding new runs by comparing lists.** The framework would have to compare lists, and track which tuned values the per-run part read. A push names the new row.
 - **A chain of totals**, each a request over the previous total and one new run. A record would not mean the sum of its runs, and a growing total is copied at every step.
 - **The framework keeps the rows for a binding without a driver**, and computes the plain request over all of them at each read. How rows combine would be decided in two places, and a framework strategy would serve workflows that never chose it. A workflow that needs every row at once writes a driver that keeps them.
 - **A push that names several tables**, whose rows enter one state. It reads as if the rows belonged together. Values that belong together are one row of one table: an index value and the values of its attached columns.

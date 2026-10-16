@@ -14,12 +14,12 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `can: CanFile \| None`, `beam_centre: BeamCentre \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
-| `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: BeamCentre` | the mean of the counts | beam-centre finding |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `can: CanFile \| None`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
+| `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: CentreArray` | the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[RunFile]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list[SampleFile]`, `background_runs: list[BackgroundFile]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `sample: SampleFile` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `CONTRIBUTE` | `sample: SampleFile` | `parts: Parts` (`numerator`, `denominator`), `transmission: TransmissionArray` | a copy of the counts and their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts: list[Parts]` | `numerator`, `denominator` | each field of `Parts` summed over the list | a sum of outputs of other records |
 | `ANGLE` | `sample: SampleFile` | `counts: Volume` | a copy of the counts | a reduction of one run into a volume |
 | `CUT` | `position: Position` (`index`), `volume: Volume` | `cut` | the value at `index` | a cut through a volume, from another package |
@@ -30,15 +30,15 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICER` | `log: RunFile` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: SampleFile`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `FIND_CENTRE` | `direct_beam: DirectBeamFile` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleFile]` with the column `transmission: list[Transmission \| None]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
+| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleFile]` with the column `transmission: list[TransmissionArray \| None]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
 A parameter's type decides how a request gives its value (README.md):
 
 | A parameter's type | In the toy specs | Given as |
 |---|---|---|
-| a group: a model of literals | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | a literal, or a reference to an output that fits |
-| a file: a `NewType` of `Path` | each `...File` | a dataset reference, or a reference to an output that fits |
-| any other type | `BeamCentre`, `Normalization`, `Transmission`, `Parts`, `sc.Variable` | a reference to an output that fits |
+| a file: a `NewType` of `Path` | each `...File` | a dataset reference |
+| has a JSON form: a group | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | a literal, or a reference to an output that fits |
+| any other type | `CentreArray`, `Normalization`, `TransmissionArray`, `Parts`, `sc.Variable` | a reference to an output that fits |
 
 A list parameter takes its element type's forms, row by row.
 Every field has a type of its own within its spec.
@@ -49,7 +49,7 @@ A reference to an output fits a parameter when the output's type fits the parame
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with its runs as the index and no attached columns; that of `SLICES` has the time ranges as the index.
 These specs declare their tables with `tables=`, and each index, being required, carries `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
-`tabulate` makes `CENTRED_MULTI` from a single-run spec with params `centre: Centre`, `sample: SampleFile`, `transmission: Transmission | None`, and `can: CanFile | None`, with `tables={'sample': ('transmission',), 'can': ()}`.
+`tabulate` makes `CENTRED_MULTI` from a single-run spec with params `centre: Centre`, `sample: SampleFile`, `transmission: TransmissionArray | None`, and `can: CanFile | None`, with `tables={'sample': ('transmission',), 'can': ()}`.
 So `sample` is a required index with the column `transmission`, and `can` is an index that may have no rows.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
@@ -825,7 +825,7 @@ assert client.provenance(total).records() == [t611]
 ```
 
 A push gives each row of a column by value or by reference: here a reference in one row and `None` in the other.
-`Transmission` has no JSON form, so a row takes a reference, or `None` since the column is optional.
+`TransmissionArray` has no JSON form, so a row takes a reference, or `None` since the column is optional.
 No can is pushed: `can` is an index that may have no rows.
 
 ## Open

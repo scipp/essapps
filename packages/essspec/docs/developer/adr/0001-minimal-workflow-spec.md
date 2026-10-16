@@ -84,8 +84,10 @@ A request goes through two phases. The *request phase* is what the client and
 the backend do with a request before any data is read: validate, log, record,
 pin. The *call phase* starts when the backend reads data for the binding.
 
-A request gives each value *by value*, as a *literal* in its JSON form, or *by
-reference*, as plain data that names data existing elsewhere. In the request
+A field of the params model is a *parameter*. A request gives each value *by
+value*, as a *literal*, or *by reference*. A literal is the value itself; the
+record holds its JSON form. A *reference* names data that exist elsewhere: a
+dataset, an output of a record, or an output of an accumulator. In the request
 phase a value given by reference is the reference; in the call phase it is the
 data. The params model types the call phase only. The backend reads each
 reference and builds the params instance from the literals and the data, so
@@ -97,36 +99,39 @@ every field of it holds the type it declares. The binding gets that instance:
 | params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-A field of the params model is a *parameter*. Which form a value takes is the
-request's choice, per value, since the same value is typed in by one user and
-computed by another: a beam centre is typed in, or found by a first reduction;
-the time slices of a slicing reduction are typed in, or found from a log. The
-parameter's type decides which forms it accepts, with `| None` removed and, for
-a list parameter, its element type taken:
+Which form a value takes is the request's choice, per value, since the same
+value is typed in by one user and computed by another: a beam centre is typed
+in, or found by a first reduction; the time slices of a slicing reduction are
+typed in, or found from a log. The parameter's type decides which forms it
+accepts, with `| None` removed and, for a list parameter, its element type
+taken. A type has a *JSON form* when it is not a file, holds no file, and
+pydantic makes a JSON schema of it with the params model's config. A value
+*round-trips* when its JSON form reads back as the value.
 
 | A parameter's type | Example | By value | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset, or an output that fits |
-| has a JSON form: pydantic makes a JSON schema of it, with the params model's config, and it holds no file | `Reduction`, `BeamCentre`, `TimeRange` | yes | to an output that fits |
+| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
 
-A *group* is a model of literals, such as `Reduction`: the usual type of a
-parameter given by value. A *data value* is a value of a type without a JSON
-form: a file, or an object such as a scipp array. A file is always given by
-reference to a dataset, so that the dataset source checks access and the record
-holds the dataset's identity; the binding gets a local path. A group that holds
-a file is refused.
+A file is given by reference to a dataset only, so that the dataset source
+checks access and the record holds the dataset's identity; the binding gets a
+local path. A *group* is a pydantic model with a JSON form, such as
+`Reduction`: the usual type of a parameter given by value. A *data value* is a
+value of a type without a JSON form: a file, or an object such as a scipp
+array.
 
 ```python
 class Reduction(BaseModel):                       # a group
     bins: int = 2
 
-class BeamCentre(BaseModel):                      # a group: typed in, or output by a finder
+class BeamCentre(BaseModel):                      # a group: a literal, or a finder's output
     x: float
     y: float
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)
+Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
 class IofQParams(BaseModel):
@@ -141,24 +146,43 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs=IofQOutputs)
 ```
 
+Two requests, written with essdispatch: `client` connects to a backend,
+`dataset(...)` names a dataset, and `finder` is the record of a request that
+finds the beam centre, so `finder.ref('centre')` names its output `centre`:
+
 ```python
 client.submit(IOFQ, params={'sample': dataset(run=60339),
-                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # typed in
+                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # a literal
 client.submit(IOFQ, params={'sample': dataset(run=60339),
-                            'beam_centre': finder.ref('centre')})            # computed
+                            'beam_centre': finder.ref('centre')})            # a reference
 ```
 
-The models carry no annotations for the framework: what the framework needs, it
-reads from the field types (`ess.spec.field_types`). `WorkflowSpec` checks these
-rules when it is made:
+**Rules.** The models carry no annotations for the framework: what the
+framework needs, it reads from the field types (`ess.spec.field_types`).
+`WorkflowSpec` checks these rules when it is made:
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not a
   dict or a union of two types.
-- A default is a value, never a reference: of a type with a JSON form, a value
-  whose JSON form reads back as the value; of any other type, `None` or an
-  empty list.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
+- A group holds no file.
+- A default is a value, never a reference: of a type with a JSON form, a value
+  that round-trips and whose JSON form is neither an `@ref` object nor a list
+  holding one; of any other type, `None` or `[]`.
+- The params model has no field validators, serializers, computed fields, or
+  aliases, and no `default_factory` that takes the other values. A list
+  parameter carries only length constraints, such as `Field(min_length=2)`. The
+  params model may have model validators, but the framework never calls them.
+
+Each parameter is validated alone, in every phase: a template, a stage call,
+or a push gives some values only, so a check that read several parameters
+would hold for some requests of a spec and not for others. A check of one
+value belongs to the value's type, as `EdgesModel` checks its edges, and so
+does the JSON form of a value, which the framework stores and reads back. A
+check across parameters, such as a transmission mode that requires a
+transmission run, is the binding's or the driver's, and fails when the request
+runs. A binding may run the model validators,
+`IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
 **References.** A reference names an output of an earlier record (`OutputRef`:
 record, output name, and optionally the key of one element of a list or dict
@@ -175,12 +199,15 @@ object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
-A framework looks for references at the top of each value and at the top of
-each element of a value that is an array, and nowhere deeper; `@ref` inside a
-group is plain data. The request phase refuses such an object at these places
-wherever the spec allows no reference. So a framework finds the references of a
-request without the spec, as a remote client that holds only the serialized
-spec must, and a literal never reads as a reference.
+The framework looks for references at two places only: the top of each value,
+and the top of each element of a value that is a JSON array. At these places
+it refuses an `@ref` object that the spec does not allow as a reference: an
+element of a parameter that is not a list, such as a `tuple` of groups, whose
+JSON is an array; or the JSON form of a literal, such as a group with extra
+fields that holds the key `@ref`. Deeper inside a value, `@ref` is plain data.
+So a framework finds the references of a request without the spec, as a
+remote client that holds only the serialized spec must, and a literal never
+reads as a reference.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -189,36 +216,11 @@ has several kinds of identity, as a URI does with its scheme:
 framework normalizes it before a reference enters a record.
 
 **Fit.** A reference *fits* a parameter when the type of the data it names can
-be the parameter's value (`ess.spec.field_types.fits`). `| None` is removed on
-both sides; a reference with a key names one element, of the output's element
-type; a list parameter takes each reference by its element type. Then the
-data's type fits when, with its `NewType`s removed one by one, it reaches the
-parameter's type or a subclass of it; or when the parameter's type, with its
-`NewType`s removed, reaches the data's type or a superclass of it. So an `IofQ`
-output fits a parameter typed `sc.DataArray`, and a plain `sc.DataArray` output
-fits a `Transmission` parameter, since a role narrows a general output. An
-`IofQ` does not fit a `Transmission` parameter, two `NewType`s of
-`sc.DataArray`. A generic alias, such as a sciline scope
-`SampleSurfaceNormal[SampleRun]`, fits only itself. A dataset reference fits a
-file parameter only. A framework checks fit in the request phase, so that a
-chain of requests is refused before anything runs.
-
-**Checks.** No parameter sees another: each is validated alone, in every phase,
-a literal from its JSON form, a value read from its object. A stage and a driver
-are made from some values only, so a check that read several parameters would
-hold for some requests of a spec and not for others. A check of one value
-belongs to the value's type, as `EdgesModel` checks its edges, and so does the
-JSON form of a value, which a framework stores and reads back. So `WorkflowSpec`
-refuses field validators, serializers, computed fields, and aliases on the
-params model, and a `default_factory` that takes the other values. A list
-parameter carries only length constraints, `Field(min_length=2)`: a check of
-one row belongs to the element type.
-
-A check across parameters, such as a transmission mode that requires a
-transmission run, is the binding's or the driver's, and fails when the request
-runs. The params model may state it as a model validator, next to the fields it
-reads, but the framework never calls it. A binding may run it,
-`IofQParams.model_validate(dict(params))`, where it has the whole instance.
+be the parameter's value: an `IofQ` output fits a parameter typed
+`sc.DataArray`, and does not fit a `Transmission` parameter, another `NewType`
+of `sc.DataArray`. A dataset reference fits a file parameter only. A framework
+checks fit in the request phase, so that a chain of requests is refused before
+anything runs. `ess.spec.field_types.fits` states the rule.
 
 ### One params model per workflow
 
@@ -280,11 +282,8 @@ SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
                            tables={'sample': ('sample_geometry',), 'can': ()})
 ```
 
-Each parameter named becomes a `list`: `sample: SampleFile` becomes
-`list[SampleFile]` with at least one row. An index is `X`, or
-`X | None = None`, which becomes a table without rows. The validators and
-constraints of a parameter named check each row. The params model is made anew,
-without the model validators of the single-run spec. The docstring of
+Each parameter named becomes a `list`, such as `sample: SampleFile` becoming
+`list[SampleFile]` with at least one row; the docstring of
 `WorkflowSpec.tabulate` states the rules for each kind of parameter.
 
 `tabulate` fills the field `tables` of `WorkflowSpec`, which maps each index to
@@ -303,11 +302,10 @@ the request and its record hold it. Such a column takes a literal in one row and
 a reference to a computed value in another, as a transmission computed for one
 run and not another.
 
-Index values are compared as the record holds them: a literal by its JSON form,
-a dataset by its identity, a reference to an output by record, output, and key.
-For an index whose type has a JSON form, they are also compared by the values
-read, so that a literal and a reference to equal data are one index value, and a
-time slice is never summed twice.
+The framework compares index values as the record holds them and, for an index
+whose type has a JSON form, also by the values read, so that a time slice is
+never summed twice (the essapps README, `docs/developer/README.md`, section
+Stages and accumulators).
 
 With one row in each table whose index is given, and none where it is left out,
 a request of the multi-run spec is a request of the single-run spec.
@@ -322,11 +320,9 @@ validators. `spec.serialize()` projects onto `SerializedWorkflowSpec`, a
 plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
-params schema gives each parameter the forms it takes: the JSON Schema of its
-type and a reference, for a type with a JSON form; a reference otherwise. A
-reference's schema names the type of the data it must fit. It suffices to render
-a form for the groups, each with a choice to give it by reference, and a picker
-of references per data value.
+params schema gives each parameter the forms it takes, so that a UI renders a
+form for each group, with a choice to give it by reference, and a picker of
+references for each data value; `WorkflowSpec.serialize` states its shape.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
 deserialized spec would be a lie about its own validation. Instead, validation

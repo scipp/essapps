@@ -52,7 +52,7 @@ class BeamCentre(BaseModel):
     y: float = 0.0
 
 
-class Transmission(BaseModel):
+class TransmissionFraction(BaseModel):
     value: float = Field(gt=0, le=1)
 
 
@@ -60,7 +60,7 @@ class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     beam_centre: BeamCentre = Field(default_factory=BeamCentre)
     sample: SampleFile
-    transmission: Transmission | None = Field(
+    transmission: TransmissionFraction | None = Field(
         default=None, description="The sample's; None takes the one in its file."
     )
     can: CanFile
@@ -136,7 +136,7 @@ class TransmissionParams(BaseModel):
 
 
 class TransmissionOutputs(BaseModel):
-    transmission: Transmission
+    transmission: TransmissionFraction
 
 
 TRANSMISSION = WorkflowSpec(
@@ -236,7 +236,7 @@ def numerator(
 
 
 def sample_denominator(
-    data: RunData[SampleRun], transmission: Transmission | None
+    data: RunData[SampleRun], transmission: TransmissionFraction | None
 ) -> Denominator[SampleRun]:
     value = data['transmission'] if transmission is None else transmission.value
     return Denominator[SampleRun](sc.scalar(data['monitor'] * value, unit='counts'))
@@ -337,7 +337,7 @@ def find_centre(params: FindCentreParams) -> FindCentreOutputs:
 def transmission(params: TransmissionParams) -> TransmissionOutputs:
     data = json.loads(params.run.read_text())
     return TransmissionOutputs(
-        transmission=Transmission(value=data['transmitted'] / data['monitor'])
+        transmission=TransmissionFraction(value=data['transmitted'] / data['monitor'])
     )
 
 
