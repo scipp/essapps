@@ -30,12 +30,26 @@ of it
 has a *JSON form*: pydantic makes a    yes         to an output that fits
 JSON schema of it, with the params
 model's config, and it holds no file
+a group that holds a file              field by    to a dataset, for its one
+                                       field       required file
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
 
 An *inline value* is the value itself in the request, held in its JSON form;
-a reference is described in :mod:`ess.spec.refs`. A *group* is a model with a
-JSON form, such as ``Reduction``. A request lives in two phases. In the
+a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
+as ``Reduction``. A group that holds a file, such as a run and the values
+given next to it, is given *field by field*: each of its fields inline or by
+reference, as a parameter is, so the file comes from a dataset::
+
+    class SampleRun(BaseModel):
+        file: SampleFile
+        transmission: TransmissionFraction | None = None
+
+    {'sample': {'file': dataset(run=101), 'transmission': t.ref('transmission')}}
+    {'sample': dataset(run=101)}  # the one required file; defaults for the rest
+
+Like the params model, such a group is never validated whole. A request
+lives in two phases. In the
 *request phase*, before any data is read, a value given by reference is a
 reference; in the *call phase*, the backend reads the data each reference
 names and builds the params instance from the values and the data, so every
@@ -47,8 +61,11 @@ framework: what the framework needs, it reads from the field types (see
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
-  a dict or a union of two types. A group holds no file: a file is given by
-  reference to a dataset.
+  a dict or a union of two types.
+- A group that holds a file holds it as a field, a file, possibly
+  optional; it follows the rules of the params model below, and a field
+  of it that is a list or a dict has a JSON form, since no reference stands
+  for a list.
 - A default is a value, never a reference: of a type with a JSON form, a
   value whose JSON form reads back as the value and is not a reference; of
   any other type, ``None`` or an empty list.
@@ -103,15 +120,19 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
 from .field_types import (
     base,
+    by_field,
     element,
+    file_field,
+    has_json_form,
+    holds_file,
     inline,
     is_file,
+    is_group,
     is_list,
     is_single,
     optional,
@@ -248,11 +269,20 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Whether a request may give the parameter ``name``, or each row of it
         if it is a list parameter, inline: its type, with ``| None`` removed
-        and for a list parameter its element type taken, has a JSON form.
-        A file takes a reference to a dataset, and any other parameter a
-        reference to an output that fits.
+        and for a list parameter its element type taken, has a JSON form, or
+        is a group given field by field (see
+        :func:`ess.spec.field_types.by_field`).
         """
-        return _takes_inline(self.params, name)
+        tp = value_type(self.params.model_fields[name].annotation)
+        return has_json_form(self.params, name) or by_field(tp)
+
+    def has_json_form(self, name: str) -> bool:
+        """
+        Whether the type of the parameter ``name``, with ``| None`` removed
+        and for a list parameter its element type taken, has a JSON form (see
+        :func:`ess.spec.field_types.has_json_form`).
+        """
+        return has_json_form(self.params, name)
 
     def columns(self, index: str) -> tuple[str, ...]:
         """The columns of the table of ``index``, the index first."""
@@ -443,11 +473,8 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: a list parameter carries only length constraints, '
                 f'not {other}; a check of one row belongs to the element type'
             )
-        if _is_model(base(tp)) and _json_schema(tp, model) and _holds_file(tp, set()):
-            problems.append(
-                f'{where}: a group holds no file; a file is given by reference '
-                'to a dataset'
-            )
+        if by_field(tp) and (group := _group_problems(base(tp))):
+            problems.extend(f'{where}: {problem}' for problem in group)
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a parameter takes no other values'
@@ -457,75 +484,67 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     return problems
 
 
-def _json_schema(tp: Any, model: type[BaseModel]) -> bool:
+def _group_problems(group: type[BaseModel]) -> list[str]:
     """
-    Whether pydantic makes a JSON schema of ``tp``, with the config of
-    ``model``. A field of a model of its own carries the config, which
-    ``TypeAdapter`` refuses for a model type.
+    Refuse a group given field by field whose fields a request cannot give
+    each inline or by reference, as the params model's: a decorator but a
+    model validator, which the framework never calls, a field with an alias,
+    a file deeper than a field, a list or a dict without a JSON form, which no
+    reference stands for, and a default that is not a value, since a field
+    left out holds its default.
     """
-    try:
-        create_model(
-            'Value', __config__=model.model_config, value=(tp, ...)
-        ).model_json_schema()
-    except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
-        return False
-    return True
+    problems = _model_validators_only(group)
+    for name, field in group.model_fields.items():
+        where = f'{group.__name__}.{name}'
+        tp, _ = optional(field.annotation)
+        if any(
+            getattr(field, a) is not None
+            for a in ('alias', 'validation_alias', 'serialization_alias')
+        ):
+            problems.append(f'{where}: a field of a group has no alias')
+        elif holds_file(tp) and not is_file(tp):
+            problems.append(
+                f'{where}: a field of a group holds a file only as a file, '
+                'possibly optional, given by reference to a dataset'
+            )
+        elif element(tp) is not None and not has_json_form(group, name):
+            problems.append(
+                f'{where}: a field of a group that is a list or a dict has a '
+                'JSON form; no reference stands for a list'
+            )
+        elif not field.is_required() and (
+            problem := _default_problem(group, name, whole=True)
+        ):
+            problems.append(f'{where}: {problem}')
+    return problems
 
 
-@functools.cache
-def _takes_inline(model: type[BaseModel], name: str) -> bool:
-    """
-    Whether the type of the field ``name`` of ``model``, with ``| None``
-    removed and for a list its element type taken, has a JSON form: pydantic
-    makes a JSON schema of it, and it holds no file.
-    """
-    tp = value_type(model.model_fields[name].annotation)
-    return not _holds_file(tp, set()) and _json_schema(tp, model)
-
-
-def _is_model(tp: Any) -> bool:
-    return isinstance(tp, type) and issubclass(tp, BaseModel)
-
-
-def _default_problem(model: type[BaseModel], name: str) -> str | None:
+def _default_problem(
+    model: type[BaseModel], name: str, whole: bool = False
+) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
     ``None``: of a type with a JSON form, an inline value (see
-    :func:`ess.spec.field_types.inline`), each row of a list; of any other
-    type, ``None`` or an empty list.
+    :func:`ess.spec.field_types.inline`), each row of a list unless
+    ``whole``, as for a field of a group; of any other type, ``None`` or an
+    empty list.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
-    if not _takes_inline(model, name):
+    if not has_json_form(model, name):
         if default is None or (isinstance(default, list) and not default):
             return None
         return 'the default of a type without a JSON form is None or an empty list'
-    rows = is_list(model, name)
+    rows = is_list(model, name) and not whole
     if rows and not isinstance(default, list):
         return 'the default of a list parameter is a list'
     try:
         for value in default if rows else [default]:
-            inline(model, name, value)
+            inline(model, name, value, whole)
     except (PydanticSerializationError, ValidationError):
         return 'the default has no JSON form that reads back as the value'
     except ValueError as error:
         return f'the default {error}'
     return None
-
-
-def _holds_file(tp: Any, seen: set[type[BaseModel]]) -> bool:
-    """
-    Whether a type, or a field of a model in it, is a file; ``seen`` holds the
-    models looked into already, so that a recursive model ends.
-    """
-    tp = base(tp)
-    if is_file(tp):
-        return True
-    if _is_model(tp):
-        if tp in seen:
-            return False
-        seen.add(tp)
-        return any(_holds_file(f.annotation, seen) for f in tp.model_fields.values())
-    return any(_holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:
@@ -626,10 +645,12 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
         tp = value_type(info.annotation)
-        data_type = Field(json_schema_extra={'dataType': type_name(tp)})
-        ref: Any = Annotated[
-            DatasetRef if is_file(tp) else OutputRef | AccumulatorRef, data_type
-        ]
+        if not by_field(tp):
+            ref = _ref_form(tp)
+        elif file := file_field(base(tp)):
+            ref = _ref_form(base(tp).model_fields[file].annotation)
+        else:
+            ref = None
         fields[name] = (
             _forms(info.annotation, info.metadata, ref, spec.takes_inline(name)),
             Field(
@@ -664,31 +685,96 @@ def _not_a_ref(schema: dict[str, Any]) -> None:
     schema['not'] = {'required': ['@ref']}
 
 
-def _forms(tp: Any, metadata: Sequence[Any], ref: Any, takes_inline: bool) -> Any:
+def _ref_form(tp: Any) -> Any:
+    """The reference a value of type ``tp`` takes, with the name of ``tp``."""
+    data_type = Field(json_schema_extra={'dataType': type_name(tp)})
+    return Annotated[
+        DatasetRef if is_file(tp) else OutputRef | AccumulatorRef, data_type
+    ]
+
+
+def _forms(
+    tp: Any,
+    metadata: Sequence[Any],
+    ref: Any,
+    takes_inline: bool,
+    fields: bool = True,
+) -> Any:
     """
     ``tp`` with its value type ``X`` replaced by ``X | ref`` if
     ``takes_inline``, else by ``ref``, so that each value, or each row of a
-    list, takes the forms of ``X``. ``metadata``, the constraints of the
-    field, goes to the list if ``tp`` is one, else to ``X``, so that a
+    list, takes the forms of ``X``; ``ref`` ``None`` takes no reference. A
+    group ``X`` given inline, if ``fields``, has each field replaced by the
+    forms it takes (see :func:`_group_forms`). ``metadata``, the constraints
+    of the field, goes to the list if ``tp`` is one, else to ``X``, so that a
     constraint of a number, say, is not put on a reference.
     """
     origin, args = get_origin(tp), get_args(tp)
     if origin is Annotated:
-        return _forms(args[0], [*metadata, *tp.__metadata__], ref, takes_inline)
+        meta = [*metadata, *tp.__metadata__]
+        return _forms(args[0], meta, ref, takes_inline, fields)
     if origin is list:
-        rows: Any = list[_forms(args[0], [], ref, takes_inline)]  # type: ignore[misc]
+        row = _forms(args[0], [], ref, takes_inline, fields)
+        rows: Any = list[row]  # type: ignore[valid-type]
         return Annotated[rows, *metadata] if metadata else rows
     if origin in (Union, UnionType):
         return Union[  # noqa: UP007
             tuple(
-                arg if arg is NoneType else _forms(arg, metadata, ref, takes_inline)
+                arg
+                if arg is NoneType
+                else _forms(arg, metadata, ref, takes_inline, fields)
                 for arg in args
             )
         ]
     if not takes_inline:
         return ref
-    value = Annotated[tp, *metadata, Field(json_schema_extra=_not_a_ref)]
-    return Union[value, ref]  # noqa: UP007
+    if not is_group(tp):
+        value = Annotated[tp, *metadata] if metadata else tp
+    else:
+        # Only an object reads as a reference; JSON Schema's ``required``
+        # holds for any other value, so ``not`` would refuse it.
+        group = _group_forms(base(tp)) if fields and by_field(tp) else tp
+        value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
+    return value if ref is None else Union[value, ref]  # noqa: UP007
+
+
+@functools.cache
+def _group_forms(group: type[BaseModel]) -> type[BaseModel]:
+    """
+    A model of the fields of a group given field by field, each replaced by
+    the forms it takes: a file by a reference to a dataset, a list or a dict
+    by itself, inline only, and any other type by itself, if it has a JSON
+    form, or a reference to an output that fits. A group in a field is given
+    inline as its own JSON form, never field by field.
+    """
+    fields: dict[str, Any] = {}
+    for name, info in group.model_fields.items():
+        tp, _ = optional(info.annotation)
+        if element(tp) is not None:
+            forms = Annotated[info.annotation, *info.metadata]
+        else:
+            json = has_json_form(group, name)
+            forms = _forms(
+                info.annotation, info.metadata, _ref_form(tp), json, fields=False
+            )
+        fields[name] = (
+            forms,
+            Field(
+                default=info.get_default(call_default_factory=True),
+                title=info.title,
+                description=info.description,
+                examples=info.examples,
+                # A reference's dataType is its json_schema_extra.
+                **(
+                    {}
+                    if info.json_schema_extra is None
+                    else {'json_schema_extra': info.json_schema_extra}
+                ),
+            ),
+        )
+    return create_model(
+        group.__name__, __config__=group.model_config, __doc__=group.__doc__, **fields
+    )
 
 
 def _outputs_schema(model: type[BaseModel]) -> dict[str, Any]:

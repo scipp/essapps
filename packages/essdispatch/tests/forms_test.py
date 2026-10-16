@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any, NewType
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.dataclasses import dataclass
 
 from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
 from ess.dispatch import dataset as dataset_ref
@@ -35,8 +36,9 @@ class LabelledShift(Shift):
     label: str = ''
 
 
-class Kind(BaseModel, validate_by_name=True):
-    """A group whose JSON form holds the key ``@ref``."""
+@dataclass(config=ConfigDict(validate_by_name=True))
+class Kind:
+    """A value, not a group, whose JSON form holds the key ``@ref``."""
 
     kind: str = Field(alias='@ref')
 
@@ -76,6 +78,29 @@ class Value(BaseModel):
     value: float
 
 
+class Run(BaseModel):
+    """A run and what is given next to it: a group that holds a file."""
+
+    file: SampleFile
+    shift: Shift = Field(default_factory=Shift)
+    offset: Offset | None = None
+    weights: list[float] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode='after')
+    def _offset_not_negative(self) -> 'Run':
+        if self.offset is not None and self.offset < 0:
+            raise ValueError('a negative offset')
+        return self
+
+
+RunAlias = NewType('RunAlias', Run)
+
+
+class RunsParams(BaseModel):
+    runs: list[Run] = Field(min_length=1)
+    extra: RunAlias | None = None
+
+
 def _spec(
     name: str, params: type[BaseModel], outputs: type[BaseModel], **kw: Any
 ) -> WorkflowSpec[Any, Any]:
@@ -95,6 +120,7 @@ ADD = _spec('add', AddParams, Value)
 SUM = _spec('sum', SumParams, Value, tables=('part',))
 STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
 SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
+RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -118,6 +144,16 @@ def add(params: AddParams) -> Value:
     )
 
 
+def runs(params: RunsParams) -> Value:
+    rows = [*params.runs, *([] if params.extra is None else [params.extra])]
+    return Value(
+        value=sum(
+            read_dataset(run.file) + run.shift.offset + (run.offset or 0.0)
+            for run in rows
+        )
+    )
+
+
 def total(params: Any) -> Value:
     return Value(value=sum(params.part))
 
@@ -126,6 +162,7 @@ def total(params: Any) -> Value:
 def client(tmp_path: Path) -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1', directory=tmp_path)
     datasets.measure(1, 1.0)
+    datasets.measure(2, 2.0)
     backend = Backend(
         datasets,
         [
@@ -136,6 +173,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(
                 SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
             ),
+            function_binding(RUNS, runs),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -169,6 +207,103 @@ def test_a_number_or_a_group_is_given_by_value_or_by_reference(
     assert by_value.request.params['shift'] == {'offset': 1.0}
 
 
+def test_each_field_of_a_group_is_given_inline_or_by_reference(
+    client: Client, loaded: Record
+) -> None:
+    computed = client.compute(
+        RUNS,
+        params={
+            'runs': [
+                {
+                    'file': dataset_ref(run=1),
+                    'shift': loaded.ref('shift'),
+                    'offset': 2.0,
+                },
+                {'file': dataset_ref(run=2), 'offset': loaded.ref('value')},
+            ]
+        },
+    )
+
+    assert client.output(computed, 'value') == (1.0 + 1.0 + 2.0) + (2.0 + 0.0 + 1.0)
+    first, second = computed.request.params['runs']
+    assert first['shift'] == loaded.ref('shift')
+    assert first['offset'] == 2.0
+    assert second['shift'] == {'offset': 0.0}  # left out, so its default
+    assert second['offset'] == loaded.ref('value')
+
+
+@pytest.mark.parametrize(
+    ('row', 'reason'),
+    [
+        ({'offset': 1.0}, r'runs\[0\]\.file: a required field, not given'),
+        ({'file': 'a.nxs'}, r"runs\[0\]\.file: 'a.nxs' is not a reference"),
+        (
+            {'file': dataset_ref(run=1), 'label': 'x'},
+            r"runs\[0\]: \['label'\]: not fields of Run",
+        ),
+        (
+            {'file': dataset_ref(run=1), 'shift': {'offset': dataset_ref(run=1)}},
+            r'runs\[0\]\.shift\.offset',
+        ),
+    ],
+)
+def test_a_group_given_field_by_field_is_refused(
+    client: Client, row: dict[str, Any], reason: str
+) -> None:
+    with pytest.raises(SubmitError, match=reason):
+        client.submit(RUNS, params={'runs': [row]})
+
+
+def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
+    client: Client, loaded: Record
+) -> None:
+    with pytest.raises(SubmitError, match=r'runs\[0\]: .* names the whole of Run'):
+        client.submit(RUNS, params={'runs': [loaded.ref('shift')]})
+
+
+def test_a_dataset_stands_for_a_group_with_its_one_required_file(
+    client: Client,
+) -> None:
+    computed = client.compute(
+        RUNS, params={'runs': [dataset_ref(run=1)], 'extra': dataset_ref(run=2)}
+    )
+
+    assert client.output(computed, 'value') == 3.0
+    (row,) = computed.request.params['runs']
+    assert row['file'] != computed.request.params['extra']['file']
+    assert row['shift'] == {'offset': 0.0}
+
+
+def test_the_framework_never_validates_a_group_given_field_by_field_whole(
+    client: Client,
+) -> None:
+    # Run's model validator refuses a negative offset; like the params model's,
+    # it is the binding's to run.
+    computed = client.compute(
+        RUNS, params={'runs': [{'file': dataset_ref(run=1), 'offset': -1.0}]}
+    )
+
+    assert client.output(computed, 'value') == 0.0
+
+
+def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
+    schema = RUNS.serialize().params_schema
+    row, run = schema['properties']['runs']['items'], schema['$defs']['Run']
+
+    assert row == {
+        'anyOf': [
+            {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}},
+            {'$ref': '#/$defs/DatasetRef', 'dataType': 'SampleFile'},
+        ]
+    }
+    assert run['properties']['file'] == {
+        '$ref': '#/$defs/DatasetRef',
+        'dataType': 'SampleFile',
+    }
+    assert run['properties']['weights']['maxItems'] == 3
+    assert run['required'] == ['file']
+
+
 def test_a_key_that_an_output_lacks_fails_the_record(
     client: Client, loaded: Record
 ) -> None:
@@ -178,7 +313,7 @@ def test_a_key_that_an_output_lacks_fails_the_record(
     assert _failed(client, computed) == f"{ref}: the output has no element '7'"
 
 
-def test_a_group_whose_json_form_reads_as_a_reference_is_refused(
+def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
     client: Client,
 ) -> None:
     with pytest.raises(

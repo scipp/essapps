@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, NewType
+from typing import Annotated, Any, NewType, TypedDict
 
 import pydantic
 import pytest
@@ -126,10 +126,8 @@ class Loose(BaseModel, extra='allow'):
     """A group that takes any field, ``@ref`` among them."""
 
 
-class Kind(BaseModel, validate_by_name=True):
-    """A group whose JSON form holds the key ``@ref``."""
-
-    kind: str = Field(alias='@ref')
+Kind = TypedDict('Kind', {'@ref': str})
+"""A value whose JSON form holds the key ``@ref``."""
 
 
 def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
@@ -240,6 +238,12 @@ class TestModelRules:
             {'params': model('P', reduction=(list[Reduction | None], []))},
             {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
             {'params': model('P', runs=(list[SampleFile], []))},
+            {'params': model('P', run=(model('Run', path=(Path, ...)), ...))},
+            {
+                'params': model(
+                    'P', run=(list[model('Run', path=(Path | None, None))], [])
+                )
+            },
             {'params': model('P', runs=(list[SampleFile | None], []))},
             {'params': model('P', parts=(BaseModel, ...))},
             {'params': model('P', bins=(int, ...))},
@@ -300,29 +304,63 @@ class TestModelRules:
                 'P.reduction: a parameter is a type',
             ),
             (
-                {'params': model('P', run=(model('Run', path=(Path, ...)), ...))},
-                'P.run: a group holds no file',
-            ),
-            (
                 {
                     'params': model(
                         'P', runs=(model('Runs', paths=(list[Path], [])), ...)
                     )
                 },
-                'P.runs: a group holds no file',
+                'P.runs: Runs.paths: a field of a group holds a file only as a file',
             ),
             (
                 {
                     'params': model(
-                        'P', run=(list[model('Run', path=(Path | None, None))], [])
+                        'P',
+                        run=(
+                            model('Run', geometry=(model('G', path=(Path, ...)), ...)),
+                            ...,
+                        ),
                     )
                 },
-                'P.run: a group holds no file',
+                'P.run: Run.geometry: a field of a group holds a file only as a file',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        run=(
+                            model(
+                                'Run', path=(Path, ...), shifts=(list[CentreArray], [])
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.run: Run.shifts: a field of a group that is a list or a dict has a '
+                'JSON form',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        run=(
+                            model(
+                                'Run', path=(Path, ...), bins=(int, Field(1, alias='b'))
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.run: Run.bins: a field of a group has no alias',
             ),
             (
                 {'params': validated('P', reduction=(Reduction, ...))},
                 r"P: no decorators but model validators, {'field_validators': "
                 r"\['_check'\]}",
+            ),
+            (
+                {'params': model('P', run=(validated('Run', path=(Path, ...)), ...))},
+                r"P.run: Run: no decorators but model validators, "
+                r"{'field_validators': \['_check'\]}",
             ),
             (
                 {'params': SerializedParams},
@@ -381,20 +419,28 @@ class TestModelRules:
                 'P.loose: the default has no JSON form that reads back',
             ),
             (
-                {'params': model('P', kind=(Kind, Kind(kind='dataset')))},
+                {'params': model('P', kind=(Kind, {'@ref': 'dataset'}))},
                 'P.kind: the default has a JSON form that reads as a reference',
             ),
             (
-                {'params': model('P', kind=(list[Kind], [Kind(kind='output')]))},
+                {'params': model('P', kind=(list[Kind], [{'@ref': 'output'}]))},
                 'P.kind: the default has a JSON form that reads as a reference',
+            ),
+            (
+                {'params': model('P', kinds=(tuple[Kind, Kind], ({'@ref': 'a'},) * 2))},
+                'P.kinds: the default has a JSON form that reads as a reference',
             ),
             (
                 {
                     'params': model(
-                        'P', kinds=(tuple[Kind, Kind], (Kind(kind='a'),) * 2)
+                        'P',
+                        run=(
+                            model('Run', path=(Path, ...), kind=(Kind, {'@ref': 'a'})),
+                            ...,
+                        ),
                     )
                 },
-                'P.kinds: the default has a JSON form that reads as a reference',
+                'P.run: Run.kind: the default has a JSON form that reads as a',
             ),
             (
                 {'params': model('P', steps=(list[TimeRange], None))},
@@ -681,7 +727,7 @@ class TestSerialization:
         assert schema['properties'] == {
             'scale': {
                 'anyOf': [
-                    inline({'type': 'number', 'exclusiveMinimum': 0}),
+                    {'type': 'number', 'exclusiveMinimum': 0},
                     data_ref('float'),
                 ],
                 'default': 1.0,
@@ -689,7 +735,7 @@ class TestSerialization:
                 'description': 'A factor.',
             },
             'mode': {
-                'anyOf': [inline({'$ref': '#/$defs/Mode'}), data_ref('Mode')],
+                'anyOf': [{'$ref': '#/$defs/Mode'}, data_ref('Mode')],
                 'default': 'fast',
                 'title': 'Mode',
             },

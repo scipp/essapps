@@ -26,12 +26,13 @@ from __future__ import annotations
 
 import functools
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import Annotated, Any, NewType, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic_core import from_json, to_json
 
 from .refs import Ref, places
@@ -125,6 +126,51 @@ def is_file(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, PurePath)
 
 
+def is_group(tp: Any) -> bool:
+    """Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one."""
+    tp = base(tp)
+    return isinstance(tp, type) and issubclass(tp, BaseModel)
+
+
+def holds_file(tp: Any, seen: frozenset[type[BaseModel]] = frozenset()) -> bool:
+    """
+    Whether a type, or a field of a model in it, is a file; ``seen`` holds the
+    models looked into already, so that a recursive model ends.
+    """
+    tp = base(tp)
+    if is_file(tp):
+        return True
+    if is_group(tp):
+        if tp in seen:
+            return False
+        return any(
+            holds_file(f.annotation, seen | {tp}) for f in tp.model_fields.values()
+        )
+    return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
+
+
+@functools.cache
+def has_json_form(model: type[BaseModel], name: str) -> bool:
+    """
+    Whether the type of the field ``name`` of ``model``, with ``| None``
+    removed and for a list its element type taken, has a JSON form: pydantic
+    makes a JSON schema of it, with the config of ``model``, and it holds no
+    file.
+    """
+    tp = value_type(model.model_fields[name].annotation)
+    if holds_file(tp):
+        return False
+    try:
+        # A field of a model of its own carries the config, which
+        # TypeAdapter refuses for a model type.
+        create_model(
+            'Value', __config__=model.model_config, value=(tp, ...)
+        ).model_json_schema()
+    except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
+        return False
+    return True
+
+
 def type_name(tp: Any) -> str:
     """The name of a type, as a serialized spec shows it."""
     return getattr(tp, '__name__', None) or repr(tp)
@@ -160,7 +206,7 @@ def _reaches(sub: Any, sup: Any) -> bool:
 
 
 @functools.cache
-def model_of(model: type[BaseModel], name: str) -> type[BaseModel]:
+def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[BaseModel]:
     """
     A model of one value of the field ``name`` of ``model`` alone, with its
     config and without its validators: it validates one value by its own
@@ -170,12 +216,14 @@ def model_of(model: type[BaseModel], name: str) -> type[BaseModel]:
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
-    hold for the whole list. A reference stands for one row.
+    hold for the whole list. A reference stands for one row. With ``whole``,
+    as for a field of a group, the model validates the whole field, a list
+    too.
     """
     info = model.model_fields[name]
     field = (
         (get_args(info.annotation)[0], Field())
-        if is_list(model, name)
+        if is_list(model, name) and not whole
         else (info.annotation, info)
     )
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
@@ -191,10 +239,13 @@ def validated(
     name: str,
     value: Any,
     read: Callable[[Ref], Any] | None = None,
+    *,
+    whole: bool = False,
 ) -> Any:
     """
     ``value`` of the field ``name`` of ``model``, validated alone (see
-    :func:`model_of`): each row of a list field by its element type.
+    :func:`model_of`): each row of a list field by its element type, unless
+    ``whole``.
 
     With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
     is as a record holds it: each value, or row, a reference or an inline
@@ -202,11 +253,18 @@ def validated(
     for it, validated from the object, and an inline value is validated from
     its JSON form, as the request phase validated it (see :func:`inline`), so
     that both phases see the same value: a strict enum takes its string only
-    from JSON.
+    from JSON. A group given field by field (see :func:`by_field`), as a
+    mapping, is made from its fields, each validated so: like the params
+    model, it is never validated whole.
     """
-    one = model_of(model, name)
+    one = model_of(model, name, whole)
+    tp = value_type(model.model_fields[name].annotation)
 
     def check(v: Any) -> Any:
+        if by_field(tp) and isinstance(v, Mapping):
+            group = base(tp)
+            fields = {f: validated(group, f, x, read, whole=True) for f, x in v.items()}
+            return group.model_construct(**fields)
         if read is None:
             made = one.model_validate({name: v})
         elif isinstance(v, Ref):
@@ -215,12 +273,36 @@ def validated(
             made = one.model_validate_json(to_json({name: v}))
         return getattr(made, name)
 
-    if is_list(model, name):
+    if is_list(model, name) and not whole:
         return [check(v) for v in value]
     return check(value)
 
 
-def json_form(model: type[BaseModel], name: str, value: Any) -> Any:
+def by_field(tp: Any) -> bool:
+    """
+    Whether a value of type ``tp`` is given field by field: a group that holds
+    a file, such as a run and what is given next to it. Each of its fields is
+    given inline or by reference, as a parameter is.
+    """
+    return is_group(tp) and holds_file(tp)
+
+
+def file_field(group: type[BaseModel]) -> str | None:
+    """
+    The one required file field of a group given field by field, which a
+    reference to a dataset stands for, or ``None`` if it has none or several.
+    """
+    files = [
+        name
+        for name, info in group.model_fields.items()
+        if info.is_required() and is_file(optional(info.annotation)[0])
+    ]
+    return files[0] if len(files) == 1 else None
+
+
+def json_form(
+    model: type[BaseModel], name: str, value: Any, whole: bool = False
+) -> Any:
     """
     The JSON form of ``value``, a valid value, or row, of the field ``name``
     of ``model`` (see :func:`model_of`), as its declared type dumps it to
@@ -228,15 +310,15 @@ def json_form(model: type[BaseModel], name: str, value: Any) -> Any:
     without the subclass's fields, and a number that is not finite as
     ``None``.
     """
-    made = model_of(model, name).model_construct(**{name: value})
+    made = model_of(model, name, whole).model_construct(**{name: value})
     return from_json(made.model_dump_json(by_alias=True))[name]
 
 
-def inline(model: type[BaseModel], name: str, value: Any) -> Any:
+def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -> Any:
     """
     The JSON form of ``value``, given inline for the field ``name`` of
-    ``model``, or a row of it (see :func:`model_of`), as the framework holds
-    it.
+    ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
+    framework holds it.
 
     ``value`` is validated from its JSON form, with a field that a model lacks
     refused at any depth, since validating would drop it silently. Raises
@@ -244,12 +326,13 @@ def inline(model: type[BaseModel], name: str, value: Any) -> Any:
     if it is not valid, and ``ValueError`` if its JSON form does not read back
     as the value, such as a number that is not finite, which JSON holds as
     ``null``, or reads as a reference at a place where a request may hold one
-    (see :func:`ess.spec.refs.places`).
+    (see :func:`ess.spec.refs.places`): for a field of a group, ``whole``,
+    the field itself.
     """
-    one = model_of(model, name)
+    one = model_of(model, name, whole)
     given = to_json({name: value}, inf_nan_mode='constants')
     made = getattr(one.model_validate_json(given, extra='forbid'), name)
-    stored = json_form(model, name, made)
+    stored = json_form(model, name, made, whole)
     try:
         again = one.model_validate_json(to_json({name: stored}))
         reads_back = getattr(again, name) == made
@@ -257,10 +340,11 @@ def inline(model: type[BaseModel], name: str, value: Any) -> Any:
         reads_back = False
     if not reads_back:
         raise ValueError('has no JSON form that reads back as the value')
-    if is_list(model, name):
-        tops = [stored]
+    if whole:
+        items = [stored]
     else:
-        tops = [item for _, item in places(name, stored)]
-    if any(isinstance(item, dict) and '@ref' in item for item in tops):
+        rows = [stored] if is_list(model, name) else stored
+        items = [item for _, _, item in places(name, rows)]
+    if any(isinstance(item, dict) and '@ref' in item for item in items):
         raise ValueError('has a JSON form that reads as a reference')
     return stored

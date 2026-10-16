@@ -3,11 +3,13 @@
 """
 References: how a request names data that exist elsewhere.
 
-A request gives a value, or a row of a list parameter, by reference to data
-that exist elsewhere: an output of an earlier record, a dataset the framework
-did not compute, or, in a request not yet accepted, an output of an
-accumulator that the framework holds. A reference stands for a whole value
-or a row, never for a whole list, and never for part of a value.
+A request gives a value, a row of a list parameter, or a field of either
+that is a group, by reference to data that exist elsewhere: an output of an
+earlier record, a dataset the framework did not compute, or, in a request
+not yet accepted, an output of an accumulator that the framework holds. A
+reference stands for a whole value, a row, or a field of a group given
+inline, such as the run of a row; never for a whole list, and never for
+anything deeper.
 A reference is what a request names and what a record keeps; turning it into
 the data a workflow takes, a local path or an object, is the business of
 whatever runs the workflow.
@@ -109,7 +111,8 @@ class AccumulatorRef(_Ref, frozen=True):
 
 Ref = OutputRef | DatasetRef | AccumulatorRef
 """
-A reference: a value, or a row of a list parameter, in a request.
+A reference: a value, a row of a list parameter, or a field of a group, in
+a request.
 
 An ``AccumulatorRef`` is only a placeholder in a request before it is
 submitted; no record holds one.
@@ -156,21 +159,36 @@ def _ref_at(where: str, value: Any) -> Ref | None:
         raise ValueError(f'{where}: {error}') from None
 
 
-def places(name: str, value: Any) -> list[tuple[str, Any]]:
+def places(name: str, value: Any) -> list[tuple[str, str | None, Any]]:
     """
     The places in the value of the parameter ``name`` where a request may
-    hold a reference, each with what it holds: the value, or each element of
-    a list, such as ``runs[2]``; never deeper.
+    hold a reference, each with the field of a group it is at, if any, and
+    what it holds: the value, or each element of a list, such as
+    ``runs[2]``, and each field of one of these that is an object but not a
+    reference, the inline value of a group, such as ``sample.run`` or
+    ``runs[2].run``; never deeper.
     """
     if isinstance(value, list):
-        return [(f'{name}[{i}]', item) for i, item in enumerate(value)]
-    return [(name, value)]
+        tops = [(f'{name}[{i}]', item) for i, item in enumerate(value)]
+    else:
+        tops = [(name, value)]
+    found: list[tuple[str, str | None, Any]] = []
+    for where, item in tops:
+        found.append((where, None, item))
+        if _is_group(item):
+            found.extend((f'{where}.{f}', f, v) for f, v in item.items())
+    return found
+
+
+def _is_group(value: Any) -> bool:
+    """Whether ``value`` may be the inline value of a group: an object, no reference."""
+    return isinstance(value, Mapping) and '@ref' not in value
 
 
 def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
     """
     Each reference in the params of a request, with its place, such as
-    ``sample`` or ``runs[2]``.
+    ``sample``, ``runs[2]``, or ``runs[2].transmission``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
     form, and is looked for at the places :func:`places` names. Any other
@@ -178,7 +196,7 @@ def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
     :func:`as_ref`).
     """
     for name, value in params.items():
-        for where, item in places(name, value):
+        for where, _, item in places(name, value):
             if (ref := _ref_at(where, item)) is not None:
                 yield where, ref
 
@@ -190,11 +208,16 @@ def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, A
     value is kept.
     """
 
+    def at(where: str, item: Any, group: bool) -> Any:
+        if (ref := _ref_at(where, item)) is not None:
+            return fn(ref)
+        if group and _is_group(item):
+            return {f: at(f'{where}.{f}', v, False) for f, v in item.items()}
+        return item
+
     def one(name: str, value: Any) -> Any:
-        mapped = [
-            item if (ref := _ref_at(where, item)) is None else fn(ref)
-            for where, item in places(name, value)
-        ]
-        return mapped if isinstance(value, list) else mapped[0]
+        if isinstance(value, list):
+            return [at(f'{name}[{i}]', item, True) for i, item in enumerate(value)]
+        return at(name, value, True)
 
     return {name: one(name, value) for name, value in params.items()}

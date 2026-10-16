@@ -21,10 +21,14 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Names.* Each name is a parameter of the spec. A required parameter must
   be given; one left out takes its default.
 - *Forms.* Each value, and each row of a list parameter, is a reference or
-  an inline value; a list parameter is given as a list of rows. A reference
-  stands for a value or a row, so a reference to a whole list, or one inside
-  the inline value of a parameter that is not a list, is refused (see
-  :mod:`ess.spec.refs`).
+  an inline value, or, for a group that holds a file, a mapping of its
+  fields, each a reference or an inline value; a list parameter is given as
+  a list of rows. A reference stands for a value, a row, or a field of a
+  group given field by field, so a reference to a whole list, or one
+  anywhere else inside a value, is refused (see :mod:`ess.spec.refs`). A
+  reference to a dataset where a group that holds a file is expected stands
+  for the group with its one required file, and its other fields at their
+  defaults; the record holds the group field by field.
 - *Inline values.* An inline value is allowed where the parameter's type has
   a JSON form (see :meth:`ess.spec.WorkflowSpec.takes_inline`), and ``None``
   where it is optional; so a file given as a string is refused: a file is
@@ -66,27 +70,35 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, get_origin
 
 from annotated_types import MaxLen, MinLen
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticSerializationError, to_json
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.field_types import (
+    base,
+    by_field,
     element,
+    file_field,
     fits,
+    has_json_form,
     inline,
     is_file,
     is_list,
+    json_form,
     optional,
     type_name,
     value_type,
 )
-from ess.spec.refs import iter_refs
+from ess.spec.refs import as_ref, places
 
 from .datasets import DatasetSource, readable
 from .records import Request, SpecId, SubmitError, Template, read_refs
 
 type Spec = WorkflowSpec[Any, Any]
+
+_LEFT_OUT = object()
+"""A field of a group that a request leaves out."""
 
 
 class Checks:
@@ -205,11 +217,14 @@ class Checks:
         row.
         """
         if not is_list(self.spec.params, name):
-            for where, ref in iter_refs({name: value}):
-                if where != name:
+            group = by_field(value_type(self.spec.params.model_fields[name].annotation))
+            for where, field, item in places(name, value):
+                at_field = field is not None and where == f'{name}.{field}'
+                if where != name and not (group and at_field) and as_ref(item):
                     raise SubmitError(
-                        f'{where}: {ref} is a reference inside a value; a '
-                        'reference stands for a whole value, or a row of a list'
+                        f'{where}: {as_ref(item)} is a reference inside a value; a '
+                        'reference stands for a whole value, a row of a list, or '
+                        'a field of a group'
                     )
             return self._one(name, name, value, proposal)
         if isinstance(value, Ref):
@@ -231,29 +246,101 @@ class Checks:
     def _one(self, where: str, name: str, value: Any, proposal: str) -> Any:
         """
         The value, or the row, ``value`` at ``where`` of parameter ``name`` as
-        the record holds it: a reference, a dataset's resolved, or an inline
-        value if the parameter takes one, or ``None`` if its type is optional.
+        the record holds it: a reference, a dataset's resolved, an inline
+        value if the parameter takes one, a group field by field, or ``None``
+        if its type is optional.
         """
-        tp = value_type(self.spec.params.model_fields[name].annotation)
-        if isinstance(value, Ref):
+        spec = self.spec
+        tp = value_type(spec.params.model_fields[name].annotation)
+        if by_field(tp):
+            group = base(tp)
+            if isinstance(value, DatasetRef) and (file := file_field(group)):
+                value = {file: value}
+            elif isinstance(value, Ref):
+                raise SubmitError(
+                    f'{where}: {value} names the whole of {type_name(tp)}, which '
+                    'holds a file; it is given field by field, its file by '
+                    'reference to a dataset, which stands for the whole if the '
+                    'group has one required file'
+                )
+            if isinstance(value, Mapping):
+                return self._group(where, group, value, proposal)
+        elif isinstance(value, Ref):
             return self._ref(where, value, tp, proposal)
-        if self.spec.takes_inline(name):
-            return self._inline(where, name, value)
-        if value is None and _nullable(self.spec, name):
+        elif spec.has_json_form(name):
+            return self._inline(where, spec.params, name, value)
+        if value is None and _nullable(spec, name):
             return None
         raise SubmitError(
             f'{where}: {value!r} is not a reference; {type_name(tp)} has no JSON '
             'form, so it is given by reference, a file as dataset(path=...)'
         )
 
-    def _inline(self, where: str, name: str, value: Any) -> Any:
+    def _group(
+        self,
+        where: str,
+        group: type[BaseModel],
+        value: Mapping[str, Any],
+        proposal: str,
+    ) -> dict[str, Any]:
         """
-        The inline value ``value`` at ``where`` of parameter ``name`` as the
-        record holds it, its JSON form (see
-        :func:`ess.spec.field_types.inline`).
+        The group ``value`` at ``where``, given field by field, as the record
+        holds it: each field a reference, a dataset's resolved, an inline
+        value, if its type has a JSON form, or ``None``, if it is optional; a
+        field left out holds its default. Like the params model, the group is
+        never validated whole.
+        """
+        fields = group.model_fields
+        if unknown := sorted(value.keys() - fields.keys()):
+            raise SubmitError(f'{where}: {unknown}: not fields of {group.__name__}')
+        held: dict[str, Any] = {}
+        for name, info in fields.items():
+            at = f'{where}.{name}'
+            tp, nullable = optional(info.annotation)
+            cell = value.get(name, _LEFT_OUT)
+            if cell is _LEFT_OUT:
+                if info.is_required():
+                    raise SubmitError(f'{at}: a required field, not given')
+                default = info.get_default(call_default_factory=True)
+                held[name] = (
+                    json_form(group, name, default, whole=True)
+                    if has_json_form(group, name)
+                    else default
+                )
+            elif isinstance(cell, Ref):
+                if element(tp) is not None:
+                    raise SubmitError(
+                        f'{at}: {cell} names a whole list; a field of a group '
+                        'that is a list is given inline'
+                    )
+                held[name] = self._ref(at, cell, tp, proposal)
+            elif has_json_form(group, name):
+                held[name] = self._inline(at, group, name, cell, whole=True)
+            elif cell is None and nullable:
+                held[name] = None
+            else:
+                raise SubmitError(
+                    f'{at}: {cell!r} is not a reference; {type_name(tp)} has no '
+                    'JSON form, so it is given by reference, a file as '
+                    'dataset(path=...)'
+                )
+        return held
+
+    def _inline(
+        self,
+        where: str,
+        model: type[BaseModel],
+        name: str,
+        value: Any,
+        whole: bool = False,
+    ) -> Any:
+        """
+        The inline value ``value`` at ``where`` of the field ``name`` of
+        ``model``, a parameter or a field of a group, as the record holds it,
+        its JSON form (see :func:`ess.spec.field_types.inline`).
         """
         try:
-            return inline(self.spec.params, name, value)
+            return inline(model, name, value, whole)
         except PydanticSerializationError as error:
             raise SubmitError(f'{self.id}: cannot be stored as JSON: {error}') from None
         except ValidationError as error:
@@ -312,15 +399,17 @@ def _nullable(spec: Spec, name: str) -> bool:
 def refs(spec: Spec, params: Mapping[str, Any]) -> list[tuple[str, Ref, Any]]:
     """
     Each reference in ``params`` by name, with its place and the type of the
-    data it must fit: the parameter's type, or its element type for a list
-    parameter.
+    data it must fit: the parameter's type, its element type for a list
+    parameter, or the type of the field of a group it stands for.
     """
-    fields = spec.params.model_fields
-    return [
-        (where, ref, value_type(fields[name].annotation))
-        for name, value in params.items()
-        for where, ref in iter_refs({name: value})
-    ]
+    found = []
+    for name, value in params.items():
+        tp = value_type(spec.params.model_fields[name].annotation)
+        for where, field, item in places(name, value):
+            if (ref := as_ref(item)) is not None and (field is None or by_field(tp)):
+                at = tp if field is None else base(tp).model_fields[field].annotation
+                found.append((where, ref, value_type(at)))
+    return found
 
 
 def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) -> None:

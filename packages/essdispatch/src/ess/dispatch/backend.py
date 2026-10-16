@@ -1229,7 +1229,7 @@ class Backend:
         typed = {n: validated(spec.params, n, v, read) for n, v in values.items()}
         indexes = {} if indexes is None else indexes
         for index in spec.tables.keys() & typed.keys():
-            if spec.takes_inline(index):
+            if spec.has_json_form(index):
                 seen = indexes.setdefault(index, {})
                 forms = [json_form(spec.params, index, v) for v in typed[index]]
                 seen.update(distinct(index, forms, seen))
