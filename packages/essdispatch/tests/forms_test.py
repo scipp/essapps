@@ -364,7 +364,7 @@ def test_a_reference_inside_a_value_is_refused(client: Client, loaded: Record) -
 def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) -> None:
     with pytest.raises(SubmitError, match=r'^terms: .* is a reference to a whole list'):
         client.submit(ADD, params={'terms': loaded.ref('values')})
-    with pytest.raises(SubmitError, match=r'^part: .* is not a list of rows'):
+    with pytest.raises(SubmitError, match=r'^part: .* is a reference to a whole list'):
         client.submit(SUM, params={'part': loaded.ref('values')})
 
 
@@ -373,7 +373,7 @@ def _failed(client: Client, record: Record) -> str | None:
     return client.failure(record)
 
 
-def test_an_inline_value_and_a_reference_to_equal_data_are_one_index_value(
+def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
     client: Client, loaded: Record
 ) -> None:
     summed = client.accumulator(Template(SUM, blanks=('part',)))
@@ -389,7 +389,7 @@ def test_an_inline_value_and_a_reference_to_equal_data_are_one_index_value(
     assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
 
 
-def test_references_to_two_records_with_equal_data_are_one_index_value(
+def test_references_to_two_records_with_equal_data_are_one_row(
     client: Client, loaded: Record
 ) -> None:
     again = client.compute(LOAD, params={'sample': dataset_ref(run=1)})
@@ -400,7 +400,7 @@ def test_references_to_two_records_with_equal_data_are_one_index_value(
     assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
 
 
-def test_index_values_read_are_compared_as_the_index_type_dumps_them(
+def test_rows_read_are_compared_as_the_element_type_dumps_them(
     client: Client, loaded: Record
 ) -> None:
     plain = client.submit(
@@ -410,7 +410,7 @@ def test_index_values_read_are_compared_as_the_index_type_dumps_them(
     assert _failed(client, plain) == 'shifts[1]: repeats shifts[0], {"offset":1.0}'
 
 
-def test_a_stage_call_with_a_repeated_index_value_read_fails(
+def test_a_stage_call_with_a_repeated_row_read_fails(
     client: Client, loaded: Record
 ) -> None:
     stage = client.stage(Template(STAGED_SUM, blanks=('part',)))

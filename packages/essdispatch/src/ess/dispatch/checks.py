@@ -13,7 +13,7 @@ method for each thing checked::
     checks = Checks(IOFQ, datasets)
     request = checks.request(request, proposal)            # a plain request
     template, fixed = checks.template(template, proposal)  # a stage or an accumulator
-    index, columns = checks.push(blanks, columns, proposal)
+    table, rows = checks.push(blanks, rows, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
 The checks of a request; a template, a push, and a state check part of these:
@@ -38,27 +38,23 @@ The checks of a request; a template, a push, and a state check part of these:
   would drop it silently. The log holds the JSON form of the validated value,
   and the call phase validates that, so it must read back as the value: a
   number that is not finite has none (see
-  :func:`ess.spec.field_types.inline`). A list parameter that is not a column
-  of a table meets its length constraints.
+  :func:`ess.spec.field_types.inline`). A list parameter that is not a table
+  meets its length constraints.
 - *References.* A file is given by reference to a dataset, and only a file
   is (see :func:`ess.spec.field_types.is_file`): the dataset source checks
   that the proposal may read it, and the record holds its identity, to
   which its name is resolved, so it must be known. A reference to a record
   or an accumulator is checked by the backend, which knows what the client
   may read (see :func:`check_fit`).
-- *Table rules.* The columns of a table are given with its index, as many
-  rows as it; a column left out is ``None`` in each row if its element type
-  is optional, and a column whose element type is not optional is given
-  whenever the table has rows. The number of rows meets the length
-  constraints of the table's columns, so a table with a required index has a
-  row, and the index values of a table are distinct, compared as the record
-  holds them: a dataset by its identity, a reference to an output by record,
-  output, and key, and an inline value by its JSON form (see
-  :func:`distinct`).
+- *Table rules.* The number of rows of a table meets its length
+  constraints, and its rows are distinct, compared as the record holds them:
+  a dataset by its identity, a reference to an output by record, output, and
+  key, an inline value by its JSON form, and a group given field by field by
+  each of its fields so (see :func:`distinct`).
 
 The params model's model validators never run: a stage and a driver never
 get a whole params instance. A template's fixed values are checked each by
-its own field, and a push by its columns' element types. The checks need
+its own field, and a push by its table's element type. The checks need
 neither the backend's lock nor a client: what depends on history or on what a
 client keeps is the backend's.
 """
@@ -114,12 +110,11 @@ class Checks:
 
     def request(self, request: Request, proposal: str) -> Request:
         """
-        The request as the record holds it: names resolved, defaults and
-        columns left out filled, inline values in JSON's types.
+        The request as the record holds it: names resolved, defaults filled
+        in, inline values in JSON's types.
         """
         spec = self.spec
-        values = _columns(spec, request.params, spec.tables)
-        params = self._values(_fixed(spec, values, ()), proposal)
+        params = self._values(_fixed(spec, request.params, ()), proposal)
         _rows(spec, params, spec.tables)
         return Request(self.id, params=params)
 
@@ -127,62 +122,47 @@ class Checks:
         self, template: Template, proposal: str
     ) -> tuple[Template, dict[str, Any]]:
         """
-        The template as given, with dataset names resolved and the columns
-        given for a blank table dropped, as the stage or the accumulator
-        holds it, and its fixed values by name, defaults filled in.
+        The template as given, with dataset names resolved, as the stage or
+        the accumulator holds it, and its fixed values by name, defaults
+        filled in.
 
-        A blank is a parameter, or a table, named by its index; a template
-        fixes a whole table or leaves it blank. A parameter in neither the
-        values nor the blanks takes its default, so it must have one. Each
+        A blank is a parameter, a table among them. A parameter in neither
+        the values nor the blanks takes its default, so it must have one. Each
         fixed value is checked by its own field, and the table rules hold on
         the fixed tables.
         """
         spec, blanks = self.spec, template.blanks
-        left_open = spec.blank_fields(blanks)
-        given = {n: v for n, v in template.params.items() if n not in left_open}
-        tables = [index for index in spec.tables if index not in blanks]
-        filled = _columns(spec, given, tables)
-        fixed = self._values(_fixed(spec, filled, blanks), proposal)
-        _rows(spec, fixed, tables)
+        given = {n: v for n, v in template.params.items() if n not in blanks}
+        fixed = self._values(_fixed(spec, given, blanks), proposal)
+        _rows(spec, fixed, [t for t in spec.tables if t not in blanks])
         stored = Template(self.id, params={n: fixed[n] for n in given}, blanks=blanks)
         return stored, fixed
 
     def push(
-        self, blanks: Collection[str], columns: Mapping[str, Any], proposal: str
+        self, blanks: Collection[str], rows: Mapping[str, Any], proposal: str
     ) -> tuple[str, dict[str, list[Any]]]:
         """
-        The index of the table a push names, and its columns by name, as the
-        log holds them.
+        The table a push gives rows of, and its rows by the table's name, as
+        the log holds them.
 
-        A push gives the columns of one of the ``blanks``, a table: its
-        index, and the columns attached to it, as lists of equal length, one
-        or more rows; a column left out is filled as a request's is. Each
-        inline value is checked by its column's element type, and each
-        reference as a request's is. Whether an index value repeats one the
-        table holds is the backend's to check, which knows the table (see
-        :func:`distinct`).
+        A push gives one or more rows of one of the ``blanks``, a table. Each
+        row is checked by the table's element type, as a request's is.
+        Whether a row repeats one the table holds is the backend's to check,
+        which knows the table (see :func:`distinct`).
         """
-        spec = self.spec
-        tables = {n: spec.table_of(n) for n in columns}
-        if unknown := sorted(n for n, index in tables.items() if index is None):
-            raise SubmitError(f'{unknown}: not columns of a table of {self.id}')
-        indexes = {index for index in tables.values() if index is not None}
-        if len(indexes) != 1:
+        if len(rows) != 1:
             raise SubmitError(
-                f'a push gives the columns of one table, not of {sorted(indexes)}'
+                f'a push gives the rows of one table, not of {sorted(rows)}'
             )
-        (index,) = indexes
-        if index not in columns:
-            raise SubmitError(f'{sorted(columns)}: columns pushed without {index}')
-        if index not in blanks:
+        ((table, given),) = rows.items()
+        if table not in blanks:
             raise SubmitError(
-                f'a push names a table of the accumulator by its index, '
-                f'{list(blanks)}, not {index!r}'
+                f'a push gives rows of a blank table of the accumulator, '
+                f'{list(blanks)}, not {table!r}'
             )
-        if not columns[index]:
-            raise SubmitError(f'a push into {index} has no rows')
-        filled = _columns(spec, read_refs(columns), [index])
-        return index, self._values(filled, proposal)
+        if not given:
+            raise SubmitError(f'a push into {table} has no rows')
+        return table, self._values(read_refs({table: given}), proposal)
 
     def state(self, plain: Request, blanks: Collection[str]) -> str | None:
         """
@@ -191,8 +171,8 @@ class Checks:
 
         Each value was checked by its field when it was given, and the params
         model's model validators never run, so this checks the rest: the
-        number of rows of each table among the ``blanks``, by the length
-        constraints of its columns.
+        number of rows of each table among the ``blanks``, by its length
+        constraints.
         """
         try:
             _lengths(self.spec, plain.params, blanks)
@@ -234,7 +214,7 @@ class Checks:
             )
         if not isinstance(value, list):
             raise SubmitError(f'{name}: {value!r} is not a list')
-        if self.spec.table_of(name) is None and (
+        if name not in self.spec.tables and (
             need := _length_problem(self.spec, name, len(value))
         ):
             raise SubmitError(f'{name}: {_rows_text(len(value))}; it needs {need}')
@@ -440,21 +420,21 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) 
 
 
 def distinct(
-    index: str, values: Sequence[Any], seen: Mapping[bytes, int]
+    table: str, rows: Sequence[Any], seen: Mapping[bytes, int]
 ) -> dict[bytes, int]:
     """
-    The rows ``values`` of the table of ``index`` after the rows ``seen``,
-    each by its JSON form, with its row. Refuses a value equal to one seen or
-    to an earlier one: a reference by its fields, such as a dataset's
-    identity, an inline value by its JSON form.
+    The ``rows`` of ``table`` after the rows ``seen``, each by its JSON form,
+    with its index. Refuses a row equal to one seen or to an earlier one: a
+    reference by its fields, such as a dataset's identity, an inline value by
+    its JSON form, and a group given field by field by each field so.
     """
     new: dict[bytes, int] = {}
-    for i, value in enumerate(values, start=len(seen)):
-        shown = to_json(value)
+    for i, row in enumerate(rows, start=len(seen)):
+        shown = to_json(row)
         first = seen[shown] if shown in seen else new.setdefault(shown, i)
         if first != i:
             raise SubmitError(
-                f'{index}[{i}]: repeats {index}[{first}], {shown.decode()}'
+                f'{table}[{i}]: repeats {table}[{first}], {shown.decode()}'
             )
     return new
 
@@ -472,75 +452,28 @@ def _fixed(
         raise SubmitError(str(error)) from None
 
 
-def _columns(
-    spec: Spec, values: Mapping[str, Any], indexes: Iterable[str]
-) -> dict[str, Any]:
+def _rows(spec: Spec, values: Mapping[str, Any], tables: Collection[str]) -> None:
     """
-    ``values`` by name with the columns of the tables of ``indexes`` checked
-    and filled.
-
-    A column is given with its index, as long as it. A column left out is
-    ``None`` in each row if its element type is optional; a column whose
-    element type is not optional is given whenever the table has rows. A
-    table whose index is left out has no rows, and an empty list in each
-    column, unless its index is required.
+    Refuse a table of ``tables`` whose number of rows breaks its length
+    constraints, or with a row repeated; ``values`` by name, as the record
+    holds them.
     """
-    fields = spec.params.model_fields
-    filled = dict(values)
-    for index in indexes:
-        attached = spec.tables[index]
-        if index not in values:
-            if given := [c for c in attached if c in values]:
-                raise SubmitError(
-                    f'{given}: columns of the table of {index}, given without it'
-                )
-            if fields[index].is_required():
-                continue  # refused as a required parameter not given
-            filled[index] = []
-            rows = 0
-        elif isinstance(values[index], list):
-            rows = len(values[index])
-        else:
-            raise SubmitError(f'{index}: {values[index]!r} is not a list of rows')
-        for column in attached:
-            if column in values:
-                cells = values[column]
-                if isinstance(cells, list) and len(cells) != rows:
-                    raise SubmitError(
-                        f'{column}: {len(cells)} rows, but {index} has {rows}'
-                    )
-            elif rows == 0 or optional(element(fields[column].annotation))[1]:
-                filled[column] = [None] * rows
-            else:
-                raise SubmitError(
-                    f'{column}: a column whose element type is not optional, not given'
-                )
-    return filled
+    _lengths(spec, values, tables)
+    for table in tables:
+        distinct(table, values.get(table) or [], {})
 
 
-def _rows(spec: Spec, values: Mapping[str, Any], indexes: Collection[str]) -> None:
+def _lengths(spec: Spec, values: Mapping[str, Any], tables: Iterable[str]) -> None:
     """
-    Refuse a table of ``indexes`` whose number of rows breaks a length
-    constraint of its columns, or with an index value repeated; ``values`` by
-    name, as the record holds them.
+    Refuse a table of ``tables`` whose number of rows breaks its length
+    constraints, such as a table that needs a row without one.
     """
-    _lengths(spec, values, indexes)
-    for index in indexes:
-        distinct(index, values.get(index) or [], {})
-
-
-def _lengths(spec: Spec, values: Mapping[str, Any], indexes: Iterable[str]) -> None:
-    """
-    Refuse a table of ``indexes`` whose number of rows breaks a length
-    constraint of one of its columns, such as a required index without a row.
-    """
-    for index in indexes:
-        n = len(values.get(index) or [])
-        for name in spec.columns(index):
-            if need := _length_problem(spec, name, n):
-                raise SubmitError(
-                    f'{index}: the table has {_rows_text(n)}; {name} needs {need}'
-                )
+    for table in tables:
+        n = len(values.get(table) or [])
+        if need := _length_problem(spec, table, n):
+            raise SubmitError(
+                f'{table}: the table has {_rows_text(n)}; it needs {need}'
+            )
 
 
 def _length_problem(spec: Spec, name: str, n: int) -> str | None:

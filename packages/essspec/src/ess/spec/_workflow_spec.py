@@ -77,20 +77,19 @@ framework: what the framework needs, it reads from the field types (see
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
 - Each output is a type, possibly optional, or a list or a dict of one.
-- The index of a table is required, with ``Field(min_length=1)``, or empty by
-  default.
+- Each table is a list parameter.
 
 A check across parameters is the binding's or the driver's, and fails when
 the request runs. The params model may state one as a model validator, but
 the framework never calls it: a stage and a driver never get a whole params
 instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
 
-A *table* is a set of list parameters of equal length, pushed together into
-an accumulator. Its *index* is the parameter that names it, such as the run;
-its other *columns* are attached to the index. ``tables`` maps each index to
-its attached columns; :meth:`WorkflowSpec.tabulate` makes a multi-run spec
-from a single-run one by naming them. A list parameter is a table only where
-``tables`` names it.
+A *table* is a list parameter whose *rows* an accumulator takes a push at a
+time, such as the sample runs; its rows are distinct. A row with more than
+one value, such as a run and the values given next to it, is a group given
+field by field. ``tables`` names the tables; :meth:`WorkflowSpec.tabulate`
+makes a multi-run spec from a single-run one by naming them. A list
+parameter is a table only where ``tables`` names it.
 
 Two forms exist, related by a one-way projection:
 
@@ -106,7 +105,7 @@ Two forms exist, related by a one-way projection:
 from __future__ import annotations
 
 import functools
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from types import NoneType, UnionType
 from typing import Annotated, Any, Self, Union, get_args, get_origin
 
@@ -117,7 +116,6 @@ from pydantic import (
     Field,
     ValidationError,
     create_model,
-    field_validator,
     model_validator,
 )
 from pydantic.fields import FieldInfo
@@ -186,34 +184,19 @@ class _SpecFields(BaseModel, frozen=True):
             "version is ``version``."
         ),
     )
-    tables: dict[str, tuple[str, ...]] = Field(
-        default_factory=dict,
+    tables: tuple[str, ...] = Field(
+        default=(),
         description=(
-            "The tables, each as its index and the columns attached to it. A "
-            "sequence of indexes is a table each, without attached columns."
+            "The list parameters whose rows an accumulator takes a push at a "
+            "time, each a table."
         ),
     )
 
     def __hash__(self) -> int:
-        # The tables are a dict, which pydantic's hash of all fields refuses;
-        # equal specs have equal identities, so these suffice.
+        # The schemas of the serialized form are dicts, which pydantic's hash
+        # of all fields refuses; equal specs have equal identities, so these
+        # suffice.
         return hash((type(self), self.name, self.version))
-
-    @field_validator('tables', mode='before')
-    @classmethod
-    def _tables_of_names(cls, tables: Any) -> Any:
-        if isinstance(tables, Sequence) and not isinstance(tables, str):
-            return _as_tables(tables)
-        return tables
-
-
-def _as_tables(
-    tables: Sequence[str] | Mapping[str, Sequence[str]],
-) -> dict[str, tuple[str, ...]]:
-    """Tables by index; a sequence of indexes makes a table of each, alone."""
-    if isinstance(tables, Mapping):
-        return {index: tuple(attached) for index, attached in tables.items()}
-    return dict.fromkeys(tables, ())
 
 
 class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
@@ -284,86 +267,56 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         return has_json_form(self.params, name)
 
-    def columns(self, index: str) -> tuple[str, ...]:
-        """The columns of the table of ``index``, the index first."""
-        return (index, *self.tables[index])
-
-    def table_of(self, name: str) -> str | None:
-        """The index of the table that holds the parameter ``name``, if any."""
-        for index, attached in self.tables.items():
-            if name == index or name in attached:
-                return index
-        return None
-
-    def blank_fields(self, blanks: Collection[str]) -> frozenset[str]:
-        """
-        The parameters that ``blanks`` leave open: a blank that is an index
-        stands for every column of its table, the index among them.
-        """
-        return frozenset(
-            name
-            for blank in blanks
-            for name in (self.columns(blank) if blank in self.tables else (blank,))
-        )
-
     def tabulate(
         self,
         *,
         name: str,
         version: int,
-        tables: Sequence[str] | Mapping[str, Sequence[str]],
+        tables: Sequence[str],
+        empty: Collection[str] = (),
         title: str | None = None,
         description: str | None = None,
     ) -> WorkflowSpec[Any, O]:
         """
-        A spec over tables, made from this one by naming the indexes of its
-        tables, each with the columns attached to it::
+        A spec over tables, made from this one by naming its parameters that
+        become tables::
 
             IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
-            SANS.tabulate(name='sans-multi', version=1,
-                          tables={'sample': ('sample_geometry',), 'can': ()})
 
-        Each parameter named becomes a ``list``. An index is ``X``, or
-        ``X | None = None``, and loses ``| None``: ``sample: SampleFile``
-        becomes ``list[SampleFile]`` with at least one row, and
-        ``can: CanFile | None = None`` becomes ``list[CanFile]``, empty by
-        default. An attached column keeps its type as written,
-        ``list[SampleGeometry | None]``, and has no default. Where its type
-        is optional, as here, the framework fills a column left out with
-        ``None`` in each row; a column of another type is given. The
-        validators and constraints of a parameter named, such as an
-        ``AfterValidator`` or ``Field(gt=0)``, check each row: they are
-        metadata of the element type. Title, description, examples (each as
-        one row), and ``json_schema_extra`` of a parameter named are kept.
-        The other parameters and the outputs are as in this spec. The params
-        model is made anew, without this spec's model validators, which read
-        fields whose types change, and has no static type.
+        Each parameter named becomes a ``list`` of its type as written, with
+        at least one row, or, if ``empty`` names it, with none by default:
+        ``sample: SampleRun`` becomes ``list[SampleRun]``, and
+        ``can: CanFile | None = None`` with ``empty=('can',)`` becomes
+        ``list[CanFile | None]``, empty by default. The validators and
+        constraints of a parameter named, such as an ``AfterValidator`` or
+        ``Field(gt=0)``, check each row: they are metadata of the element
+        type. Title, description, examples (each as one row), and
+        ``json_schema_extra`` of a parameter named are kept. The other
+        parameters and the outputs are as in this spec. The params model is
+        made anew, without this spec's model validators, which read fields
+        whose types change, and has no static type.
 
-        With one row in each table whose index is given, and none where it is
-        left out, a request of the new spec is a request of this one (see
-        :func:`ess.spec.testing.check_one_row`).
+        With one row in each table, a request of the new spec is a request of
+        this one (see :func:`ess.spec.testing.check_one_row`).
         """
         if self.tables:
             raise ValueError(f'{self.name} has tables already')
-        named = _as_tables(tables)
-        names = {n for index, attached in named.items() for n in (index, *attached)}
         fields = self.params.model_fields
-        if unknown := sorted(names - fields.keys()):
+        if unknown := sorted(set(tables) - fields.keys()):
             raise ValueError(f'{unknown}: not parameters of {self.name}')
-        if lists := sorted(n for n in names if element(fields[n].annotation)):
-            raise ValueError(f'{lists}: lists already, cannot be columns')
-        if misshapen := sorted(i for i in named if not _index_shape(fields[i])):
-            raise ValueError(f'{misshapen}: an index is X, or X | None = None')
-        attached = {n for columns in named.values() for n in columns}
+        if lists := sorted(n for n in tables if element(fields[n].annotation)):
+            raise ValueError(f'{lists}: lists already, cannot be tables')
+        if not_tables := sorted(set(empty) - set(tables)):
+            raise ValueError(f'{not_tables}: empty, but not tables')
         return WorkflowSpec(
             name=name,
             version=version,
             title=title or self.title,
             description=description or self.description,
             code_revision=self.code_revision,
-            params=_tabulated(self.params, named.keys(), attached),
+            params=_tabulated(self.params, tables, empty),
             outputs=self.outputs,
-            tables=named,
+            tables=tuple(tables),
         )
 
     def serialize(self) -> SerializedWorkflowSpec:
@@ -557,78 +510,47 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
 
 
 def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
-    problems = []
-    seen: set[str] = set()
     fields = spec.params.model_fields
-    for index, attached in spec.tables.items():
-        for name in (index, *attached):
-            if name in seen:
-                problems.append(f'{name}: a column of two tables')
-            seen.add(name)
-            if (field := fields.get(name)) is None:
-                problems.append(f'{name}: not a parameter of {spec.name}')
-            elif get_origin(field.annotation) is not list:
-                problems.append(f'{name}: a column of a table is a list')
-            elif name == index and optional(element(field.annotation))[1]:
-                problems.append(f'{index}: the index of a table holds no None')
-            elif name == index and field.is_required():
-                if not any(
-                    isinstance(m, MinLen) and m.min_length >= 1 for m in field.metadata
-                ):
-                    problems.append(
-                        f'{index}: a required index has Field(min_length=1)'
-                    )
-            elif name == index:
-                default = field.get_default(call_default_factory=True)
-                if not (isinstance(default, list) and not default):
-                    problems.append(
-                        f'{index}: the index of a table is required, or empty by '
-                        'default'
-                    )
+    problems = [
+        f'{name}: a table named twice'
+        for name in sorted(set(spec.tables))
+        if spec.tables.count(name) > 1
+    ]
+    for name in dict.fromkeys(spec.tables):
+        if (field := fields.get(name)) is None:
+            problems.append(f'{name}: not a parameter of {spec.name}')
+        elif get_origin(field.annotation) is not list:
+            problems.append(f'{name}: a table is a list parameter')
     return problems
 
 
 def _tabulated(
-    model: type[BaseModel], indexes: Sequence[str], attached: set[str]
+    model: type[BaseModel], tables: Collection[str], empty: Collection[str]
 ) -> type[BaseModel]:
-    """``model`` with the fields named as columns."""
+    """``model`` with the fields named as tables, each a list of its type."""
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
-        if name not in indexes and name not in attached:
+        if name not in tables:
             fields[name] = (info.annotation, info)
             continue
         meta = {
             'title': info.title,
             'description': info.description,
             'json_schema_extra': info.json_schema_extra,
-            # An example of a column is one row of it.
+            # An example of a table is one row of it.
             'examples': None if info.examples is None else [[e] for e in info.examples],
         }
         # A row is a value of the field, so the field's validators and
         # constraints check each row.
-        if name in attached:
-            row, rows = info.annotation, {}
-        elif info.is_required():
-            row, rows = info.annotation, {'min_length': 1}
-        else:  # X | None = None, as tabulate checks
-            members = [a for a in get_args(info.annotation) if a is not NoneType]
-            row = Union[tuple(members)]  # noqa: UP007
-            rows = {'default_factory': list}
-        if info.metadata:
-            row = Annotated[row, *info.metadata]
+        row = (
+            Annotated[info.annotation, *info.metadata]
+            if info.metadata
+            else info.annotation
+        )
+        rows = {'default_factory': list} if name in empty else {'min_length': 1}
         fields[name] = (list[row], Field(**rows, **meta))
     return create_model(
         f'Tabulated{model.__name__}', __config__=model.model_config, **fields
-    )
-
-
-def _index_shape(field: FieldInfo) -> bool:
-    """Whether ``tabulate`` takes a field as an index: ``X``, or ``X | None = None``."""
-    if field.is_required():
-        return not optional(field.annotation)[1]
-    return (
-        optional(field.annotation)[1]
-        and field.get_default(call_default_factory=True) is None
     )
 
 
@@ -637,9 +559,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     The JSON Schema of the params: that of a model of the same fields, each
     with its title, description, default, and length constraints, and with
     its type replaced by the forms it takes (see :func:`_forms`). As the
-    backend does, it refuses a field that a model lacks, and does not require
-    a column of a table whose element type is optional, which the backend
-    fills with ``None``.
+    backend does, it refuses a field that a model lacks.
     """
     model: type[BaseModel] = spec.params
     fields: dict[str, Any] = {}
@@ -667,16 +587,6 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     for group in [schema, *schema.get('$defs', {}).values()]:
         if 'properties' in group:
             group['additionalProperties'] = False
-    filled = {
-        column
-        for attached in spec.tables.values()
-        for column in attached
-        if optional(element(model.model_fields[column].annotation))[1]
-    }
-    if required := [n for n in schema.get('required', []) if n not in filled]:
-        schema['required'] = required
-    else:
-        schema.pop('required', None)
     return schema
 
 

@@ -5,10 +5,11 @@ Each check passes for a binding or driver that keeps its symmetry and fails
 for one with a bug that breaks it.
 
 The toy spec ``SUB`` takes a sample and a can value and gives
-``diff = factor * (sample - can)``; ``SUB_MULTI`` sums the rows of each table.
+``diff = factor * (sample - can)``; ``SUB_MULTI`` sums the rows of each table,
+a can row of ``None`` as no can.
 """
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, NewType
 
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 from ess.spec import DriverBinding, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import (
+    Rows,
     assert_close,
     check_arrival_and_order,
     check_caching,
@@ -52,7 +54,9 @@ def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
 
 
 SUB = _spec('sub', params=SubParams, outputs=SubOutputs)
-SUB_MULTI = SUB.tabulate(name='sub-multi', version=1, tables=('sample', 'can'))
+SUB_MULTI = SUB.tabulate(
+    name='sub-multi', version=1, tables=('sample', 'can'), empty=('can',)
+)
 
 
 def subtract(scale: Scale, sample: float, can: float | None) -> SubOutputs:
@@ -93,9 +97,6 @@ class RemembersFirstCall(Calls):
         return remember
 
 
-Columns = Mapping[str, Sequence[Any]]
-
-
 class Sums:
     """A driver of ``SUB_MULTI``."""
 
@@ -103,8 +104,8 @@ class Sums:
         self.factor = fixed['scale'].factor
         self.sums = {'sample': 0.0, 'can': 0.0}
 
-    def push(self, table: str, columns: Columns) -> None:
-        self.sums[table] += sum(columns[table])
+    def push(self, table: str, rows: Rows) -> None:
+        self.sums[table] += sum(row for row in rows if row is not None)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self.factor * (self.sums['sample'] - self.sums['can']))
@@ -113,16 +114,16 @@ class Sums:
 class IgnoresCans(Sums):
     """Breaks one-row: drops the cans."""
 
-    def push(self, table: str, columns: Columns) -> None:
+    def push(self, table: str, rows: Rows) -> None:
         if table == 'sample':
-            super().push(table, columns)
+            super().push(table, rows)
 
 
 class KeepsLastPush(Sums):
     """Breaks arrival: each push replaces what was pushed before into its table."""
 
-    def push(self, table: str, columns: Columns) -> None:
-        self.sums[table] = sum(columns[table])
+    def push(self, table: str, rows: Rows) -> None:
+        self.sums[table] = sum(rows)
 
 
 class StartsAtFirstSample(Sums):
@@ -136,8 +137,8 @@ class StartsAtFirstSample(Sums):
         super().__init__(fixed)
         self.total: float | None = None
 
-    def push(self, table: str, columns: Columns) -> None:
-        for value in columns[table]:
+    def push(self, table: str, rows: Rows) -> None:
+        for value in rows:
             if table == 'sample':
                 self.total = value + (self.total or 0.0)
             elif self.total is not None:
@@ -172,8 +173,8 @@ class JoinsInPlace:
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.joined: list[float] | None = None
 
-    def push(self, table: str, columns: Columns) -> None:
-        for value in columns[table]:
+    def push(self, table: str, rows: Rows) -> None:
+        for value in rows:
             if self.joined is None:
                 self.joined = value
             else:
@@ -184,7 +185,7 @@ class JoinsInPlace:
 
 
 FIXED = {'scale': Scale(factor=2.0)}
-TABLES = {'sample': {'sample': [5.0, 7.0]}, 'can': {'can': [1.0, 2.0, 4.0]}}
+TABLES = {'sample': [5.0, 7.0], 'can': [1.0, 2.0, 4.0]}
 
 
 def test_arrival_and_order_pass_for_sums_kept_per_table() -> None:
@@ -208,9 +209,9 @@ def test_order_fails_for_a_driver_that_drops_rows_of_a_table_pushed_first() -> N
 def test_arrival_fails_for_a_driver_that_modifies_the_values_pushed() -> None:
     with pytest.raises(
         AssertionError,
-        match=r"values after pushing them, one push per table, 'parts', 'parts'\[0\]",
+        match=r"values after pushing them, one push per table, 'parts'\[0\]: ",
     ):
-        check_arrival_and_order(JoinsInPlace, {}, {'parts': {'parts': [[1.0], [2.0]]}})
+        check_arrival_and_order(JoinsInPlace, {}, {'parts': [[1.0], [2.0]]})
 
 
 def test_states_that_a_driver_refuses_are_not_read() -> None:
@@ -220,9 +221,7 @@ def test_states_that_a_driver_refuses_are_not_read() -> None:
 
     check_arrival_and_order(Ratio, FIXED, TABLES)
     with pytest.raises(ZeroDivisionError):
-        check_arrival_and_order(
-            Ratio, FIXED, {'sample': {'sample': [1.0]}, 'can': {'can': []}}
-        )
+        check_arrival_and_order(Ratio, FIXED, {'sample': [1.0], 'can': []})
 
 
 def test_caching_passes_for_a_stage_that_computes_each_call() -> None:
@@ -236,17 +235,14 @@ def test_caching_fails_for_a_stage_that_holds_the_outputs_of_its_first_call() ->
         check_caching(RemembersFirstCall(SUB, subtract), {'sample': 5.0}, calls)
 
 
-def test_one_row_gives_a_row_where_the_index_is_given_and_none_elsewhere() -> None:
-    request = one_row(SUB_MULTI, SubParams(sample=5.0))
+def test_one_row_gives_each_table_a_row_of_the_value() -> None:
+    request = one_row(SUB_MULTI, SubParams(sample=5.0, can=1.0))
     assert request.scale == Scale()
-    assert (request.sample, request.can) == ([5.0], [])
+    assert (request.sample, request.can) == ([5.0], [1.0])
 
 
-def test_one_row_gives_attached_columns_a_row_of_the_value() -> None:
-    weighted = SUB.tabulate(name='weighted', version=1, tables={'sample': ('scale',)})
-    request = one_row(weighted, SubParams(sample=5.0, can=1.0))
-    assert request.scale == [Scale()]
-    assert (request.sample, request.can) == ([5.0], 1.0)
+def test_one_row_gives_a_row_of_none_for_an_optional_value_that_is_none() -> None:
+    assert one_row(SUB_MULTI, SubParams(sample=5.0)).can == [None]
 
 
 @pytest.mark.parametrize('can', [1.0, None])

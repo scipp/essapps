@@ -104,7 +104,7 @@ def _spec(
     *,
     params: type[BaseModel],
     outputs: type[BaseModel] = Value,
-    tables: Any = (),
+    tables: tuple[str, ...] = (),
 ) -> Spec:
     return WorkflowSpec(
         name=name,
@@ -132,31 +132,39 @@ class Tag(BaseModel):
     tags: Any = None
 
 
+class TaggedRun(BaseModel):
+    """A run and its tag, if given: a group that holds a file."""
+
+    file: RunFile
+    tag: Tag | None = None
+
+
 class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
-    tag: list[Tag | None]
-    runs: list[RunFile] = Field(default_factory=list)
+    runs: list[TaggedRun] = Field(default_factory=list)
     offset: Offset | None = None
 
 
-SUM = _spec('sum', params=SumParams, tables={'runs': ('tag',)})
+SUM = _spec('sum', params=SumParams, tables=('runs',))
 
 
 class Weight(BaseModel):
     value: float
 
 
+class WeightedRun(BaseModel):
+    """A run and its weight, which has no default: a group that holds a file."""
+
+    file: RunFile
+    weight: Weight
+
+
 class WeightedParams(BaseModel):
-    weight: list[Weight]
-    values: list[Part] = Field(min_length=1)
+    runs: list[WeightedRun] = Field(min_length=1)
 
 
-WEIGHTED = _spec(
-    'weighted',
-    params=WeightedParams,
-    tables={'values': ('weight',)},
-)
+WEIGHTED = _spec('weighted', params=WeightedParams, tables=('runs',))
 
 
 class MeanAndSpread(BaseModel):
@@ -203,7 +211,7 @@ class PositiveScale(BaseModel):
 
 
 class StepsParams(BaseModel):
-    """A params model with a table: its index is a list of groups."""
+    """A params model with a table of groups."""
 
     scale: PositiveScale = Field(default_factory=PositiveScale)
     steps: list[Step] = Field(min_length=1)
@@ -243,9 +251,8 @@ def scale(params: ScaleParams) -> Value:
 
 
 def weighted(params: Any) -> Value:
-    """WEIGHTED as a plain function: each value times its weight, summed."""
-    pairs = zip(params.weight, params.values, strict=True)
-    return Value(value=sum(w.value * x for w, x in pairs))
+    """WEIGHTED as a plain function: each run times its weight, summed."""
+    return Value(value=sum(r.weight.value * read_dataset(r.file) for r in params.runs))
 
 
 def stitch(params: StitchParams) -> Curve:
@@ -267,7 +274,7 @@ def append_digit(number: float, digit: float) -> float:
 
 class Fold:
     """
-    A driver that combines the index values of one table into the spec's one
+    A driver that combines the rows of one table into the spec's one
     output with ``operation``, as in ``operation(operation(a, b), c)``, in
     push order. The first value is copied, so that combining in place never
     changes the output it came from.
@@ -279,8 +286,8 @@ class Fold:
         self._operation = operation
         self._total: Any = None
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        for value in columns[table]:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        for value in rows:
             if self._total is None:
                 self._total = copy.deepcopy(value)
             else:
@@ -291,7 +298,7 @@ class Fold:
 
 
 def folding(spec: Spec, operation: Callable[[Any, Any], Any]) -> DriverBinding:
-    """A binding of a spec over one table, whose output is its index values folded."""
+    """A binding of a spec over one table, whose output is its rows folded."""
     return DriverBinding(spec, lambda fixed: Fold(spec, operation))
 
 
@@ -305,9 +312,9 @@ class Averaging:
         self._total = 0.0
         self._count = 0
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        self._total += sum(columns[table])
-        self._count += len(columns[table])
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        self._total += sum(rows)
+        self._count += len(rows)
 
     def outputs(self) -> MeanAndSpread:
         return MeanAndSpread(mean=self._total / self._count)
@@ -321,10 +328,10 @@ class _ScaledTotal:
         self.total = fixed['offset'] or 0.0
         self.tags: list[Any] = []
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        self.tags.extend(columns['tag'])
-        for path in columns['runs']:
-            self.total += self._factor * read_dataset(path)
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        for run in rows:
+            self.tags.append(run.tag)
+            self.total += self._factor * read_dataset(run.file)
 
     def outputs(self) -> Value:
         return Value(value=self.total)
@@ -354,8 +361,8 @@ class Walking:
         self._factor = fixed['scale'].factor
         self._total = 0.0
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        self._total += sum(step.size for step in columns['steps'])
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        self._total += sum(step.size for step in rows)
 
     def outputs(self) -> Value:
         return Value(value=self._factor * self._total)
@@ -755,8 +762,10 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
             SCALE,
             params={'scaling': {'factor': 2.0, 'speed': 2.0}, 'sample': dataset(run=1)},
         )
-    with pytest.raises(SubmitError, match=r'tag\[0\]\.speed: Extra inputs are not'):
-        acc.push(runs=[dataset(run=1)], tag=[{'speed': 2.0}])
+    with pytest.raises(
+        SubmitError, match=r'runs\[0\]\.tag\.speed: Extra inputs are not'
+    ):
+        acc.push(runs=[{'file': dataset(run=1), 'tag': {'speed': 2.0}}])
 
 
 # What a client keeps
@@ -1075,7 +1084,9 @@ def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(
     flipped = {'scale': {'factor': -2.0}}
     walk = client.accumulator(Template(WALK, params=flipped, blanks=('steps',)))
     walk.push(steps=[Step(size=1.0)])
-    with pytest.raises(SubmitError, match='steps needs at least 2') as refused:
+    with pytest.raises(
+        SubmitError, match='steps: the table has one row; it needs at least 2'
+    ) as refused:
         client.submit(WALK, params={**flipped, 'steps': [Step(size=1.0)]})
     reason = f'^{re.escape(str(refused.value))}$'
     with pytest.raises(LookupError, match=reason):
@@ -1094,7 +1105,9 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         walk = client.accumulator(Template(WALK, blanks=('steps',)))
         walk.push(steps=[Step(size=1.0)])
-        with pytest.raises(LookupError, match='steps needs at least 2'):
+        with pytest.raises(
+            LookupError, match='steps: the table has one row; it needs at least 2'
+        ):
             client.output(walk)
         walk.push(steps=[Step(size=2.0)])
 
@@ -1107,12 +1120,13 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     acc = client.accumulator(
         Template(SUM, params={'labels': Labels(tags=('a', 'b'))}, blanks=('runs',))
     )
-    acc.push(runs=[dataset(run=1)], tag=[Tag(tags=('c', 'd'))])
+    acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=('c', 'd'))}])
     read = client.compute(_read(acc))
 
     assert client.output(read, 'value') == 1.0
     assert acc.template.params == {'labels': {'tags': ['a', 'b']}}  # JSON has no tuple
-    assert _state(client, read).request.params['tag'] == [{'tags': ['c', 'd']}]
+    (run,) = _state(client, read).request.params['runs']
+    assert run['tag'] == {'tags': ['c', 'd']}
     assert scaled_sum.opened[0]['labels'] == Labels(tags=['a', 'b'])
     assert scaled_sum.held[0].tags == [Tag(tags=['c', 'd'])]
 
@@ -1173,15 +1187,13 @@ def test_an_accumulator_is_read_through_a_reference(client: Client) -> None:
         client.submit(_total(client))
 
 
-def test_the_blanks_of_an_accumulator_are_its_tables_by_their_indexes(
-    client: Client,
-) -> None:
+def test_the_blanks_of_an_accumulator_are_its_tables(client: Client) -> None:
     refused = {
-        r"by their indexes \['runs'\], not \[\]$": Template(SUM),
+        r"tables, \['runs'\], not \[\]$": Template(SUM),
         r"not \['scale'\]$": Template(SUM, blanks=('scale',)),
         r"not \['runs', 'scale'\]$": Template(SUM, blanks=('runs', 'scale')),
-        r"not \['tag'\]$": Template(SUM, blanks=('tag',)),
-        r"by their indexes \['high', 'low'\], not \[\]$": Template(STITCH),
+        r"not \['tag'\]$": Template(SUM, blanks=('tag',)),  # a field of a row
+        r"tables, \['low', 'high'\], not \[\]$": Template(STITCH),
         r"not \['reference'\]$": Template(STITCH, blanks=('reference',)),
     }
     for reason, template in refused.items():
@@ -1251,7 +1263,7 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
             client.accumulator(Template(SUM, blanks=('runs',), **values))
 
 
-def test_a_template_that_fixes_a_repeated_index_value_is_refused(
+def test_a_template_that_fixes_a_repeated_row_is_refused(
     client: Client,
 ) -> None:
     load = client.compute(_load(1))
@@ -1270,63 +1282,60 @@ def test_a_template_that_fixes_a_repeated_index_value_is_refused(
 # Pushes
 
 
-def test_a_push_takes_an_index_and_its_columns_as_a_request_does(
-    client: Client,
-) -> None:
-    loads = [client.submit(_load(n)) for n in (1, 2)]
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('values',)))
-    weighted.push(values=[loads[0].ref('value')], weight=[Weight(value=3.0)])
-    weighted.push(values=[loads[1].ref('value')], weight=[{'value': 1.0}])
+def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
+    rows = [
+        {'file': dataset(run=1), 'weight': Weight(value=3.0)},
+        {'file': dataset(run=2), 'weight': {'value': 1.0}},
+    ]
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
+    for row in rows:
+        weighted.push(runs=[row])
     read = client.compute(_read(weighted))
-    plain = client.compute(
-        WEIGHTED,
-        params={
-            'weight': [Weight(value=3.0), Weight(value=1.0)],
-            'values': [x.ref('value') for x in loads],
-        },
-    )
+    plain = client.compute(WEIGHTED, params={'runs': rows})
 
     assert client.output(read, 'value') == client.output(plain, 'value') == 5.0
     state = _state(client, read)
     assert state.request == plain.request
-    assert client.provenance(read).records() == [state, *loads]
+    assert client.provenance(read).records() == [state]
 
 
 def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     load = client.compute(_load(1))
-    value, weight = [load.ref('value')], [Weight(value=1.0)]
-    pushes = [
-        {'values': value},  # a column whose element type is not optional
-        {'weight': weight * 2, 'values': value},  # columns of unequal length
-        {'weight': [load.ref('value')], 'values': value},  # a reference, no fit
-        {'weight': [{'value': 'x'}], 'values': value},  # an invalid inline value
-        {'weight': weight, 'values': [dataset(run=1)]},  # a dataset, no file
-        {'weight': weight, 'values': [{'@ref': 'run'}]},  # no kind of reference
+    run, weight = dataset(run=1), Weight(value=1.0)
+    rows = [
+        run,  # a dataset for a group whose weight has no default
+        {'file': run, 'weight': load.ref('value')},  # a reference, no fit
+        {'file': run, 'weight': {'value': 'x'}},  # an invalid inline value
+        {'file': run, 'weight': dataset(run=2)},  # a dataset, no file
+        {'file': run, 'weight': {'@ref': 'run'}},  # no kind of reference
+        {'file': run, 'weight': weight, 'speed': 1.0},  # a field the group lacks
     ]
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('values',)))
-    for columns in pushes:
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
+    for row in rows:
         with pytest.raises(SubmitError) as refused:
-            client.submit(WEIGHTED, params=columns)
+            client.submit(WEIGHTED, params={'runs': [row]})
         with pytest.raises(SubmitError) as pushed:
-            weighted.push(**columns)
+            weighted.push(runs=[row])
         assert str(pushed.value) == str(refused.value)
 
 
-def test_a_push_takes_lists_of_values(client: Client) -> None:
+def test_a_push_takes_lists_of_rows(client: Client) -> None:
     load = client.compute(_load(1))
     total = _total(client)
     plain = {'@ref': 'output', 'record': load.id, 'output': 'value'}
-    for column in (load.ref('value'), plain, 'x'):
-        with pytest.raises(TypeError, match='parts: a column is a list of values'):
-            total.push(parts=column)  # type: ignore[arg-type]
+    for rows in (load.ref('value'), plain, 'x'):
+        with pytest.raises(TypeError, match='parts: the rows of a table are a list'):
+            total.push(parts=rows)  # type: ignore[arg-type]
 
 
-def test_a_reference_in_a_push_must_fit_its_column(client: Client) -> None:
+def test_a_reference_in_a_push_must_fit_its_field(client: Client) -> None:
     load = client.submit(_load(1))
-    weighted = client.accumulator(Template(WEIGHTED, blanks=('values',)))
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
 
-    with pytest.raises(SubmitError, match=r'^weight\[0\]: .*, of type float, does not'):
-        weighted.push(values=[1.0], weight=[load.ref('value')])
+    with pytest.raises(
+        SubmitError, match=r'^runs\[0\]\.weight: .*, of type float, does not'
+    ):
+        weighted.push(runs=[{'file': dataset(run=1), 'weight': load.ref('value')}])
 
 
 def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
@@ -1506,14 +1515,14 @@ class _Summing:
         self._owner = owner
         self._fold = Fold(TOTAL, operator.add)
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.failing:
             self._owner.failing = False
             raise ValueError('cannot add')
         self._owner.pushed += 1
-        self._fold.push(table, columns)
+        self._fold.push(table, rows)
 
     def outputs(self) -> BaseModel:
         return self._fold.outputs()
@@ -1826,13 +1835,13 @@ class _Sides:
         self._owner = owner
         self._sums: dict[str, Any] = {'samples': 0.0, 'backgrounds': 0.0}
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.refusing:
             self._owner.refusing = False
             raise ValueError('cannot add')
-        for value in columns[table]:
+        for value in rows:
             self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> Sides:

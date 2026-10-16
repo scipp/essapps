@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NewType
 
@@ -16,7 +16,8 @@ from ess.spec.testing import check_arrival_and_order, check_caching, check_one_r
 # A toy SANS reduction of a sample run and an optional can run, each a file of
 # counts. The pipeline sets each field under its type as written, such as
 # ``CanFile | None``. ``IofQDriver`` sums the numerator and the denominator of
-# each table's runs and computes the outputs from the sums.
+# each table's runs, a can row of ``None`` as no can, and computes the outputs
+# from the sums.
 
 
 class Reduction(BaseModel):
@@ -52,7 +53,9 @@ def _spec(name: str, **models: type[BaseModel]) -> WorkflowSpec[Any, Any]:
 
 
 IOFQ = _spec('iofq', params=IofQParams, outputs=IofQOutputs)
-IOFQ_MULTI = IOFQ.tabulate(name='iofq-multi', version=1, tables=('sample', 'can'))
+IOFQ_MULTI = IOFQ.tabulate(
+    name='iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
+)
 
 
 def sample_numerator(counts: SampleCounts, reduction: Reduction) -> SampleNumerator:
@@ -152,9 +155,9 @@ class IofQDriver:
         }
         self._sums: dict[Any, np.ndarray] = {}
 
-    def push(self, table: str, columns: Mapping[str, Any]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
-        for path in columns[table]:
+        for path in (row for row in rows if row is not None):
             for k, part in stage.compute({key: path}).items():
                 self._sums[k] = self._sums[k] + part if k in self._sums else part
 
@@ -268,7 +271,7 @@ def test_the_bindings_keep_the_symmetries(
         check_one_row(single, multi, IofQParams(sample=samples[0], can=can))
     runs = {'sample': samples[0], 'can': cans[0]}
     check_caching(single, runs, [reduction(2), reduction(1), reduction(2)])
-    tables = {'sample': {'sample': samples}, 'can': {'can': cans}}
+    tables = {'sample': samples, 'can': cans}
     check_arrival_and_order(multi.make_driver, reduction(2), tables)
 
 
@@ -292,7 +295,7 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
 ) -> None:
     driver = multi.make_accumulator({'can': cans, **reduction(2)}, ('sample',))
     for sample in samples:
-        driver.push('sample', {'sample': [sample]})
+        driver.push('sample', [sample])
         driver.outputs()
     assert loaded == cans + samples
 
@@ -353,7 +356,7 @@ def test_keys_name_keys_of_the_workflows_own(samples: list[Path]) -> None:
     assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
 
 
-def test_a_table_sets_the_key_of_each_column_to_its_list(samples: list[Path]) -> None:
+def test_a_table_sets_the_key_of_its_type_to_its_list(samples: list[Path]) -> None:
     def load_all(paths: list[SampleFile]) -> Counts:
         return Counts(sum(np.loadtxt(path) for path in paths))
 

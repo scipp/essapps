@@ -32,14 +32,14 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     blank, and each call must return a pipeline of its own, such as a copy.
     Each parameter sets the sciline key of its type as written, without
     ``Annotated`` metadata, such as ``Reduction`` or ``CanFile | None``; a
-    column of a table sets the
-    key of its type, a list, to its list. Each output is computed as the key
-    of its type without ``| None``, since an optional output means that the
-    graph may lack it, not that a provider returns ``None``; an output that a
-    provider returns as ``X | None`` needs ``keys=``. ``keys`` names another
-    key of a parameter or an output, for a workflow with keys of its own,
-    such as for two parameters of one type; for a parameter, ``None`` sets
-    no key, for a field that ``make_pipeline`` uses itself::
+    table sets the key of its type, a list, to its list. Each output is
+    computed as the key of its type without ``| None``, since an optional
+    output means that the graph may lack it, not that a provider returns
+    ``None``; an output that a provider returns as ``X | None`` needs
+    ``keys=``. ``keys`` names another key of a parameter or an output, for a
+    workflow with keys of its own, such as for two parameters of one type; for
+    a parameter, ``None`` sets no key, for a field that ``make_pipeline`` uses
+    itself::
 
         PipelineBinding(
             IOFQ,
@@ -110,8 +110,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
         A stage passes its fixed values with defaults filled in. A driver
         passes the fixed values it is made with: every value that is not a
-        column of a table, defaults filled in. So a field that is a column of
-        the multi-run spec cannot shape the graph, as a blank cannot.
+        table, defaults filled in. So a field that is a table of the
+        multi-run spec cannot shape the graph, as a blank cannot.
         """
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
@@ -128,7 +128,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         self, fixed: Mapping[str, Any], blanks: Collection[str]
     ) -> StageCall[O]:
         values = fixed_values(self.spec, fixed, blanks)
-        left_open = self.spec.blank_fields(blanks)
+        left_open = frozenset(blanks)
         if keyless := sorted(n for n in left_open if self._keys[n] is None):
             raise ValueError(f'{keyless}: without a key, cannot be blanks')
         pipeline = self.pipeline(values)

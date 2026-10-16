@@ -82,12 +82,12 @@ PART = WorkflowSpec(
     params=PartParams,
     outputs=Value,
 )
-TOTAL = PART.tabulate(name='total', version=1, tables={'part': ('weight',)})
+TOTAL = PART.tabulate(name='total', version=1, tables=('part',))
 
 
 def total(params: Any) -> Value:
-    factors = [1.0 if w is None else w.factor for w in params.weight]
-    return Value(value=sum(f * p for f, p in zip(factors, params.part, strict=True)))
+    factor = 1.0 if params.weight is None else params.weight.factor
+    return Value(value=factor * sum(params.part))
 
 
 @pytest.fixture
@@ -244,13 +244,13 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
             accumulator=total.id,
             proposal='p1',
             template=Template(TOTAL, blanks=('part',)),
-            params={'weight': [], 'part': []},
+            params={'weight': None, 'part': []},
         ),
         *(
             Pushed(
                 accumulator=total.id,
                 table='part',
-                params={'weight': [None], 'part': [load.ref('value')]},
+                params={'part': [load.ref('value')]},
             )
             for load in loads
         ),
@@ -264,34 +264,29 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     assert _record(client, state.id).request == Request(
         TOTAL,
         params={
-            'weight': [None] * 3,
+            'weight': None,
             'part': [load.ref('value') for load in loads],
         },
     )
     assert client.output(read, 'value') == 6.0
 
 
-def test_a_push_is_logged_as_its_columns_by_name_with_references_as_written(
+def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
     loads = [client.compute(LOAD, params=_sample(n)) for n in (1, 2)]
     total = _total(client)
-    total.push(
-        part=[load.ref('value') for load in loads], weight=[Weight(factor=3), None]
-    )
+    total.push(part=[load.ref('value') for load in loads])
 
     (pushed,) = [e for e in Log.read(tmp_path / 'log') if isinstance(e, Pushed)]
     assert pushed == Pushed(
         accumulator=total.id,
         table='part',
-        params={
-            'weight': [{'factor': 3.0}, None],
-            'part': [load.ref('value') for load in loads],
-        },
+        params={'part': [load.ref('value') for load in loads]},
     )
     assert all(isinstance(ref, OutputRef) for ref in pushed.params['part'])
-    assert client.output(total, 'value') == 5.0
+    assert client.output(total, 'value') == 3.0
 
 
 def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) -> None:
@@ -302,7 +297,7 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
         Pushed(
             accumulator='a1',
             table='part',
-            params={'weight': [None], 'part': [part]},
+            params={'part': [part]},
         ),
     ]
     _write(tmp_path / 'log', *events)
@@ -405,10 +400,10 @@ def test_a_refused_call_writes_nothing_to_the_log(
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, params={'part': [other]})
-    with pytest.raises(SubmitError, match='not columns of a table'):
+    with pytest.raises(SubmitError, match='rows of a blank table'):
         total.push(other=[load.ref('value')])
-    with pytest.raises(SubmitError, match='pushed without part'):
-        total.push(weight=[Weight()])
+    with pytest.raises(SubmitError, match='the rows of one table'):
+        total.push(part=[load.ref('value')], other=[1.0])
     with pytest.raises(SubmitError, match='has no rows'):
         total.push(part=[])
     with pytest.raises(SubmitError, match=r'part\[1\]: repeats part\[0\]'):

@@ -143,12 +143,10 @@ class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    Values are given as a request's are. A blank is a parameter, or a table,
-    named by its index; a template fixes a whole table or
-    leaves it blank. Naming a field as a blank drops the value given for it,
-    and the backend drops the columns given for a blank table, so a template
-    can be made from any request's values or a whole params model, which it
-    keeps as a dict. Change a template with ``dataclasses.replace``.
+    Values are given as a request's are. A blank is a parameter, a table
+    among them. Naming a field as a blank drops the value given for it, so a
+    template can be made from any request's values or a whole params model,
+    which it keeps as a dict. Change a template with ``dataclasses.replace``.
     """
 
     spec: SpecId
@@ -170,8 +168,8 @@ class Template:
 
     def fill(self, *, params: Mapping[str, Any] | BaseModel | None = None) -> Request:
         """
-        The request with the blanks filled by ``params``; a blank table by
-        its index and the columns attached to it.
+        The request with the blanks filled by ``params``, a blank table by
+        its rows.
         """
         params = _given(params)
         if missing := [b for b in self.blanks if b not in params]:
@@ -194,7 +192,7 @@ class Record(BaseModel, frozen=True):
 
     ``request`` has every value filled in, inline values in their JSON form
     and references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
-    filled, a column left out of a table filled, and each reference to an
+    filled, and each reference to an
     accumulator replaced by a reference to the record of the state it reads, a
     record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and

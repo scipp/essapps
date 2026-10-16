@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Templates, the stages and accumulators made from them, and pushes of the
-columns of a table.
+rows of a table.
 """
 
 import math
@@ -30,10 +30,16 @@ class Weight(BaseModel):
     value: float = 1.0
 
 
+class WeightedRun(BaseModel):
+    """A run and its weight, if given: a group that holds a file."""
+
+    file: SampleFile
+    weight: Weight | None = None
+
+
 class ScaleParams(BaseModel):
     scaling: Factor | None = None
-    weight: Weight | None = None
-    sample: SampleFile
+    sample: WeightedRun
 
 
 class Value(BaseModel):
@@ -69,7 +75,7 @@ def _spec(
     *,
     params: type[BaseModel] = NoParams,
     outputs: type[BaseModel] = Value,
-    tables: Any = (),
+    tables: tuple[str, ...] = (),
 ) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
@@ -84,7 +90,7 @@ def _spec(
 
 SCALE = _spec('scale', params=ScaleParams)
 TOTAL = SCALE.tabulate(
-    name='total', version=1, tables={'sample': ('weight',), 'scaling': ()}
+    name='total', version=1, tables=('sample', 'scaling'), empty=('scaling',)
 )
 MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
@@ -94,15 +100,16 @@ CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
 
 def scale(params: ScaleParams) -> Value:
     factor = 1.0 if params.scaling is None else params.scaling.factor
-    weight = 1.0 if params.weight is None else params.weight.value
-    return Value(value=read_dataset(params.sample) * factor * weight)
+    return Value(value=_weighted(params.sample) * factor)
 
 
 def total(params: Any) -> Value:
-    weights = [1.0 if w is None else w.value for w in params.weight]
-    runs = [read_dataset(path) for path in params.sample]
-    summed = sum(w * x for w, x in zip(weights, runs, strict=True))
+    summed = sum(_weighted(run) for run in params.sample)
     return Value(value=summed * math.prod(f.factor for f in params.scaling))
+
+
+def _weighted(run: WeightedRun) -> float:
+    return read_dataset(run.file) * (1.0 if run.weight is None else run.weight.value)
 
 
 def make(params: NoParams) -> Made:
@@ -123,8 +130,8 @@ class Count:
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        self.rows += len(columns[table])
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        self.rows += len(rows)
 
     def outputs(self) -> Value:
         return Value(value=self.rows)
@@ -222,7 +229,7 @@ def test_a_misspelt_name_is_refused(client: Client) -> None:
         client.stage(
             Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
         )
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters or tables"):
+    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
         client.stage(Template(SCALE, blanks=('sampel',)))
 
 
@@ -236,22 +243,22 @@ def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> 
 # Accumulators and pushes
 
 
-def test_a_push_gives_an_index_and_the_columns_attached_to_it(
+def test_a_push_gives_rows_of_a_table_each_a_group_or_a_dataset_for_it(
     client: Client, datasets: FakeDatasets
 ) -> None:
     acc = client.accumulator(
         Template(TOTAL, params={'scaling': [Factor(factor=10.0)]}, blanks=('sample',))
     )
     acc.push(sample=[dataset(run=1)])
-    acc.push(sample=[dataset(run=2)], weight=[Weight(value=2.0)])
+    acc.push(sample=[{'file': dataset(run=2), 'weight': Weight(value=2.0)}])
 
     assert client.output(acc, 'value') == 50.0
     request = client.provenance(acc).request
-    assert request.params['weight'] == [None, {'value': 2.0}]
+    assert [row['weight'] for row in request.params['sample']] == [None, {'value': 2.0}]
     assert request.datasets() == [datasets.resolve(dataset(run=n)) for n in (1, 2)]
 
 
-def test_an_index_may_be_a_parameter(client: Client) -> None:
+def test_a_table_may_hold_values_that_are_not_files(client: Client) -> None:
     acc = client.accumulator(
         Template(TOTAL, params={'sample': [dataset(run=2)]}, blanks=('scaling',))
     )
@@ -262,7 +269,7 @@ def test_an_index_may_be_a_parameter(client: Client) -> None:
         acc.push(scaling=[{'factor': 5.0}])
 
 
-def test_a_push_refuses_an_index_value_the_table_holds(
+def test_a_push_refuses_a_row_the_table_holds(
     client: Client, datasets: FakeDatasets
 ) -> None:
     acc = client.accumulator(Template(TOTAL, blanks=('sample', 'scaling')))
@@ -275,13 +282,26 @@ def test_a_push_refuses_an_index_value_the_table_holds(
         acc.push(sample=[dataset(run=2), dataset(run=2)])
 
 
-def test_a_push_names_one_blank_table_by_its_index(client: Client) -> None:
+def test_rows_are_distinct_as_a_whole(client: Client) -> None:
+    acc = client.accumulator(Template(TOTAL, blanks=('sample', 'scaling')))
+    weighted = {'file': dataset(run=1), 'weight': Weight(value=2.0)}
+    acc.push(sample=[dataset(run=1), weighted])  # the same file, another weight
+
+    assert client.output(acc, 'value') == 3.0
+    with pytest.raises(SubmitError, match=r'sample\[2\]: repeats sample\[1\]'):
+        acc.push(sample=[weighted])
+    with pytest.raises(SubmitError, match=r'sample\[2\]: repeats sample\[0\]'):
+        acc.push(sample=[{'file': dataset(run=1)}])  # as row 0, a bare dataset
+
+
+def test_a_push_gives_rows_of_one_blank_table(client: Client) -> None:
     acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
     row = [dataset(run=1)]
     refused = {
-        'pushed without sample': {'weight': [Weight()]},
-        r"by its index, \['sample'\], not 'scaling'": {'scaling': [Factor()]},
-        r"\['other'\]: not columns of a table": {'other': row},
+        r"blank table of the accumulator, \['sample'\], not 'scaling'": {
+            'scaling': [Factor()]
+        },
+        r"blank table of the accumulator, \['sample'\], not 'other'": {'other': row},
         r"one table, not of \['sample', 'scaling'\]": {
             'sample': row,
             'scaling': [Factor()],
@@ -289,33 +309,29 @@ def test_a_push_names_one_blank_table_by_its_index(client: Client) -> None:
         'a push into sample has no rows': {'sample': []},
         r'one table, not of \[\]': {},
     }
-    for reason, columns in refused.items():
+    for reason, rows in refused.items():
         with pytest.raises(SubmitError, match=reason):
-            acc.push(**columns)
+            acc.push(**rows)
 
 
-def test_a_state_with_no_row_in_a_required_index_cannot_be_read(
+def test_a_state_with_no_row_in_a_table_that_needs_one_cannot_be_read(
     client: Client,
 ) -> None:
     acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
 
-    with pytest.raises(LookupError, match='sample: the table has no row'):
+    with pytest.raises(
+        LookupError, match='sample: the table has no row; it needs at least 1'
+    ):
         client.output(acc, 'value')
 
 
-def test_a_template_leaves_a_whole_table_blank(client: Client) -> None:
+def test_the_blanks_of_an_accumulator_are_tables(client: Client) -> None:
     with pytest.raises(
-        SubmitError, match=r"tables, by their indexes .*, not \['weight'\]"
+        SubmitError,
+        match=r"the blanks of an accumulator are tables, \['sample', 'scaling'\], "
+        r"not \['weight'\]",
     ):
         client.accumulator(Template(TOTAL, blanks=('weight',)))
-
-
-def test_a_template_drops_the_columns_given_for_a_blank_table(client: Client) -> None:
-    acc = client.accumulator(
-        Template(TOTAL, params={'weight': [Weight()]}, blanks=('sample',))
-    )
-
-    assert acc.template == Template(TOTAL, blanks=('sample',))
 
 
 def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
@@ -323,10 +339,8 @@ def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
 ) -> None:
     run = [dataset(run=1)]
     refused = {
-        'weight: 2 rows, but sample has 1': Template(
-            TOTAL,
-            params={'weight': [Weight()] * 2, 'sample': run},
-            blanks=('scaling',),
+        r'sample\[1\]: repeats sample\[0\]': Template(
+            TOTAL, params={'sample': run * 2}, blanks=('scaling',)
         ),
         'sample: the table has no row': Template(
             TOTAL, params={'sample': []}, blanks=('scaling',)
@@ -337,7 +351,7 @@ def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
             client.accumulator(template)
 
 
-def test_a_table_whose_optional_index_is_left_out_has_no_rows(client: Client) -> None:
+def test_a_table_that_may_be_empty_left_out_has_no_rows(client: Client) -> None:
     plain = client.compute(TOTAL, params={'sample': [dataset(run=1)]})
     acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
     acc.push(sample=[dataset(run=1)])

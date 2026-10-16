@@ -187,17 +187,14 @@ class KeptRows:
         self._spec = spec
         self._function = function
         self._fixed = fixed
-        self._columns: dict[str, list[Any]] = {
-            name: [] for index in spec.tables for name in spec.columns(index)
-        }
+        self._rows: dict[str, list[Any]] = {table: [] for table in spec.tables}
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
-        for name, column in columns.items():
-            self._columns[name].extend(column)
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        self._rows[table].extend(rows)
 
     def outputs(self) -> BaseModel:
-        columns = {n: list(c) for n, c in self._columns.items()}
-        return self._function(instance(self._spec, {**self._fixed, **columns}))
+        rows = {t: list(r) for t, r in self._rows.items()}
+        return self._function(instance(self._spec, {**self._fixed, **rows}))
 
 
 def kept_rows(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:

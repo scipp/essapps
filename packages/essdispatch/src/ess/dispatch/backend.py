@@ -84,10 +84,10 @@ see the same values, and data read from the object (see
 :func:`ess.spec.field_types.validated`). For a plain request it makes the
 params instance from these values without validating again, so the params
 model's model validators never run; a stage or an accumulator gets the
-values by name. The index values of a table, if the index's type has a JSON
-form, are distinct by the JSON forms of the values read, as the index's type
-dumps them, too: an inline value and a reference to equal data are one
-index value. A table that a request, a template, or a stage call
+values by name. The rows of a table, if its element type has a JSON form,
+are distinct by the JSON forms of the rows read, as the element type dumps
+them, too: an inline value and a reference to equal data are one row. A
+table that a request, a template, or a stage call
 gives whole is compared within itself when it is read. The binding returns
 an instance of the outputs model: an output that the spec declares optional
 and the binding returns as ``None`` is left out, and a record whose binding
@@ -109,34 +109,31 @@ stops: the requests through it fail, and later ones are refused. A stage
 lives until its client releases it or ends, and the requests made through it
 have run.
 
-An accumulator opens from a template whose blanks are tables, each named by
-its index, checked as a stage's template is. Each push gives the columns of
-one blank table: its index and the columns attached to it, as lists of equal
-length, one or more rows; a column left out is ``None`` in each row if its
-type allows it. A push is checked by its columns' element types alone, and
-refused if it repeats an index value the table holds; the accumulator keeps
-the index values logged, so this takes time in proportion to the push. The
+An accumulator opens from a template whose blanks are tables, checked as a
+stage's template is. Each push gives one or more rows of one blank table. A
+push is checked by the table's element type alone, and refused if it
+repeats a row the table holds; the accumulator keeps the rows logged, by
+JSON form, so this takes time in proportion to the push. The
 driver gets each step's values as the log holds them, so that it and the
 record of a state agree. Opening and pushing return once these checks pass
 and the event is logged, as a submission does: they check
 the records they reference against what the backend knows now, and refuse
 one that has failed, but do not wait for one that is pending.
 
-Each accumulator then works through its steps one at a time, in the order
-they were logged, on the workers: opening has the binding make the driver
-from the template's values by name, each read and validated by its own
-field, and each push is one push of the table's columns into the driver,
-which may add the rows in place; each value is first read and validated by
-its column's element type, and a value that fails its check fails the push,
-as does an index value read whose JSON form repeats one of the table read
-before; the accumulator keeps these JSON forms, which a restart need not
-rebuild, since no accumulator survives it. A step starts once the records it
-references have completed, and a push once the readers of the state before
-it are done. If a step fails, or a record it references has not completed,
-the accumulator stops: it takes no more pushes or readers, the steps after it
-are dropped, and the requests that wait for a state it will not reach fail.
-Its driver is dropped once no reader holds its current state, without
-waiting for its client to release it.
+Each accumulator then works through its steps one at a time, in the order they
+were logged, on the workers: opening has the binding make the driver from the
+template's values by name, each read and validated by its own field, and each
+push is one push of the table's rows into the driver, which may add the rows
+in place; each row is first read and validated by the table's element type,
+and a row that fails its check fails the push, as does a row read whose JSON
+form repeats one of the table read before; the accumulator keeps these JSON
+forms, which a restart need not rebuild, since no accumulator survives it. A
+step starts once the records it references have completed, and a push once the
+readers of the state before it are done. If a step fails, or a record it
+references has not completed, the accumulator stops: it takes no more pushes
+or readers, the steps after it are dropped, and the requests that wait for a
+state it will not reach fail. Its driver is dropped once no reader holds its
+current state, without waiting for its client to release it.
 
 A read pins the accumulator's state after the pushes logged so far: a request
 that references the accumulator, when it is submitted; a read of its outputs;
@@ -148,8 +145,8 @@ and its number of pushes, and the records of the requests reference that
 record's outputs. No client keeps the record of a state, so only the requests
 of that submission read it. A push or a template reads no accumulator. A
 state may be read only if its plain request would be accepted. The first read
-of a state checks the number of rows of each blank table against the length
-constraints of its columns, such as a row in a table with a required index,
+of a state checks the number of rows of each blank table against its length
+constraints, such as a table that needs a row,
 outside the backend's lock, and a read of a state whose request would be
 refused is refused with that request's reason. Every other check was made
 when a value was given, and the params model's model validators run on no
@@ -338,8 +335,8 @@ class _Stage:
     once it has staged.
 
     The template's values are as given, with dataset names resolved when the
-    stage was made. ``given`` names the values a call gives: the blanks, a
-    table's with its columns. ``reads`` are the outputs of records the
+    stage was made. ``given`` names the values a call gives: the blanks.
+    ``reads`` are the outputs of records the
     template references, which the stage keeps as a reader until it has
     staged, has stopped, or is released; it is empty from then on. The first
     call to run stages the binding under ``staging``, so that concurrent calls
@@ -388,14 +385,14 @@ class _Accumulator:
     driver is made. ``steps`` holds each step not yet done, in the order
     logged, as the table it pushes into and its values by name, as the log
     holds them: first the template's fixed values, with no table, until the
-    driver is made, then the columns of each push. Each comes with the
+    driver is made, then the rows of each push. Each comes with the
     outputs of records it reads, which it holds as a reader. ``busy`` says a
     worker makes the driver or pushes into it, outside the backend's lock.
-    ``seen`` holds the index values of each blank table logged so far, by
-    JSON form, with their rows (see :func:`.checks.distinct`).
-    ``indexes_read`` holds those of the values read in the steps done so far,
-    for an index whose type has a JSON form (see :meth:`Backend._typed`);
-    only the worker that does a step changes it.
+    ``seen`` holds the rows of each blank table logged so far, by JSON form,
+    with their indexes (see :func:`.checks.distinct`). ``rows_read`` holds
+    those of the rows read in the steps done so far, for a table whose
+    element type has a JSON form (see :meth:`Backend._typed`); only the
+    worker that does a step changes it.
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was checked, and why it would be refused, or ``None``. Two
@@ -426,7 +423,7 @@ class _Accumulator:
         self.added: int | None = None
         self.steps: deque[_Step] = deque()
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
-        self.indexes_read: dict[str, dict[bytes, int]] = {}
+        self.rows_read: dict[str, dict[bytes, int]] = {}
         self.busy = False
         self.checked: tuple[int, str | None] | None = None
         self.stopped: str | None = None
@@ -1208,7 +1205,7 @@ class Backend:
         self,
         spec_id: SpecId,
         values: Mapping[str, Any],
-        indexes: dict[str, dict[bytes, int]] | None = None,
+        rows: dict[str, dict[bytes, int]] | None = None,
     ) -> dict[str, Any]:
         """
         ``values`` of a request by name as the binding takes them; no lock.
@@ -1217,22 +1214,21 @@ class Backend:
         :func:`ess.spec.field_types.validated`). A plain request makes the
         params instance from them, and a stage or a driver takes them by name.
 
-        The index values of each table in ``values`` whose index type has a
-        JSON form are distinct by the JSON forms of the values read, as the
-        index type dumps them, so an inline value and a reference to equal
-        data are one index value. They are compared with those in
-        ``indexes``, the index values read before by index, which they join
-        (see :func:`.checks.distinct`).
+        The rows of each table in ``values`` whose element type has a JSON
+        form are distinct by the JSON forms of the rows read, as the element
+        type dumps them, so an inline value and a reference to equal data are
+        one row. They are compared with those in ``rows``, the rows read
+        before by table, which they join (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
         typed = {n: validated(spec.params, n, v, read) for n, v in values.items()}
-        indexes = {} if indexes is None else indexes
-        for index in spec.tables.keys() & typed.keys():
-            if spec.has_json_form(index):
-                seen = indexes.setdefault(index, {})
-                forms = [json_form(spec.params, index, v) for v in typed[index]]
-                seen.update(distinct(index, forms, seen))
+        rows = {} if rows is None else rows
+        for table in spec.tables:
+            if table in typed and spec.has_json_form(table):
+                seen = rows.setdefault(table, {})
+                forms = [json_form(spec.params, table, v) for v in typed[table]]
+                seen.update(distinct(table, forms, seen))
         return typed
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
@@ -1660,7 +1656,7 @@ class Backend:
         """
         spec_id = template.spec
         proposal = self._client(client).proposal
-        spec = self.spec(spec_id)  # an unknown spec is refused as such
+        self.spec(spec_id)  # an unknown spec is refused as such
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
             raise SubmitError(f'{spec_id}: its binding makes no stages')
@@ -1669,7 +1665,7 @@ class Backend:
         with self._changed:
             caller = self._client(client)
             self._check_reads(spec_id, stored.params, caller, {})
-            given = spec.blank_fields(stored.blanks)
+            given = frozenset(stored.blanks)
             stage = caller.stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
         return stage_id, stored
@@ -1679,7 +1675,7 @@ class Backend:
         An accumulator of the client, and its template as history holds it.
 
         The spec's binding must make accumulators, and the template's blanks
-        are tables, named by their indexes, which the pushes fill. The
+        are tables, which the pushes fill. The
         template is checked as a stage's is (see :meth:`open_stage`), and
         the records its values reference are checked as a request's are. The
         accumulator then opens: its first step has the binding make the driver
@@ -1692,10 +1688,10 @@ class Backend:
         binding = self._bindings[spec_id]
         if not isinstance(binding, AccumulatorBinding):
             raise SubmitError(f'{spec_id}: its binding makes no accumulators')
-        if not blanks or not set(blanks) <= tables.keys():
+        if not blanks or not set(blanks) <= set(tables):
             raise SubmitError(
-                f'{spec_id}: the blanks of an accumulator are tables, by their '
-                f'indexes {sorted(tables)}, not {list(blanks)}'
+                f'{spec_id}: the blanks of an accumulator are tables, '
+                f'{list(tables)}, not {list(blanks)}'
             )
         stored, fixed = self._checks[spec_id].template(template, caller.proposal)
         accumulator_id = uuid.uuid4().hex
@@ -1704,7 +1700,7 @@ class Backend:
             self._check_reads(spec_id, stored.params, caller, {})
             # The blank tables without rows, so that the pushes extend them
             # into the plain request of each state.
-            empty = {c: [] for b in blanks for c in spec.columns(b)}
+            empty: dict[str, list[Any]] = {b: [] for b in blanks}
             self._append(
                 Opened(
                     accumulator=accumulator_id,
@@ -1720,14 +1716,14 @@ class Backend:
         return accumulator_id, acc.template
 
     def push(
-        self, accumulator_id: str, columns: Mapping[str, list[Any]], client: str
+        self, accumulator_id: str, rows: Mapping[str, list[Any]], client: str
     ) -> None:
         """
-        Log a push of the columns of one table; its rows enter one state.
+        Log a push of rows of one table, by its name; they enter one state.
 
-        The columns are checked (see :meth:`.checks.Checks.push`), and so are
+        The rows are checked (see :meth:`.checks.Checks.push`), and so are
         the records they reference, as a request's are, without waiting for
-        those that are pending. An index value the table holds is refused.
+        those that are pending. A row the table holds is refused.
         The push is logged before it is added, so the pushes into one
         accumulator are added in the order they were logged (see
         :meth:`_advance`). A push waits while a freeze is being checked, and
@@ -1738,17 +1734,17 @@ class Backend:
             acc = self._accumulator(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
-        index, values = checks.push(acc.template.blanks, columns, caller.proposal)
+        table, values = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
-            rows = distinct(index, values[index], acc.seen[index])
+            seen = distinct(table, values[table], acc.seen[table])
             self._check_reads(spec_id, values, caller, {})
-            self._append(Pushed(accumulator=accumulator_id, table=index, params=values))
-            acc.seen[index].update(rows)
+            self._append(Pushed(accumulator=accumulator_id, table=table, params=values))
+            acc.seen[table].update(seen)
             pushed = self._views.pushes[accumulator_id][-1]
-            self._queue(acc, index, pushed.params)
+            self._queue(acc, table, pushed.params)
 
     def freeze(
         self,
@@ -1814,8 +1810,8 @@ class Backend:
     ) -> None:
         """
         Queue a step of the accumulator: opening its driver with the
-        template's fixed values, with no ``table``, or a push of the columns
-        of ``table``; lock held.
+        template's fixed values, with no ``table``, or a push of rows of
+        ``table``; lock held.
 
         The step holds the outputs it reads until it is done.
         """
@@ -1867,11 +1863,11 @@ class Backend:
         # busy, or on this worker.
         table, values, reads = acc.steps[0]
         try:
-            typed = self._typed(acc.template.spec, values, acc.indexes_read)
+            typed = self._typed(acc.template.spec, values, acc.rows_read)
             if table is None:
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:
-                acc.driver.push(table, typed)
+                acc.driver.push(table, typed[table])
         except Exception as error:  # the binding refuses the values or rows
             with self._changed:
                 self._stop(acc, f'{acc.step} failed: {str(error) or repr(error)}')
@@ -1912,10 +1908,10 @@ class Backend:
         would be refused, or ``None``; needs no lock.
 
         That request is the one its records list (see ``views.py``): the
-        template's fixed values, with each blank table filled by the columns
+        template's fixed values, with each blank table filled by the rows
         pushed, in push order. The number of rows of each blank table must
-        meet the length constraints of its columns, so a table with a
-        required index must have a row (see :meth:`.checks.Checks.state`).
+        meet its length constraints, so a table that needs a row must have
+        one (see :meth:`.checks.Checks.state`).
         ``acc.checked`` keeps the answer for the last state checked.
         """
         checked = acc.checked

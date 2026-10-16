@@ -146,8 +146,8 @@ class Accumulator:
     all at once, at the first pin that needs them, and kept until the next
     push is added; no output is computed for a state that nobody pins. The
     first pin of a state also checks its plain request: the number of rows
-    of each table, by the length constraints of its columns, such as a row
-    in each table with a required index.
+    of each table, by its length constraints, such as a table that needs a
+    row.
 
     A push, and a submission that pins, return once logged, so a controller
     does not slow down when the backend falls behind. A controller that should
@@ -171,42 +171,40 @@ class Accumulator:
         self.outputs = outputs
         self._push = push
 
-    def push(self, **columns: Sequence[Any]) -> None:
+    def push(self, **rows: Sequence[Any]) -> None:
         """
-        Add rows to a blank table of the template: its index and the columns
-        attached to it, by name, as lists of equal length, the rows entering
-        one state in order::
+        Add rows to a blank table of the template, by its name, the rows
+        entering one state in order::
 
             acc.push(sample=[dataset(run=611), dataset(run=612)])
-            acc.push(sample=[dataset(run=613)], sample_geometry=[geometry])
+            acc.push(sample=[{'file': dataset(run=613), 'transmission': t.ref('t')}])
 
         Each row is given inline, such as a group as a model or a dict, or
-        by reference, as its type allows. A column left out is ``None``
-        in each row if its type allows it, and a column whose element type is
-        not optional is given in every push. A push names one table, through
-        its index: a column without its index is refused, and so are an index
-        of a table the template fixes, an index value the table holds already
-        or that the push repeats, and a push of no rows. Index values are
-        compared as the record holds them: a dataset by its identity, a
-        reference to an output by record, output, and key, and an inline value
-        by its JSON form; for an index whose type has a JSON form, also by the
-        values read, before the driver gets the rows.
+        by reference, as its type allows; a group that holds a file field by
+        field, or as a reference to a dataset for its one required file. A
+        push gives rows of one table; a table the template fixes is refused,
+        and so are a row the table holds already or that the push repeats,
+        and a push of no rows. Rows are compared as the record holds them: a
+        dataset by its identity, a reference to an output by record, output,
+        and key, an inline value by its JSON form, and a group given field by
+        field by each field so; for a table whose element type has a JSON
+        form, also by the rows read, before the driver gets them.
 
         One push is one push into the binding's driver. A push references
-        datasets or outputs of records, never an accumulator. Each value is
-        checked by its column's element type; the number of rows of a table,
-        such as a row in a table with a required index, is checked when a
-        state is pinned. When the push is added, its index values read, if the
-        index's type has a JSON form, are compared with those read before by
-        that form, so an inline value and a reference to equal data are one
-        index value, and a repeat fails the push. A record that has failed or
-        was cancelled is refused, and one that is pending is not waited for.
-        The push returns once it is logged. The backend adds the pushes one at
-        a time, in the order logged, each once the records it references have
+        datasets or outputs of records, never an accumulator. Each row is
+        checked by the table's element type; the number of rows of a table,
+        such as a row in a table that needs one, is checked when a state is
+        pinned. When the push is added, its rows read, if the table's element
+        type has a JSON form, are compared with those read before by that
+        form, so an inline value and a reference to equal data are one row,
+        and a repeat fails the push. A record that has failed or was
+        cancelled is refused, and one that is pending is not waited for. The
+        push returns once it is logged. The backend adds the pushes one at a
+        time, in the order logged, each once the records it references have
         completed and the readers of the state before it are done (see
         :mod:`ess.dispatch.backend`).
 
-        If adding fails, such as for data that fail their column's check, or
+        If adding fails, such as for data that fail their table's check, or
         a record has not completed, the accumulator stops for good: the
         records of states it did not reach fail, and so do the requests that
         read them, and every later push and pin is refused. The reason names
@@ -214,15 +212,15 @@ class Accumulator:
         should skip a run whose reduction failed waits for that record before
         it pushes.
         """
-        for name, column in columns.items():
-            if isinstance(column, str | BaseModel | Mapping) or not isinstance(
-                column, Sequence
+        for name, given in rows.items():
+            if isinstance(given, str | BaseModel | Mapping) or not isinstance(
+                given, Sequence
             ):
                 raise TypeError(
-                    f'{name}: a column is a list of values, such as [value], '
-                    f'not {column!r}'
+                    f'{name}: the rows of a table are a list, such as [row], '
+                    f'not {given!r}'
                 )
-        self._push({name: as_values(list(c)) for name, c in columns.items()})
+        self._push({name: as_values(list(r)) for name, r in rows.items()})
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -414,17 +412,16 @@ class Client:
         """
         An accumulator of the template; the client keeps it until it releases it.
 
-        The template's blanks are one or more of the spec's tables, each named
-        by its index. A template a request would refuse is refused here, with
-        the blanks left out, and so is one that references an accumulator,
-        and one whose spec's binding makes no accumulators. The driver gets
-        each value validated by its own field, data read as the object; the
-        accumulator's template holds the values as the backend resolved them.
-        A record the template references that has failed or was cancelled is
-        refused, and one that is pending is not waited for. Opening returns
-        once the template is checked; the backend reads its values once, after
-        the records they reference have completed, and the accumulator stops
-        if the binding then fails to make its driver.
+        The template's blanks are one or more of the spec's tables. A template a
+        request would refuse is refused here, with the blanks left out, and so is
+        one that references an accumulator, and one whose spec's binding makes no
+        accumulators. The driver gets each value validated by its own field, data
+        read as the object; the accumulator's template holds the values as the
+        backend resolved them. A record the template references that has failed or
+        was cancelled is refused, and one that is pending is not waited for.
+        Opening returns once the template is checked; the backend reads its values
+        once, after the records they reference have completed, and the accumulator
+        stops if the binding then fails to make its driver.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id

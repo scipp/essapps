@@ -75,9 +75,15 @@ class Scale(BaseModel):
     factor: float = 1.0
 
 
-class ScaledParams(BaseModel):
+class ScaledRun(BaseModel):
+    """A run and its scale, if given: a group that holds a file."""
+
+    file: SampleFile
     scale: Scale | None = None
-    sample: SampleFile
+
+
+class ScaledParams(BaseModel):
+    sample: ScaledRun
 
 
 class PartsOutputs(BaseModel):
@@ -129,7 +135,7 @@ PIECES = _spec('pieces', outputs=PiecesOutputs)
 ANYTHING = _spec('anything', params=BoxParams)  # a box of any value
 SCALED = _spec('scaled', params=ScaledParams)
 MODES = _spec('modes', params=ModeParams)
-SUM = SCALED.tabulate(name='sum', version=1, tables={'sample': ('scale',)})
+SUM = SCALED.tabulate(name='sum', version=1, tables=('sample',))
 
 
 def add(params: AddParams) -> ValueOutputs:
@@ -137,9 +143,12 @@ def add(params: AddParams) -> ValueOutputs:
 
 
 def total(params: Any) -> ValueOutputs:
-    factors = [1.0 if s is None else s.factor for s in params.scale]
-    loaded = [read_dataset(path) for path in params.sample]
-    return ValueOutputs(value=sum(f * x for f, x in zip(factors, loaded, strict=True)))
+    return ValueOutputs(
+        value=sum(
+            (1.0 if run.scale is None else run.scale.factor) * read_dataset(run.file)
+            for run in params.sample
+        )
+    )
 
 
 def split(params: LoadParams) -> PartsOutputs:
@@ -419,8 +428,8 @@ def test_a_dataset_of_another_proposal_is_refused(
 
 
 def test_a_table_takes_a_list_of_rows(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^sample: .* is not a list of rows$'):
-        client.submit(SUM, params={'sample': dataset(run=1)})
+    with pytest.raises(SubmitError, match=r'^sample: .* is not a list$'):
+        client.submit(SUM, params={'sample': {'file': dataset(run=1)}})
 
 
 def test_a_file_given_as_a_string_is_refused(client: Client) -> None:
@@ -450,8 +459,8 @@ def test_a_file_takes_a_reference_to_a_dataset_only(client: Client) -> None:
 
     with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
         client.submit(LOAD, params={'sample': loaded.ref('value')})
-    with pytest.raises(SubmitError, match=rf'^sample\[0\]: .* {refused}$'):
-        client.submit(SUM, params={'sample': [loaded.ref('value')]})
+    with pytest.raises(SubmitError, match=rf'^sample\[0\]\.file: .* {refused}$'):
+        client.submit(SUM, params={'sample': [{'file': loaded.ref('value')}]})
     with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
         client.stage(
             Template(MODES, params={'sample': loaded.ref('value')}, blanks=('values',))
@@ -628,51 +637,42 @@ def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
 # Tables in a plain request
 
 
-def test_a_column_left_out_is_none_in_each_row(client: Client) -> None:
-    runs = [dataset(run=1), dataset(run=2)]
-    summed = client.compute(SUM, params={'sample': runs})
+def test_a_dataset_as_a_row_is_the_group_with_its_file(client: Client) -> None:
+    summed = client.compute(SUM, params={'sample': [dataset(run=1), dataset(run=2)]})
 
-    assert summed.request.params['scale'] == [None, None]
     assert client.output(summed, 'value') == 3.0
 
 
-def test_a_table_takes_a_column_attached_to_its_index(client: Client) -> None:
+def test_a_row_is_a_group_given_field_by_field(client: Client) -> None:
     summed = client.compute(
         SUM,
         params={
-            'scale': [Scale(factor=10.0), None],
-            'sample': [dataset(run=1), dataset(run=2)],
+            'sample': [
+                {'file': dataset(run=1), 'scale': Scale(factor=10.0)},
+                dataset(run=2),
+            ]
         },
     )
 
     assert client.output(summed, 'value') == 12.0
 
 
-def test_the_columns_of_a_table_have_equal_length(client: Client) -> None:
-    with pytest.raises(SubmitError, match='scale: 1 rows, but sample has 2'):
-        client.submit(
-            SUM,
-            params={
-                'scale': [Scale()],
-                'sample': [dataset(run=1), dataset(run=2)],
-            },
-        )
-
-
-def test_a_table_with_a_required_index_has_a_row(client: Client) -> None:
+def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None:
     with pytest.raises(SubmitError, match='sample'):
         client.submit(SUM, params={'sample': []})
 
 
-def test_an_index_value_given_twice_is_refused(
-    client: Client, datasets: FakeDatasets
-) -> None:
+def test_a_row_given_twice_is_refused(client: Client, datasets: FakeDatasets) -> None:
     path = datasets.path(datasets.resolve(dataset(run=1)))
 
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
         client.submit(SUM, params={'sample': [dataset(run=1), dataset(path=path)]})
 
 
-def test_a_column_without_its_index_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match="columns of the table of sample"):
-        client.submit(SUM, params={'scale': [Scale()]})
+def test_rows_are_distinct_as_a_whole(client: Client) -> None:
+    scaled = {'file': dataset(run=1), 'scale': Scale(factor=2.0)}
+    summed = client.compute(SUM, params={'sample': [dataset(run=1), scaled]})
+
+    assert client.output(summed, 'value') == 3.0
+    with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
+        client.submit(SUM, params={'sample': [scaled, dict(scaled)]})

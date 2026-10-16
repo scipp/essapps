@@ -83,7 +83,7 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
             CENTRED_MULTI, params={'centre': Centre(x=0.0)}, blanks=('sample', 'can')
         )
     )
-    total.push(sample=[r611, r612], transmission=[t611.ref('transmission'), None])
+    total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
 
     assert client.output(total, 'centred').values.tolist() == [2.25, 2.75]
     assert client.provenance(total).records() == [t611]

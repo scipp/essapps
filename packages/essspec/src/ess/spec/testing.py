@@ -15,7 +15,7 @@ needs no known result. With a single-run binding ``single`` (a
     check_arrival_and_order(
         make_driver,
         {'reduction': params.reduction},
-        {'sample': {'sample': [run_101, run_102]}, 'can': {'can': [run_110]}},
+        {'sample': [run_101, run_102], 'can': [run_110]},
     )
 
 Values are those the binding receives: data read. Outputs are compared up to
@@ -39,8 +39,8 @@ from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
 from .field_types import validated
 
-Columns = Mapping[str, Sequence[Any]]
-"""A table's columns by name, the index among them, as a push gives them."""
+Rows = Sequence[Any]
+"""A table's rows, as a push gives them."""
 
 
 def check_one_row(
@@ -51,9 +51,9 @@ def check_one_row(
     rtol: float = 1e-12,
 ) -> None:
     """
-    One-row: the binding of a multi-run spec, with one row in each table
-    whose index is given and none where it is left out, gives the outputs of
-    the binding of the single-run spec that ``tabulate`` made it from.
+    One-row: the binding of a multi-run spec, with one row in each table,
+    gives the outputs of the binding of the single-run spec that
+    ``tabulate`` made it from.
 
     ``params`` is a request of ``single``, an instance of its spec's params
     model; the request of ``multi`` is made from it.
@@ -68,15 +68,12 @@ def check_one_row(
 
 def one_row(spec: WorkflowSpec[Any, Any], params: BaseModel) -> BaseModel:
     """
-    The request of the multi-run ``spec`` with one row in each table whose
-    index is given in the request ``params`` of the single-run spec, and none
-    where it is ``None``.
+    The request of the multi-run ``spec`` with one row in each table: the
+    value of the request ``params`` of the single-run spec.
     """
     values = dict(params)
-    for index in spec.tables:
-        rows = 0 if values[index] is None else 1
-        for name in spec.columns(index):
-            values[name] = [values[name]] * rows
+    for table in spec.tables:
+        values[table] = [values[table]]
     return instance(spec, values)
 
 
@@ -105,14 +102,13 @@ def check_caching(
     Caching: each call through one stage gives the outputs of the plain
     request with the same values.
 
-    The stage is made with ``fixed`` and the blanks the names of the first
-    call leave open, a table's columns by its index, and called in the order
-    given. Values are by name, as ``make_stage`` takes them. Repeat a call
-    after others, as in bins 50, 100, and 50 again, to find a stage whose
-    calls change what it holds.
+    The stage is made with ``fixed`` and the names of the first call as its
+    blanks, and called in the order given. Values are by name, as
+    ``make_stage`` takes them. Repeat a call after others, as in bins 50,
+    100, and 50 again, to find a stage whose calls change what it holds.
     """
     spec = binding.spec
-    blanks = tuple(n for n in calls[0] if spec.table_of(n) in (None, n))
+    blanks = tuple(calls[0])
     call = binding.make_stage(fixed, blanks)
     for n, values in enumerate(calls, start=1):
         given = fixed_values(spec, {**fixed, **values}, ())
@@ -127,7 +123,7 @@ def check_caching(
 def check_arrival_and_order(
     make_driver: Callable[[Mapping[str, Any]], Driver[Any]],
     fixed: Mapping[str, Any],
-    tables: Mapping[str, Columns],
+    tables: Mapping[str, Rows],
     *,
     rtol: float = 1e-12,
 ) -> None:
@@ -137,9 +133,9 @@ def check_arrival_and_order(
 
     ``make_driver`` makes a driver from ``fixed``, as for a
     ``DriverBinding``, so a package tests its driver without a spec.
-    ``fixed`` holds every value that is not a column of a table, defaults
-    included: this function does not fill them in. ``tables`` holds the
-    columns of each table by its index. The rows are pushed into a new
+    ``fixed`` holds every value that is not a table, defaults
+    included: this function does not fill them in. ``tables`` holds the rows
+    of each table by its name. The rows are pushed into a new
     driver for each of several schedules, each table's rows in their order:
     one push per table, the tables reversed, one row per push table by
     table, and one row per push alternating between the tables. Every
@@ -179,35 +175,31 @@ def check_arrival_and_order(
         )
 
 
-def _rows(columns: Columns, start: int, stop: int) -> dict[str, list[Any]]:
-    """Rows ``start`` to ``stop`` of a table, as its columns."""
-    return {name: list(column[start:stop]) for name, column in columns.items()}
-
-
-def _length(columns: Columns) -> int:
-    return len(next(iter(columns.values())))
+def _rows(rows: Rows, start: int, stop: int) -> list[Any]:
+    """Rows ``start`` to ``stop`` of a table."""
+    return list(rows[start:stop])
 
 
 def _one_push_per_table(
     make_driver: Callable[[Mapping[str, Any]], Driver[Any]],
     fixed: Mapping[str, Any],
-    tables: Mapping[str, Columns],
+    tables: Mapping[str, Rows],
 ) -> Any:
     driver = make_driver(fixed)
-    for table, columns in tables.items():
-        if _length(columns):
-            driver.push(table, copy.deepcopy(dict(columns)))
+    for table, rows in tables.items():
+        if rows:
+            driver.push(table, copy.deepcopy(list(rows)))
     return driver.outputs()
 
 
 def _schedules(
-    tables: Mapping[str, Columns],
+    tables: Mapping[str, Rows],
 ) -> list[tuple[str, list[tuple[str, int, int]]]]:
     """
     Named push schedules over the rows of ``tables``, each push as its table
     and the slice of its rows; schedules that push the same are listed once.
     """
-    lengths = {t: _length(columns) for t, columns in tables.items()}
+    lengths = {t: len(rows) for t, rows in tables.items()}
     names = [t for t in tables if lengths[t]]
     longest = max(lengths.values(), default=0)
 

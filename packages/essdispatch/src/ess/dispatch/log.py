@@ -101,8 +101,8 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
 
     The template's blanks are the tables that the pushes fill. ``params``
     holds the template's other values, defaults filled in, inline values in
-    JSON's types, and the columns of the blank tables, without rows: the
-    driver was made with the other values, and with the columns pushed they
+    JSON's types, and the blank tables, without rows: the driver was made
+    with the other values, and with the rows pushed they
     give the plain request of a state. ``template`` holds the values as the
     client gave them, names resolved, which the client gets back, as it does a
     stage's template.
@@ -117,9 +117,8 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
 
 class Pushed(BaseModel, frozen=True, extra='forbid'):
     """
-    A push into an accumulator: rows of the table of index ``table``, as its
-    columns by name, each a list, of equal length, names resolved, a column
-    left out filled.
+    A push into an accumulator: rows of the table ``table``, in ``params``
+    under its name, names resolved.
     """
 
     kind: Literal['pushed'] = 'pushed'

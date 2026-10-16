@@ -4,8 +4,9 @@
 A batch: one template filled for each of many datasets.
 
 A lookup fills further blanks per dataset, such as the can measured most
-recently before a sample. A blank a dataset fills is a file parameter, which
-takes the dataset itself. Datasets are ordered by their run number.
+recently before a sample. A blank a dataset fills is a file parameter, or a
+group that holds one required file, which takes the dataset itself. Datasets
+are ordered by their run number.
 """
 
 from __future__ import annotations
@@ -69,7 +70,8 @@ def apply(
     Fill the template for each dataset.
 
     ``source`` answers metadata queries, such as ``client.datasets``. Each
-    dataset fills the one blank the lookup leaves, a file parameter. The
+    dataset fills the one blank the lookup leaves, a file parameter or a group
+    that holds one required file. The
     requests are keyed by member: the value of the metadata field
     ``member_field`` of each dataset. Submitting them under a label makes the
     keys the members of their records. Raises ``LookupError`` if the request

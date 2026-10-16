@@ -16,7 +16,7 @@ is run again as its request by that client, and must give the same outputs
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, NewType
 
@@ -327,8 +327,8 @@ class Summing:
         self._fixed = fixed
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
-    def push(self, table: str, columns: Mapping[str, list[Any]]) -> None:
-        for path in columns[table]:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
+        for path in rows:
             self._sums[table] += _counts(path)  # in place from the second row
 
     def outputs(self) -> BaseModel:
@@ -500,10 +500,16 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
     return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam).mean())))
 
 
+class SampleRun(Data):
+    """A sample run and its transmission, if given: a group that holds a file."""
+
+    file: SampleFile
+    transmission: TransmissionArray | None = None
+
+
 class CentredParams(Data):
     centre: Centre
-    sample: SampleFile
-    transmission: TransmissionArray | None = None
+    sample: SampleRun
     can: CanFile | None = None
 
 
@@ -517,7 +523,8 @@ class CentredOutputs(Data):
 CENTRED_MULTI = _spec('sans-centred', CentredOutputs, params=CentredParams).tabulate(
     name='sans-centred-multi',
     version=1,
-    tables={'sample': ('transmission',), 'can': ()},
+    tables=('sample', 'can'),
+    empty=('can',),
 )
 
 
@@ -526,8 +533,10 @@ def centred(params: Any) -> CentredOutputs:
     The sample runs, each times its transmission if given, minus the cans,
     minus the centre.
     """
-    rows = zip(params.sample, params.transmission, strict=True)
-    samples = sum(_counts(s) * (1.0 if t is None else t.value) for s, t in rows)
+    samples = sum(
+        _counts(s.file) * (1.0 if s.transmission is None else s.transmission.value)
+        for s in params.sample
+    )
     cans = sum((_counts(c) for c in params.can), 0.0)
     return CentredOutputs(centred=Centred(_array(samples - cans - params.centre.x)))
 

@@ -63,7 +63,9 @@ IOFQ = WorkflowSpec(
     params=IofQParams,
     outputs=IofQOutputs,
 )
-IOFQ_MULTI = IOFQ.tabulate(name='iofq-multi', version=1, tables=('sample', 'can'))
+IOFQ_MULTI = IOFQ.tabulate(
+    name='iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
+)
 
 
 def _counts(run: Path | None) -> np.ndarray:
@@ -126,9 +128,9 @@ class IofQDriver:
         key, no_can = self._contribute['can']
         self._sums: dict[Any, Any] = no_can.compute({key: None})
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
-        for run in columns[table]:
+        for run in rows:
             for k, part in stage.compute({key: run}).items():
                 self._sums[k] = self._sums.get(k, 0) + part
 
@@ -174,8 +176,8 @@ def _through_a_stage(client: Client) -> sc.Variable:
 def _pushed(*pushes: Mapping[str, list[Any]]) -> Callable[[Client], sc.Variable]:
     def read(client: Client) -> sc.Variable:
         acc = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-        for columns in pushes:
-            acc.push(**columns)
+        for rows in pushes:
+            acc.push(**rows)
         return client.output(acc, 'iofq')
 
     return read

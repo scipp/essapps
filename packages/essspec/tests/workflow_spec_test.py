@@ -145,9 +145,7 @@ def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
 
 IOFQ = spec()
 IOFQ_MULTI = IOFQ.tabulate(
-    name='sans-iofq-multi',
-    version=1,
-    tables={'sample': ('sample_geometry',), 'can': ()},
+    name='sans-iofq-multi', version=1, tables=('sample', 'can'), empty=('can',)
 )
 
 
@@ -161,13 +159,25 @@ def annotations(model: type[BaseModel]) -> dict[str, Any]:
     return {name: f.annotation for name, f in model.model_fields.items()}
 
 
+class SampleRun(BaseModel):
+    """A sample run and the geometry given next to it: a group that holds a file."""
+
+    file: SampleFile
+    geometry: SampleGeometry | None = None
+
+
+RUNS = spec(name='sans-runs', params=model('P', sample=(SampleRun, ...))).tabulate(
+    name='sans-runs-multi', version=1, tables=('sample',)
+)
+
+
 class TestMetadata:
     def test_params_default_to_a_model_without_fields(self) -> None:
         minimal = WorkflowSpec(
             name='wf', version=1, title='W', description='D', outputs=IofQOutputs
         )
         assert minimal.params is NoParams
-        assert minimal.tables == {}
+        assert minimal.tables == ()
         assert minimal.code_revision is None
 
     def test_no_params_refuse_any_value(self) -> None:
@@ -195,7 +205,6 @@ class TestMetadata:
             'sample_geometry',
             'time_range',
         ]
-        assert IOFQ_MULTI.takes_inline('sample_geometry')
         assert not IOFQ_MULTI.takes_inline('sample')
 
     @pytest.mark.parametrize(
@@ -216,14 +225,6 @@ class TestMetadata:
     @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[CanFile | None]])
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
         assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
-
-    def test_an_index_as_a_blank_leaves_open_every_column_of_its_table(self) -> None:
-        assert IOFQ_MULTI.blank_fields(('sample', 'beam_centre')) == {
-            'sample',
-            'sample_geometry',
-            'beam_centre',
-        }
-        assert IOFQ.blank_fields(('sample',)) == {'sample'}
 
 
 class TestModelRules:
@@ -503,14 +504,22 @@ class TestTables:
             outputs=model('O', iofq=(IofQ, ...), runs=(list[Banks], ...)),
             tables=['sample'],
         )
-        assert stitch.tables == {'sample': ()}
-        assert stitch.columns('sample') == ('sample',)
-        assert stitch.table_of('sample') == 'sample'
+        assert stitch.tables == ('sample',)
 
     def test_a_list_field_is_a_table_only_where_tables_names_it(self) -> None:
         listing = spec(params=model('P', sample=(list[SampleFile], ...)))
-        assert listing.tables == {}
-        assert listing.table_of('sample') is None
+        assert listing.tables == ()
+
+    def test_a_table_is_any_list_parameter(self) -> None:
+        params = model(
+            'P',
+            sample=(list[SampleFile | None], ...),
+            reduction=(list[Reduction], [Reduction()]),
+        )
+        assert spec(params=params, tables=['sample', 'reduction']).tables == (
+            'sample',
+            'reduction',
+        )
 
     @pytest.mark.parametrize(
         ('params', 'tables', 'reason'),
@@ -518,17 +527,7 @@ class TestTables:
             (
                 {'sample': (SampleFile, ...)},
                 ['sample'],
-                'sample: a column of a table is a list',
-            ),
-            (
-                {'sample': (list[SampleFile | None], ...)},
-                ['sample'],
-                'sample: the index of a table holds no None',
-            ),
-            (
-                {'sample': (list[SampleFile], ...)},
-                ['sample'],
-                r'sample: a required index has Field\(min_length=1\)',
+                'sample: a table is a list parameter',
             ),
             (
                 {'sample': (list[SampleFile], Field(min_length=1))},
@@ -536,12 +535,9 @@ class TestTables:
                 'run: not a parameter of sans-iofq',
             ),
             (
-                {
-                    'sample': (list[SampleFile], Field(min_length=1)),
-                    'can': (list[CanFile], []),
-                },
-                {'sample': ('can',), 'can': ()},
-                'can: a column of two tables',
+                {'sample': (list[SampleFile], Field(min_length=1))},
+                ['sample', 'sample'],
+                'sample: a table named twice',
             ),
         ],
     )
@@ -549,82 +545,78 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-    def test_an_index_is_required_or_empty_by_default(self) -> None:
-        params = model('P', reduction=(list[Reduction], [Reduction()]))
-        with pytest.raises(ValueError, match='reduction: the index of a table is'):
-            spec(params=params, tables=['reduction'])
-        spec(params=model('P', reduction=(list[Reduction], [])), tables=['reduction'])
-
 
 class TestTabulate:
     def test_names_the_tables_and_keeps_the_rest_of_the_metadata(self) -> None:
         assert IOFQ_MULTI.name == 'sans-iofq-multi'
         assert IOFQ_MULTI.title == IOFQ.title
         assert IOFQ_MULTI.description == IOFQ.description
-        assert IOFQ_MULTI.tables == {'sample': ('sample_geometry',), 'can': ()}
-        assert IOFQ_MULTI.columns('sample') == ('sample', 'sample_geometry')
-        assert IOFQ_MULTI.table_of('sample_geometry') == 'sample'
-        assert IOFQ_MULTI.table_of('beam_centre') is None
+        assert IOFQ_MULTI.tables == ('sample', 'can')
 
-    def test_each_field_named_becomes_a_list(self) -> None:
+    def test_each_field_named_becomes_a_list_of_its_type_as_written(self) -> None:
         assert annotations(IOFQ_MULTI.params) == {
             'reduction': Reduction,
-            'sample_geometry': list[SampleGeometry | None],
+            'sample_geometry': SampleGeometry | None,
             'time_range': TimeRange | None,
             'sample': list[SampleFile],
-            'can': list[CanFile],
+            'can': list[CanFile | None],
             'beam_centre': CentreArray | None,
         }
 
-    def test_a_required_index_takes_at_least_one_row(self) -> None:
+    def test_a_table_takes_at_least_one_row(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='sample'):
-            IOFQ_MULTI.params(sample=[], sample_geometry=[])
+            IOFQ_MULTI.params(sample=[])
+        runs = IOFQ.tabulate(name='runs', version=1, tables=('sample', 'can'))
+        assert runs.params.model_fields['can'].is_required()
+        with pytest.raises(pydantic.ValidationError, match='can'):
+            runs.params(sample=[Path('a.nxs')], can=[])
 
-    def test_an_optional_index_is_empty_by_default(self) -> None:
-        params = IOFQ_MULTI.params(sample=[Path('run.nxs')], sample_geometry=[None])
+    def test_a_table_named_empty_is_empty_by_default(self) -> None:
+        params = IOFQ_MULTI.params(sample=[Path('run.nxs')])
         assert params.can == []
         assert params.beam_centre is None
+        params = IOFQ_MULTI.params(sample=[Path('run.nxs')], can=[None, Path('b.nxs')])
+        assert params.can == [None, Path('b.nxs')]
 
-    def test_an_attached_column_has_no_default(self) -> None:
-        assert IOFQ_MULTI.params.model_fields['sample_geometry'].is_required()
-        params = IOFQ_MULTI.params(
-            sample=[Path('a.nxs'), Path('b.nxs')],
-            sample_geometry=[None, {'thickness': 0.2}],
+    def test_a_row_with_more_than_one_value_is_a_group_that_holds_a_file(
+        self,
+    ) -> None:
+        assert RUNS.params.model_fields['sample'].annotation == list[SampleRun]
+        params = RUNS.params(
+            sample=[
+                {'file': Path('a.nxs')},
+                {'file': Path('b.nxs'), 'geometry': {'thickness': 0.2}},
+            ]
         )
-        assert params.sample_geometry == [None, SampleGeometry(thickness=0.2)]
+        assert [row.geometry for row in params.sample] == [
+            None,
+            SampleGeometry(thickness=0.2),
+        ]
 
     def test_the_field_validators_of_the_types_still_run(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='thickness must be'):
-            IOFQ_MULTI.params(
-                sample=[Path('a.nxs')], sample_geometry=[{'thickness': -1.0}]
+            RUNS.params(
+                sample=[{'file': Path('a.nxs'), 'geometry': {'thickness': -1.0}}]
             )
 
     def test_the_model_validators_are_not_carried_over(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='a can needs a beam centre'):
             IofQParams(sample=Path('a.nxs'), can=Path('b.nxs'))
-        IOFQ_MULTI.params(
-            sample=[Path('a.nxs')], sample_geometry=[None], can=[Path('b.nxs')]
-        )
+        IOFQ_MULTI.params(sample=[Path('a.nxs')], can=[Path('b.nxs')])
 
     def test_the_outputs_are_kept(self) -> None:
         runs = IOFQ.tabulate(name='runs', version=1, tables=('sample', 'can'))
         assert runs.outputs is IofQOutputs
-        assert runs.tables == {'sample': (), 'can': ()}
+        assert runs.tables == ('sample', 'can')
 
-    def test_an_index_may_be_a_group(self) -> None:
+    def test_a_table_may_be_of_groups(self) -> None:
         slices = IOFQ.tabulate(name='slices', version=1, tables=('time_range',))
-        assert slices.params.model_fields['time_range'].annotation == list[TimeRange]
+        assert (
+            slices.params.model_fields['time_range'].annotation
+            == list[TimeRange | None]
+        )
         assert slices.params.model_fields['sample'].annotation == SampleFile
         assert slices.takes_inline('time_range')
-
-    def test_refuses_an_index_with_a_default_but_none(self) -> None:
-        with pytest.raises(ValueError, match=r"\['reduction'\]: an index is X, or"):
-            IOFQ.tabulate(name='geometries', version=1, tables=('reduction',))
-
-    def test_refuses_an_optional_index_without_a_default(self) -> None:
-        params = model('P', sample=(SampleFile, ...), can=(CanFile | None, ...))
-        with pytest.raises(ValueError, match=r"\['can'\]: an index is X, or X \| None"):
-            spec(params=params).tabulate(name='runs', version=1, tables=('can',))
 
     def test_the_validators_of_a_field_named_check_each_row(self) -> None:
         def known(path: Path) -> Path:
@@ -638,7 +630,7 @@ class TestTabulate:
             can=(Annotated[CanFile, AfterValidator(known)] | None, None),
         )
         runs = spec(params=params).tabulate(
-            name='runs', version=1, tables=('sample', 'can')
+            name='runs', version=1, tables=('sample', 'can'), empty=('can',)
         )
         runs.params(sample=[Path('run.nxs')], can=[Path('run.nxs')])
         for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
@@ -648,7 +640,7 @@ class TestTabulate:
             file_ref('SampleFile')
         )
 
-    def test_keeps_the_display_metadata_of_a_column(self) -> None:
+    def test_keeps_the_display_metadata_of_a_table(self) -> None:
         sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})
         runs = spec(params=model('P', sample=(SampleFile, sample))).tabulate(
             name='runs', version=1, tables=('sample',)
@@ -657,16 +649,13 @@ class TestTabulate:
         assert field.examples == [[Path('a.nxs')]]
         assert field.json_schema_extra == {'unit': 'file'}
 
-    @pytest.mark.parametrize(
-        ('tables', 'reason'),
-        [
-            (('run',), r"\['run'\]: not parameters of sans-iofq"),
-            ({'sample': ('iofq',)}, r"\['iofq'\]: not parameters of sans-iofq"),
-        ],
-    )
-    def test_refuses_names_that_are_not_fields(self, tables: Any, reason: str) -> None:
-        with pytest.raises(ValueError, match=reason):
-            IOFQ.tabulate(name='multi', version=1, tables=tables)
+    def test_refuses_names_that_are_not_fields(self) -> None:
+        with pytest.raises(ValueError, match=r"\['run'\]: not parameters of sans-iofq"):
+            IOFQ.tabulate(name='multi', version=1, tables=('run',))
+
+    def test_refuses_empty_names_that_are_not_tables(self) -> None:
+        with pytest.raises(ValueError, match=r"\['can'\]: empty, but not tables"):
+            IOFQ.tabulate(name='multi', version=1, tables=('sample',), empty=('can',))
 
     def test_refuses_a_spec_with_tables(self) -> None:
         with pytest.raises(ValueError, match='sans-iofq-multi has tables already'):
@@ -782,19 +771,11 @@ class TestSerialization:
         }
         assert properties['can'] == {
             'type': 'array',
-            'items': file_ref('CanFile'),
+            'items': {'anyOf': [file_ref('CanFile'), {'type': 'null'}]},
             'default': [],
             'title': 'Can',
         }
-        assert properties['sample_geometry']['items'] == {
-            'anyOf': [
-                inline({'$ref': '#/$defs/SampleGeometry'}),
-                data_ref('SampleGeometry'),
-                {'type': 'null'},
-            ]
-        }
-        assert serialized.tables == {'sample': ('sample_geometry',), 'can': ()}
-        # The backend fills sample_geometry, whose rows may be None, if left out.
+        assert serialized.tables == ('sample', 'can')
         assert serialized.params_schema['required'] == ['sample']
 
     def test_outputs_name_the_type_of_each_value(self) -> None:
@@ -869,18 +850,16 @@ class TestSerialization:
 
     def test_the_schema_of_tables_takes_rows_of_both_forms(self) -> None:
         jsonschema = pytest.importorskip('jsonschema')
-        schema = IOFQ_MULTI.serialize().params_schema
-        rows = {
-            'sample': [DatasetRef(dataset='run:loki/1'), DatasetRef(dataset='2')],
-            'sample_geometry': [
-                SampleGeometry(thickness=0.1),
-                OutputRef(record='r1', output='geometry'),
-            ],
-        }
-        jsonschema.validate(to_jsonable_python(rows), schema)
-        jsonschema.validate(to_jsonable_python({'sample': rows['sample']}), schema)
+        schema = RUNS.serialize().params_schema
+        file = DatasetRef(dataset='run:loki/1')
+        rows = [
+            file,
+            {'file': file, 'geometry': SampleGeometry(thickness=0.1)},
+            {'file': file, 'geometry': OutputRef(record='r1', output='geometry')},
+        ]
+        jsonschema.validate(to_jsonable_python({'sample': rows}), schema)
         with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate({'sample': [], 'sample_geometry': []}, schema)
+            jsonschema.validate({'sample': []}, schema)
 
     def test_metadata_is_kept(self) -> None:
         serialized = spec(version=2, code_revision='abc123').serialize()

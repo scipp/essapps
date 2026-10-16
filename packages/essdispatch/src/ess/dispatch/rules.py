@@ -34,11 +34,11 @@ class Rule:
     """
     Apply a template to each new dataset the selector matches.
 
-    A dataset fills the blank, a file parameter, itself. With ``series``, a
-    request instead takes every dataset with the same value of that metadata
-    field so far, in run order, and that value is its member. The blank is
-    then a table, named by its index, a file parameter, and each dataset is
-    a row of it.
+    A dataset fills the blank, a file parameter, or a group that holds one
+    required file, itself. With ``series``, a request instead takes every
+    dataset with the same value of that metadata field so far, in run order,
+    and that value is its member. The blank is then a table of these, and
+    each dataset is a row of it.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
