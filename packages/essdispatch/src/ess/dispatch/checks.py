@@ -21,20 +21,21 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Names.* Each name is a parameter of the spec. A required parameter must
   be given; one left out takes its default.
 - *Forms.* Each value, and each row of a list parameter, is a reference or
-  a literal; a list parameter is given as a list of rows. A reference stands
-  for a value or a row, so a reference to a whole list, or one inside the
-  literal of a parameter that is not a list, is refused (see
+  an inline value; a list parameter is given as a list of rows. A reference
+  stands for a value or a row, so a reference to a whole list, or one inside
+  the inline value of a parameter that is not a list, is refused (see
   :mod:`ess.spec.refs`).
-- *Literals.* A literal is allowed where the parameter's type has a JSON
-  form (see :meth:`ess.spec.WorkflowSpec.takes_literal`), and ``None`` where
-  it is optional; so a file given as a string is refused: a file is given as
-  ``dataset(path=...)``. Each literal is validated alone, by a model of its
-  field, or for a row of its element type, from its JSON form, and a field
-  that a model lacks is refused at any depth, since validating would drop it
-  silently. The log holds the JSON form of the validated value, and the call
-  phase validates that, so it must read back as the value: a number that is
-  not finite has none (see :func:`ess.spec.field_types.literal`). A list
-  parameter that is not a column of a table meets its length constraints.
+- *Inline values.* An inline value is allowed where the parameter's type has
+  a JSON form (see :meth:`ess.spec.WorkflowSpec.takes_inline`), and ``None``
+  where it is optional; so a file given as a string is refused: a file is
+  given as ``dataset(path=...)``. Each inline value is validated alone, by a
+  model of its field, or for a row of its element type, from its JSON form,
+  and a field that a model lacks is refused at any depth, since validating
+  would drop it silently. The log holds the JSON form of the validated value,
+  and the call phase validates that, so it must read back as the value: a
+  number that is not finite has none (see
+  :func:`ess.spec.field_types.inline`). A list parameter that is not a column
+  of a table meets its length constraints.
 - *References.* A file is given by reference to a dataset, and only a file
   is (see :func:`ess.spec.field_types.is_file`): the dataset source checks
   that the proposal may read it, and the record holds its identity, to
@@ -48,7 +49,8 @@ The checks of a request; a template, a push, and a state check part of these:
   constraints of the table's columns, so a table with a required index has a
   row, and the index values of a table are distinct, compared as the record
   holds them: a dataset by its identity, a reference to an output by record,
-  output, and key, and a literal by its JSON form (see :func:`distinct`).
+  output, and key, and an inline value by its JSON form (see
+  :func:`distinct`).
 
 The params model's model validators never run: a stage and a driver never
 get a whole params instance. A template's fixed values are checked each by
@@ -72,9 +74,9 @@ from ess.spec.binding import fixed_values
 from ess.spec.field_types import (
     element,
     fits,
+    inline,
     is_file,
     is_list,
-    literal,
     optional,
     type_name,
     value_type,
@@ -101,7 +103,7 @@ class Checks:
     def request(self, request: Request, proposal: str) -> Request:
         """
         The request as the record holds it: names resolved, defaults and
-        columns left out filled, literals in JSON's types.
+        columns left out filled, inline values in JSON's types.
         """
         spec = self.spec
         values = _columns(spec, request.params, spec.tables)
@@ -143,9 +145,9 @@ class Checks:
         A push gives the columns of one of the ``blanks``, a table: its
         index, and the columns attached to it, as lists of equal length, one
         or more rows; a column left out is filled as a request's is. Each
-        literal is checked by its column's element type, and each reference
-        as a request's is. Whether an index value repeats one the table holds
-        is the backend's to check, which knows the table (see
+        inline value is checked by its column's element type, and each
+        reference as a request's is. Whether an index value repeats one the
+        table holds is the backend's to check, which knows the table (see
         :func:`distinct`).
         """
         spec = self.spec
@@ -188,9 +190,9 @@ class Checks:
 
     def _values(self, values: Mapping[str, Any], proposal: str) -> dict[str, Any]:
         """
-        ``values`` by name as the record holds them: each literal validated by
-        its field, a row by its element type, and each reference with dataset
-        names resolved.
+        ``values`` by name as the record holds them: each inline value
+        validated by its field, a row by its element type, and each reference
+        with dataset names resolved.
         """
         return {
             name: self._value(name, value, proposal) for name, value in values.items()
@@ -198,8 +200,9 @@ class Checks:
 
     def _value(self, name: str, value: Any, proposal: str) -> Any:
         """
-        The value of parameter ``name`` as the record holds it: a literal or
-        a reference, or for a list parameter a list of them, one per row.
+        The value of parameter ``name`` as the record holds it: an inline
+        value or a reference, or for a list parameter a list of them, one per
+        row.
         """
         if not is_list(self.spec.params, name):
             for where, ref in iter_refs({name: value}):
@@ -228,14 +231,14 @@ class Checks:
     def _one(self, where: str, name: str, value: Any, proposal: str) -> Any:
         """
         The value, or the row, ``value`` at ``where`` of parameter ``name`` as
-        the record holds it: a reference, a dataset's resolved, or a literal
-        if the parameter takes one, or ``None`` if its type is optional.
+        the record holds it: a reference, a dataset's resolved, or an inline
+        value if the parameter takes one, or ``None`` if its type is optional.
         """
         tp = value_type(self.spec.params.model_fields[name].annotation)
         if isinstance(value, Ref):
             return self._ref(where, value, tp, proposal)
-        if self.spec.takes_literal(name):
-            return self._literal(where, name, value)
+        if self.spec.takes_inline(name):
+            return self._inline(where, name, value)
         if value is None and _nullable(self.spec, name):
             return None
         raise SubmitError(
@@ -243,13 +246,14 @@ class Checks:
             'form, so it is given by reference, a file as dataset(path=...)'
         )
 
-    def _literal(self, where: str, name: str, value: Any) -> Any:
+    def _inline(self, where: str, name: str, value: Any) -> Any:
         """
-        The literal ``value`` at ``where`` of parameter ``name`` as the record
-        holds it, its JSON form (see :func:`ess.spec.field_types.literal`).
+        The inline value ``value`` at ``where`` of parameter ``name`` as the
+        record holds it, its JSON form (see
+        :func:`ess.spec.field_types.inline`).
         """
         try:
-            return literal(self.spec.params, name, value)
+            return inline(self.spec.params, name, value)
         except PydanticSerializationError as error:
             raise SubmitError(f'{self.id}: cannot be stored as JSON: {error}') from None
         except ValidationError as error:
@@ -353,7 +357,7 @@ def distinct(
     The rows ``values`` of the table of ``index`` after the rows ``seen``,
     each by its JSON form, with its row. Refuses a value equal to one seen or
     to an earlier one: a reference by its fields, such as a dataset's
-    identity, a literal by its JSON form.
+    identity, an inline value by its JSON form.
     """
     new: dict[bytes, int] = {}
     for i, value in enumerate(values, start=len(seen)):

@@ -56,14 +56,13 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | spec | a workflow's name, version, params, and outputs |
 | params, outputs | the two models of a spec: everything the workflow takes, and its results (see Specs and bindings) |
 | parameter | a field of the params model |
-| literal | the value itself, such as `Reduction(bins=100)`; the record holds its JSON form. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
+| inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
-| by value, by reference | the two forms of a value in a request: a literal, or a reference |
-| group | a pydantic model with a JSON form, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given by value |
+| group | a pydantic model with a JSON form, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given inline |
 | data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
 | fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
-| request | a spec and its params, each value a literal or a reference |
+| request | a spec and its params, each value given inline or by reference |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 | logged | recorded by the backend in the proposal's *history*. `submit` and the other calls that start work return once logged. |
 | record | a request as the backend logged it. A record never changes, only its status. |
@@ -107,14 +106,14 @@ A spec has two pydantic models:
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
+| params | everything the workflow takes: settings, files, data | each value given inline or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
 ```python
 class Reduction(BaseModel):                       # a group
     bins: int = 100
 
-class BeamCentre(BaseModel):                      # a group: a literal, or an output of a first reduction
+class BeamCentre(BaseModel):                      # a group: inline, or an output of a first reduction
     x: float
     y: float
 
@@ -137,10 +136,10 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
                     params=IofQParams, outputs=IofQOutputs)
 ```
 
-Whether a value is given by value or by reference is the request's choice, per value.
+Whether a value is given inline or by reference is the request's choice, per value.
 The parameter's type decides which of the two it accepts, with `| None` removed and, for a list parameter, its element type taken:
 
-| A parameter's type | Example | By value | By reference |
+| A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
@@ -200,13 +199,13 @@ client.output(result, 'iofq')            # raises if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
-`params` is a dict by name: each value a literal or a reference, or a list of these for a list parameter.
-A literal is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
-`params` may also be an instance of the params model, if every value is a literal; a spec with a file takes a dict.
+`params` is a dict by name: each value given inline or as a reference, or a list of these for a list parameter.
+An inline value is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
+`params` may also be an instance of the params model, if every value is given inline; a spec with a file takes a dict.
 It may be left out when every parameter has a default.
 
 Submitting a request returns a *record*.
-The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the JSON form of each literal, and each reference.
+The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the JSON form of each inline value, and each reference.
 It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
@@ -230,8 +229,8 @@ Each takes one request or record, a list, or a dict, and returns the same shape.
 `Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 
-**Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each literal by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
-A literal must round-trip, since the log holds its JSON form: a number that is not finite does not.
+**Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each inline value by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
+An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
 In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
 If one request of a call is refused, none is submitted.
@@ -247,7 +246,7 @@ The same beam centre is typed in by one user and computed by another:
 
 ```python
 result = client.submit(IOFQ, params={'sample': dataset(run=60339),
-                                     'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # a literal
+                                     'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})       # pending
 result = client.submit(IOFQ, params={'sample': dataset(run=60339),
                                      'beam_centre': centre.ref('centre')})            # a reference
@@ -269,7 +268,7 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 ```
 
 The framework looks for references at two places only: the top of each value, and the top of each element of a value that is a JSON array.
-At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; or the JSON form of a literal, such as a group with extra fields that holds the key `@ref`.
+At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; or the JSON form of an inline value, such as a group with extra fields that holds the key `@ref`.
 Deeper inside a value, `@ref` is plain data.
 So the framework finds the references of a request without the spec.
 
@@ -315,7 +314,7 @@ A blank is a whole parameter, never a field of a group.
 template = Template(IOFQ, params={'reduction': Reduction(bins=100)}, blanks=('sample',))
 ```
 
-`Template` validates each fixed literal by its own field, and checks that each fixed reference is readable and fits its field.
+`Template` validates each fixed inline value by its own field, and checks that each fixed reference is readable and fits its field.
 A required parameter may be a blank.
 
 A template can also be made from any request's values.
@@ -429,7 +428,7 @@ A spec takes them as *tables*, next to the values that all runs share.
 A table is a set of list parameters of equal length, pushed together.
 Its *index* is the parameter that names it, such as the sample runs.
 Its other *columns* are attached to the index, such as a correction of each run.
-Each position is a *row*, and each row is given by value or by reference, as its type allows.
+Each position is a *row*, and each row is given inline or by reference, as its type allows.
 As in a pandas DataFrame, the index values of a table are distinct.
 
 A *multi-run spec* is made from the *single-run spec* of the same reduction by naming the parameters that become tables:
@@ -561,23 +560,23 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed literal by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the index values of fixed tables read distinct |
+| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the index values of fixed tables read distinct |
 | a stage call | the same, for the values given; the table rules on given tables | each given value read; the index values of given tables read distinct |
-| a push | each literal by its column's element type; each reference readable and fitting its column; the table rules on the table with the push | each value read by its column's element type; the index values read distinct from those read before, before the driver gets them |
+| a push | each inline value by its column's element type; each reference readable and fitting its column; the table rules on the table with the push | each value read by its column's element type; the index values read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by the length constraints of its columns | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.
 
 **Distinct index values.** A push refuses an index value that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Index values are compared in two ways.
-In the request phase, they are compared as the record holds them: a literal by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key.
+In the request phase, they are compared as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key.
 So `dataset(run=611)` and `dataset(path=...)` of the same file are one value.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated index value is refused too, including one in a template.
 
 In the call phase, for an index whose type has a JSON form, they are also compared by the JSON form of each value read.
 The backend keeps the index values read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
-So a literal and a reference to an output whose value is equal are one index value, and a time slice is never summed twice:
+So an inline value and a reference to an output whose value is equal are one index value, and a time slice is never summed twice:
 
 ```python
 SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))

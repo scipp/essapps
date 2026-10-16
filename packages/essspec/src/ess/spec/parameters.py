@@ -96,7 +96,8 @@ class EnergyUnit(StrEnum):
 
 class Quantity(BaseModel, frozen=True):
     """
-    A scalar or short vector with a unit, as plain data: a literal.
+    A scalar or short vector with a unit, as plain data that a request can
+    give inline.
 
     The small-value type for values that a user reads or types, such as a
     scale factor. As a parameter it is a group like any other, or a field of

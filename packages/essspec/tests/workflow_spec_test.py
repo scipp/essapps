@@ -191,14 +191,14 @@ class TestMetadata:
         with pytest.raises(pydantic.ValidationError):
             IOFQ.title = 'Other'
 
-    def test_a_type_with_a_json_form_takes_a_literal(self) -> None:
-        assert [n for n in IofQParams.model_fields if IOFQ.takes_literal(n)] == [
+    def test_a_type_with_a_json_form_takes_an_inline_value(self) -> None:
+        assert [n for n in IofQParams.model_fields if IOFQ.takes_inline(n)] == [
             'reduction',
             'sample_geometry',
             'time_range',
         ]
-        assert IOFQ_MULTI.takes_literal('sample_geometry')
-        assert not IOFQ_MULTI.takes_literal('sample')
+        assert IOFQ_MULTI.takes_inline('sample_geometry')
+        assert not IOFQ_MULTI.takes_inline('sample')
 
     @pytest.mark.parametrize(
         'tp',
@@ -212,12 +212,12 @@ class TestMetadata:
             Reduction | None,
         ],
     )
-    def test_a_number_an_enum_or_a_tuple_takes_a_literal(self, tp: Any) -> None:
-        assert spec(params=model('P', value=(tp, ...))).takes_literal('value')
+    def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
+        assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
     @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[CanFile | None]])
-    def test_a_file_or_an_object_takes_no_literal(self, tp: Any) -> None:
-        assert not spec(params=model('P', value=(tp, ...))).takes_literal('value')
+    def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
+        assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
     def test_an_index_as_a_blank_leaves_open_every_column_of_its_table(self) -> None:
         assert IOFQ_MULTI.blank_fields(('sample', 'beam_centre')) == {
@@ -569,7 +569,7 @@ class TestTabulate:
         slices = IOFQ.tabulate(name='slices', version=1, tables=('time_range',))
         assert slices.params.model_fields['time_range'].annotation == list[TimeRange]
         assert slices.params.model_fields['sample'].annotation == SampleFile
-        assert slices.takes_literal('time_range')
+        assert slices.takes_inline('time_range')
 
     def test_refuses_an_index_with_a_default_but_none(self) -> None:
         with pytest.raises(ValueError, match=r"\['reduction'\]: an index is X, or"):
@@ -643,8 +643,8 @@ def data_ref(data_type: str) -> dict[str, Any]:
     return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
 
 
-def literal(schema: dict[str, Any]) -> dict[str, Any]:
-    """The schema of a literal: an object with the key ``@ref`` is not one."""
+def inline(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema of an inline value: an object with the key ``@ref`` is not one."""
     return {**schema, 'not': {'required': ['@ref']}}
 
 
@@ -659,7 +659,7 @@ class TestSerialization:
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
         assert schema['properties']['reduction'] == {
-            'anyOf': [literal({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
+            'anyOf': [inline({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
             'default': {'bins': 2},
             'title': 'Reduction',
         }
@@ -681,7 +681,7 @@ class TestSerialization:
         assert schema['properties'] == {
             'scale': {
                 'anyOf': [
-                    literal({'type': 'number', 'exclusiveMinimum': 0}),
+                    inline({'type': 'number', 'exclusiveMinimum': 0}),
                     data_ref('float'),
                 ],
                 'default': 1.0,
@@ -689,7 +689,7 @@ class TestSerialization:
                 'description': 'A factor.',
             },
             'mode': {
-                'anyOf': [literal({'$ref': '#/$defs/Mode'}), data_ref('Mode')],
+                'anyOf': [inline({'$ref': '#/$defs/Mode'}), data_ref('Mode')],
                 'default': 'fast',
                 'title': 'Mode',
             },
@@ -719,7 +719,7 @@ class TestSerialization:
         assert properties['time_range'] == {
             'type': 'array',
             'items': {
-                'anyOf': [literal({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
+                'anyOf': [inline({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
             },
             'minItems': 2,
             'title': 'Slices',
@@ -742,7 +742,7 @@ class TestSerialization:
         }
         assert properties['sample_geometry']['items'] == {
             'anyOf': [
-                literal({'$ref': '#/$defs/SampleGeometry'}),
+                inline({'$ref': '#/$defs/SampleGeometry'}),
                 data_ref('SampleGeometry'),
                 {'type': 'null'},
             ]

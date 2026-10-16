@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A value, or a row, given by value or by reference, as the request chooses."""
+"""A value, or a row, given inline or by reference, as the request chooses."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -238,7 +238,7 @@ def _failed(client: Client, record: Record) -> str | None:
     return client.failure(record)
 
 
-def test_a_literal_and_a_reference_to_equal_data_are_one_index_value(
+def test_an_inline_value_and_a_reference_to_equal_data_are_one_index_value(
     client: Client, loaded: Record
 ) -> None:
     summed = client.accumulator(Template(SUM, blanks=('part',)))

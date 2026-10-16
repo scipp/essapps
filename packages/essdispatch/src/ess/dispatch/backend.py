@@ -79,15 +79,15 @@ reference to a record or an accumulator is one the client may read, and its
 data fit the parameter's field. In the *call phase*, on a worker, the backend
 reads the data each reference names, a local path for a dataset, and
 validates each value alone by its field, a row of a list by its element type:
-a literal from its JSON form, which the log holds, so that both phases see
-the same values, and data read from the object (see
+an inline value from its JSON form, which the log holds, so that both phases
+see the same values, and data read from the object (see
 :func:`ess.spec.field_types.validated`). For a plain request it makes the
 params instance from these values without validating again, so the params
 model's model validators never run; a stage or an accumulator gets the
 values by name. The index values of a table, if the index's type has a JSON
 form, are distinct by the JSON forms of the values read, as the index's type
-dumps them, too: a literal and a reference to equal data are one index
-value. A table that a request, a template, or a stage call
+dumps them, too: an inline value and a reference to equal data are one
+index value. A table that a request, a template, or a stage call
 gives whole is compared within itself when it is read. The binding returns
 an instance of the outputs model: an output that the spec declares optional
 and the binding returns as ``None`` is left out, and a record whose binding
@@ -1219,17 +1219,17 @@ class Backend:
 
         The index values of each table in ``values`` whose index type has a
         JSON form are distinct by the JSON forms of the values read, as the
-        index type dumps them, so a literal and a reference to equal data are
-        one index value. They are compared with those in ``indexes``, the
-        index values read before by index, which they join (see
-        :func:`.checks.distinct`).
+        index type dumps them, so an inline value and a reference to equal
+        data are one index value. They are compared with those in
+        ``indexes``, the index values read before by index, which they join
+        (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
         read = self._reader(values)
         typed = {n: validated(spec.params, n, v, read) for n, v in values.items()}
         indexes = {} if indexes is None else indexes
         for index in spec.tables.keys() & typed.keys():
-            if spec.takes_literal(index):
+            if spec.takes_inline(index):
                 seen = indexes.setdefault(index, {})
                 forms = [json_form(spec.params, index, v) for v in typed[index]]
                 seen.update(distinct(index, forms, seen))

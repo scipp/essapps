@@ -78,25 +78,25 @@ factories in another under the same name, are the natural fit for the
 requirement above and are expected to become the convention once the first
 service adopts this spec.
 
-### Params by value or by reference
+### Params inline or by reference
 
 A request goes through two phases. The *request phase* is what the client and
 the backend do with a request before any data is read: validate, log, record,
 pin. The *call phase* starts when the backend reads data for the binding.
 
-A field of the params model is a *parameter*. A request gives each value *by
-value*, as a *literal*, or *by reference*. A literal is the value itself; the
-record holds its JSON form. A *reference* names data that exist elsewhere: a
-dataset, an output of a record, or an output of an accumulator. In the request
-phase a value given by reference is the reference; in the call phase it is the
-data. The params model types the call phase only. The backend reads each
-reference and builds the params instance from the literals and the data, so
-every field of it holds the type it declares. The binding gets that instance:
-`compute(params) -> outputs`.
+A field of the params model is a *parameter*. A request gives each value in one
+of two forms: *inline* or *by reference*. An *inline value* is the value itself
+in the request; the record holds its JSON form. A *reference* names data that
+exist elsewhere: a dataset, an output of a record, or an output of an
+accumulator. In the request phase a value given by reference is the reference;
+in the call phase it is the data. The params model types the call phase only.
+The backend reads each reference and builds the params instance from the inline
+values and the data, so every field of it holds the type it declares. The
+binding gets that instance: `compute(params) -> outputs`.
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
+| params | everything the workflow takes: settings, files, data | each value given inline or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
 Which form a value takes is the request's choice, per value, since the same
@@ -108,7 +108,7 @@ taken. A type has a *JSON form* when it is not a file, holds no file, and
 pydantic makes a JSON schema of it with the params model's config. A value
 *round-trips* when its JSON form reads back as the value.
 
-| A parameter's type | Example | By value | By reference |
+| A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
@@ -117,7 +117,7 @@ pydantic makes a JSON schema of it with the params model's config. A value
 A file is given by reference to a dataset only, so that the dataset source
 checks access and the record holds the dataset's identity; the binding gets a
 local path. A *group* is a pydantic model with a JSON form, such as
-`Reduction`: the usual type of a parameter given by value. A *data value* is a
+`Reduction`: the usual type of a parameter given inline. A *data value* is a
 value of a type without a JSON form: a file, or an object such as a scipp
 array.
 
@@ -125,7 +125,7 @@ array.
 class Reduction(BaseModel):                       # a group
     bins: int = 2
 
-class BeamCentre(BaseModel):                      # a group: a literal, or a finder's output
+class BeamCentre(BaseModel):                      # a group: inline, or a finder's output
     x: float
     y: float
 
@@ -152,7 +152,7 @@ finds the beam centre, so `finder.ref('centre')` names its output `centre`:
 
 ```python
 client.submit(IOFQ, params={'sample': dataset(run=60339),
-                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # a literal
+                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
 client.submit(IOFQ, params={'sample': dataset(run=60339),
                             'beam_centre': finder.ref('centre')})            # a reference
 ```
@@ -203,11 +203,11 @@ The framework looks for references at two places only: the top of each value,
 and the top of each element of a value that is a JSON array. At these places
 it refuses an `@ref` object that the spec does not allow as a reference: an
 element of a parameter that is not a list, such as a `tuple` of groups, whose
-JSON is an array; or the JSON form of a literal, such as a group with extra
-fields that holds the key `@ref`. Deeper inside a value, `@ref` is plain data.
-So a framework finds the references of a request without the spec, as a
-remote client that holds only the serialized spec must, and a literal never
-reads as a reference.
+JSON is an array; or the JSON form of an inline value, such as a group with
+extra fields that holds the key `@ref`. Deeper inside a value, `@ref` is plain
+data. So a framework finds the references of a request without the spec, as a
+remote client that holds only the serialized spec must, and an inline value
+never reads as a reference.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -271,7 +271,7 @@ carries its own unit.
 A *table* is a set of list parameters of equal length, pushed together into an
 accumulator. Its *index* is the parameter that names it, such as the run. Its
 other *columns* are attached to the index, such as a correction of each run.
-Each position is a *row*, and each row is given by value or by reference, as its
+Each position is a *row*, and each row is given inline or by reference, as its
 type allows. As in a pandas DataFrame, the index values of a table are distinct.
 A *single-run spec* takes one run per parameter. `tabulate` makes a *multi-run
 spec* from it by naming the indexes, each with the columns attached to it:
@@ -298,9 +298,9 @@ a table only when `tables` names it.
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
 lacks or has wrong is given next to the run, as a column of the run's table, so
-the request and its record hold it. Such a column takes a literal in one row and
-a reference to a computed value in another, as a transmission computed for one
-run and not another.
+the request and its record hold it. Such a column takes an inline value in one
+row and a reference to a computed value in another, as a transmission computed
+for one run and not another.
 
 The framework compares index values as the record holds them and, for an index
 whose type has a JSON form, also by the values read, so that a time slice is
@@ -370,8 +370,8 @@ semantics (`name`, `version`, `title`, `description`, `params`, `outputs`) are
 those of esslivedata's for exactly this reason, and esslivedata already
 declares outputs as a model class with title and description as field metadata.
 
-esslivedata's params model holds settings only, each given by value: its
-specs are the special case of this one in which every value is a literal, so a
+esslivedata's params model holds settings only, each given inline: its specs
+are the special case of this one in which every value is given inline, so a
 request may give their params as an instance of the model. Its data arrive as
 streams, which this spec does not model. A value that changes during a stream,
 such as a motor position, arrives on a stream of its own and is set as a
@@ -411,13 +411,13 @@ output, and dims and units of an output for a UI.
 
 ## Alternatives considered
 
-- **Two models, params by value and inputs by reference.** The spec fixes the
+- **Two models, params inline and inputs by reference.** The spec fixes the
   form per field. A value used both ways, such as a beam centre, then needs a
   client that reads it and sends it again, which loses the record of where it
   came from, or a spec per form; and moving a field between the models breaks
   every client.
 - **Inputs that also take a value inline.** Keeps two models, but the inputs
-  then hold literals, which removes the reason for two.
+  then hold inline values, which removes the reason for two.
 - **A constant spec per typed value**, which outputs the value typed in, for a
   request to reference. Needs no framework change, but a submission per typed
   value.
@@ -429,7 +429,7 @@ output, and dims and units of an output for a UI.
   holds a reference where its type says `Path`, and every validator runs on
   references in the request phase.
 - **Every value tagged**, `{"value": ...}` and `{"ref": ...}`. Unambiguous
-  without a reserved key, but every literal in requests, the log, and
+  without a reserved key, but every inline value in requests, the log, and
   esslivedata's params gets a wrapper.
 - **`$ref` as the key of a reference.** It is the JSON Schema keyword for a
   reference within a schema, so a reference held in a schema, as a default or

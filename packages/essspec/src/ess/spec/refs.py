@@ -33,7 +33,7 @@ from pydantic.config import JsonDict
 def _kind_required(schema: JsonDict) -> None:
     """
     Require ``"@ref"`` in a reference's JSON schema: without it, an object is
-    a literal, not a reference.
+    an inline value, not a reference.
     """
     required = schema.get('required', [])
     schema['required'] = ['@ref', *(required if isinstance(required, list) else [])]

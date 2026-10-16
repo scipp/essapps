@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 A value typed in by one user and computed by another: the request gives each
-value, or each row, by value or by reference.
+value, or each row, inline or by reference.
 """
 
 import pytest

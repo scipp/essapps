@@ -180,7 +180,7 @@ class Accumulator:
             acc.push(sample=[dataset(run=611), dataset(run=612)])
             acc.push(sample=[dataset(run=613)], sample_geometry=[geometry])
 
-        Each row is given by value, such as a group as a model or a dict, or
+        Each row is given inline, such as a group as a model or a dict, or
         by reference, as its type allows. A column left out is ``None``
         in each row if its type allows it, and a column whose element type is
         not optional is given in every push. A push names one table, through
@@ -188,8 +188,8 @@ class Accumulator:
         of a table the template fixes, an index value the table holds already
         or that the push repeats, and a push of no rows. Index values are
         compared as the record holds them: a dataset by its identity, a
-        reference to an output by record, output, and key, and a literal by
-        its JSON form; for an index whose type has a JSON form, also by the
+        reference to an output by record, output, and key, and an inline value
+        by its JSON form; for an index whose type has a JSON form, also by the
         values read, before the driver gets the rows.
 
         One push is one push into the binding's driver. A push references
@@ -198,11 +198,11 @@ class Accumulator:
         such as a row in a table with a required index, is checked when a
         state is pinned. When the push is added, its index values read, if the
         index's type has a JSON form, are compared with those read before by
-        that form, so a literal and a reference to equal data are one index
-        value, and a repeat fails the push. A record that has failed or was
-        cancelled is refused, and one that is pending is not waited for. The
-        push returns once it is logged. The backend adds the pushes one at a
-        time, in the order logged, each once the records it references have
+        that form, so an inline value and a reference to equal data are one
+        index value, and a repeat fails the push. A record that has failed or
+        was cancelled is refused, and one that is pending is not waited for.
+        The push returns once it is logged. The backend adds the pushes one at
+        a time, in the order logged, each once the records it references have
         completed and the readers of the state before it are done (see
         :mod:`ess.dispatch.backend`).
 
@@ -310,10 +310,10 @@ class Client:
         Submit a spec or a stage with values, or requests.
 
         A spec takes its params, a dict by name or an instance of its params
-        model if every value is a literal. Each value, or each row of a list
-        parameter, is given by value or by reference, as its type allows: a
-        type with a JSON form takes a literal, such as a group as a model or
-        a dict, a file a reference to a dataset, and any other type a
+        model if every value is given inline. Each value, or each row of a
+        list parameter, is given inline or by reference, as its type allows: a
+        type with a JSON form takes an inline value, such as a group as a model
+        or a dict, a file a reference to a dataset, and any other type a
         reference to an output that fits::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
@@ -329,7 +329,7 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError`` naming the field at fault, after the request's
         key or index if several are given: an invalid value, an unknown spec
-        or dataset, a literal for a type without a JSON form, a reference
+        or dataset, an inline value for a type without a JSON form, a reference
         where none may stand, such as to a whole list, a reference the client
         may not read, or one whose data do not fit its field. Then no request
         of the call is submitted; the records of earlier calls stay.

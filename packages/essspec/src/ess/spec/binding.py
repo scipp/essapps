@@ -25,7 +25,7 @@ The protocols name what the backend calls: :class:`Binding` for a plain
 request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator. A plain request passes an instance of the params model,
 ``compute(params) -> outputs``. A stage or an accumulator is made from some
-values only, so these pass by name, each as its type, whether given by value
+values only, so these pass by name, each as its type, whether given inline
 or by reference: a group as the model, a file as a local path, any other value
 as the object, and a table as its columns, each under its own name, as lists
 of equal length::

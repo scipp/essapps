@@ -37,7 +37,7 @@ A parameter's type decides how a request gives its value (README.md):
 | A parameter's type | In the toy specs | Given as |
 |---|---|---|
 | a file: a `NewType` of `Path` | each `...File` | a dataset reference |
-| has a JSON form: a group | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | a literal, or a reference to an output that fits |
+| has a JSON form: a group | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an inline value, or a reference to an output that fits |
 | any other type | `CentreArray`, `Normalization`, `TransmissionArray`, `Parts`, `sc.Variable` | a reference to an output that fits |
 
 A list parameter takes its element type's forms, row by row.
@@ -370,7 +370,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-Gap: a dataset reference fits a file parameter only, and `normalization` is a data value, an `sc.Variable`; loading a dataset as the object a parameter takes is deferred ([params-by-value-or-reference.md](plans/params-by-value-or-reference.md), Left for later).
+Gap: a dataset reference fits a file parameter only, and `normalization` is a data value, an `sc.Variable`; loading a dataset as the object a parameter takes is deferred ([params-inline-or-by-reference.md](plans/params-inline-or-by-reference.md), Left for later).
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -751,7 +751,7 @@ System story only; see [system-stories.md](system-stories.md).
 
 ## I. Values typed in or computed
 
-One user types a value in and another computes it; the request gives each value, or each row, by value or by reference.
+One user types a value in and another computes it; the request gives each value, or each row, inline or by reference.
 
 ### I1. Time slices found by a first reduction
 
@@ -806,7 +806,7 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 ```
 
 Both drivers get a `Centre`; neither sees whether it was typed in or computed.
-The record of the typed-in centre holds the literal in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
+The record of the typed-in centre holds the inline value in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
 `IOFQ`'s `beam_centre`, a `NewType` of `sc.Variable`, has no JSON form, so it takes a reference only (C1).
 
 ### I3. A correction computed for one run and not another
@@ -824,7 +824,7 @@ assert client.output(total, 'centred').values.tolist() == [2.25, 2.75]   # [1, 3
 assert client.provenance(total).records() == [t611]
 ```
 
-A push gives each row of a column by value or by reference: here a reference in one row and `None` in the other.
+A push gives each row of a column inline or by reference: here a reference in one row and `None` in the other.
 `TransmissionArray` has no JSON form, so a row takes a reference, or `None` since the column is optional.
 No can is pushed: `can` is an index that may have no rows.
 

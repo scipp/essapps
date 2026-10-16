@@ -18,8 +18,8 @@ with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
 of one type can be the value of a field of another, so that an output of one
 spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone, as
-:func:`validated` does in the call phase and :func:`literal` for a value
-given by value.
+:func:`validated` does in the call phase and :func:`inline` for a value
+given inline.
 """
 
 from __future__ import annotations
@@ -197,11 +197,12 @@ def validated(
     :func:`model_of`): each row of a list field by its element type.
 
     With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
-    is as a record holds it: each value, or row, a reference or a literal in
-    its JSON form. A reference is replaced by the data ``read`` gives for it,
-    validated from the object, and a literal is validated from its JSON form,
-    as the request phase validated it (see :func:`literal`), so that both
-    phases see the same value: a strict enum takes its string only from JSON.
+    is as a record holds it: each value, or row, a reference or an inline
+    value in its JSON form. A reference is replaced by the data ``read`` gives
+    for it, validated from the object, and an inline value is validated from
+    its JSON form, as the request phase validated it (see :func:`inline`), so
+    that both phases see the same value: a strict enum takes its string only
+    from JSON.
     """
     one = model_of(model, name)
 
@@ -231,9 +232,9 @@ def json_form(model: type[BaseModel], name: str, value: Any) -> Any:
     return from_json(made.model_dump_json(by_alias=True))[name]
 
 
-def literal(model: type[BaseModel], name: str, value: Any) -> Any:
+def inline(model: type[BaseModel], name: str, value: Any) -> Any:
     """
-    The JSON form of ``value``, given by value for the field ``name`` of
+    The JSON form of ``value``, given inline for the field ``name`` of
     ``model``, or a row of it (see :func:`model_of`), as the framework holds
     it.
 

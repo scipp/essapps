@@ -10,19 +10,20 @@ where the workflow is computed:
 =======  =============================  ===============  ==========================
 Model    Holds                          In a request     When the workflow runs
 =======  =============================  ===============  ==========================
-params   everything the workflow        a literal or a   the values, and the data
-         takes: settings, files, data   reference each   the references name
+params   everything the workflow        each value       the values, and the data
+         takes: settings, files, data   inline or by     the references name
+                                        reference
 outputs  results                        (none)           the data the workflow
                                                          returns
 =======  =============================  ===============  ==========================
 
-A request gives each value by value or by reference, and each row of a
+A request gives each value inline or by reference, and each row of a
 list parameter. A parameter's type decides which of the two it takes, with
 ``| None`` removed and, for a list parameter, its element type taken (see
-:meth:`WorkflowSpec.takes_literal`):
+:meth:`WorkflowSpec.takes_inline`):
 
 =====================================  ==========  ===========================
-A parameter's type                     By value    By reference
+A parameter's type                     Inline      By reference
 =====================================  ==========  ===========================
 a file: ``Path``, or a ``NewType``     no          to a dataset
 of it
@@ -32,13 +33,13 @@ model's config, and it holds no file
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
 
-A value given by value is a *literal*, held in its JSON form; a reference is
-described in :mod:`ess.spec.refs`. A *group* is a model of literals, such as
-``Reduction``. A request lives in two phases. In the *request phase*, before
-any data is read, a value given by reference is a reference; in the *call
-phase*, the backend reads the data each reference names and builds the
-params instance from the values and the data, so every field of it holds
-the type it declares.
+An *inline value* is the value itself in the request, held in its JSON form;
+a reference is described in :mod:`ess.spec.refs`. A *group* is a model with a
+JSON form, such as ``Reduction``. A request lives in two phases. In the
+*request phase*, before any data is read, a value given by reference is a
+reference; in the *call phase*, the backend reads the data each reference
+names and builds the params instance from the values and the data, so every
+field of it holds the type it declares.
 
 The models are ordinary pydantic models and carry no annotations for the
 framework: what the framework needs, it reads from the field types (see
@@ -109,10 +110,10 @@ from pydantic_core import PydanticSerializationError
 from .field_types import (
     base,
     element,
+    inline,
     is_file,
     is_list,
     is_single,
-    literal,
     optional,
     type_name,
     value_type,
@@ -243,15 +244,15 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
 
-    def takes_literal(self, name: str) -> bool:
+    def takes_inline(self, name: str) -> bool:
         """
         Whether a request may give the parameter ``name``, or each row of it
-        if it is a list parameter, by value: its type, with ``| None`` removed
+        if it is a list parameter, inline: its type, with ``| None`` removed
         and for a list parameter its element type taken, has a JSON form.
         A file takes a reference to a dataset, and any other parameter a
         reference to an output that fits.
         """
-        return _takes_literal(self.params, name)
+        return _takes_inline(self.params, name)
 
     def columns(self, index: str) -> tuple[str, ...]:
         """The columns of the table of ``index``, the index first."""
@@ -341,7 +342,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
         The params schema has each value, or each row of a list parameter,
         in the forms it takes: ``anyOf`` its JSON schema and a reference if it
-        takes a literal, else a reference. A reference's schema is the
+        takes an inline value, else a reference. A reference's schema is the
         ``@ref`` object of each kind it may be, with the name of the data type
         it must fit in ``dataType``, as the outputs schema has each output.
         The projection is one-way: pydantic validators do not survive it, so
@@ -472,7 +473,7 @@ def _json_schema(tp: Any, model: type[BaseModel]) -> bool:
 
 
 @functools.cache
-def _takes_literal(model: type[BaseModel], name: str) -> bool:
+def _takes_inline(model: type[BaseModel], name: str) -> bool:
     """
     Whether the type of the field ``name`` of ``model``, with ``| None``
     removed and for a list its element type taken, has a JSON form: pydantic
@@ -489,12 +490,12 @@ def _is_model(tp: Any) -> bool:
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: of a type with a JSON form, a literal (see
-    :func:`ess.spec.field_types.literal`), each row of a list; of any other
+    ``None``: of a type with a JSON form, an inline value (see
+    :func:`ess.spec.field_types.inline`), each row of a list; of any other
     type, ``None`` or an empty list.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
-    if not _takes_literal(model, name):
+    if not _takes_inline(model, name):
         if default is None or (isinstance(default, list) and not default):
             return None
         return 'the default of a type without a JSON form is None or an empty list'
@@ -503,7 +504,7 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
         return 'the default of a list parameter is a list'
     try:
         for value in default if rows else [default]:
-            literal(model, name, value)
+            inline(model, name, value)
     except (PydanticSerializationError, ValidationError):
         return 'the default has no JSON form that reads back as the value'
     except ValueError as error:
@@ -630,7 +631,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
             DatasetRef if is_file(tp) else OutputRef | AccumulatorRef, data_type
         ]
         fields[name] = (
-            _forms(info.annotation, info.metadata, ref, spec.takes_literal(name)),
+            _forms(info.annotation, info.metadata, ref, spec.takes_inline(name)),
             Field(
                 # Undefined, and so required, if the field is.
                 default=info.get_default(call_default_factory=True),
@@ -659,32 +660,32 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
 
 
 def _not_a_ref(schema: dict[str, Any]) -> None:
-    """A literal's JSON schema: an object with the key ``@ref`` is a reference."""
+    """An inline value's schema: an object with the key ``@ref`` is a reference."""
     schema['not'] = {'required': ['@ref']}
 
 
-def _forms(tp: Any, metadata: Sequence[Any], ref: Any, literal: bool) -> Any:
+def _forms(tp: Any, metadata: Sequence[Any], ref: Any, takes_inline: bool) -> Any:
     """
-    ``tp`` with its value type ``X`` replaced by ``X | ref`` if it takes a
-    ``literal``, else by ``ref``, so that each value, or each row of a list,
-    takes the forms of ``X``. ``metadata``, the constraints of the field,
-    goes to the list if ``tp`` is one, else to ``X``, so that a constraint of
-    a number, say, is not put on a reference.
+    ``tp`` with its value type ``X`` replaced by ``X | ref`` if
+    ``takes_inline``, else by ``ref``, so that each value, or each row of a
+    list, takes the forms of ``X``. ``metadata``, the constraints of the
+    field, goes to the list if ``tp`` is one, else to ``X``, so that a
+    constraint of a number, say, is not put on a reference.
     """
     origin, args = get_origin(tp), get_args(tp)
     if origin is Annotated:
-        return _forms(args[0], [*metadata, *tp.__metadata__], ref, literal)
+        return _forms(args[0], [*metadata, *tp.__metadata__], ref, takes_inline)
     if origin is list:
-        rows: Any = list[_forms(args[0], [], ref, literal)]  # type: ignore[misc]
+        rows: Any = list[_forms(args[0], [], ref, takes_inline)]  # type: ignore[misc]
         return Annotated[rows, *metadata] if metadata else rows
     if origin in (Union, UnionType):
         return Union[  # noqa: UP007
             tuple(
-                arg if arg is NoneType else _forms(arg, metadata, ref, literal)
+                arg if arg is NoneType else _forms(arg, metadata, ref, takes_inline)
                 for arg in args
             )
         ]
-    if not literal:
+    if not takes_inline:
         return ref
     value = Annotated[tp, *metadata, Field(json_schema_extra=_not_a_ref)]
     return Union[value, ref]  # noqa: UP007

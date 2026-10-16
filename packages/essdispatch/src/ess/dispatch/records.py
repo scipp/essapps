@@ -3,10 +3,10 @@
 """
 Requests and records: what a user asks for and what the backend made of it.
 
-Both are plain data. A request names a spec and its params by name, each a
-literal or a reference; a record is the request with every value filled in,
-as the backend accepted it. A record never changes. Its status,
-which changes once from pending to finished, is asked of the client.
+Both are plain data. A request names a spec and its params by name, each an
+inline value or a reference; a record is the request with every value filled
+in, as the backend accepted it. A record never changes. Its status, which
+changes once from pending to finished, is asked of the client.
 """
 
 from __future__ import annotations
@@ -63,9 +63,9 @@ def read_refs(params: Any) -> Any:
 
 Params = Annotated[dict[str, Any], BeforeValidator(read_refs)]
 """
-The params of a request by name, each a literal, a reference, ``None``, or a
-list of these; so every way of making one, the log's JSON among them, holds
-references as :data:`~ess.spec.Ref`.
+The params of a request by name, each an inline value, a reference, ``None``,
+or a list of these; so every way of making one, the log's JSON among them,
+holds references as :data:`~ess.spec.Ref`.
 """
 
 
@@ -96,10 +96,10 @@ class Request(BaseModel, frozen=True):
     """
     A spec and its params, by name.
 
-    ``params`` is an instance of the params model, if every value is a
-    literal, or a dict by name: a literal, such as a group as a model or a
-    dict, or a reference, as the parameter's type allows; a list of these for
-    a list parameter.
+    ``params`` is an instance of the params model, if every value is given
+    inline, or a dict by name: an inline value, such as a group as a model or
+    a dict, or a reference, as the parameter's type allows; a list of these
+    for a list parameter.
     A file is always given by reference, such as ``dataset(path=...)``. A
     reference is found at the top of a value or of an element of a list, so
     the references of a request are found without its spec.
@@ -192,11 +192,11 @@ class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it.
 
-    ``request`` has every value filled in, literals in their JSON form and
-    references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
+    ``request`` has every value filled in, inline values in their JSON form
+    and references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
     filled, a column left out of a table filled, and each reference to an
-    accumulator replaced by a reference to the record of the state it reads,
-    a record of the plain request of that state.
+    accumulator replaced by a reference to the record of the state it reads, a
+    record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 

@@ -1299,7 +1299,7 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
         {'values': value},  # a column whose element type is not optional
         {'weight': weight * 2, 'values': value},  # columns of unequal length
         {'weight': [load.ref('value')], 'values': value},  # a reference, no fit
-        {'weight': [{'value': 'x'}], 'values': value},  # an invalid literal
+        {'weight': [{'value': 'x'}], 'values': value},  # an invalid inline value
         {'weight': weight, 'values': [dataset(run=1)]},  # a dataset, no file
         {'weight': weight, 'values': [{'@ref': 'run'}]},  # no kind of reference
     ]
