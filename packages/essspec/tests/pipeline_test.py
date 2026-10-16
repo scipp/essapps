@@ -252,7 +252,9 @@ def test_a_stage_call_takes_the_blanks_exactly(
 
 
 def test_a_stage_refuses_values_that_do_not_fit(single: PipelineBinding) -> None:
-    with pytest.raises(ValueError, match=r"\['sample'\]: neither fixed nor blank"):
+    with pytest.raises(
+        ValueError, match=r"\['sample'\]: required parameters, not given"
+    ):
         single.make_stage({}, ('reduction',))
 
 

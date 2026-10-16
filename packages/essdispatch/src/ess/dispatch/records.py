@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
 from ess.spec.refs import iter_refs, map_refs
@@ -105,7 +105,7 @@ class Request(BaseModel, frozen=True):
     the references of a request are found without its spec.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
 
     spec: SpecId
     params: Params = Field(default_factory=dict)
@@ -138,6 +138,7 @@ class Request(BaseModel, frozen=True):
 
 
 @dataclass(frozen=True, init=False)
+@with_config(extra='forbid')
 class Template:
     """
     A spec, some values, and blanks that each use fills.
@@ -191,9 +192,9 @@ class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it.
 
-    ``request`` has every value filled in, literals in JSON's types and data
-    values as references: dataset names resolved, defaults filled, a column
-    left out of a table filled, and each reference to an
+    ``request`` has every value filled in, literals in their JSON form and
+    references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
+    filled, a column left out of a table filled, and each reference to an
     accumulator replaced by a reference to the record of the state it reads,
     a record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and

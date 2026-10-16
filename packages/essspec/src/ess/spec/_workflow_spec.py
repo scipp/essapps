@@ -24,8 +24,8 @@ list parameter. A parameter's type decides which of the two it takes, with
 =====================================  ==========  ===========================
 A parameter's type                     By value    By reference
 =====================================  ==========  ===========================
-a file: ``Path``, or a ``NewType``     no          to a dataset, or to an
-of it                                              output that fits
+a file: ``Path``, or a ``NewType``     no          to a dataset
+of it
 has a *JSON form*: pydantic makes a    yes         to an output that fits
 JSON schema of it, with the params
 model's config, and it holds no file
@@ -104,19 +104,20 @@ from pydantic import (
 )
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError, from_json, to_json
+from pydantic_core import PydanticSerializationError
 
 from .field_types import (
     base,
     element,
     is_file,
+    is_list,
     is_single,
-    model_of,
+    literal,
     optional,
     type_name,
     value_type,
 )
-from .refs import AccumulatorRef, OutputRef, Ref
+from .refs import AccumulatorRef, DatasetRef, OutputRef
 
 
 class NoParams(BaseModel):
@@ -247,8 +248,8 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         Whether a request may give the parameter ``name``, or each row of it
         if it is a list parameter, by value: its type, with ``| None`` removed
         and for a list parameter its element type taken, has a JSON form.
-        Every parameter takes a reference to an output that fits, and a file a
-        reference to a dataset too.
+        A file takes a reference to a dataset, and any other parameter a
+        reference to an output that fits.
         """
         return _takes_literal(self.params, name)
 
@@ -354,7 +355,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             code_revision=self.code_revision,
             tables=self.tables,
             params_schema=_params_schema(self),
-            outputs_schema=_data_schema(self.outputs),
+            outputs_schema=_outputs_schema(self.outputs),
         )
 
 
@@ -488,33 +489,26 @@ def _is_model(tp: Any) -> bool:
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: of a type with a JSON form, a value whose JSON form reads back
-    as the value and is not a reference, nor a list holding one; of any other
+    ``None``: of a type with a JSON form, a literal (see
+    :func:`ess.spec.field_types.literal`), each row of a list; of any other
     type, ``None`` or an empty list.
     """
-    field = model.model_fields[name]
-    default = field.get_default(call_default_factory=True)
+    default = model.model_fields[name].get_default(call_default_factory=True)
     if not _takes_literal(model, name):
         if default is None or (isinstance(default, list) and not default):
             return None
         return 'the default of a type without a JSON form is None or an empty list'
+    rows = is_list(model, name)
+    if rows and not isinstance(default, list):
+        return 'the default of a list parameter is a list'
     try:
-        line = to_json({name: default})
-        again = model_of(model, name).model_validate_json(line)
-        reads_back = getattr(again, name) == default
+        for value in default if rows else [default]:
+            literal(model, name, value)
     except (PydanticSerializationError, ValidationError):
-        reads_back = False
-    if not reads_back:
         return 'the default has no JSON form that reads back as the value'
-    value = from_json(line)[name]
-    if any(isinstance(v, dict) and '@ref' in v for v in _tops(value)):
-        return 'a default is a value, not a reference'
+    except ValueError as error:
+        return f'the default {error}'
     return None
-
-
-def _tops(value: Any) -> list[Any]:
-    """Where a request may hold a reference: the value, or each element of a list."""
-    return value if isinstance(value, list) else [value]
 
 
 def _holds_file(tp: Any, seen: set[type[BaseModel]]) -> bool:
@@ -622,31 +616,51 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
     The JSON Schema of the params: that of a model of the same fields, each
     with its title, description, default, and length constraints, and with
-    its type replaced by the forms it takes (see :func:`_forms`).
+    its type replaced by the forms it takes (see :func:`_forms`). As the
+    backend does, it refuses a field that a model lacks, and does not require
+    a column of a table whose element type is optional, which the backend
+    fills with ``None``.
     """
     model: type[BaseModel] = spec.params
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
         tp = value_type(info.annotation)
         data_type = Field(json_schema_extra={'dataType': type_name(tp)})
-        ref: Any = (
-            Annotated[Ref, data_type]
-            if is_file(tp)
-            else Annotated[OutputRef | AccumulatorRef, data_type]
-        )
+        ref: Any = Annotated[
+            DatasetRef if is_file(tp) else OutputRef | AccumulatorRef, data_type
+        ]
         fields[name] = (
             _forms(info.annotation, info.metadata, ref, spec.takes_literal(name)),
             Field(
                 # Undefined, and so required, if the field is.
                 default=info.get_default(call_default_factory=True),
-                title=info.title,
+                # pydantic leaves out the title of a field that is a $ref only
+                title=info.title or name.replace('_', ' ').title(),
                 description=info.description,
             ),
         )
     schema: dict[str, Any] = create_model(
         model.__name__, __config__=model.model_config, **fields
     ).model_json_schema()
+    for group in [schema, *schema.get('$defs', {}).values()]:
+        if 'properties' in group:
+            group['additionalProperties'] = False
+    filled = {
+        column
+        for attached in spec.tables.values()
+        for column in attached
+        if optional(element(model.model_fields[column].annotation))[1]
+    }
+    if required := [n for n in schema.get('required', []) if n not in filled]:
+        schema['required'] = required
+    else:
+        schema.pop('required', None)
     return schema
+
+
+def _not_a_ref(schema: dict[str, Any]) -> None:
+    """A literal's JSON schema: an object with the key ``@ref`` is a reference."""
+    schema['not'] = {'required': ['@ref']}
 
 
 def _forms(tp: Any, metadata: Sequence[Any], ref: Any, literal: bool) -> Any:
@@ -672,22 +686,23 @@ def _forms(tp: Any, metadata: Sequence[Any], ref: Any, literal: bool) -> Any:
         ]
     if not literal:
         return ref
-    return Union[Annotated[tp, *metadata] if metadata else tp, ref]  # noqa: UP007
+    value = Annotated[tp, *metadata, Field(json_schema_extra=_not_a_ref)]
+    return Union[value, ref]  # noqa: UP007
 
 
-def _data_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """A schema of a model of data values, by the type of each value."""
+def _outputs_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """The schema of the outputs model, by the type of each output."""
     return {
         'title': model.__name__,
         'type': 'object',
-        'properties': {n: _data_property(f) for n, f in model.model_fields.items()},
+        'properties': {n: _output_property(f) for n, f in model.model_fields.items()},
         'required': [n for n, f in model.model_fields.items() if f.is_required()],
     }
 
 
-def _data_property(field: FieldInfo) -> dict[str, Any]:
-    """The schema of a field of data values, by the type of each value."""
-    prop = _data_type_schema(field.annotation)
+def _output_property(field: FieldInfo) -> dict[str, Any]:
+    """The schema of an output, by the type of each value."""
+    prop = _output_type_schema(field.annotation)
     if field.title is not None:
         prop['title'] = field.title
     if field.description is not None:
@@ -699,12 +714,12 @@ def _data_property(field: FieldInfo) -> dict[str, Any]:
     return prop
 
 
-def _data_type_schema(annotation: Any) -> dict[str, Any]:
+def _output_type_schema(annotation: Any) -> dict[str, Any]:
     tp, is_optional = optional(annotation)
     if (item := element(tp)) is None:
         schema: dict[str, Any] = {'dataType': type_name(tp)}
     elif get_origin(tp) is list:
-        schema = {'type': 'array', 'items': _data_type_schema(item)}
+        schema = {'type': 'array', 'items': _output_type_schema(item)}
     else:
-        schema = {'type': 'object', 'additionalProperties': _data_type_schema(item)}
+        schema = {'type': 'object', 'additionalProperties': _output_type_schema(item)}
     return {'anyOf': [schema, {'type': 'null'}]} if is_optional else schema

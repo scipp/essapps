@@ -81,12 +81,13 @@ reads the data each reference names, a local path for a dataset, and
 validates each value alone by its field, a row of a list by its element type:
 a literal from its JSON form, which the log holds, so that both phases see
 the same values, and data read from the object (see
-:func:`.checks.validated`). For a plain request it makes the params instance
-from these values without validating again, so the params model's model
-validators never run; a stage or an accumulator gets the values by name. The
-index values of a table, if the index's type has a JSON form, are distinct
-by the JSON forms of the values read, too: a literal and a reference to equal
-data are one index value. A table that a request, a template, or a stage call
+:func:`ess.spec.field_types.validated`). For a plain request it makes the
+params instance from these values without validating again, so the params
+model's model validators never run; a stage or an accumulator gets the
+values by name. The index values of a table, if the index's type has a JSON
+form, are distinct by the JSON forms of the values read, as the index's type
+dumps them, too: a literal and a reference to equal data are one index
+value. A table that a request, a template, or a stage call
 gives whole is compared within itself when it is read. The binding returns
 an instance of the outputs model: an output that the spec declares optional
 and the binding returns as ``None`` is left out, and a record whose binding
@@ -217,10 +218,10 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, optional
+from ess.spec.field_types import base, json_form, optional, validated
 from ess.spec.refs import iter_refs, map_refs
 
-from .checks import Checks, check_fit, distinct, refs, validated
+from .checks import Checks, check_fit, distinct, refs
 from .datasets import DatasetSource, Selector, readable
 from .log import (
     Event,
@@ -271,11 +272,17 @@ def _not_returned(where: str) -> LookupError:
     return LookupError(f'{where}: the workflow did not return it')
 
 
-def _element(value: Any, key: str | None) -> Any:
-    """``value``, or its element ``key`` if given: by index for a list."""
-    if key is None:
+def _element(value: Any, ref: OutputRef) -> Any:
+    """
+    ``value``, the output ``ref`` names, or its element ``ref.key`` if given:
+    by index for a list.
+    """
+    if (key := ref.key) is None:
         return value
-    return value[int(key)] if isinstance(value, list) else value[key]
+    try:
+        return value[int(key)] if isinstance(value, list) else value[key]
+    except (IndexError, KeyError):
+        raise LookupError(f'{ref}: the output has no element {key!r}') from None
 
 
 Selection = Mapping[str, int | slice]
@@ -671,11 +678,11 @@ class Backend:
         if record_id in views.states:
             return 'the driver it reads is gone'
         for ref in views.records[record_id].request.upstream():
-            where = f'input {ref.record} output {ref.output}'
+            where = f'record {ref.record} output {ref.output}'
             if ref.record in runs:
                 continue
             if (status := views.status(ref.record)) is not Status.COMPLETED:
-                return f'input {ref.record} {status}'
+                return f'record {ref.record} {status}'
             if views.omitted((ref.record, ref.output)):
                 return f'{where}: the workflow did not return it'
             write = views.write((ref.record, ref.output))
@@ -1207,23 +1214,25 @@ class Backend:
         ``values`` of a request by name as the binding takes them; no lock.
         The data each reference names is read, and each value is validated
         alone by its field, a row of a list by its element type (see
-        :func:`.checks.validated`). A plain request makes the params instance
-        from them, and a stage or a driver takes them by name.
+        :func:`ess.spec.field_types.validated`). A plain request makes the
+        params instance from them, and a stage or a driver takes them by name.
 
         The index values of each table in ``values`` whose index type has a
-        JSON form are distinct by the JSON forms of the values read, so a
-        literal and a reference to equal data are one index value. They are
-        compared with those in ``indexes``, the index values read before by
-        index, which they join (see :func:`.checks.distinct`).
+        JSON form are distinct by the JSON forms of the values read, as the
+        index type dumps them, so a literal and a reference to equal data are
+        one index value. They are compared with those in ``indexes``, the
+        index values read before by index, which they join (see
+        :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
-        read = self._read(values)
-        typed = {n: validated(spec, n, v, read[n]) for n, v in values.items()}
+        read = self._reader(values)
+        typed = {n: validated(spec.params, n, v, read) for n, v in values.items()}
         indexes = {} if indexes is None else indexes
         for index in spec.tables.keys() & typed.keys():
             if spec.takes_literal(index):
                 seen = indexes.setdefault(index, {})
-                seen.update(distinct(index, typed[index], seen))
+                forms = [json_form(spec.params, index, v) for v in typed[index]]
+                seen.update(distinct(index, forms, seen))
         return typed
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
@@ -1260,13 +1269,13 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _read(self, params: Mapping[str, Any]) -> dict[str, Any]:
+    def _reader(self, params: Mapping[str, Any]) -> Callable[[Ref], Any]:
         """
-        ``params`` by name with the data their references name read: outputs
-        held in memory, or one element of each, under the backend's lock, and
-        outside it, outputs written and no longer held from the store, and
-        the paths of datasets. The caller reads only what something keeps for
-        it, so an output is held or written.
+        What reads the data each reference in ``params`` names: outputs held
+        in memory, or one element of each, taken under the backend's lock
+        now, and outside it, outputs written and no longer held from the
+        store, and the paths of datasets. The caller reads only what something
+        keeps for it, so an output is held or written.
         """
         held: dict[Ref, Any] = {}
         with self._changed:
@@ -1277,8 +1286,8 @@ class Backend:
                 if self._views.omitted(key):
                     raise _not_returned(f'record {ref.record} output {ref.output}')
                 if key in self._outputs:
-                    held[ref] = _element(self._outputs[key], ref.key)
-        return map_refs(params, lambda r: held[r] if r in held else self._stored(r))
+                    held[ref] = _element(self._outputs[key], ref)
+        return lambda ref: held[ref] if ref in held else self._stored(ref)
 
     def _stored(self, ref: Ref) -> Any:
         """
@@ -1291,7 +1300,7 @@ class Backend:
             raise TypeError(f'{ref}: a record never reads an accumulator')
         if self._store is None:
             raise LookupError(f'{ref}: the backend has no store')
-        return _element(self._store.read(ref.record, ref.output), ref.key)
+        return _element(self._store.read(ref.record, ref.output), ref)
 
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
@@ -1443,7 +1452,7 @@ class Backend:
                         self._finish(
                             dependent,
                             Status.FAILED,
-                            f'input {record_id} output {name}: '
+                            f'record {record_id} output {name}: '
                             f'the write failed: {failure}',
                         )
             self._drop(record_id)
@@ -1489,7 +1498,7 @@ class Backend:
                         (
                             dependent,
                             Status.FAILED,
-                            f'input {finished_id} {finished}',
+                            f'record {finished_id} {finished}',
                             (),
                         )
                     )
@@ -1838,7 +1847,7 @@ class Backend:
             if status is Status.PENDING:
                 return
             if status is not Status.COMPLETED:
-                self._stop(acc, f'{acc.step}: input {record_id} {status}')
+                self._stop(acc, f'{acc.step}: record {record_id} {status}')
                 return
         acc.busy = True
         acc.drop()

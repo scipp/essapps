@@ -275,7 +275,7 @@ def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
     assert client.wait([load, shift]) == [Status.FAILED, Status.FAILED]
     assert client.failure([load, shift]) == [
         'the write failed: no space left on device',
-        f'input {load.id} failed',
+        f'record {load.id} failed',
     ]
 
 
@@ -606,9 +606,9 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
         Status.COMPLETED,
     ]
     assert again.failure(records[1:4]) == [
-        f'the backend restarted: input {kept.id} output value was not persisted',
+        f'the backend restarted: record {kept.id} output value was not persisted',
         'the backend restarted: the driver it reads is gone',
-        f'the backend restarted: input {state.id} failed',
+        f'the backend restarted: record {state.id} failed',
     ]
 
 
@@ -638,7 +638,7 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
 
     assert again.wait(calls) == [Status.FAILED, Status.COMPLETED]
     assert again.failure(calls[0]) == (
-        f'the backend restarted: input {kept.id} output value was not persisted'
+        f'the backend restarted: record {kept.id} output value was not persisted'
     )
     assert again.output(calls[1], 'value') == 4.0
 
@@ -711,6 +711,6 @@ def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
 
     assert again.wait(shift) is Status.FAILED
     assert again.failure(shift) == (
-        f'the backend restarted: input {load.id} output value: '
+        f'the backend restarted: record {load.id} output value: '
         'the write failed: the backend restarted'
     )

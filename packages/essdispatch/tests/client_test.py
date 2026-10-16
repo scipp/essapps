@@ -1323,10 +1323,10 @@ def test_a_push_takes_lists_of_values(client: Client) -> None:
 
 def test_a_reference_in_a_push_must_fit_its_column(client: Client) -> None:
     load = client.submit(_load(1))
-    summed = client.accumulator(Template(SUM, blanks=('runs',)))
+    weighted = client.accumulator(Template(WEIGHTED, blanks=('values',)))
 
-    with pytest.raises(SubmitError, match=r'^runs\[0\]: .*, of type float, does not'):
-        summed.push(runs=[load.ref('value')])
+    with pytest.raises(SubmitError, match=r'^weight\[0\]: .*, of type float, does not'):
+        weighted.push(values=[1.0], weight=[load.ref('value')])
 
 
 def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
@@ -1343,8 +1343,8 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
             read()
     with pytest.raises(SubmitError, match=r"^source: total/v1 has no output 'extra'$"):
         client.submit(SHIFT, params={'source': extra})
-    with pytest.raises(SubmitError, match=r'^runs\[0\]: .* does not fit'):
-        client.submit(SUM, params={'runs': [total.ref('value')]})
+    with pytest.raises(SubmitError, match=r'^shift: .* does not fit Shift'):
+        client.submit(SHIFT, params={'shift': total.ref('value'), 'source': 1.0})
     with pytest.raises(SubmitError, match=r'^source: the accumulator was released or'):
         elsewhere.submit(_read(total))
 
@@ -1408,10 +1408,10 @@ def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
     client.cancel(pending)
     loading.set()
 
-    stopped = f'the accumulator stopped: push 0: input {pending.id} cancelled'
+    stopped = f'the accumulator stopped: push 0: record {pending.id} cancelled'
     state = _state(client, read)
     assert client.wait(read) is Status.FAILED
-    assert client.failure([state, read]) == [stopped, f'input {state.id} failed']
+    assert client.failure([state, read]) == [stopped, f'record {state.id} failed']
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[pending.ref('value')])
 
@@ -1583,7 +1583,7 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     stopped = 'the accumulator stopped: push 1 failed: cannot add'
     state = _state(client, after)
     assert client.wait(after) is Status.FAILED
-    assert client.failure([state, after]) == [stopped, f'input {state.id} failed']
+    assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
     assert len(state.request.params['parts']) == 2  # the push is in the log
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[summed_loads[2].ref('value')])
@@ -1698,7 +1698,7 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
 
         assert client.failure([state, read]) == [
             'the workflow of total/v1 returned MeanAndSpread, not Value',
-            f'input {state.id} failed',
+            f'record {state.id} failed',
         ]
 
 
@@ -1996,7 +1996,7 @@ def test_cancelling_the_record_of_a_state_fails_its_readers_and_frees_the_push(
 
     read = _start(lambda: client.output(sides, 'difference'))
     assert _listed(read.result(timeout=2)) == [1.0]  # copying.go is still clear
-    assert client.failure(copied) == f'input {state.id} cancelled'
+    assert client.failure(copied) == f'record {state.id} cancelled'
 
 
 def test_two_submissions_that_read_one_state_make_two_records_computed_once(
@@ -2341,7 +2341,7 @@ def test_a_push_proceeds_after_readers_whose_outputs_failed(
     state = _state(client, copied)
     assert client.failure([state, copied]) == [
         'cannot compute',
-        f'input {state.id} failed',
+        f'record {state.id} failed',
     ]
     assert _listed(client.output(sides, 'difference')) == [-1.0]
 

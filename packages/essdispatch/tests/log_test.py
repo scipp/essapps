@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The backend's log: what it holds, and a backend started from it."""
 
+import json
 import shutil
 import threading
 import uuid
@@ -467,3 +468,64 @@ def test_a_line_that_is_not_an_event_is_refused(
 
     with pytest.raises(ValueError, match='kind'):
         Log.read(tmp_path / 'log')
+
+
+SPEC = {'name': 'load', 'version': 1}
+
+
+@pytest.mark.parametrize(
+    'event',
+    [
+        {
+            'kind': 'submitted',
+            'time': '2026-10-01T00:00:00Z',
+            'proposal': 'p1',
+            'submitter': 'anna',
+            'records': [
+                {
+                    'id': 'r1',
+                    'outputs': ['value'],
+                    'request': {
+                        'spec': SPEC,
+                        'params': {},
+                        'inputs': {'sample': {'dataset': 'run:1'}},
+                    },
+                }
+            ],
+        },
+        {
+            'kind': 'opened',
+            'accumulator': 'a1',
+            'proposal': 'p1',
+            'template': {'spec': SPEC, 'params': {}, 'blanks': []},
+            'params': {},
+            'inputs': {'sample': {'dataset': 'run:1'}},
+        },
+        {
+            'kind': 'opened',
+            'accumulator': 'a1',
+            'proposal': 'p1',
+            'template': {'spec': SPEC, 'params': {}, 'inputs': {}, 'blanks': []},
+            'params': {},
+        },
+        {
+            'kind': 'pushed',
+            'accumulator': 'a1',
+            'table': 'part',
+            'params': {},
+            'inputs': {'part': [{'kind': 'output', 'record': 'r', 'output': 'o'}]},
+        },
+    ],
+)
+def test_a_line_with_a_field_an_event_lacks_is_refused_naming_the_line(
+    tmp_path: Path, event: dict[str, Any]
+) -> None:
+    path = tmp_path / 'log'
+    finished = Finished(record='r0', status=Status.COMPLETED).model_dump_json()
+    path.write_text(f'{finished}\n{json.dumps(event)}\n')
+
+    for read in (Log.read, Log):
+        with pytest.raises(
+            ValueError, match=r'log, line 2: not an event of a log of this format'
+        ):
+            read(path)

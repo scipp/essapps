@@ -313,8 +313,8 @@ class Client:
         model if every value is a literal. Each value, or each row of a list
         parameter, is given by value or by reference, as its type allows: a
         type with a JSON form takes a literal, such as a group as a model or
-        a dict, and every type a reference to an output that fits; a file
-        takes a dataset::
+        a dict, a file a reference to a dataset, and any other type a
+        reference to an output that fits::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': dataset(run=60339)})

@@ -203,7 +203,7 @@ def fixed_values(
                 raise ValueError(f'{index}: the columns of a table have equal length')
     left = {n: f for n, f in fields.items() if n not in fixed and n not in left_open}
     if missing := [n for n, f in left.items() if f.is_required() and n not in attached]:
-        raise ValueError(f'{missing}: neither fixed nor blank, and without a default')
+        raise ValueError(f'{missing}: required parameters, not given')
     defaults = {
         name: []
         if spec.table_of(name) is not None

@@ -135,7 +135,7 @@ def test_fixed_values_take_a_table_as_its_columns() -> None:
             ('can',),
             'sample: the columns of a table are lists',
         ),
-        ({}, ('can',), r"\['sample'\]: neither fixed nor blank"),
+        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
         ({'sample': [5.0]}, ('can',), r"sample: a table is fixed whole, \['weight'\]"),
         (
             {'sample': [5.0], 'weight': [None, None]},
@@ -181,7 +181,7 @@ def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
     [
         ({}, ('scale', 'sample'), r"\['scale'\]: the blanks of an accumulator are"),
         ({}, ('runs',), r"\['runs'\]: the blanks of an accumulator are tables"),
-        ({}, ('can',), r"\['sample'\]: neither fixed nor blank"),
+        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
     ],
 )
 def test_an_accumulator_refuses_values_that_do_not_fit(

@@ -50,7 +50,7 @@ class TimeRange(BaseModel):
 
 SampleFile = NewType('SampleFile', Path)
 CanFile = NewType('CanFile', Path)
-BeamCentre = NewType('BeamCentre', sc.Variable)
+CentreArray = NewType('CentreArray', sc.Variable)
 IofQ = NewType('IofQ', sc.DataArray)
 Banks = NewType('Banks', sc.DataArray)
 
@@ -108,7 +108,7 @@ class IofQParams(BaseModel, arbitrary_types_allowed=True):
     time_range: TimeRange | None = None
     sample: SampleFile = Field(title='Sample run')
     can: CanFile | None = None
-    beam_centre: BeamCentre | None = None
+    beam_centre: CentreArray | None = None
 
     @model_validator(mode='after')
     def _can_needs_a_centre(self) -> 'IofQParams':
@@ -124,6 +124,12 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
 
 class Loose(BaseModel, extra='allow'):
     """A group that takes any field, ``@ref`` among them."""
+
+
+class Kind(BaseModel, validate_by_name=True):
+    """A group whose JSON form holds the key ``@ref``."""
+
+    kind: str = Field(alias='@ref')
 
 
 def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
@@ -209,7 +215,7 @@ class TestMetadata:
     def test_a_number_an_enum_or_a_tuple_takes_a_literal(self, tp: Any) -> None:
         assert spec(params=model('P', value=(tp, ...))).takes_literal('value')
 
-    @pytest.mark.parametrize('tp', [BeamCentre, SampleFile, list[CanFile | None]])
+    @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[CanFile | None]])
     def test_a_file_or_an_object_takes_no_literal(self, tp: Any) -> None:
         assert not spec(params=model('P', value=(tp, ...))).takes_literal('value')
 
@@ -281,7 +287,7 @@ class TestModelRules:
                 'sample: a field of both IofQParams and O',
             ),
             (
-                {'params': model('P', centre=(BeamCentre, sc.scalar(1.0)))},
+                {'params': model('P', centre=(CentreArray, sc.scalar(1.0)))},
                 'P.centre: the default of a type without a JSON form is None or '
                 'an empty list',
             ),
@@ -372,19 +378,27 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
                     )
                 },
-                'P.loose: a default is a value, not a reference',
+                'P.loose: the default has no JSON form that reads back',
+            ),
+            (
+                {'params': model('P', kind=(Kind, Kind(kind='dataset')))},
+                'P.kind: the default has a JSON form that reads as a reference',
+            ),
+            (
+                {'params': model('P', kind=(list[Kind], [Kind(kind='output')]))},
+                'P.kind: the default has a JSON form that reads as a reference',
             ),
             (
                 {
                     'params': model(
-                        'P',
-                        loose=(
-                            list[Loose],
-                            [Loose(**{'@ref': 'output', 'record': 'r'})],
-                        ),
+                        'P', kinds=(tuple[Kind, Kind], (Kind(kind='a'),) * 2)
                     )
                 },
-                'P.loose: a default is a value, not a reference',
+                'P.kinds: the default has a JSON form that reads as a reference',
+            ),
+            (
+                {'params': model('P', steps=(list[TimeRange], None))},
+                'P.steps: the default of a list parameter is a list',
             ),
             (
                 {'params': model('P', runs=(dict[str, SampleFile], {}))},
@@ -430,7 +444,7 @@ class TestModelRules:
 
     def test_every_problem_is_reported_at_once(self) -> None:
         params = model(
-            'P', centre=(BeamCentre, sc.scalar(1.0)), sample=(SampleFile, Path('a'))
+            'P', centre=(CentreArray, sc.scalar(1.0)), sample=(SampleFile, Path('a'))
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
@@ -513,7 +527,7 @@ class TestTabulate:
             'time_range': TimeRange | None,
             'sample': list[SampleFile],
             'can': list[CanFile],
-            'beam_centre': BeamCentre | None,
+            'beam_centre': CentreArray | None,
         }
 
     def test_a_required_index_takes_at_least_one_row(self) -> None:
@@ -619,15 +633,19 @@ class TestTabulate:
 
 
 def file_ref(data_type: str) -> dict[str, Any]:
-    """The schema of a reference to a file, given as a dataset or an output."""
-    kinds = ('OutputRef', 'DatasetRef', 'AccumulatorRef')
-    return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
+    """The schema of a reference to a file, a dataset."""
+    return {'$ref': '#/$defs/DatasetRef', 'dataType': data_type}
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
     """The schema of a reference to data of any other type, an output."""
     kinds = ('OutputRef', 'AccumulatorRef')
     return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
+
+
+def literal(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema of a literal: an object with the key ``@ref`` is not one."""
+    return {**schema, 'not': {'required': ['@ref']}}
 
 
 class ScaledParams(BaseModel):
@@ -641,12 +659,16 @@ class TestSerialization:
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
         assert schema['properties']['reduction'] == {
-            'anyOf': [{'$ref': '#/$defs/Reduction'}, data_ref('Reduction')],
+            'anyOf': [literal({'$ref': '#/$defs/Reduction'}), data_ref('Reduction')],
             'default': {'bins': 2},
             'title': 'Reduction',
         }
-        assert schema['$defs']['Reduction'] == Reduction.model_json_schema()
+        assert schema['$defs']['Reduction'] == {
+            **Reduction.model_json_schema(),
+            'additionalProperties': False,
+        }
         assert schema['required'] == ['sample']
+        assert schema['additionalProperties'] is False
 
     def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
         defs = IOFQ.serialize().params_schema['$defs']
@@ -659,7 +681,7 @@ class TestSerialization:
         assert schema['properties'] == {
             'scale': {
                 'anyOf': [
-                    {'type': 'number', 'exclusiveMinimum': 0},
+                    literal({'type': 'number', 'exclusiveMinimum': 0}),
                     data_ref('float'),
                 ],
                 'default': 1.0,
@@ -667,7 +689,7 @@ class TestSerialization:
                 'description': 'A factor.',
             },
             'mode': {
-                'anyOf': [{'$ref': '#/$defs/Mode'}, data_ref('Mode')],
+                'anyOf': [literal({'$ref': '#/$defs/Mode'}), data_ref('Mode')],
                 'default': 'fast',
                 'title': 'Mode',
             },
@@ -683,7 +705,7 @@ class TestSerialization:
                 'title': 'Can',
             },
             'beam_centre': {
-                'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
+                'anyOf': [data_ref('CentreArray'), {'type': 'null'}],
                 'default': None,
                 'title': 'Beam Centre',
             },
@@ -696,7 +718,9 @@ class TestSerialization:
         properties = spec(params=params).serialize().params_schema['properties']
         assert properties['time_range'] == {
             'type': 'array',
-            'items': {'anyOf': [{'$ref': '#/$defs/TimeRange'}, data_ref('TimeRange')]},
+            'items': {
+                'anyOf': [literal({'$ref': '#/$defs/TimeRange'}), data_ref('TimeRange')]
+            },
             'minItems': 2,
             'title': 'Slices',
         }
@@ -718,13 +742,14 @@ class TestSerialization:
         }
         assert properties['sample_geometry']['items'] == {
             'anyOf': [
-                {'$ref': '#/$defs/SampleGeometry'},
+                literal({'$ref': '#/$defs/SampleGeometry'}),
                 data_ref('SampleGeometry'),
                 {'type': 'null'},
             ]
         }
         assert serialized.tables == {'sample': ('sample_geometry',), 'can': ()}
-        assert serialized.params_schema['required'] == ['sample_geometry', 'sample']
+        # The backend fills sample_geometry, whose rows may be None, if left out.
+        assert serialized.params_schema['required'] == ['sample']
 
     def test_outputs_name_the_type_of_each_value(self) -> None:
         assert IOFQ.serialize().outputs_schema['properties'] == {
@@ -750,7 +775,7 @@ class TestSerialization:
         [
             {'sample': DatasetRef(dataset='run:loki/1')},
             {
-                'sample': OutputRef(record='r1', output='file'),
+                'sample': DatasetRef(dataset='run:loki/1'),
                 'reduction': Reduction(bins=4),
                 'beam_centre': OutputRef(record='r2', output='centre'),
             },
@@ -778,6 +803,13 @@ class TestSerialization:
                 'sample': DatasetRef(dataset='run:loki/1'),
                 'beam_centre': DatasetRef(dataset='run:loki/2'),
             },
+            {'sample': OutputRef(record='r1', output='file')},
+            {'sample': DatasetRef(dataset='run:loki/1'), 'speed': 1.0},
+            {
+                'sample': DatasetRef(dataset='run:loki/1'),
+                'reduction': {'bins': 4, 'extra': 1},
+            },
+            {'sample': DatasetRef(dataset='run:loki/1'), 'reduction': {'@ref': 'x'}},
         ],
     )
     def test_the_schema_refuses_a_malformed_request(
@@ -800,6 +832,7 @@ class TestSerialization:
             ],
         }
         jsonschema.validate(to_jsonable_python(rows), schema)
+        jsonschema.validate(to_jsonable_python({'sample': rows['sample']}), schema)
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({'sample': [], 'sample_geometry': []}, schema)
 

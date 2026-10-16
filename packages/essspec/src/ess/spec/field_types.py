@@ -17,18 +17,24 @@ with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
 (see :func:`plain`). :func:`fits` says whether data
 of one type can be the value of a field of another, so that an output of one
 spec can feed a parameter of another. :func:`model_of` makes a model of one
-field, which validates a value by that field alone.
+field, which validates a value, or a row of a list, by that field alone, as
+:func:`validated` does in the call phase and :func:`literal` for a value
+given by value.
 """
 
 from __future__ import annotations
 
 import functools
 import operator
+from collections.abc import Callable
 from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import Annotated, Any, NewType, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic_core import from_json, to_json
+
+from .refs import Ref, places
 
 
 def plain(tp: Any) -> Any:
@@ -153,26 +159,107 @@ def _reaches(sub: Any, sup: Any) -> bool:
     return isinstance(sub, type) and isinstance(sup, type) and issubclass(sub, sup)
 
 
-def model_of(
-    model: type[BaseModel], name: str, *, rows: bool = False
-) -> type[BaseModel]:
-    """
-    A model of the field ``name`` of ``model`` alone, with its config and
-    without its validators: it validates one value by its own field, as every
-    value of a request is validated, in both phases. The params model has no
-    decorators but model validators, which the framework never calls; a check
-    of one value belongs to the value's type.
-
-    With ``rows``, the field ``name`` is a list parameter, and the model
-    validates one row of it: by its element type alone, with that type's
-    metadata, without the field's length constraints, which hold for the
-    whole list.
-    """
-    return _model_of(model, name, rows)
-
-
 @functools.cache
-def _model_of(model: type[BaseModel], name: str, rows: bool) -> type[BaseModel]:
+def model_of(model: type[BaseModel], name: str) -> type[BaseModel]:
+    """
+    A model of one value of the field ``name`` of ``model`` alone, with its
+    config and without its validators: it validates one value by its own
+    field, as every value of a request is validated, in both phases. The
+    params model has no decorators but model validators, which the framework
+    never calls; a check of one value belongs to the value's type.
+
+    For a list field, the model validates one row: by its element type alone,
+    with that type's metadata, without the field's length constraints, which
+    hold for the whole list. A reference stands for one row.
+    """
     info = model.model_fields[name]
-    field = (get_args(info.annotation)[0], Field()) if rows else (info.annotation, info)
+    field = (
+        (get_args(info.annotation)[0], Field())
+        if is_list(model, name)
+        else (info.annotation, info)
+    )
     return create_model(model.__name__, __config__=model.model_config, **{name: field})
+
+
+def is_list(model: type[BaseModel], name: str) -> bool:
+    """Whether the field ``name`` of ``model`` is a list, given as a list of rows."""
+    return get_origin(model.model_fields[name].annotation) is list
+
+
+def validated(
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    read: Callable[[Ref], Any] | None = None,
+) -> Any:
+    """
+    ``value`` of the field ``name`` of ``model``, validated alone (see
+    :func:`model_of`): each row of a list field by its element type.
+
+    With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
+    is as a record holds it: each value, or row, a reference or a literal in
+    its JSON form. A reference is replaced by the data ``read`` gives for it,
+    validated from the object, and a literal is validated from its JSON form,
+    as the request phase validated it (see :func:`literal`), so that both
+    phases see the same value: a strict enum takes its string only from JSON.
+    """
+    one = model_of(model, name)
+
+    def check(v: Any) -> Any:
+        if read is None:
+            made = one.model_validate({name: v})
+        elif isinstance(v, Ref):
+            made = one.model_validate({name: read(v)})
+        else:
+            made = one.model_validate_json(to_json({name: v}))
+        return getattr(made, name)
+
+    if is_list(model, name):
+        return [check(v) for v in value]
+    return check(value)
+
+
+def json_form(model: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    The JSON form of ``value``, a valid value, or row, of the field ``name``
+    of ``model`` (see :func:`model_of`), as its declared type dumps it to
+    JSON and JSON reads back: an instance of a subclass of a model type
+    without the subclass's fields, and a number that is not finite as
+    ``None``.
+    """
+    made = model_of(model, name).model_construct(**{name: value})
+    return from_json(made.model_dump_json(by_alias=True))[name]
+
+
+def literal(model: type[BaseModel], name: str, value: Any) -> Any:
+    """
+    The JSON form of ``value``, given by value for the field ``name`` of
+    ``model``, or a row of it (see :func:`model_of`), as the framework holds
+    it.
+
+    ``value`` is validated from its JSON form, with a field that a model lacks
+    refused at any depth, since validating would drop it silently. Raises
+    ``PydanticSerializationError`` if it has no JSON form, ``ValidationError``
+    if it is not valid, and ``ValueError`` if its JSON form does not read back
+    as the value, such as a number that is not finite, which JSON holds as
+    ``null``, or reads as a reference at a place where a request may hold one
+    (see :func:`ess.spec.refs.places`).
+    """
+    one = model_of(model, name)
+    given = to_json({name: value}, inf_nan_mode='constants')
+    made = getattr(one.model_validate_json(given, extra='forbid'), name)
+    stored = json_form(model, name, made)
+    try:
+        again = one.model_validate_json(to_json({name: stored}))
+        reads_back = getattr(again, name) == made
+    except ValidationError:
+        reads_back = False
+    if not reads_back:
+        raise ValueError('has no JSON form that reads back as the value')
+    if is_list(model, name):
+        tops = [stored]
+    else:
+        tops = [item for _, item in places(name, stored)]
+    if any(isinstance(item, dict) and '@ref' in item for item in tops):
+        raise ValueError('has a JSON form that reads as a reference')
+    return stored

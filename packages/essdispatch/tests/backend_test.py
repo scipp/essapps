@@ -273,8 +273,8 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
         Status.FAILED,
     ]
     assert client.failure(bad) == 'negative run'
-    assert client.failure(first) == f'input {bad.id} failed'
-    assert client.failure(second) == f'input {first.id} failed'
+    assert client.failure(first) == f'record {bad.id} failed'
+    assert client.failure(second) == f'record {first.id} failed'
 
 
 def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
@@ -444,11 +444,18 @@ def test_a_dataset_fits_a_file_field_only(client: Client) -> None:
         client.submit(ADD, params=operands(dataset(run=1), dataset(run=2)))
 
 
-def test_an_output_that_does_not_fit_its_field_is_refused(client: Client) -> None:
+def test_a_file_takes_a_reference_to_a_dataset_only(client: Client) -> None:
     loaded = client.submit(load(1))
+    refused = 'is not a dataset; a file, SampleFile, is given by reference to a dataset'
 
-    with pytest.raises(SubmitError, match=r'sample: .*, of type float, does not fit'):
+    with pytest.raises(SubmitError, match=rf'^sample: {loaded.id}.value {refused}$'):
         client.submit(LOAD, params={'sample': loaded.ref('value')})
+    with pytest.raises(SubmitError, match=rf'^sample\[0\]: .* {refused}$'):
+        client.submit(SUM, params={'sample': [loaded.ref('value')]})
+    with pytest.raises(SubmitError, match=rf'^sample: .* {refused}$'):
+        client.stage(
+            Template(MODES, params={'sample': loaded.ref('value')}, blanks=('values',))
+        )
 
 
 def test_a_required_parameter_left_out_is_refused(client: Client) -> None:

@@ -77,8 +77,8 @@ class DatasetRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A dataset reference fits a file field (see
-    :func:`ess.spec.field_types.fits`).
+    are. A file parameter takes a reference to a dataset, and no other
+    parameter does (see :func:`ess.spec.field_types.is_file`).
     """
 
     kind: Literal['dataset'] = Field(default='dataset', alias='@ref', repr=False)
@@ -156,23 +156,31 @@ def _ref_at(where: str, value: Any) -> Ref | None:
         raise ValueError(f'{where}: {error}') from None
 
 
+def places(name: str, value: Any) -> list[tuple[str, Any]]:
+    """
+    The places in the value of the parameter ``name`` where a request may
+    hold a reference, each with what it holds: the value, or each element of
+    a list, such as ``runs[2]``; never deeper.
+    """
+    if isinstance(value, list):
+        return [(f'{name}[{i}]', item) for i, item in enumerate(value)]
+    return [(name, value)]
+
+
 def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
     """
     Each reference in the params of a request, with its place, such as
     ``sample`` or ``runs[2]``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
-    form, and is looked for at the top of each value, and at the top of each
-    element of a list, never deeper. Any other value is skipped; a malformed
-    reference raises ``ValueError`` (see :func:`as_ref`).
+    form, and is looked for at the places :func:`places` names. Any other
+    value is skipped; a malformed reference raises ``ValueError`` (see
+    :func:`as_ref`).
     """
     for name, value in params.items():
-        if isinstance(value, list):
-            for i, item in enumerate(value):
-                if (ref := _ref_at(f'{name}[{i}]', item)) is not None:
-                    yield f'{name}[{i}]', ref
-        elif (ref := _ref_at(name, value)) is not None:
-            yield name, ref
+        for where, item in places(name, value):
+            if (ref := _ref_at(where, item)) is not None:
+                yield where, ref
 
 
 def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
@@ -182,12 +190,11 @@ def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, A
     value is kept.
     """
 
-    def one(where: str, value: Any) -> Any:
-        return value if (ref := _ref_at(where, value)) is None else fn(ref)
+    def one(name: str, value: Any) -> Any:
+        mapped = [
+            item if (ref := _ref_at(where, item)) is None else fn(ref)
+            for where, item in places(name, value)
+        ]
+        return mapped if isinstance(value, list) else mapped[0]
 
-    return {
-        name: [one(f'{name}[{i}]', v) for i, v in enumerate(value)]
-        if isinstance(value, list)
-        else one(name, value)
-        for name, value in params.items()
-    }
+    return {name: one(name, value) for name, value in params.items()}

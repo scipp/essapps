@@ -227,7 +227,9 @@ def test_a_misspelt_name_is_refused(client: Client) -> None:
 
 
 def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['sample'\]: neither fixed nor blank"):
+    with pytest.raises(
+        SubmitError, match=r"\['sample'\]: required parameters, not given"
+    ):
         client.stage(Template(SCALE, blanks=('scaling',)))
 
 

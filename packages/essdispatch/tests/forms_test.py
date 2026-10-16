@@ -29,6 +29,18 @@ class Shift(BaseModel):
     offset: float = 0.0
 
 
+class LabelledShift(Shift):
+    """A shift with a field that ``Shift`` lacks."""
+
+    label: str = ''
+
+
+class Kind(BaseModel, validate_by_name=True):
+    """A group whose JSON form holds the key ``@ref``."""
+
+    kind: str = Field(alias='@ref')
+
+
 class LoadParams(BaseModel):
     sample: SampleFile
 
@@ -36,6 +48,7 @@ class LoadParams(BaseModel):
 class LoadOutputs(BaseModel, arbitrary_types_allowed=True):
     value: float
     shift: Shift
+    labelled: LabelledShift
     blob: Blob
     values: list[float]
 
@@ -48,10 +61,15 @@ class AddParams(BaseModel):
     blob: Blob | None = None
     pair: tuple[float, float] = (0.0, 0.0)
     terms: list[float] = Field(default_factory=list)
+    kind: Kind | None = None
 
 
 class SumParams(BaseModel):
     part: list[float] = Field(min_length=1)
+
+
+class ShiftsParams(BaseModel):
+    shifts: list[Shift] = Field(min_length=1)
 
 
 class Value(BaseModel):
@@ -76,12 +94,17 @@ LOAD = _spec('load', LoadParams, LoadOutputs)
 ADD = _spec('add', AddParams, Value)
 SUM = _spec('sum', SumParams, Value, tables=('part',))
 STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
+SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
 
 
 def load(params: LoadParams) -> LoadOutputs:
     value = read_dataset(params.sample)
     return LoadOutputs(
-        value=value, shift=Shift(offset=value), blob=Blob(value), values=[value, 2.0]
+        value=value,
+        shift=Shift(offset=value),
+        labelled=LabelledShift(offset=value, label='first'),
+        blob=Blob(value),
+        values=[value, 2.0],
     )
 
 
@@ -110,6 +133,9 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(ADD, add),
             kept_rows(SUM, total),
             StagedFunction(STAGED_SUM, total),
+            function_binding(
+                SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
+            ),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -141,6 +167,24 @@ def test_a_number_or_a_group_is_given_by_value_or_by_reference(
     assert client.output(by_value, 'value') == 5.0
     assert by_reference.request.params['shift'] == loaded.ref('shift')
     assert by_value.request.params['shift'] == {'offset': 1.0}
+
+
+def test_a_key_that_an_output_lacks_fails_the_record(
+    client: Client, loaded: Record
+) -> None:
+    ref = loaded.ref('values', key='7')
+    computed = client.submit(ADD, params={'terms': [ref]})
+
+    assert _failed(client, computed) == f"{ref}: the output has no element '7'"
+
+
+def test_a_group_whose_json_form_reads_as_a_reference_is_refused(
+    client: Client,
+) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^kind: has a JSON form that reads as a reference$'
+    ):
+        client.submit(ADD, params={'kind': Kind(kind='output')})
 
 
 def test_a_type_without_a_json_form_takes_a_reference_only(
@@ -219,6 +263,16 @@ def test_references_to_two_records_with_equal_data_are_one_index_value(
     )
 
     assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
+
+
+def test_index_values_read_are_compared_as_the_index_type_dumps_them(
+    client: Client, loaded: Record
+) -> None:
+    plain = client.submit(
+        SHIFTS, params={'shifts': [Shift(offset=1.0), loaded.ref('labelled')]}
+    )
+
+    assert _failed(client, plain) == 'shifts[1]: repeats shifts[0], {"offset":1.0}'
 
 
 def test_a_stage_call_with_a_repeated_index_value_read_fails(

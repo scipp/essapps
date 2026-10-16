@@ -37,7 +37,7 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
-from .field_types import model_of
+from .field_types import validated
 
 Columns = Mapping[str, Sequence[Any]]
 """A table's columns by name, the index among them, as a push gives them."""
@@ -83,15 +83,14 @@ def one_row(spec: WorkflowSpec[Any, Any], params: BaseModel) -> BaseModel:
 def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseModel:
     """
     An instance of the spec's params model from ``values`` by name, as a
-    stage or a driver takes them, made as the backend makes one: each value
-    validated by its own field, without the model validators.
+    stage or a driver takes them, made as the backend makes one from data it
+    read: each value, or each row of a list, validated from the object by its
+    own field, without the length constraints of a list, which the backend
+    checks when a request is submitted, and without the model validators.
     """
     model: type[BaseModel] = spec.params
     return model.model_construct(
-        **{
-            n: getattr(model_of(model, n).model_validate({n: v}), n)
-            for n, v in values.items()
-        }
+        **{n: validated(model, n, v) for n, v in values.items()}
     )
 
 

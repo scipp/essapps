@@ -88,7 +88,7 @@ RunFile = NewType('RunFile', Path)
 BackgroundFile = NewType('BackgroundFile', Path)
 ReferenceFile = NewType('ReferenceFile', Path)
 
-BeamCentre = NewType('BeamCentre', sc.Variable)
+CentreArray = NewType('CentreArray', sc.Variable)
 Normalization = NewType('Normalization', sc.Variable)
 IofQ = NewType('IofQ', sc.Variable)
 Masked = NewType('Masked', sc.Variable)
@@ -103,7 +103,7 @@ class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: SampleFile
     can: CanFile | None = None
-    beam_centre: BeamCentre | None = None
+    beam_centre: CentreArray | None = None
     normalization: Normalization | None = None
 
 
@@ -139,7 +139,7 @@ class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: SampleFile
     can: CanFile | None = None
-    beam_centre: BeamCentre | None = None
+    beam_centre: CentreArray | None = None
     normalization: Normalization | None = None
 
 
@@ -164,7 +164,7 @@ class BeamCentreParams(Data):
 
 
 class CentreOutputs(Data):
-    centre: BeamCentre
+    centre: CentreArray
 
 
 BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
@@ -172,7 +172,7 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
-        centre=BeamCentre(sc.scalar(float(_counts(params.direct_beam).mean())))
+        centre=CentreArray(sc.scalar(float(_counts(params.direct_beam).mean())))
     )
 
 
@@ -252,7 +252,7 @@ def background(
     )
 
 
-Transmission = NewType('Transmission', sc.Variable)
+TransmissionArray = NewType('TransmissionArray', sc.Variable)
 
 
 class Parts(Data):
@@ -268,7 +268,7 @@ class ContributeParams(Data):
 
 class ContributeOutputs(Data):
     parts: Parts
-    transmission: Transmission
+    transmission: TransmissionArray
 
 
 CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams)
@@ -280,7 +280,7 @@ def contribute(params: ContributeParams) -> ContributeOutputs:
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
         ),
-        transmission=Transmission(sc.scalar(float(counts[0] / counts.sum()))),
+        transmission=TransmissionArray(sc.scalar(float(counts[0] / counts.sum()))),
     )
 
 
@@ -503,7 +503,7 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
 class CentredParams(Data):
     centre: Centre
     sample: SampleFile
-    transmission: Transmission | None = None
+    transmission: TransmissionArray | None = None
     can: CanFile | None = None
 
 
