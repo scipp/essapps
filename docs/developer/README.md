@@ -25,15 +25,15 @@ The same with the framework:
 ```python
 records = {}
 for run in (60339, 60340, 60341):
-    records[run] = client.submit(IOFQ, params=IofQParams(reduction=Reduction(bins=100)),
-                                 inputs={'sample': dataset(run=run)})
+    records[run] = client.submit(IOFQ, params={'reduction': Reduction(bins=100),
+                                               'sample': dataset(run=run)})
 client.wait(records)
 client.output(records[60339], 'iofq')
 ```
 
 `client` connects to the framework (see Client and backend).
-`IOFQ` is the spec of the I(Q) reduction, which names its params, inputs, and outputs, and `IofQParams` is its params model (see Specs and bindings).
-`dataset(run=run)` names the raw data of a run (see Datasets), here as the input `sample`.
+`IOFQ` is the spec of the I(Q) reduction, which names its params and outputs (see Specs and bindings).
+`dataset(run=run)` names the raw data of a run (see Datasets), here as the parameter `sample`.
 `client.submit` returns a *record* at once.
 The three reductions run in parallel, possibly on another machine.
 `client.wait` blocks until they have finished, and `client.output` reads an output by name.
@@ -53,27 +53,27 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 |---|---|
 | backend | the process that runs requests and keeps records |
 | client | a connection to one backend, for one proposal (an experiment at ESS) |
-| spec | a workflow's name, version, params, inputs, and outputs |
-| params, inputs, outputs | the three models of a spec: configuration, data, and results (see Specs and bindings) |
-| parameter, input | a field of the params model, or of the inputs model |
-| side | whether a name is a parameter, the *params side*, or an input, the *inputs side* |
-| literal | a value that has a JSON form and that the client knows: a number, a string, an enum, a model of such values |
-| data value | a value that the backend fetches, given by reference: a file, an array, a model holding one, or any other output of a record |
-| group | a model of literals as the value of a parameter, such as the settings of one reduction step |
+| spec | a workflow's name, version, params, and outputs |
+| params, outputs | the two models of a spec: everything the workflow takes, and its results (see Specs and bindings) |
+| parameter | a field of the params model |
+| by value, by reference | the two forms of a value in a request: a *literal*, the value itself in its JSON form, or a *reference* to data that exist elsewhere |
+| literal | a value given by value. Its type has a *JSON form*: pydantic makes a JSON schema of it, and it holds no file. |
+| group | a model of literals, such as the settings of one reduction step: the usual type of a parameter given by value |
+| data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
-| request | a spec, its params, and its inputs |
+| request | a spec and its params, each value a literal or a reference |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
 | logged | recorded by the backend in the proposal's *history*. `submit` and the other calls that start work return once logged. |
 | record | a request as the backend logged it. A record never changes, only its status. |
-| reference | a value of a request's inputs that names an output of a record or an accumulator, or a dataset |
-| fits | a reference fits an input when the type of the data it names can be the input's value (see References) |
+| reference | a value of a request that names an output of a record or an accumulator, or a dataset |
+| fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | label, member | names under which records are found later |
-| template | a spec with *fixed values* for some parameters and inputs and *blanks* for the others |
-| fixed value | the value a template gives a parameter or an input, by side, as a request does |
-| blank | a parameter, an input, or a table (named by its index) that a template leaves open |
+| template | a spec with *fixed values* for some parameters and *blanks* for the others |
+| fixed value | the value a template gives a parameter, as a request does |
+| blank | a parameter, or a table (named by its index), that a template leaves open |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
 | dataset source | where a backend finds datasets |
-| table, index, column, row | a *table* is a set of list fields of equal length, named by its *index* and pushed together; its other fields are *columns*, and one position is a *row* (see Combining runs: tables) |
+| table, index, column, row | a *table* is a set of list parameters of equal length, named by its *index* and pushed together; its other parameters are *columns*, and one position is a *row* (see Combining runs: tables) |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
 | push | one call that gives an accumulator rows of one of its tables |
@@ -103,73 +103,83 @@ The service runs only workflows from installed packages.
 A *workflow* is a computation that a package offers.
 
 **Spec.** A workflow package declares a spec (`ess.spec.WorkflowSpec`) for each workflow.
-A spec has three pydantic models:
+A spec has two pydantic models:
 
 | Model | Holds | In a request | When the workflow runs |
 |---|---|---|---|
-| params | configuration: literals only | the values | the same values |
-| inputs | data only | a reference per value | the data the references name |
+| params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
-
-Each parameter is a group, possibly optional, or a list of groups.
-Each input is a data value, possibly optional, or a list of data values.
-Each output is a data value, possibly optional, or a list or a dict of data values.
 
 ```python
 class Reduction(BaseModel):                       # a group
     bins: int = 100
 
+class BeamCentre(BaseModel):                      # a group: typed in, or computed by a first reduction
+    x: float
+    y: float
+
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)                # a NeXus file of an empty-can run
+Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
-
-class BeamCentre(BaseModel, arbitrary_types_allowed=True):   # a model that holds an array
-    value: sc.Variable
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-
-class IofQInputs(BaseModel):
     sample: SampleFile
     can: CanFile | None = None                    # the empty-can run, if any
     beam_centre: BeamCentre | None = None
+    transmission: Transmission | None = None
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...',
-                    params=IofQParams, inputs=IofQInputs, outputs=IofQOutputs)
+                    params=IofQParams, outputs=IofQOutputs)
 ```
 
+Whether a value is given by value or by reference is the request's choice, per value.
+The parameter's type decides which of the two it accepts, with `| None` removed and, for a list parameter, its element type taken:
+
+| A parameter's type | Example | By value | By reference |
+|---|---|---|---|
+| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset, or an output that fits |
+| has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
+| anything else | `Transmission` | no | to an output that fits |
+
 The models are ordinary pydantic models: the framework reads what it needs from the field types.
-A file is `Path` or a `NewType` of it.
-Each parameter, input, and output has a type of its own within the spec, such as `SampleFile` and `CanFile` for two NeXus files, since the type is the field's sciline key (see What a binding provides).
+Each parameter is a type, possibly optional, or a list of one.
+Each output is a type, possibly optional, or a list or a dict of one.
+A group holds no file, since a file is given by reference to a dataset.
+A default is a value, never a reference: of a type without a JSON form, `None` or an empty list.
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
-A workflow without data takes `NoInputs`, as one without configuration takes `NoParams`.
+A workflow that takes nothing has the params model `NoParams`.
 A request computes every output its spec declares.
 
-A check of one value belongs to the value's type, such as a field validator of `BeamCentre`, and so does the JSON form of a value, which the framework stores and reads back.
-`WorkflowSpec` refuses every pydantic decorator of the params and inputs models themselves but a model validator: field validators, serializers, and computed fields.
-A check across parameters is a model validator of the params model, and a check across inputs one of the inputs model.
-A check across params and inputs, such as a transmission mode that requires a transmission run, is the binding's, and fails when the request runs.
+**Checks.** Each parameter is validated alone, in every phase.
+A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
+`WorkflowSpec` refuses field validators, serializers, computed fields, and aliases on the params model itself, and a `default_factory` that takes the other values.
+A list parameter carries only length constraints, such as `Field(min_length=2)`: a check of one row belongs to the element type.
+A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
+The params model may state such a check as a model validator, next to the fields it reads, but the framework never calls it: a stage and a driver never get a whole params instance, so the check would hold for some requests of a spec and not for others.
+A binding may run it, `IofQParams.model_validate(dict(params))`.
 
 **Binding.** A binding is what the backend calls to compute a spec's requests.
 The workflow author makes it from a pipeline, a driver, or a function, each for one spec.
-The simplest binding is a function that takes the params and the inputs, instances of the spec's models, and returns an instance of its outputs model:
+The simplest binding is a function that takes an instance of the spec's params model and returns an instance of its outputs model:
 
 ```python
-def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs:
-    ...                                     # params.reduction.bins; inputs.sample is a local path
+def iofq(params: IofQParams) -> IofQOutputs:
+    ...                                     # params.reduction.bins; params.sample is a local path
     return IofQOutputs(iofq=result)
 
 draft = function_binding(IOFQ, iofq)        # from ess.spec
 ```
 
 The binding never sees a reference: the backend reads the data of each reference before it calls the binding.
-A file input is a local path, and any other input the object, such as a `BeamCentre`.
-The backend passes every parameter and input, with the defaults of the models filled in.
-Defaults belong in the models only.
-A binding must not modify its inputs or return an output that shares memory with an input.
+Each value is its type, whichever form the request gave it in: a group as the model, a file as a local path, any other data value as the object, such as a `Transmission`.
+The backend passes every parameter, with the defaults of the model filled in.
+Defaults belong in the model only.
+A binding must not modify the values it gets or return an output that shares memory with one of them.
 `ess.spec.testing` checks this for values backed by numpy.
 A sciline pipeline, or a driver that accumulates rows, is bound the same way (see What a binding provides).
 
@@ -178,21 +188,22 @@ The service runs only installed workflows.
 
 ## Requests and records
 
-A *request* is a spec, params, and inputs, given by keyword:
+A *request* is a spec and its params, given by keyword:
 
 ```python
-result = client.compute(IOFQ, params=IofQParams(reduction=Reduction(bins=100)),
-                        inputs={'sample': dataset(run=60339)})     # submit, then wait
+result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
+                                      'sample': dataset(run=60339)})   # submit, then wait
 client.output(result, 'iofq')            # raises if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
-`params` is an instance of the params model or a dict of its fields: `IofQParams(reduction=Reduction(bins=100))` and `{'reduction': {'bins': 100}}` give the same request.
+`params` is a dict by name: each value a literal or a reference, or a list of these for a list parameter.
+A literal is the value, such as `Reduction(bins=100)`, or its JSON form, `{'bins': 100}`: both give the same request.
+`params` may also be an instance of the params model, if every value is a literal; a spec with a file takes a dict.
 It may be left out when every parameter has a default.
-`inputs` is a dict by name, and each value is a reference (see References), or a list of references for a list field.
 
 Submitting a request returns a *record*.
-The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params`, in JSON's types, and `record.request.inputs`, as references.
+The record holds the request with every value filled in, defaults included, and the names of its outputs: `record.request.params` holds the literals in JSON's types and the references.
 It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
@@ -213,11 +224,12 @@ On the service, only that part leaves the backend.
 | `client.release(records)` | drops the client's hold on their outputs |
 
 Each takes one request or record, a list, or a dict, and returns the same shape.
-`Request(IOFQ, params=..., inputs=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
+`Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 
-**Validation.** In the request phase, at submission, the backend checks the params model, the names and the required inputs, that each value of the inputs is a reference or a list of references, readable and fitting its input (see References), and the table rules (see Combining runs: tables).
-In the call phase, it checks each input by its type once, when it reads the data, and runs the inputs model's own validators.
+**Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each literal by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
+A literal must read back from its JSON form as the value, since the log holds that form: a number that is not finite has none.
+In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
@@ -225,32 +237,52 @@ Validation in the request phase never proves that a workflow will succeed.
 
 ## References
 
-An input is given by *reference*: to an output of a record, `record.ref(name)`; to a dataset, `dataset(...)` (see Datasets); or to an output of an accumulator, `acc.ref(name)` (see Stages and accumulators).
+A value is given by *reference*: to an output of a record, `record.ref(name)`; to a dataset, `dataset(...)` (see Datasets); or to an output of an accumulator, `acc.ref(name)` (see Stages and accumulators).
 A reference to a pending record is allowed, so a chain is submitted without waiting.
-`BEAM_CENTRE` takes the input `direct_beam`, a file, and returns `centre: BeamCentre`:
+`BEAM_CENTRE` takes the parameter `direct_beam`, a file, and returns `centre: BeamCentre`.
+The same beam centre is typed in by one user and computed by another:
 
 ```python
-centre = client.submit(BEAM_CENTRE, inputs={'direct_beam': dataset(run=60330)})   # pending
-result = client.submit(IOFQ, inputs={'sample': dataset(run=60339),
-                                     'beam_centre': centre.ref('centre')})
+result = client.submit(IOFQ, params={'sample': dataset(run=60339),
+                                     'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # typed in
+centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})       # pending
+result = client.submit(IOFQ, params={'sample': dataset(run=60339),
+                                     'beam_centre': centre.ref('centre')})            # computed
 ```
 
-The backend runs the second request once the first has completed.
+The backend runs the last request once the one before has completed.
 A request never references another request of the same `submit` call.
 A file is always given by reference: `dataset(path=...)` names a file by its path, and a string where a file is expected is refused.
-Every value in the inputs of a request is a reference or a list of references, and params hold none.
+`record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
+A key that the output lacks fails in the call phase.
 
-A reference *fits* an input when the type of the data it names can be the input's value.
+A reference stands for a value, or for one row of a list parameter: never for a whole list, and never for part of a group.
+Its JSON form is an object with the key `@ref`, which names its kind:
+
+```json
+{"@ref": "dataset", "dataset": "run:loki/60339"}
+{"@ref": "output", "record": "r17", "output": "centre"}
+{"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
+```
+
+The framework looks for references at the top of each value and at the top of each element of a list, and nowhere deeper.
+So it finds the references of a request without the spec, and refuses such an object where the spec allows no reference, such as inside a value that is not a list.
+
+A reference *fits* a parameter when the type of the data it names can be the parameter's value.
 `| None` is removed on both sides.
-Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the input's type or a subclass of it, or when the input's type, with its `NewType`s removed, reaches the output's type or a superclass of it:
+A reference with a key names one element, of the output's element type, and a list parameter takes each reference by its element type.
+Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the parameter's type or a subclass of it, or when the parameter's type, with its `NewType`s removed, reaches the output's type or a superclass of it:
 
-| Type of the output | Type of the input | Fits |
+| Type of the output | Type of the parameter | Fits |
 |---|---|---|
 | `BeamCentre` | `BeamCentre \| None` | yes |
+| `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
 | `IofQ` | `sc.DataArray`, as an export takes it | yes |
 | `sc.DataArray` | `Transmission`, a `NewType` of `sc.DataArray` | yes: a role narrows a general output |
 | `IofQ` | `Transmission` | no: two `NewType`s of `sc.DataArray` |
-| a dataset | `SampleFile` | yes: a dataset fits a file input |
+| a dataset | `SampleFile` | yes: a dataset fits a file parameter only |
+
+A generic alias, such as a sciline scope `SampleSurfaceNormal[SampleRun]`, fits only itself.
 
 ## Labels and members
 
@@ -259,7 +291,7 @@ A *member* names one part of a label, such as one sample or one temperature.
 Both are optional and given at submission, not in the request.
 
 ```python
-client.compute(IOFQ, params={'reduction': {'bins': 50}}, inputs={'sample': run},
+client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': run},
                label='iofq', member='250K')
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # dict keys become the members
 client.latest('iofq', member='250K')                  # the newest record of this member
@@ -269,19 +301,17 @@ client.records(label='iofq')                          # oldest first; without la
 
 ## Templates
 
-A *template* is a spec, its fixed values, and its blanks, the names of the parameters and inputs left open.
+A *template* is a spec, its fixed values, and its blanks, the names of the parameters left open.
 Stages, accumulators, and automatic reduction are built from templates.
-A blank is a whole parameter or input, never a field of a group.
-`Template` takes the fixed values by side, as a request does, and all but the spec by keyword:
+A blank is a whole parameter, never a field of a group.
+`Template` takes the fixed values as a request does, and all but the spec by keyword:
 
 ```python
 template = Template(IOFQ, params={'reduction': Reduction(bins=100)}, blanks=('sample',))
 ```
 
-`Template` validates each fixed value by its own field, and checks that each fixed reference is readable and fits its input.
-A required parameter or input may be a blank.
-A check that reads several fields is therefore a model validator, never a field validator reading `info.data`.
-The params model's own validators run on each request made from the template.
+`Template` validates each fixed literal by its own field, and checks that each fixed reference is readable and fits its field.
+A required parameter may be a blank.
 
 A template can also be made from any request's values.
 A name in `blanks` drops the value given for it:
@@ -289,7 +319,7 @@ A name in `blanks` drops the value given for it:
 ```python
 final = client.latest('iofq', member='250K')    # the final reduction of one sample
 beamtime = Template(final.request.spec, params=final.request.params,
-                    inputs=final.request.inputs, blanks=('sample',))   # its sample left open
+                    blanks=('sample',))         # its sample left open
 ```
 
 ## How long records and values are kept
@@ -327,8 +357,8 @@ Any other reference is refused, even to a record that is still pending.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
-centre = client.compute(BEAM_CENTRE, inputs={'direct_beam': dataset(run=60330)})
-result = client.submit(IOFQ, inputs={'sample': dataset(run=60339),
+centre = client.compute(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})
+result = client.submit(IOFQ, params={'sample': dataset(run=60339),
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
@@ -349,7 +379,7 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, inputs={'sample': dataset(run=60341)}, label='night', persist=('iofq',))   # only the store keeps iofq
+client.submit(IOFQ, params={'sample': dataset(run=60341)}, label='night', persist=('iofq',))   # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
 morning.output(morning.records(label='night')[0], 'iofq')   # read from the store
 ```
@@ -382,7 +412,7 @@ A *selector* picks datasets by metadata.
 It matches raw datasets unless it names another kind, such as calibration.
 
 ```python
-samples = client.datasets.list(Selector(role='sample'))       # dataset references, usable as inputs
+samples = client.datasets.list(Selector(role='sample'))       # dataset references, usable as values
 for run in client.datasets.watch(Selector(scan='17')): ...   # existing ones first, then new ones
 client.datasets.metadata(run)['sample']                       # the source's current values
 ```
@@ -391,28 +421,28 @@ client.datasets.metadata(run)['sample']                       # the source's cur
 
 Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the values that all runs share.
-A table is a set of list fields of equal length, pushed together.
-Its *index* is the field that names it, such as the sample runs.
+A table is a set of list parameters of equal length, pushed together.
+Its *index* is the parameter that names it, such as the sample runs.
 Its other *columns* are attached to the index, such as a correction of each run.
-Index and columns are parameters or inputs.
-Each position is a *row*.
+Each position is a *row*, and each row is given by value or by reference, as its type allows.
 As in a pandas DataFrame, the index values of a table are distinct.
 
-A *multi-run spec* is made from the *single-run spec* of the same reduction by naming the fields that become tables:
+A *multi-run spec* is made from the *single-run spec* of the same reduction by naming the parameters that become tables:
 
 ```python
 IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
 ```
 
-Each field named becomes a `list` on its own side, and is the index of a table.
+Each parameter named becomes a `list`, and is the index of a table.
 An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None = None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
 An index is `X`, or `X | None = None`, and `tabulate` refuses any other.
-The validators and constraints of a field named check each row.
-The other fields, `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
+The validators and constraints of a parameter named check each row.
+The other parameters, such as `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
+The params model is made anew, without the model validators of `IofQParams`, which read fields whose types change.
 A request that gives every row is a plain request:
 
 ```python
-result = client.compute(IOFQ_MULTI, inputs={'sample': [dataset(run=611), dataset(run=612)],
+result = client.compute(IOFQ_MULTI, params={'sample': [dataset(run=611), dataset(run=612)],
                                              'can': [dataset(run=614)]})
 ```
 
@@ -430,9 +460,21 @@ An attached column keeps its type as written: `sample_geometry` becomes `list[Sa
 A column whose type allows `None` and that a request or a push leaves out is `None` in each row.
 A column of any other type is given with its index every time.
 
+Each row of a column is given in its own form.
+`transmission` is a column of the sample runs in this multi-run spec, computed by a record for one run and absent for the other:
+
+```python
+IOFQ_T = IOFQ.tabulate(name='sans-iofq-t', version=1,
+                       tables={'sample': ('transmission',), 'can': ()})
+client.compute(IOFQ_T, params={'sample': [dataset(run=611), dataset(run=612)],
+                               'transmission': [t611.ref('transmission'), None]})
+```
+
+`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`.
+
 A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables={'runs': ()})`.
 Its required index carries `Field(min_length=1)`, as one that `tabulate` makes, such as `runs: list[RunFile] = Field(min_length=1)`, so the model, its schema, and the backend agree that the table has a row.
-A list field makes a table only when `tables` names it; otherwise it is a value like any other.
+A list parameter makes a table only when `tables` names it; otherwise it is a value like any other.
 
 The *table rules* are: the columns of a table have equal length, a table with a required index has a row, and the index values are distinct.
 
@@ -453,12 +495,12 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, inputs={'sample': dataset(run=60339)}, blanks=('reduction',)))
+tune = client.stage(Template(IOFQ, params={'sample': dataset(run=60339)}, blanks=('reduction',)))
 for bins in (50, 100, 200):
     client.compute(tune, params={'reduction': Reduction(bins=bins)}, label='iofq')   # the first call loads the run
 ```
 
-A call through the stage takes the values of the blanks by side, as a request does.
+A call through the stage takes the values of the blanks, as a request does.
 It fills the blanks and makes the record of the plain request.
 The first call has the binding make its stage from the fixed values.
 The binding then computes what depends only on them, and later calls compute only the rest.
@@ -502,7 +544,7 @@ Pinning does not wait for these pushes to be added.
 | Call | Returns | Holds back push n+1 |
 |---|---|---|
 | `client.output(acc, 'iofq')` | a copy of the output of state n, or of the part `select=` names, and makes no record | while it waits for state n and copies |
-| `client.submit(EXPORT, inputs={'result': acc.ref('iofq')})` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
+| `client.submit(EXPORT, params={'result': acc.ref('iofq')})` | a record of the `EXPORT` request. The submission also makes the record of state n, whose outputs the request reads without a copy. | from submission until the request's workflow has returned |
 | `client.freeze(acc)` | the record of state n (see Freeze) | no push follows |
 | `client.provenance(acc)` | the provenance of the plain request of state n, at once | no |
 
@@ -514,21 +556,37 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed value by its own field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed input by its type, once, when the stage or the driver is made |
-| a stage call | the params model on the fixed and the given parameters; each given reference readable and fitting; the table rules on given tables | each given input by its type |
-| a push | each literal by its column's type; each reference readable and fitting its column; the table rules on the table with the push | each data value by its column's type, when the push is added |
-| a state, at a pin | the params model on the state's params; each required index has a row | (none) |
+| a template | each fixed literal by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the index values of fixed tables read distinct |
+| a stage call | the same, for the values given; the table rules on given tables | each given value read; the index values of given tables read distinct |
+| a push | each literal by its column's element type; each reference readable and fitting its column; the table rules on the table with the push | each value read by its column's element type; the index values read distinct from those read before, before the driver gets them |
+| a state, at a pin | the number of rows of each table, by the length constraints of its columns | (none) |
 
-The inputs model's own validators run on plain requests only: a stage holds its fixed data in the form its binding made of them, and an accumulator's rows go to the driver one push at a time, so neither makes a whole inputs instance.
-A data value that fails its check at a push stops the accumulator, as any failing push does.
+A value that fails its check at a push stops the accumulator, as any failing push does.
 
-A push refuses an index value that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
-Index values are compared as the record holds them.
-A dataset compares by the identity the dataset source gives it, so `dataset(run=611)` and `dataset(path=...)` of the same file are one value.
-A reference to an output compares by record, output, and key, and a literal by equality.
-Running again a cell that computes a record and pushes its output is not caught: each run pushes a reference to a new record.
+**Distinct index values.** A push refuses an index value that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
+Index values are compared in two ways.
+In the request phase, they are compared as the record holds them: a literal by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key.
+So `dataset(run=611)` and `dataset(path=...)` of the same file are one value.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated index value is refused too, including one in a template.
+
+In the call phase, for an index whose type has a JSON form, they are also compared by the JSON form of each value read.
+The backend keeps the index values read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
+So a literal and a reference to an output whose value is equal are one index value, and a time slice is never summed twice:
+
+```python
+SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))
+slicer = client.compute(FIND_SLICES, params={'log': dataset(run=611)})   # outputs slices: list[TimeRange]
+n = len(client.output(slicer, 'slices'))
+acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611)}, blanks=('time_range',)))
+acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
+acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the push fails
+```
+
+A repeat found in the call phase fails the push, which stops the accumulator.
+The client reads how many slices there are, since a reference names one row.
+Running again a cell that computes a record and pushes its output pushes a reference to a new record.
+Only the call phase catches that repeat, and only for an index whose type has a JSON form.
 
 The accumulator *stops* if
 
@@ -538,14 +596,14 @@ The accumulator *stops* if
 
 Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
 
-**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over its table `runs`, and `CUT`, which takes the value at `position.index` of its input `volume` ([user-stories.md](user-stories.md)):
+**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over its table `runs`, and `CUT`, which takes the value at `position.index` of its parameter `volume` ([user-stories.md](user-stories.md)):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in runs:
     volume.push(runs=[run])                 # returns once logged; the backend adds it later
-    cut = client.submit(CUT, params={'position': Position(index=0)},
-                        inputs={'volume': volume.ref('counts')})
+    cut = client.submit(CUT, params={'position': Position(index=0),
+                                     'volume': volume.ref('counts')})
                                             # pins this state; CUT reads it in place
     show(client.output(volume, 'counts', select={'q': 0}))
                                             # pins this state, waits for it, copies the slice
@@ -583,7 +641,7 @@ The client can keep it, persist it, or reference it from another template.
 
 ```python
 iofq.push(sample=[dataset(run=615)])
-exported = client.submit(EXPORT, inputs={'result': iofq.ref('iofq')})   # pins the state after this push
+exported = client.submit(EXPORT, params={'result': iofq.ref('iofq')})   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
 
@@ -616,7 +674,7 @@ A stage or an accumulator that its binding does not serve is refused when it is 
 **The protocol.** The backend calls a binding through three protocols of `ess.spec.binding`, one per client action:
 
 ```python
-binding.compute(params, inputs)                    # Binding: a plain request
+binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
@@ -624,22 +682,22 @@ driver.push('sample', {'sample': [path_611]})      # once per push: one table, b
 driver.outputs()                                   # once per state that is read
 ```
 
-`compute` gets instances of the params and inputs models, and returns one of the outputs model.
-A stage or an accumulator is made from some values only, so `make_stage` and `make_accumulator` get the values by name, params and inputs in one mapping:
+`compute` gets an instance of the params model, and returns one of the outputs model.
+A stage or an accumulator is made from some values only, so `make_stage` and `make_accumulator` get the values by name, each as its type, whichever form the request gave it in:
 
 ```python
-{'reduction': Reduction(bins=2), 'beam_centre': centre,               # a parameter as its group, an input as its data
- 'sample': [path_611, path_612], 'sample_geometry': [None, geometry]} # each column of a table under its own name
+{'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
+ 'sample': [path_611, path_612], 'sample_geometry': [None, geometry]}           # each column of a table under its own name
 ```
 
 `fixed` holds the fixed values, and `blanks` names the others, a table by its index.
-A parameter or an input in neither takes the spec's default.
+A parameter in neither takes the spec's default.
 `compute`, `make_stage`, and the callable it returns may be called from several threads at once, and none modifies the values it is given.
 The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
 The function does not get the blanks, so a field that changes the graph cannot be a blank.
-Each parameter and input sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `SampleFile`, or `CanFile | None`.
+Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `SampleFile`, or `CanFile | None`.
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
 A table sets the key of each of its columns to its list.
 A workflow with keys of its own names them with `keys=`:
@@ -650,10 +708,11 @@ PipelineBinding(IOFQ, make_pipeline,
                       'iofq': BackgroundSubtractedIofQ})
 ```
 
-For a parameter or an input, `None` in `keys=` sets no key, for a field that `make_pipeline` uses itself.
+Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
+For a parameter, `None` in `keys=` sets no key, for a field that `make_pipeline` uses itself.
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
 A plain request is a stage with no blanks, called once.
-The author of the pipeline promises that it is pure: it modifies no input, and returns the same results for the same inputs.
+The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.
 `binding.keys` and `binding.pipeline(fixed)` give the keys and the graph of a `PipelineBinding`, so that the driver of the multi-run spec reuses them ([roles/toy_sans.py](roles/toy_sans.py)).
 A driver passes `pipeline` the fixed values it is made with: every value that is not a column of a table, defaults filled in.
 So a field that is a column of the multi-run spec cannot shape the graph, as a blank cannot.
@@ -739,15 +798,15 @@ The binding of `VOLUME` is a driver that sums, so the loop holds one volume and 
 
 ```python
 for run in client.datasets.watch(Selector(role='sample')):
-    record = client.submit(IOFQ, inputs={'sample': run})
+    record = client.submit(IOFQ, params={'sample': run})
     show(client.output(record, 'iofq'))
 ```
 
 ## Batch and automatic reduction
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
-`apply` fills a template once per dataset: the dataset itself is the value of the template's blank input.
-A *lookup* fills further blank inputs, such as the latest can run before each sample run.
+`apply` fills a template once per dataset: the dataset itself is the value of the template's blank file parameter.
+A *lookup* fills further blank file parameters, such as the latest can run before each sample run.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
@@ -763,7 +822,7 @@ With a *series*, one request takes all matching datasets so far with the same va
 An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`:
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, inputs={'reference': reference}, blanks=('runs',)),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()
 ```
@@ -776,8 +835,8 @@ provenance.datasets(), provenance.records(), provenance.software
 pid = client.publish(result.ref('iofq'), 'scicat')     # the output and its provenance
 ```
 
-Provenance lists the record's request, every record that supplied an input (directly or through other records), the datasets they used, and the software versions.
-If an input is an accumulator's state, the record listed is the record of that state.
+Provenance lists the record's request, every record that supplied a value by reference (directly or through other records), the datasets they used, and the software versions.
+If a value is an output of an accumulator's state, the record listed is the record of that state.
 Provenance stops at datasets.
 
 Publishing puts an output in a catalogue with its provenance.
@@ -797,9 +856,9 @@ Each symmetry names a change that a caller may make without changing the outputs
 | placement | where a request runs | the record and its outputs | the framework | |
 
 Arrival, order, and placement hold up to rounding.
-`ess.spec.testing` checks the symmetries a workflow package keeps, by comparing two calls with the same inputs:
+`ess.spec.testing` checks the symmetries a workflow package keeps, by comparing two calls with the same values:
 
-- `check_one_row(single, multi, params, inputs)`: the binding of the multi-run spec, given the one-row request made from `params` and `inputs`, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
+- `check_one_row(single, multi, params)`: the binding of the multi-run spec, given the one-row request made from `params`, an instance of the single-run spec's params model, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
 - `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{index: {column: list}}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a column of a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
 

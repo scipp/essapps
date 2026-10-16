@@ -18,8 +18,8 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
-A blank that a dataset fills is an input, such as `sample: SampleFile`, and the dataset reference is its value: `apply` fills inputs only.
-So each dataset that a rule or a lookup finds needs an input of its own in the spec, such as `sample` and `can`.
+A blank that a dataset fills is a file parameter, such as `sample: SampleFile`, and the dataset reference is its value: `apply` fills file parameters only.
+So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `sample` and `can`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
@@ -42,7 +42,7 @@ Each dataset is a row of the template's blank table: the dataset reference is th
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, inputs={'reference': reference}, blanks=('runs',)),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 

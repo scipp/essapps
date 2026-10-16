@@ -1,6 +1,6 @@
 # A request gives each parameter by value or by reference
 
-**Status: proposed** for the branch `69-params-and-inputs` (issue #69, PR #71).
+**Status: implemented** on the branch `69-params-and-inputs` (issue #69, PR #71).
 
 It rewrites [ADR 0001](../../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md) (essspec) in place, since that ADR decides what a spec consists of, and the README sections from Specs and bindings to Stages and accumulators.
 [binding-jobs.md](binding-jobs.md) describes how a binding is called; with this note, a binding gets one model instance.

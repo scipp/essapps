@@ -57,7 +57,7 @@ Records, checks, pushes, and the forms of apps stay the same for every technique
 
 **Two examples.**
 *One table with two columns.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` as the input `transmission: TransmissionFile | None`.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` as the parameter `transmission: TransmissionFile | None`.
 In the multi-run spec, the transmission run is a column attached to the index `sample`.
 So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
@@ -65,7 +65,7 @@ Two tables of their own could be paired wrongly.
 ```python
 IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1,
                            tables={'sample': ('transmission',), 'can': ()})
-iofq = client.accumulator(Template(IOFQ_MULTI, inputs={'can': cans}, blanks=('sample',)))  # can runs fixed
+iofq = client.accumulator(Template(IOFQ_MULTI, params={'can': cans}, blanks=('sample',)))  # can runs fixed
 iofq.push(sample=[dataset(run=611)], transmission=[dataset(run=610)])
 iofq.push(sample=[dataset(run=613)], transmission=[dataset(run=612)])
 ```
