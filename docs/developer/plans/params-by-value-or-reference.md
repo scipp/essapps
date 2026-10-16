@@ -15,7 +15,7 @@ A spec declares two models:
 | params | everything the workflow takes: settings, files, data | each value given by value or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-A request gives each value *by value*, as a *literal*, or *by reference*.
+A request gives each value in one of two forms: *by value* (a *literal*) or *by reference* (a *reference*).
 A literal is the value itself; the record holds its JSON form.
 A *reference* names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator.
 Whether a parameter is given by value or by reference is the request's choice, per value.

@@ -35,7 +35,7 @@ Defined in the [README](../README.md) and in [params-by-value-or-reference.md](p
 | Term | Meaning |
 |---|---|
 | params, outputs | The two models of a spec. *Params* hold everything the workflow takes: settings, files, data. *Outputs* hold the results. |
-| parameter | A field of the params model. A request gives each value of it *by value*, as a literal, or *by reference*, as the parameter's type allows: a file by reference to a dataset, and any other type by reference to an output of a record or an accumulator. A literal is the value itself; the record holds its JSON form. The binding gets the value as its type either way. |
+| parameter | A field of the params model. A request gives each value of it in one of two forms, *by value* (a literal) or *by reference*, as the parameter's type allows: a file by reference to a dataset, and any other type by reference to an output of a record or an accumulator. A literal is the value itself; the record holds its JSON form. The binding gets the value as its type either way. |
 | group | A pydantic model with a JSON form, such as `Reduction`: the usual type of a parameter given by value. |
 | table, index, column, row | A *table* is a set of list parameters of equal length, pushed together. Its *index* is the parameter that names it, such as `sample`; its other *columns* are attached to the index. Each position is a *row*. |
 | template, fixed, blank | A *template* is a request with some parameters or tables left out, the *blanks*; the others are *fixed*. A blank is a whole parameter, never a field of a group; a table is a blank by its index. |
