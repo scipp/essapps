@@ -755,7 +755,7 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
             SCALE,
             params={'scaling': {'factor': 2.0, 'speed': 2.0}, 'sample': dataset(run=1)},
         )
-    with pytest.raises(SubmitError, match=r'tag\.0\.speed: Extra inputs are not'):
+    with pytest.raises(SubmitError, match=r'tag\[0\]\.speed: Extra inputs are not'):
         acc.push(runs=[dataset(run=1)], tag=[{'speed': 2.0}])
 
 
@@ -964,9 +964,10 @@ def _parts(*records: Record) -> dict[str, list[Any]]:
 
 
 def test_a_reference_names_the_record_of_the_state_pinned_at_submission(
-    client: Client,
+    client: Client, datasets: FakeDatasets
 ) -> None:
-    loads = client.compute([_load(n) for n in (1, 2, 1)])
+    datasets.measure(3, 3.0)
+    loads = client.compute([_load(n) for n in (1, 2, 3)])
     total = _total(client)
     total.push(parts=[loads[0].ref('value')])
     total.push(parts=[loads[1].ref('value')])
@@ -975,7 +976,7 @@ def test_a_reference_names_the_record_of_the_state_pinned_at_submission(
     second = client.compute(_read(total))
 
     states = [_state(client, r) for r in (first, second)]
-    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 4.0]
+    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 6.0]
     assert [r.request.params['source'] for r in (first, second)] == [
         state.ref('value') for state in states
     ]
@@ -1297,7 +1298,7 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     pushes = [
         {'values': value},  # a column whose element type is not optional
         {'weight': weight * 2, 'values': value},  # columns of unequal length
-        {'weight': weight, 'values': [1.0]},  # a value where a reference goes
+        {'weight': [load.ref('value')], 'values': value},  # a reference, no fit
         {'weight': [{'value': 'x'}], 'values': value},  # an invalid literal
         {'weight': weight, 'values': [dataset(run=1)]},  # a dataset, no file
         {'weight': weight, 'values': [{'@ref': 'run'}]},  # no kind of reference
@@ -1550,15 +1551,19 @@ def summed_loads(summed: Client) -> list[Record]:
     return summed.compute([_load(n) for n in (1, 2, 1)])
 
 
-def test_an_accumulator_adds_each_row_once(summed: Client, summing: Sum) -> None:
+def test_an_accumulator_adds_each_row_once(
+    summed: Client, summing: Sum, datasets: FakeDatasets
+) -> None:
     client = summed
+    for n in (3, 4):
+        datasets.measure(n, float(n))
     total = _total(client)
     values = []
-    for n in (1, 2, 1, 2):
+    for n in (1, 2, 3, 4):
         total.push(parts=[client.compute(_load(n)).ref('value')])
         values.append(client.output(client.submit(_read(total)), 'value'))
 
-    assert values == [1.0, 3.0, 4.0, 6.0]
+    assert values == [1.0, 3.0, 6.0, 10.0]
     assert summing.pushed == 4
 
 

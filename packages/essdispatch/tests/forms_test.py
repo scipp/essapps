@@ -1,0 +1,232 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""A value, or a row, given by value or by reference, as the request chooses."""
+
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, NewType
+
+import pytest
+from pydantic import BaseModel, ConfigDict, Field
+
+from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
+from ess.dispatch import dataset as dataset_ref
+from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
+from ess.spec import WorkflowSpec, function_binding
+
+SampleFile = NewType('SampleFile', Path)
+Offset = NewType('Offset', float)
+
+
+class Blob:
+    """A type without a JSON form."""
+
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+
+class Shift(BaseModel):
+    offset: float = 0.0
+
+
+class LoadParams(BaseModel):
+    sample: SampleFile
+
+
+class LoadOutputs(BaseModel, arbitrary_types_allowed=True):
+    value: float
+    shift: Shift
+    blob: Blob
+    values: list[float]
+
+
+class AddParams(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    shift: Shift = Field(default_factory=Shift)
+    offset: Offset | None = None
+    blob: Blob | None = None
+    pair: tuple[float, float] = (0.0, 0.0)
+    terms: list[float] = Field(default_factory=list)
+
+
+class SumParams(BaseModel):
+    part: list[float] = Field(min_length=1)
+
+
+class Value(BaseModel):
+    value: float
+
+
+def _spec(
+    name: str, params: type[BaseModel], outputs: type[BaseModel], **kw: Any
+) -> WorkflowSpec[Any, Any]:
+    return WorkflowSpec(
+        name=name,
+        version=1,
+        title=name,
+        description=name,
+        params=params,
+        outputs=outputs,
+        **kw,
+    )
+
+
+LOAD = _spec('load', LoadParams, LoadOutputs)
+ADD = _spec('add', AddParams, Value)
+SUM = _spec('sum', SumParams, Value, tables=('part',))
+STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
+
+
+def load(params: LoadParams) -> LoadOutputs:
+    value = read_dataset(params.sample)
+    return LoadOutputs(
+        value=value, shift=Shift(offset=value), blob=Blob(value), values=[value, 2.0]
+    )
+
+
+def add(params: AddParams) -> Value:
+    return Value(
+        value=params.shift.offset
+        + (params.offset or 0.0)
+        + (0.0 if params.blob is None else params.blob.value)
+        + sum(params.pair)
+        + sum(params.terms)
+    )
+
+
+def total(params: Any) -> Value:
+    return Value(value=sum(params.part))
+
+
+@pytest.fixture
+def client(tmp_path: Path) -> Iterator[Client]:
+    datasets = FakeDatasets(proposal='p1', directory=tmp_path)
+    datasets.measure(1, 1.0)
+    backend = Backend(
+        datasets,
+        [
+            function_binding(LOAD, load),
+            function_binding(ADD, add),
+            kept_rows(SUM, total),
+            StagedFunction(STAGED_SUM, total),
+        ],
+    )
+    yield Client(backend, proposal='p1', submitter='anna')
+    backend.close()
+
+
+@pytest.fixture
+def loaded(client: Client) -> Record:
+    """LOAD of run 1, whose value is 1.0."""
+    return client.compute(LOAD, params={'sample': dataset_ref(run=1)})
+
+
+def test_a_number_or_a_group_is_given_by_value_or_by_reference(
+    client: Client, loaded: Record
+) -> None:
+    by_reference = client.compute(
+        ADD,
+        params={
+            'shift': loaded.ref('shift'),
+            'offset': loaded.ref('value'),
+            'terms': [loaded.ref('values', key='0'), 2.0],
+        },
+    )
+    by_value = client.compute(
+        ADD, params={'shift': Shift(offset=1.0), 'offset': 1.0, 'terms': [1.0, 2.0]}
+    )
+
+    assert client.output(by_reference, 'value') == 5.0
+    assert client.output(by_value, 'value') == 5.0
+    assert by_reference.request.params['shift'] == loaded.ref('shift')
+    assert by_value.request.params['shift'] == {'offset': 1.0}
+
+
+def test_a_type_without_a_json_form_takes_a_reference_only(
+    client: Client, loaded: Record
+) -> None:
+    computed = client.compute(ADD, params={'blob': loaded.ref('blob')})
+
+    assert client.output(computed, 'value') == 1.0
+    with pytest.raises(
+        SubmitError, match=r"^blob: \{'value': 1.0\} is not a reference; Blob has no"
+    ):
+        client.submit(ADD, params={'blob': {'value': 1.0}})
+
+
+@pytest.mark.parametrize(
+    ('name', 'output', 'refused'),
+    [
+        ('shift', 'value', r'shift: .* of type float, does not fit Shift'),
+        ('offset', 'shift', r'offset: .* of type Shift, does not fit Offset'),
+        ('blob', 'value', r'blob: .* of type float, does not fit Blob'),
+    ],
+)
+def test_a_reference_must_fit_its_parameter(
+    client: Client, loaded: Record, name: str, output: str, refused: str
+) -> None:
+    with pytest.raises(SubmitError, match=refused):
+        client.submit(ADD, params={name: loaded.ref(output)})
+
+
+def test_a_dataset_fits_a_file_only(client: Client) -> None:
+    with pytest.raises(
+        SubmitError, match=r'^shift: dataset run:1 does not fit Shift, which is not'
+    ):
+        client.submit(ADD, params={'shift': dataset_ref(run=1)})
+
+
+def test_a_reference_inside_a_value_is_refused(client: Client, loaded: Record) -> None:
+    with pytest.raises(SubmitError, match=r'^pair\[1\]: .* is a reference inside'):
+        client.submit(ADD, params={'pair': [1.0, loaded.ref('value')]})
+
+
+def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) -> None:
+    with pytest.raises(SubmitError, match=r'^terms: .* is a reference to a whole list'):
+        client.submit(ADD, params={'terms': loaded.ref('values')})
+    with pytest.raises(SubmitError, match=r'^part: .* is not a list of rows'):
+        client.submit(SUM, params={'part': loaded.ref('values')})
+
+
+def _failed(client: Client, record: Record) -> str | None:
+    assert client.wait(record) is Status.FAILED
+    return client.failure(record)
+
+
+def test_a_literal_and_a_reference_to_equal_data_are_one_index_value(
+    client: Client, loaded: Record
+) -> None:
+    summed = client.accumulator(Template(SUM, blanks=('part',)))
+    summed.push(part=[loaded.ref('value')])
+    assert client.output(summed, 'value') == 1.0
+
+    summed.push(part=[2.0, 1.0])  # distinct as the record holds them
+    with pytest.raises(
+        LookupError, match=r'push 1 failed: part\[2\]: repeats part\[0\], 1.0$'
+    ):
+        client.output(summed, 'value')
+    plain = client.submit(SUM, params={'part': [1.0, loaded.ref('value')]})
+    assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
+
+
+def test_references_to_two_records_with_equal_data_are_one_index_value(
+    client: Client, loaded: Record
+) -> None:
+    again = client.compute(LOAD, params={'sample': dataset_ref(run=1)})
+    plain = client.submit(
+        SUM, params={'part': [loaded.ref('value'), again.ref('value')]}
+    )
+
+    assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
+
+
+def test_a_stage_call_with_a_repeated_index_value_read_fails(
+    client: Client, loaded: Record
+) -> None:
+    stage = client.stage(Template(STAGED_SUM, blanks=('part',)))
+    distinct = client.submit(stage, params={'part': [loaded.ref('value'), 2.0]})
+    repeated = client.submit(stage, params={'part': [loaded.ref('value'), 1.0]})
+
+    assert client.output(distinct, 'value') == 3.0
+    assert _failed(client, repeated) == 'part[1]: repeats part[0], 1.0'

@@ -11,8 +11,8 @@ from ess.spec.field_types import (
     base,
     element,
     fits,
-    is_data_value,
     is_file,
+    is_single,
     optional,
     plain,
     supertypes,
@@ -86,7 +86,7 @@ def test_supertypes_remove_newtypes_one_by_one() -> None:
     'tp', [Path, SampleFile, sc.DataArray, IofQ, Parts, SampleParts, float]
 )
 def test_a_data_value_is_one_value(tp: Any) -> None:
-    assert is_data_value(tp)
+    assert is_single(tp)
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ def test_a_data_value_is_one_value(tp: Any) -> None:
     ],
 )
 def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
-    assert not is_data_value(tp)
+    assert not is_single(tp)
 
 
 def test_a_file_is_a_path_or_a_newtype_of_it() -> None:

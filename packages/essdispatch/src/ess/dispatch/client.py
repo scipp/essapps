@@ -180,8 +180,8 @@ class Accumulator:
             acc.push(sample=[dataset(run=611), dataset(run=612)])
             acc.push(sample=[dataset(run=613)], sample_geometry=[geometry])
 
-        A group is given by value, as a model or a dict, and a data value by
-        reference. A column left out is ``None``
+        Each row is given by value, such as a group as a model or a dict, or
+        by reference, as its type allows. A column left out is ``None``
         in each row if its type allows it, and a column whose element type is
         not optional is given in every push. A push names one table, through
         its index: a column without its index is refused, and so are an index
@@ -195,11 +195,14 @@ class Accumulator:
         datasets or outputs of records, never an accumulator. Each value is
         checked by its column's element type; the number of rows of a table,
         such as a row in a table with a required index, is checked when a
-        state is pinned. A record that has failed or was cancelled is
-        refused, and one that is pending is not waited for. The push returns
-        once it is logged. The backend adds the pushes one at a time, in the
-        order logged, each once the records it references have completed and
-        the readers of the state before it are done (see
+        state is pinned. When the push is added, its index values read, if the
+        index's type has a JSON form, are compared with those read before by
+        that form, so a literal and a reference to equal data are one index
+        value, and a repeat fails the push. A record that has failed or was
+        cancelled is refused, and one that is pending is not waited for. The
+        push returns once it is logged. The backend adds the pushes one at a
+        time, in the order logged, each once the records it references have
+        completed and the readers of the state before it are done (see
         :mod:`ess.dispatch.backend`).
 
         If adding fails, such as for data that fail their column's check, or
@@ -306,9 +309,11 @@ class Client:
         Submit a spec or a stage with values, or requests.
 
         A spec takes its params, a dict by name or an instance of its params
-        model if every value is a literal: a group as a model or a dict, and
-        a reference for a data value, or a list of these for a list
-        parameter::
+        model if every value is a literal. Each value, or each row of a list
+        parameter, is given by value or by reference, as its type allows: a
+        type with a JSON form takes a literal, such as a group as a model or
+        a dict, and every type a reference to an output that fits; a file
+        takes a dataset::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': dataset(run=60339)})
@@ -323,10 +328,10 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError`` naming the field at fault, after the request's
         key or index if several are given: an invalid value, an unknown spec
-        or dataset, a value that is not a reference where a data value is
-        expected, a reference where a literal is, a reference the client may
-        not read, or one whose data do not fit its field. Then no request of
-        the call is submitted; the records of earlier calls stay.
+        or dataset, a literal for a type without a JSON form, a reference
+        where none may stand, such as to a whole list, a reference the client
+        may not read, or one whose data do not fit its field. Then no request
+        of the call is submitted; the records of earlier calls stay.
 
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
@@ -412,7 +417,7 @@ class Client:
         by its index. A template a request would refuse is refused here, with
         the blanks left out, and so is one that references an accumulator,
         and one whose spec's binding makes no accumulators. The driver gets
-        each value validated by its own field, a data value as its data; the
+        each value validated by its own field, data read as the object; the
         accumulator's template holds the values as the backend resolved them.
         A record the template references that has failed or was cancelled is
         refused, and one that is pending is not waited for. Opening returns

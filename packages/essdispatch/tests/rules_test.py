@@ -164,7 +164,7 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
     assert loop.status(load).reason is None
 
 
-def test_a_dataset_fills_a_blank_data_value_never_a_group(
+def test_a_dataset_fills_a_blank_file_never_a_group(
     client: Client, datasets: FakeDatasets
 ) -> None:
     sample = datasets.measure(1, 5.0, role='sample')
@@ -185,5 +185,5 @@ def test_a_dataset_fills_a_blank_data_value_never_a_group(
     assert scaled['1'].params['sample'] == sample
     assert loop.step() == []
     assert loop.status(rule).reason == (
-        '1: scale: uuid:run-1 is a reference; scale is given by value'
+        '1: scale: dataset uuid:run-1 does not fit Scale, which is not a file'
     )

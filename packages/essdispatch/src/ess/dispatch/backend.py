@@ -78,14 +78,19 @@ its lock, what depends on history and on what the client keeps: each
 reference to a record or an accumulator is one the client may read, and its
 data fit the parameter's field. In the *call phase*, on a worker, the backend
 reads the data each reference names, a local path for a dataset, and
-validates each value alone by its field: a literal from its JSON form, which
-the log holds, so that both phases see the same values, and a data value from
-the object read (see :func:`.checks.validated`). For a plain request it makes
-the params instance from these values without validating again, so the
-params model's model validators never run; a stage or an accumulator gets
-the values by name. The binding returns an instance of the outputs model: an
-output that the spec declares optional and the binding returns as ``None``
-is left out, and a record whose binding returns anything else fails.
+validates each value alone by its field, a row of a list by its element type:
+a literal from its JSON form, which the log holds, so that both phases see
+the same values, and data read from the object (see
+:func:`.checks.validated`). For a plain request it makes the params instance
+from these values without validating again, so the params model's model
+validators never run; a stage or an accumulator gets the values by name. The
+index values of a table, if the index's type has a JSON form, are distinct
+by the JSON forms of the values read, too: a literal and a reference to equal
+data are one index value. A table that a request, a template, or a stage call
+gives whole is compared within itself when it is read. The binding returns
+an instance of the outputs model: an output that the spec declares optional
+and the binding returns as ``None`` is left out, and a record whose binding
+returns anything else fails.
 
 A stage checks its template's values when it is made, and resolves dataset
 names: each fixed value by its own field. It keeps the outputs they
@@ -121,12 +126,14 @@ they were logged, on the workers: opening has the binding make the driver
 from the template's values by name, each read and validated by its own
 field, and each push is one push of the table's columns into the driver,
 which may add the rows in place; each value is first read and validated by
-its column's element type, and a value that fails its check fails the push. A step
-starts once the records it references have completed, and a push once the
-readers of the state before it are done. If a step fails, or a record it
-references has not completed, the accumulator stops: it takes no more pushes
-or readers, the steps after it are dropped, and the requests that wait for a
-state it will not reach fail.
+its column's element type, and a value that fails its check fails the push,
+as does an index value read whose JSON form repeats one of the table read
+before; the accumulator keeps these JSON forms, which a restart need not
+rebuild, since no accumulator survives it. A step starts once the records it
+references have completed, and a push once the readers of the state before
+it are done. If a step fails, or a record it references has not completed,
+the accumulator stops: it takes no more pushes or readers, the steps after it
+are dropped, and the requests that wait for a state it will not reach fail.
 Its driver is dropped once no reader holds its current state, without
 waiting for its client to release it.
 
@@ -379,6 +386,9 @@ class _Accumulator:
     worker makes the driver or pushes into it, outside the backend's lock.
     ``seen`` holds the index values of each blank table logged so far, by
     JSON form, with their rows (see :func:`.checks.distinct`).
+    ``indexes_read`` holds those of the values read in the steps done so far,
+    for an index whose type has a JSON form (see :meth:`Backend._typed`);
+    only the worker that does a step changes it.
 
     ``checked`` holds the number of pushes of the last state whose plain
     request was checked, and why it would be refused, or ``None``. Two
@@ -409,6 +419,7 @@ class _Accumulator:
         self.added: int | None = None
         self.steps: deque[_Step] = deque()
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
+        self.indexes_read: dict[str, dict[bytes, int]] = {}
         self.busy = False
         self.checked: tuple[int, str | None] | None = None
         self.stopped: str | None = None
@@ -1186,16 +1197,34 @@ class Backend:
             returned = call(self._typed(request.spec, given))
         return _outputs_of(request.spec, spec.outputs, returned)
 
-    def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
+    def _typed(
+        self,
+        spec_id: SpecId,
+        values: Mapping[str, Any],
+        indexes: dict[str, dict[bytes, int]] | None = None,
+    ) -> dict[str, Any]:
         """
         ``values`` of a request by name as the binding takes them; no lock.
         The data each reference names is read, and each value is validated
-        alone by its field, a column of a table by its element type (see
+        alone by its field, a row of a list by its element type (see
         :func:`.checks.validated`). A plain request makes the params instance
         from them, and a stage or a driver takes them by name.
+
+        The index values of each table in ``values`` whose index type has a
+        JSON form are distinct by the JSON forms of the values read, so a
+        literal and a reference to equal data are one index value. They are
+        compared with those in ``indexes``, the index values read before by
+        index, which they join (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
-        return {n: validated(spec, n, v) for n, v in self._read(values).items()}
+        read = self._read(values)
+        typed = {n: validated(spec, n, v, read[n]) for n, v in values.items()}
+        indexes = {} if indexes is None else indexes
+        for index in spec.tables.keys() & typed.keys():
+            if spec.takes_literal(index):
+                seen = indexes.setdefault(index, {})
+                seen.update(distinct(index, typed[index], seen))
+        return typed
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
@@ -1829,7 +1858,7 @@ class Backend:
         # busy, or on this worker.
         table, values, reads = acc.steps[0]
         try:
-            typed = self._typed(acc.template.spec, values)
+            typed = self._typed(acc.template.spec, values, acc.indexes_read)
             if table is None:
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:

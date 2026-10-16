@@ -3,9 +3,11 @@
 """
 References: how a request names data that exist elsewhere.
 
-A request gives each data value by reference: an output of an earlier
-record, a dataset the framework did not compute, or, in a request not yet
-accepted, an output of an accumulator that the framework holds.
+A request gives a value, or a row of a list parameter, by reference to data
+that exist elsewhere: an output of an earlier record, a dataset the framework
+did not compute, or, in a request not yet accepted, an output of an
+accumulator that the framework holds. A reference stands for a whole value
+or a row, never for a whole list, and never for part of a value.
 A reference is what a request names and what a record keeps; turning it into
 the data a workflow takes, a local path or an object, is the business of
 whatever runs the workflow.
@@ -95,7 +97,7 @@ class AccumulatorRef(_Ref, frozen=True):
 
 Ref = OutputRef | DatasetRef | AccumulatorRef
 """
-A reference: a data value in a request.
+A reference: a value, or a row of a list parameter, in a request.
 
 An ``AccumulatorRef`` is only a placeholder in a request before it is
 submitted; no record holds one.

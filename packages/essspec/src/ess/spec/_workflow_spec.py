@@ -16,15 +16,29 @@ outputs  results                        (none)           the data the workflow
                                                          returns
 =======  =============================  ===============  ==========================
 
-A parameter's type decides the form a request gives it in. A *group*, a
-model of literals, is given by value, as a *literal* in its JSON form; any
-other type, a file (``Path``, or a ``NewType`` of it) or an object such as a
-scipp array or a number, is a *data value*, given by reference (see
-:mod:`ess.spec.refs`). A request lives in two phases. In the *request phase*,
-before any data is read, a data value is a reference; in the *call phase*,
-the backend reads the data each reference names and builds the params
-instance from the values and the data, so every field of it holds the type
-it declares.
+A request gives each value by value or by reference, and each row of a
+list parameter. A parameter's type decides which of the two it takes, with
+``| None`` removed and, for a list parameter, its element type taken (see
+:meth:`WorkflowSpec.takes_literal`):
+
+=====================================  ==========  ===========================
+A parameter's type                     By value    By reference
+=====================================  ==========  ===========================
+a file: ``Path``, or a ``NewType``     no          to a dataset, or to an
+of it                                              output that fits
+has a *JSON form*: pydantic makes a    yes         to an output that fits
+JSON schema of it, with the params
+model's config, and it holds no file
+anything else, such as a scipp array   no          to an output that fits
+=====================================  ==========  ===========================
+
+A value given by value is a *literal*, held in its JSON form; a reference is
+described in :mod:`ess.spec.refs`. A *group* is a model of literals, such as
+``Reduction``. A request lives in two phases. In the *request phase*, before
+any data is read, a value given by reference is a reference; in the *call
+phase*, the backend reads the data each reference names and builds the
+params instance from the values and the data, so every field of it holds
+the type it declares.
 
 The models are ordinary pydantic models and carry no annotations for the
 framework: what the framework needs, it reads from the field types (see
@@ -32,14 +46,11 @@ framework: what the framework needs, it reads from the field types (see
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
-  a dict or a union of two types. With ``| None`` removed and, for a list
-  parameter, its element type taken, a model that pydantic makes a JSON
-  schema of, with the params model's config, is a group; any other type is a
-  data value. A group holds no file: a file is given by reference to a
-  dataset.
-- A default is a value, never a reference: of a group, a value whose JSON
-  form reads back as the value and is not a reference; of a data value,
-  ``None`` or an empty list.
+  a dict or a union of two types. A group holds no file: a file is given by
+  reference to a dataset.
+- A default is a value, never a reference: of a type with a JSON form, a
+  value whose JSON form reads back as the value and is not a reference; of
+  any other type, ``None`` or an empty list.
 - No parameter sees another: each is validated alone, in every phase. So
   the params model has no field validators, serializers, computed fields, or
   aliases, and no ``default_factory`` that takes the other values. A list
@@ -47,7 +58,7 @@ framework: what the framework needs, it reads from the field types (see
   a check of one row belongs to the element type. A check of one value
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
-- Each output is a data value, possibly optional, or a list or a dict of them.
+- Each output is a type, possibly optional, or a list or a dict of one.
 - The index of a table is required, with ``Field(min_length=1)``, or empty by
   default.
 
@@ -91,15 +102,15 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic.errors import PydanticInvalidForJsonSchema
+from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError, from_json, to_json
 
 from .field_types import (
     base,
     element,
-    is_data_value,
     is_file,
+    is_single,
     model_of,
     optional,
     type_name,
@@ -230,13 +241,15 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
 
-    def by_value(self, name: str) -> bool:
+    def takes_literal(self, name: str) -> bool:
         """
-        Whether a request gives the parameter ``name`` by value: its type is
-        a group, or a list of groups. Any other parameter is a data value,
-        given by reference.
+        Whether a request may give the parameter ``name``, or each row of it
+        if it is a list parameter, by value: its type, with ``| None`` removed
+        and for a list parameter its element type taken, has a JSON form.
+        Every parameter takes a reference to an output that fits, and a file a
+        reference to a dataset too.
         """
-        return _group(self.params, name)
+        return _takes_literal(self.params, name)
 
     def columns(self, index: str) -> tuple[str, ...]:
         """The columns of the table of ``index``, the index first."""
@@ -324,11 +337,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema is the JSON Schema of the parameters given by value,
-        and has each other parameter as a reference to data of a type, named
-        in ``dataType``, as the outputs schema has each output. The
-        projection is one-way: pydantic validators do not survive it, so a
-        consumer of the serialized form can validate only optimistically.
+        The params schema is the JSON Schema of the parameters that take a
+        literal, and has each other parameter as a reference to data of a
+        type, named in ``dataType``, as the outputs schema has each output.
+        The projection is one-way: pydantic validators do not survive it, so
+        a consumer of the serialized form can validate only optimistically.
         """
         return SerializedWorkflowSpec(
             name=self.name,
@@ -347,10 +360,10 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A form
-    shows the params schema: a parameter given by value by its JSON Schema,
-    and a picker for each other parameter, whose property names the type of
-    the data it takes in ``dataType``, a list parameter as an array of them,
-    an optional one with ``null`` in ``anyOf``.
+    shows the params schema: a parameter that takes a literal by its JSON
+    Schema, and a picker for each other parameter, whose property names the
+    type of the data it takes in ``dataType``, a list parameter as an array
+    of them, an optional one with ``null`` in ``anyOf``.
     """
 
     params_schema: dict[str, Any] = Field(
@@ -407,7 +420,7 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
-        if not (_one_or_list(field.annotation) and is_data_value(tp)):
+        if not (_one_or_list(field.annotation) and is_single(tp)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
             )
@@ -439,28 +452,29 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
 
 
 def _json_schema(tp: Any, model: type[BaseModel]) -> bool:
-    """Whether pydantic makes a JSON schema of ``tp``, with the config of ``model``."""
+    """
+    Whether pydantic makes a JSON schema of ``tp``, with the config of
+    ``model``. A field of a model of its own carries the config, which
+    ``TypeAdapter`` refuses for a model type.
+    """
     try:
         create_model(
             'Value', __config__=model.model_config, value=(tp, ...)
         ).model_json_schema()
-    except PydanticInvalidForJsonSchema:
+    except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
         return False
     return True
 
 
 @functools.cache
-def _group(model: type[BaseModel], name: str) -> bool:
+def _takes_literal(model: type[BaseModel], name: str) -> bool:
     """
     Whether the type of the field ``name`` of ``model``, with ``| None``
-    removed and for a list its element type taken, is a group, or a
-    ``NewType`` of one: a model that pydantic makes a JSON schema of, holding
-    no file.
+    removed and for a list its element type taken, has a JSON form: pydantic
+    makes a JSON schema of it, and it holds no file.
     """
     tp = value_type(model.model_fields[name].annotation)
-    return (
-        _is_model(base(tp)) and not _holds_file(tp, set()) and _json_schema(tp, model)
-    )
+    return not _holds_file(tp, set()) and _json_schema(tp, model)
 
 
 def _is_model(tp: Any) -> bool:
@@ -470,16 +484,16 @@ def _is_model(tp: Any) -> bool:
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: of a group, a value whose JSON form reads back as the value and
-    is not a reference, nor a list holding one; of a data value, ``None`` or
-    an empty list.
+    ``None``: of a type with a JSON form, a value whose JSON form reads back
+    as the value and is not a reference, nor a list holding one; of any other
+    type, ``None`` or an empty list.
     """
     field = model.model_fields[name]
     default = field.get_default(call_default_factory=True)
-    if not _group(model, name):
+    if not _takes_literal(model, name):
         if default is None or (isinstance(default, list) and not default):
             return None
-        return 'the default of a data value is None or an empty list'
+        return 'the default of a type without a JSON form is None or an empty list'
     try:
         line = to_json({name: default})
         again = model_of(model, name).model_validate_json(line)
@@ -517,10 +531,10 @@ def _holds_file(tp: Any, seen: set[type[BaseModel]]) -> bool:
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:
     return [
-        f'{model.__name__}.{name}: an output is a data value, possibly '
-        'optional, or a list or a dict of them'
+        f'{model.__name__}.{name}: an output is a type, possibly optional, '
+        'or a list or a dict of one'
         for name, field in model.model_fields.items()
-        if not is_data_value(value_type(field.annotation))
+        if not is_single(value_type(field.annotation))
     ]
 
 
@@ -602,20 +616,20 @@ def _index_shape(field: FieldInfo) -> bool:
 
 def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
-    The JSON Schema of the parameters given by value, with each other
+    The JSON Schema of the parameters that take a literal, with each other
     parameter as :func:`_data_schema` has it, in the order of the fields.
     """
     model: type[BaseModel] = spec.params
     fields = model.model_fields
     literals: dict[str, Any] = {
-        n: (f.annotation, f) for n, f in fields.items() if spec.by_value(n)
+        n: (f.annotation, f) for n, f in fields.items() if spec.takes_literal(n)
     }
     schema: dict[str, Any] = create_model(
         model.__name__, __config__=model.model_config, **literals
     ).model_json_schema()
-    by_value = schema.get('properties', {})
+    properties = schema.get('properties', {})
     schema['properties'] = {
-        n: by_value[n] if n in literals else _data_property(f)
+        n: properties[n] if n in literals else _data_property(f)
         for n, f in fields.items()
     }
     schema['required'] = [n for n, f in fields.items() if f.is_required()]

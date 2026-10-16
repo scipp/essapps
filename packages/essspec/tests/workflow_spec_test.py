@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, NewType
 
@@ -54,6 +55,11 @@ class Node(BaseModel):
 
 
 ReductionOfCan = NewType('ReductionOfCan', Reduction)
+
+
+class Mode(Enum):
+    fast = 'fast'
+    slow = 'slow'
 
 
 def validated(name: str, **fields: Any) -> type[BaseModel]:
@@ -171,14 +177,33 @@ class TestMetadata:
         with pytest.raises(pydantic.ValidationError):
             IOFQ.title = 'Other'
 
-    def test_a_group_is_given_by_value_and_a_data_value_by_reference(self) -> None:
-        assert [n for n in IofQParams.model_fields if IOFQ.by_value(n)] == [
+    def test_a_type_with_a_json_form_takes_a_literal(self) -> None:
+        assert [n for n in IofQParams.model_fields if IOFQ.takes_literal(n)] == [
             'reduction',
             'sample_geometry',
             'time_range',
         ]
-        assert IOFQ_MULTI.by_value('sample_geometry')
-        assert not IOFQ_MULTI.by_value('sample')
+        assert IOFQ_MULTI.takes_literal('sample_geometry')
+        assert not IOFQ_MULTI.takes_literal('sample')
+
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            float,
+            NewType('Offset', float),
+            Mode,
+            ReductionOfCan,
+            list[float],
+            tuple[Reduction, Reduction],
+            Reduction | None,
+        ],
+    )
+    def test_a_number_an_enum_or_a_tuple_takes_a_literal(self, tp: Any) -> None:
+        assert spec(params=model('P', value=(tp, ...))).takes_literal('value')
+
+    @pytest.mark.parametrize('tp', [BeamCentre, SampleFile, list[CanFile | None]])
+    def test_a_file_or_an_object_takes_no_literal(self, tp: Any) -> None:
+        assert not spec(params=model('P', value=(tp, ...))).takes_literal('value')
 
     def test_an_index_as_a_blank_leaves_open_every_column_of_its_table(self) -> None:
         assert IOFQ_MULTI.blank_fields(('sample', 'beam_centre')) == {
@@ -226,6 +251,7 @@ class TestModelRules:
             {'outputs': model('O', iofq=(dict[str, IofQ | None], ...))},
             {'outputs': model('O', path=(Path | None, None))},
             {'params': model('P', reduction=(ReductionOfCan, ...))},
+            {'params': model('P', bins=(int, 2), mode=(Mode, Mode.fast))},
             {'params': model('P', tree=(Node, ...))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
         ],
@@ -247,8 +273,9 @@ class TestModelRules:
                 'sample: a field of both IofQParams and O',
             ),
             (
-                {'params': model('P', bins=(int, 2))},
-                'P.bins: the default of a data value is None or an empty list',
+                {'params': model('P', centre=(BeamCentre, sc.scalar(1.0)))},
+                'P.centre: the default of a type without a JSON form is None or '
+                'an empty list',
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
@@ -373,19 +400,19 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleFile, Path('run.nxs')))},
-                'P.sample: the default of a data value is None or an empty list',
+                'P.sample: the default of a type without a JSON form is None',
             ),
             (
                 {'params': model('P', runs=(list[SampleFile], [Path('run.nxs')]))},
-                'P.runs: the default of a data value is None or an empty list',
+                'P.runs: the default of a type without a JSON form is None',
             ),
             (
                 {'outputs': model('O', iofq=(IofQ | Banks, ...))},
-                'O.iofq: an output is a data value',
+                'O.iofq: an output is a type, possibly optional',
             ),
             (
                 {'outputs': model('O', iofq=(list[list[IofQ]], ...))},
-                'O.iofq: an output is a data value',
+                'O.iofq: an output is a type, possibly optional',
             ),
         ],
     )
@@ -394,8 +421,10 @@ class TestModelRules:
             spec(**fields)
 
     def test_every_problem_is_reported_at_once(self) -> None:
-        params = model('P', bins=(int, 2), sample=(SampleFile, Path('run.nxs')))
-        with pytest.raises(ValueError, match=r'P\.bins: .*; P\.sample: '):
+        params = model(
+            'P', centre=(BeamCentre, sc.scalar(1.0)), sample=(SampleFile, Path('a'))
+        )
+        with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
 
 
@@ -518,7 +547,7 @@ class TestTabulate:
         slices = IOFQ.tabulate(name='slices', version=1, tables=('time_range',))
         assert slices.params.model_fields['time_range'].annotation == list[TimeRange]
         assert slices.params.model_fields['sample'].annotation == SampleFile
-        assert slices.by_value('time_range')
+        assert slices.takes_literal('time_range')
 
     def test_refuses_an_index_with_a_default_but_none(self) -> None:
         with pytest.raises(ValueError, match=r"\['reduction'\]: an index is X, or"):

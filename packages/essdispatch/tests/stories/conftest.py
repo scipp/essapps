@@ -431,6 +431,107 @@ def export(params: ExportParams) -> ExportOutputs:
     return ExportOutputs(text=','.join(str(v) for v in params.result.values))
 
 
+class TimeRange(BaseModel):
+    """The time bins ``start`` to ``stop`` of a run, ``stop`` excluded."""
+
+    start: int
+    stop: int
+
+
+class SlicerParams(Data):
+    log: RunFile
+
+
+class SlicerOutputs(Data):
+    slices: list[TimeRange]
+
+
+SLICER = _spec('slicer', SlicerOutputs, params=SlicerParams)
+
+
+def slicer(params: SlicerParams) -> SlicerOutputs:
+    """A slice of every two bins of the log."""
+    n = len(_counts(params.log))
+    return SlicerOutputs(
+        slices=[TimeRange(start=i, stop=min(i + 2, n)) for i in range(0, n, 2)]
+    )
+
+
+class SlicesParams(Data):
+    sample: SampleFile
+    time_range: list[TimeRange] = Field(min_length=1)
+
+
+Sliced = NewType('Sliced', sc.Variable)
+
+
+class SlicedOutputs(Data):
+    sliced: Sliced
+
+
+SLICES = _spec('slices', SlicedOutputs, params=SlicesParams, tables=('time_range',))
+
+
+def sliced(params: SlicesParams) -> SlicedOutputs:
+    """The counts of the sample in every time range, summed."""
+    counts = _counts(params.sample)
+    total = sum(float(counts[r.start : r.stop].sum()) for r in params.time_range)
+    return SlicedOutputs(sliced=Sliced(sc.scalar(total)))
+
+
+class Centre(BaseModel):
+    """A beam centre as plain data: typed in, or found by ``FIND_CENTRE``."""
+
+    x: float
+
+
+class FindCentreParams(Data):
+    direct_beam: DirectBeamFile
+
+
+class FoundCentre(Data):
+    centre: Centre
+
+
+FIND_CENTRE = _spec('find-centre', FoundCentre, params=FindCentreParams)
+
+
+def find_centre(params: FindCentreParams) -> FoundCentre:
+    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam).mean())))
+
+
+class CentredParams(Data):
+    centre: Centre
+    sample: SampleFile
+    transmission: Transmission | None = None
+    can: CanFile | None = None
+
+
+Centred = NewType('Centred', sc.Variable)
+
+
+class CentredOutputs(Data):
+    centred: Centred
+
+
+CENTRED_MULTI = _spec('sans-centred', CentredOutputs, params=CentredParams).tabulate(
+    name='sans-centred-multi',
+    version=1,
+    tables={'sample': ('transmission',), 'can': ()},
+)
+
+
+def centred(params: Any) -> CentredOutputs:
+    """
+    The sample runs, each times its transmission if given, minus the cans,
+    minus the centre.
+    """
+    rows = zip(params.sample, params.transmission, strict=True)
+    samples = sum(_counts(s) * (1.0 if t is None else t.value) for s, t in rows)
+    cans = sum((_counts(c) for c in params.can), 0.0)
+    return CentredOutputs(centred=Centred(_array(samples - cans - params.centre.x)))
+
+
 TOYS: dict[SpecId, Binding[Any, Any, Any]] = {
     SpecId.of(binding.spec): binding
     for binding in [
@@ -447,6 +548,10 @@ TOYS: dict[SpecId, Binding[Any, Any, Any]] = {
         function_binding(EXPORT, export),
         function_binding(PARTS_SUM, parts_sum),
         summing(VOLUME, volume),
+        function_binding(SLICER, slicer),
+        kept_rows(SLICES, sliced),
+        function_binding(FIND_CENTRE, find_centre),
+        kept_rows(CENTRED_MULTI, centred),
     ]
 }
 """The binding of each toy spec, by its ID."""

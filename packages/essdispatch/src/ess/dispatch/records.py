@@ -97,8 +97,9 @@ class Request(BaseModel, frozen=True):
     A spec and its params, by name.
 
     ``params`` is an instance of the params model, if every value is a
-    literal, or a dict by name: a group as a model or a dict, given by value,
-    and a reference for a data value; a list of these for a list parameter.
+    literal, or a dict by name: a literal, such as a group as a model or a
+    dict, or a reference, as the parameter's type allows; a list of these for
+    a list parameter.
     A file is always given by reference, such as ``dataset(path=...)``. A
     reference is found at the top of a value or of an element of a list, so
     the references of a request are found without its spec.

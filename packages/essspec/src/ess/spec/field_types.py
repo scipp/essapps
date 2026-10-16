@@ -99,9 +99,9 @@ def base(tp: Any) -> Any:
     return supertypes(tp)[-1]
 
 
-def is_data_value(tp: Any) -> bool:
+def is_single(tp: Any) -> bool:
     """
-    Whether ``tp`` is the type of one data value: any type but a list, a
+    Whether ``tp`` is the type of a single value: any type but a list, a
     dict, a union, or ``None``, once its ``NewType``s are removed.
     """
     tp = base(tp)
@@ -163,9 +163,10 @@ def model_of(
     decorators but model validators, which the framework never calls; a check
     of one value belongs to the value's type.
 
-    With ``rows``, the field is a column of rows pushed into a table: it is
-    validated by its element type alone, with that type's metadata, without
-    the field's length constraints on the whole table.
+    With ``rows``, the field ``name`` is a list parameter, and the model
+    validates one row of it: by its element type alone, with that type's
+    metadata, without the field's length constraints, which hold for the
+    whole list.
     """
     return _model_of(model, name, rows)
 
@@ -173,5 +174,5 @@ def model_of(
 @functools.cache
 def _model_of(model: type[BaseModel], name: str, rows: bool) -> type[BaseModel]:
     info = model.model_fields[name]
-    field: dict[str, Any] = {name: (info.annotation, Field() if rows else info)}
-    return create_model(model.__name__, __config__=model.model_config, **field)
+    field = (get_args(info.annotation)[0], Field()) if rows else (info.annotation, info)
+    return create_model(model.__name__, __config__=model.model_config, **{name: field})
