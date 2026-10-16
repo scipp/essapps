@@ -10,16 +10,7 @@ import pytest
 
 from ess.dispatch import Client, Request, Selector, SubmitError, Template, apply
 
-from .conftest import (
-    IOFQ,
-    IOFQ_V2,
-    VOLUME,
-    IofQParams,
-    Measure,
-    Reduction,
-    ReductionV2,
-    Run,
-)
+from .conftest import IOFQ, IOFQ_V2, VOLUME, Measure, Reduction, ReductionV2
 
 
 def test_d1_temperature_scan(
@@ -63,11 +54,7 @@ def test_d2_overnight_cluster_batch(
     corrupt(runs['7'])
     for member, run in runs.items():
         client.submit(
-            IOFQ,
-            IofQParams(sample=Run(file=run)),
-            label='night',
-            member=member,
-            persist=True,
+            IOFQ, params={'sample': run}, label='night', member=member, persist=True
         )
     client.close()  # the laptop is closed; the persisted runs go on
 
@@ -79,7 +66,7 @@ def test_d2_overnight_cluster_batch(
     reruns = [
         morning.submit(
             r.request.spec,
-            r.request.params,
+            params=r.request.params,
             label=r.label,
             member=r.member,
             persist=True,
@@ -149,11 +136,11 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
 
     before = client.records(label='scan')
-    runs = [r.request.params['sample']['file'] for r in before]
+    runs = [r.request.params['sample'] for r in before]
     renamed = apply(
         replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
     )
-    with pytest.raises(SubmitError, match=r"reduction: \['threshold'\]"):
+    with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
         client.submit(renamed, label='scan')
     moved = replace(
         template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5)}
@@ -185,16 +172,14 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        volume.push('runs', [Run(file=run)])  # added once the previous cut is copied
+        volume.push(runs=[run])  # added once the previous cut is copied
         pushed.append(run)
         cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
     total = client.freeze(volume, persist=True)
 
     assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
     assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
-    assert total.request == Request(  # push order
-        VOLUME, {'runs': [Run(file=run) for run in pushed]}
-    )
+    assert total.request == Request(VOLUME, params={'runs': pushed})  # push order
     assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)
     assert len(provenance.datasets()) == 300  # run 5, measured again, once

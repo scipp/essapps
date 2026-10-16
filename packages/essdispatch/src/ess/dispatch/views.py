@@ -186,16 +186,19 @@ class Views:
     def plain(self, accumulator_id: str, pushes: int) -> Request:
         """
         The plain request of the accumulator's state after ``pushes`` pushes:
-        its typed fixed values, with each table filled by the rows pushed into
-        it, in push order.
+        its fixed values, with each blank table filled by the rows pushed
+        into it, in push order.
         """
         opened = self.accumulators[accumulator_id]
-        pushed = self.pushes.get(accumulator_id, [])[:pushes]
-        tables = {
-            t: [row for p in pushed if p.table == t for row in p.rows]
-            for t in opened.template.blanks
-        }
-        return Request(opened.template.spec, {**opened.fixed, **tables})
+        params = dict(opened.params)
+        copied: set[str] = set()  # the tables copied from the opening's
+        for push in self.pushes.get(accumulator_id, [])[:pushes]:
+            for name, rows in push.params.items():
+                if name not in copied:
+                    params[name] = list(params[name])
+                    copied.add(name)
+                params[name].extend(rows)
+        return Request(opened.template.spec, params=params)
 
     def status(self, record_id: str) -> Status:
         finished = self.finished.get(record_id)

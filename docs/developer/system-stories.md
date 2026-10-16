@@ -76,7 +76,7 @@ Gap: a cancel ends the records, but a workflow that has started runs on and keep
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
 Property: with a driver that adds in place, such as `Summing`, each push reduces its run and adds it to the driver, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open). A cut copies only its selection and makes no record; a cut kept as a record makes the record of its state too, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). History therefore grows in proportion to the number of runs. The frozen volume is written once, and no copy of it is made.
-Each cut checks the plain request of its state, which takes time in proportion to the rows so far: about 1.3 ms at 300 rows, so its total over the scan grows with the square of the number of runs ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
+The first pin of each state builds the state's plain request, in time proportional to the rows pushed so far, and checks the number of rows of each table by its length constraints ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
 
 Gap: reducing the runs of one scan on several nodes needs a merge of two drivers (README.md open question 1).
 

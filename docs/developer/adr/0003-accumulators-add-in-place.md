@@ -54,10 +54,11 @@ All outputs of a state are computed at once, the first time a pin needs them, si
 Two pins of one state compute once.
 
 **Checks at pin, not at push.**
-A push checks each row by its row model alone, and a state's plain request is checked when the state is first pinned.
+A push checks each row by the table's element type alone, and that its rows are new to the table.
+When a state is first pinned, the backend checks the number of rows of each table by its length constraints, so a table that needs a row has one.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
-Opening an accumulator types each fixed value by its own field alone, since a params-model validator that needs rows would refuse the empty tables.
-So a validator that reads several values must not change one, because the driver got the values typed one by one.
+Opening an accumulator validates each fixed value by its own field alone.
+The framework never runs a model validator of the params model, on a template, a push, or a state: a driver never gets a whole params instance.
 
 **A failed push stops the accumulator**, since skipping it would make state n differ from the plain request over the first n pushes.
 
@@ -88,6 +89,6 @@ Lifting the first rule later breaks no code.
 - An accumulator holds one driver, the rows of the push being added, and a pinned state's outputs until the next push. Outputs that allocate, such as a normalized volume, cost one more volume.
 - A slow reader delays the next addition, not the controller's `push` call.
 - A failure to add reaches the controller at its next push or pin, not from `push` itself.
-- A binding must not return an output that shares memory with an input, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
-- The first pin of each state checks its plain request, about 1.3 ms at 300 rows and 4 ms at 1000. Story D7 pins after every push, so its total grows with the square of the pushes, to 0.2 s for 300 and 2 s for 1000.
+- A binding must not return an output that shares memory with a value it is given, or a record's output could change at the next push (README, [Specs and bindings](../README.md#specs-and-bindings)).
+- The first pin of each state builds the state's plain request, in time proportional to the rows pushed so far, and checks the number of rows of each table.
 - A request that reads two accumulators holds back the next push of both until it has run.

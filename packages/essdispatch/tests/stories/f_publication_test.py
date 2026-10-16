@@ -10,16 +10,7 @@ import pytest
 
 from ess.dispatch import Client, SubmitError, Template
 
-from .conftest import (
-    BEAM_CENTRE,
-    IOFQ,
-    BeamCentreParams,
-    Corrections,
-    IofQParams,
-    Measure,
-    Reduction,
-    Run,
-)
+from .conftest import BEAM_CENTRE, IOFQ, Measure, Reduction
 
 
 @pytest.mark.xfail(
@@ -29,22 +20,17 @@ def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-    centre = client.compute(
-        BEAM_CENTRE, BeamCentreParams(direct_beam=Run(file=centre_run))
-    )
+    centre = client.compute(BEAM_CENTRE, params={'direct_beam': centre_run})
     tune = client.stage(
         Template(
             IOFQ,
-            params=IofQParams(
-                sample=Run(file=run),
-                corrections=Corrections(beam_centre=centre.ref('centre')),
-            ),
+            params={'sample': run, 'beam_centre': centre.ref('centre')},
             blanks=('reduction',),
         )
     )
-    result = client.compute(tune, {'reduction': Reduction(threshold=1.5)})
+    result = client.compute(tune, params={'reduction': Reduction(threshold=1.5)})
     pid = client.publish(result.ref('iofq'), 'scicat')
-    plain = client.compute(IOFQ, result.request.params)
+    plain = client.compute(IOFQ, params=result.request.params)
 
     provenance = scicat.entries[pid].provenance
     assert provenance == client.provenance(result) == client.provenance(plain)
@@ -62,16 +48,16 @@ def test_f2_reproduce_after_two_upgrades(
 ) -> None:
     result = client.compute(
         IOFQ,
-        IofQParams(
-            sample=Run(file=measure(1, [1.0, 2.0, 3.0, 4.0])),
-            reduction=Reduction(threshold=1.5),
-        ),
+        params={
+            'reduction': Reduction(threshold=1.5),
+            'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
+        },
     )
     upgraded = upgrade(versions={'scipp': '99.0'})
 
     with pytest.raises(SubmitError, match='scipp'):
         upgraded.recompute(result)
-    again = upgraded.compute(result.request.spec, result.request.params)
+    again = upgraded.compute(result.request.spec, params=result.request.params)
 
     assert again.request == result.request
     assert upgraded.provenance(again).software['scipp'] == '99.0'

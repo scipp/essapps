@@ -9,127 +9,161 @@ This is the only module of ``ess.spec`` that imports sciline (extra
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any
 
 import sciline
+from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
+from .field_types import optional, plain
 
 Key = Any
 
 
-class PipelineBinding:
+class PipelineBinding[P: BaseModel, O: BaseModel]:
     """
     A sciline pipeline behind a spec: plain requests and stages.
 
-    ``params`` maps each parameter to the sciline key it sets: a group or a
-    table as a whole by its name, or each field of a group by its path, such as
-    ``'sample.file'``. A group set to ``None`` sets each key of its paths to
-    ``None``. ``outputs`` maps each output of the spec to the key that
-    computes it, every required one included. A stage sets the fixed values on
-    a copy of the pipeline and cuts it at the keys of the blanks with
-    ``sciline.Stage``, which computes what does not depend on them on the
-    first call and holds it. A plain request is a stage with no blanks, called
-    once. A key that no output depends on is not fed: its value cannot change
-    the outputs. ``fixed`` and ``blanks`` are checked by ``fixed_values`` of
-    :mod:`ess.spec.binding`, and a parameter without a key is refused.
+    ``make_pipeline`` makes the pipeline from the fixed values, by name, with
+    defaults filled in, so that the graph may depend on them; it gets no
+    blank, and each call must return a pipeline of its own, such as a copy.
+    Each parameter sets the sciline key of its type as written, without
+    ``Annotated`` metadata, such as ``Reduction`` or ``CanFile | None``; a
+    table sets the key of its type, a list, to its list. Each output is
+    computed as the key of its type without ``| None``, since an optional
+    output means that the graph may lack it, not that a provider returns
+    ``None``; an output that a provider returns as ``X | None`` needs
+    ``keys=``. ``keys`` names another key of a parameter or an output, for a
+    workflow with keys of its own, such as for two parameters of one type; for
+    a parameter, ``None`` sets no key, for a field that ``make_pipeline`` uses
+    itself::
 
-    The author of the pipeline promises that it is pure: it modifies no input,
-    and returns the same results for the same inputs.
+        PipelineBinding(
+            IOFQ,
+            make_pipeline,
+            keys={'sample': Filename[SampleRun], 'iofq': BackgroundSubtractedIofQ},
+        )
+
+    :attr:`keys` and :meth:`pipeline` give these keys and the graph, so that
+    the driver of a multi-run spec can reuse them.
+
+    A stage cuts :meth:`pipeline` of the fixed values at the keys of the
+    blanks with ``sciline.Stage``, which computes what does not depend on
+    them on the first call and holds it. A plain request is a stage with no
+    blanks, called once. ``make_pipeline`` gets no blank, so a field that
+    changes the graph cannot be a blank. A key that no output depends on is
+    not fed: its value cannot change the outputs. An optional output is
+    computed if the pipeline has a value or a provider for its key, and is
+    ``None`` otherwise. ``fixed`` and ``blanks`` are checked by
+    ``fixed_values`` of :mod:`ess.spec.binding`, and a field without a key
+    cannot be a blank.
+
+    The author of the pipeline promises that it is pure: it modifies no value
+    it is given, and returns the same results for the same values.
     """
 
     def __init__(
         self,
-        spec: WorkflowSpec[Any],
-        pipeline: sciline.Pipeline,
+        spec: WorkflowSpec[P, O],
+        make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
         *,
-        params: Mapping[str, Key],
-        outputs: Mapping[str, Key],
+        keys: Mapping[str, Key | None] | None = None,
     ) -> None:
-        names = {path.split('.')[0] for path in params}
-        if unknown := names - spec.params.model_fields.keys():
-            raise ValueError(f'{sorted(unknown)}: not parameters of {spec.name}')
-        declared = spec.outputs.model_fields
-        if unknown := outputs.keys() - declared.keys():
-            raise ValueError(f'{sorted(unknown)}: not outputs of {spec.name}')
-        required = {n for n, f in declared.items() if f.is_required()}
-        if missing := required - outputs.keys():
-            raise ValueError(f'{sorted(missing)}: outputs of {spec.name} not mapped')
+        keys = dict(keys or {})
+        declared = spec.params.model_fields
+        outputs = spec.outputs.model_fields
+        if unknown := keys.keys() - declared.keys() - outputs.keys():
+            raise ValueError(f'{sorted(unknown)}: not fields of {spec.name}')
+        if unset := [n for n in outputs if n in keys and keys[n] is None]:
+            raise ValueError(f'{unset}: an output is computed as a key')
+        all_keys = {
+            **{n: keys.get(n, plain(f.annotation)) for n, f in declared.items()},
+            **{n: keys.get(n, optional(f.annotation)[0]) for n, f in outputs.items()},
+        }
+        names: dict[Key, list[str]] = {}
+        for name, key in all_keys.items():
+            if key is not None:
+                names.setdefault(key, []).append(name)
+        if shared := [' and '.join(n) for n in names.values() if len(n) > 1]:
+            raise ValueError(
+                f'{spec.name}: {"; ".join(shared)}: two fields have one key'
+            )
         self.spec = spec
-        self._pipeline = pipeline
-        self._keys = _Keys(params)
-        self._outputs = dict(outputs)
+        self._keys = MappingProxyType(all_keys)
+        self._make_pipeline = make_pipeline
 
-    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.make_stage(params, ())({})
+    @property
+    def keys(self) -> Mapping[str, Key | None]:
+        """
+        The sciline key of each parameter and output, by name; ``None`` for a
+        parameter that sets none.
+        """
+        return self._keys
 
-    def make_stage(
-        self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> StageCall:
-        values = fixed_values(self.spec, fixed, blanks)
-        blank_keys = self._keys.of(blanks)
-        pipeline = self._keys.set(self._pipeline, values)
-        cut = _Cut(pipeline, tuple(self._outputs.values()), blank_keys)
+    def pipeline(self, fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        """
+        The pipeline ``make_pipeline`` makes from ``fixed``, by name, with each
+        value of ``fixed`` set at its key: the graph that a stage cuts.
 
-        def call(blank_values: Mapping[str, Any]) -> dict[str, Any]:
-            results = cut(self._keys.by_key(blank_values))
-            return {name: results[key] for name, key in self._outputs.items()}
-
-        return call
-
-
-class _Keys:
-    """The sciline keys of parameters, mapped as ``params`` of PipelineBinding."""
-
-    def __init__(self, params: Mapping[str, Key]) -> None:
-        keys: dict[str, dict[str, Key]] = defaultdict(dict)
-        for path, key in params.items():
-            keys[path.split('.')[0]][path] = key
-        if both := [n for n, ks in keys.items() if n in ks and len(ks) > 1]:
-            raise ValueError(f'{both}: mapped as a whole and by paths')
-        self._keys = dict(keys)
-
-    def of(self, names: Iterable[str]) -> list[Key]:
-        """The keys that the parameters ``names`` set."""
-        names = list(names)
-        if unknown := set(names) - self._keys.keys():
-            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
-        return [key for name in names for key in self._keys[name].values()]
-
-    def set(
-        self, pipeline: sciline.Pipeline, values: Mapping[str, Any]
-    ) -> sciline.Pipeline:
-        """A copy of ``pipeline`` with ``values`` set."""
-        pipeline = pipeline.copy()
-        for key, value in self.by_key(values).items():
+        A stage passes its fixed values with defaults filled in. A driver
+        passes the fixed values it is made with: every value that is not a
+        table, defaults filled in. So a field that is a table of the
+        multi-run spec cannot shape the graph, as a blank cannot.
+        """
+        spec = self.spec
+        if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
+            raise ValueError(f'{unknown}: not parameters of {spec.name}')
+        pipeline = self._make_pipeline(fixed)
+        for key, value in self._by_key(fixed).items():
             pipeline[key] = value
         return pipeline
 
-    def by_key(self, values: Mapping[str, Any]) -> dict[Key, Any]:
-        """``values`` by the sciline key each sets."""
-        by_key: dict[Key, Any] = {}
-        unknown: list[str] = []
-        for name, value in values.items():
-            keys = self._keys.get(name, {})
-            if name in keys:
-                by_key[keys[name]] = value
-            elif keys and value is None:
-                by_key.update(dict.fromkeys(keys.values()))
-            elif keys and isinstance(value, Mapping):
-                for field, v in value.items():
-                    path = f'{name}.{field}'
-                    if path in keys:
-                        by_key[keys[path]] = v
-                    else:
-                        unknown.append(path)
-            else:
-                unknown.append(name)
-        if unknown:
-            raise ValueError(f'no sciline key for the parameters {sorted(unknown)}')
-        return by_key
+    def compute(self, params: P) -> O:
+        return self.make_stage(dict(params), ())({})
+
+    def make_stage(
+        self, fixed: Mapping[str, Any], blanks: Collection[str]
+    ) -> StageCall[O]:
+        values = fixed_values(self.spec, fixed, blanks)
+        left_open = frozenset(blanks)
+        if keyless := sorted(n for n in left_open if self._keys[n] is None):
+            raise ValueError(f'{keyless}: without a key, cannot be blanks')
+        pipeline = self.pipeline(values)
+        output_fields = self.spec.outputs.model_fields
+        outputs = [
+            self._keys[name]
+            for name, field in output_fields.items()
+            if field.is_required() or _computable(pipeline, self._keys[name])
+        ]
+        cut = _Cut(pipeline, outputs, [self._keys[n] for n in left_open])
+        output_model = self.spec.outputs
+
+        def call(blank_values: Mapping[str, Any]) -> O:
+            if blank_values.keys() != left_open:
+                raise ValueError(f'give the blanks {sorted(left_open)}')
+            results = cut(self._by_key(blank_values))
+            return output_model(
+                **{n: results.get(self._keys[n]) for n in output_fields}
+            )
+
+        return call
+
+    def _by_key(self, values: Mapping[str, Any]) -> dict[Key, Any]:
+        """``values`` by the key each sets; a field without a key is left out."""
+        return {
+            self._keys[n]: v for n, v in values.items() if self._keys[n] is not None
+        }
+
+
+def _computable(pipeline: sciline.Pipeline, key: Key) -> bool:
+    """Whether the pipeline has a value or a provider for ``key``."""
+    # sciline keeps a node's value or provider as an attribute of the node in
+    # its graph, under the names 'value' and 'provider'.
+    node = pipeline.underlying_graph.nodes.get(key, {})
+    return 'value' in node or 'provider' in node
 
 
 class _Cut:

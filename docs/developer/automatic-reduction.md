@@ -10,7 +10,7 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 It reads metadata through `client.datasets` and builds plain data; it submits nothing.
 
 ```python
-requests = apply(Template.from_spec(IOFQ, sample=BLANK), samples, client.datasets, member_field='temperature')
+requests = apply(Template(IOFQ, blanks=('sample',)), samples, client.datasets, member_field='temperature')
 records = client.submit(requests, label='scan', persist=True)
 ```
 
@@ -18,30 +18,31 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
-A blank a dataset fills is a group, such as `sample: Run`, and the dataset goes in its field `dataset_field`, by default `file`, which `apply` and `Rule` take.
-A blank is a whole group, so the template cannot fix the other fields of a group that a dataset fills.
-A spec that batch reduction fills therefore gives each dataset that a rule or a lookup finds a group of its own, such as `sample: Run` and `can: Run`.
+A blank that a dataset fills is a file parameter, such as `can: CanFile`, or a group that holds one required file, such as `sample: Sample`, and the dataset reference is its value: `apply` fills no other parameters.
+So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `sample` and `can`.
+A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template.from_spec(IOFQ, sample=BLANK, can=BLANK), samples, client.datasets, lookup=cans)
+requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets, lookup=cans)
 ```
 
 ## Rules
 
-A rule is plain data: a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists, all of them by default.
+A rule is plain data: a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists, every output by default.
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
-rule = Rule('auto-iofq', Template.from_spec(IOFQ, sample=BLANK), selector=Selector(role='sample'),
+rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
             label='iofq')
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each dataset is a row of the template's table blank, in the row's field `dataset_field`, and each arrival of an angle submits one plain request that stitches all angles of that sample so far.
+Each dataset is a row of the template's blank table `runs`: the dataset reference is the row.
+Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template.from_spec(STITCH, reference=Run(file=reference), runs=BLANK),
+rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
 

@@ -4,15 +4,15 @@
 A batch: one template filled for each of many datasets.
 
 A lookup fills further blanks per dataset, such as the can measured most
-recently before a sample. A blank a dataset fills is a group, and the dataset
-goes in its field ``dataset_field``. Datasets are ordered by their run number.
+recently before a sample. A blank a dataset fills is a file parameter, or a
+group that holds one required file, which takes the dataset itself. Datasets
+are ordered by their run number.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
 
 from ess.spec import DatasetRef
 
@@ -45,14 +45,9 @@ class Lookup:
     def __init__(self, **rules: LastBefore) -> None:
         self.rules = rules
 
-    def fill(
-        self, ref: DatasetRef, source: Datasets, dataset_field: str
-    ) -> dict[str, Any]:
-        """Each blank, a group with the dataset found in ``dataset_field``."""
-        return {
-            blank: {dataset_field: rule.find(ref, source)}
-            for blank, rule in self.rules.items()
-        }
+    def fill(self, ref: DatasetRef, source: Datasets) -> dict[str, DatasetRef]:
+        """Each blank, a file parameter, with the dataset found."""
+        return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
 def dataset_blank(template: Template, lookup: Lookup | None) -> str:
@@ -69,25 +64,24 @@ def apply(
     source: Datasets,
     *,
     member_field: str = 'run',
-    dataset_field: str = 'file',
     lookup: Lookup | None = None,
 ) -> dict[str, Request]:
     """
     Fill the template for each dataset.
 
     ``source`` answers metadata queries, such as ``client.datasets``. Each
-    dataset fills the one blank the lookup leaves, a group, in its field
-    ``dataset_field``. The requests are keyed by member: the value of the
-    metadata field ``member_field`` of each dataset. Submitting them under a
-    label makes the keys the members of their records. Raises ``LookupError``
-    if the request of a dataset cannot be made.
+    dataset fills the one blank the lookup leaves, a file parameter or a group
+    that holds one required file. The
+    requests are keyed by member: the value of the metadata field
+    ``member_field`` of each dataset. Submitting them under a label makes the
+    keys the members of their records. Raises ``LookupError`` if the request
+    of a dataset cannot be made.
     """
     requests, failed = try_apply(
         template,
         datasets,
         source,
         member_field=member_field,
-        dataset_field=dataset_field,
         lookup=lookup,
     )
     if failed:
@@ -101,7 +95,6 @@ def try_apply(
     source: Datasets,
     *,
     member_field: str = 'run',
-    dataset_field: str = 'file',
     lookup: Lookup | None = None,
 ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
     """
@@ -117,12 +110,11 @@ def try_apply(
     for ref in datasets:
         try:
             member = str(source.metadata(ref)[member_field])
-            found = lookup.fill(ref, source, dataset_field) if lookup else {}
-            values = {blank: {dataset_field: ref}, **found}
+            found = lookup.fill(ref, source) if lookup else {}
         except LookupError as error:
             failed[ref] = error
             continue
         if member in requests:
             raise ValueError(f'two datasets have {member_field} {member}')
-        requests[member] = template.fill(values)
+        requests[member] = template.fill(params={blank: ref, **found})
     return requests, failed
