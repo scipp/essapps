@@ -477,7 +477,8 @@ A list parameter makes a table only when `tables` names it; otherwise it is a va
 The *table rules* are: the number of rows of a table meets its length constraints, such as a table that needs a row, and the rows of a table are distinct.
 
 **Single-run and multi-run specs.** With one row in each table, a request of `IOFQ_MULTI` is a request of `IOFQ`, and gives the same outputs (the one-row symmetry, see Symmetries).
-A request of `IOFQ` without a can, `can=None`, is the request of `IOFQ_MULTI` with `can=[None]`, so a driver over a table whose rows may be `None` takes such a row as no row.
+A request of `IOFQ` without a can, `can=None`, is the request of `IOFQ_MULTI` with one can row, `can=[None]`; what that row means is the workflow's, here that no can is subtracted.
+`can=[]`, a table without rows, is another request, which a driver may refuse.
 The binding's driver handles structure below a row, such as detector banks, and decides what is summed ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Stages and accumulators
@@ -734,7 +735,7 @@ class IofQDriver:
 
     def push(self, table, rows):
         for row in rows:                          # a Sample, or a can run's path
-            if row is None:                       # a can left out, as one_row gives it
+            if row is None:                       # a can row of None: subtract no can
                 continue
             parts = numerator_and_denominator(row, self._bins)
             old = self._sums.get(table)
