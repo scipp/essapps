@@ -112,14 +112,18 @@ pydantic makes a JSON schema of it with the params model's config. A value
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
+| a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source
 checks access and the record holds the dataset's identity; the binding gets a
-local path. A *group* is a pydantic model with a JSON form, such as
-`Reduction`: the usual type of a parameter given inline. A *data value* is a
-value of a type without a JSON form: a file, or an object such as a scipp
-array.
+local path. A *group* is a pydantic model, such as `Reduction`: the usual
+type of a parameter given inline. A group that holds a file, such as `Sample`
+below, is given *field by field*: each of its fields inline or by reference,
+as a parameter is, so its file comes from a dataset. A reference to a dataset
+stands for the whole group: its one required file, and its other fields at
+their defaults. A *data value* is a value of a type without a JSON form: a
+file, or an object such as a scipp array.
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -134,9 +138,13 @@ CanFile = NewType('CanFile', Path)
 Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
+class Sample(BaseModel):                          # a group that holds a file
+    run: SampleFile
+    transmission: Transmission | None = None
+
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleFile
+    sample: Sample
     can: CanFile | None = None
     beam_centre: BeamCentre | None = None
 
@@ -165,7 +173,10 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - Each parameter's type is a type, possibly optional, or a list of one; not a
   dict or a union of two types.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
-- A group holds no file.
+- A group holds a file only as one of its fields, typed as a file, possibly
+  optional. Such a group follows the rules on defaults and on the params model
+  below. A field of it that is a list or a dict has a JSON form, since no
+  reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value
   that round-trips and whose JSON form is neither an `@ref` object nor a list
   holding one; of any other type, `None` or `[]`.
@@ -176,7 +187,8 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 
 Each parameter is validated alone, in every phase: a template, a stage call,
 or a push gives some values only, so a check that read several parameters
-would hold for some requests of a spec and not for others. A check of one
+would hold for some requests of a spec and not for others. Like the params
+model, a group given field by field is never validated whole. A check of one
 value belongs to the value's type, as `EdgesModel` checks its edges, and so
 does the JSON form of a value, which the framework stores and reads back. A
 check across parameters, such as a transmission mode that requires a
@@ -190,8 +202,9 @@ output), a dataset the framework did not compute (`DatasetRef`: one identity
 string), or an output of an accumulator (`AccumulatorRef`: accumulator and
 output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
-state. A reference stands for a value, or for one row of a list parameter:
-never for a whole list, and never for part of a group. Its JSON form is an
+state. A reference stands for a value, for one row of a list parameter, or
+for one field of a group given field by field, such as `sample.run`: never
+for a whole list, and never for part of any other group. Its JSON form is an
 object with the key `@ref`, which names its kind:
 
 ```json
@@ -199,13 +212,15 @@ object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
-The framework looks for references at two places only: the top of each value,
-and the top of each element of a value that is a JSON array. At these places
-it refuses an `@ref` object that the spec does not allow as a reference: an
-element of a parameter that is not a list, such as a `tuple` of groups, whose
-JSON is an array; or the JSON form of an inline value, such as a group with
-extra fields that holds the key `@ref`. Deeper inside a value, `@ref` is plain
-data. So a framework finds the references of a request without the spec, as a
+The framework looks for references at three places only: the top of each
+value, the top of each element of a value that is a JSON array, and each field
+of an object at one of these two places, such as `sample.run` or
+`sample[2].transmission`. At these places it refuses an `@ref` object that the
+spec does not allow as a reference: an element of a parameter that is not a
+list, such as a `tuple` of groups, whose JSON is an array; a field of a group
+given inline whole, such as `reduction.bins`; or the JSON form of an inline
+value, such as a group with extra fields that holds the key `@ref`. Deeper
+inside a value, `@ref` is plain data. So a framework finds the references of a request without the spec, as a
 remote client that holds only the serialized spec must, and an inline value
 never reads as a reference.
 
@@ -218,7 +233,7 @@ framework normalizes it before a reference enters a record.
 **Fit.** A reference *fits* a parameter when the type of the data it names can
 be the parameter's value: an `IofQ` output fits a parameter typed
 `sc.DataArray`, and does not fit a `Transmission` parameter, another `NewType`
-of `sc.DataArray`. A dataset reference fits a file parameter only. A framework
+of `sc.DataArray`. A dataset reference fits a file only. A framework
 checks fit in the request phase, so that a chain of requests is refused before
 anything runs. `ess.spec.field_types.fits` states the rule.
 
@@ -261,56 +276,57 @@ which sciline targets to compute) is not modeled: like parameter slicing, it is
 an implementation notion. Livedata-specific output machinery (`OutputView`,
 `Temporality`, windowing) stays in esslivedata.
 
-### Groups, and tables named by their index
+### Groups, and tables
 
 The models of `ess.spec.parameters`, such as `QEdges` and `WavelengthRange`, are
 groups that specs share. A field of plain numbers states its unit in its
 declaration or in a unit field beside it, as the edges models do; a data value
 carries its own unit.
 
-A *table* is a set of list parameters of equal length, pushed together into an
-accumulator. Its *index* is the parameter that names it, such as the run. Its
-other *columns* are attached to the index, such as a correction of each run.
-Each position is a *row*, and each row is given inline or by reference, as its
-type allows. As in a pandas DataFrame, the index values of a table are distinct.
-A *single-run spec* takes one run per parameter. `tabulate` makes a *multi-run
-spec* from it by naming the indexes, each with the columns attached to it:
+A *table* is a list parameter whose *rows* an accumulator takes a push at a
+time, such as the sample runs. Each row is given inline or by reference, as its
+type allows. The rows of a table are distinct. A *single-run spec* takes one
+run per parameter. `tabulate` makes a *multi-run spec* from it by naming the
+parameters that become tables:
 
 ```python
-IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
-SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
-                           tables={'sample': ('sample_geometry',), 'can': ()})
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'),
+                           empty=('can',))
 ```
 
-Each parameter named becomes a `list`, such as `sample: SampleFile` becoming
-`list[SampleFile]` with at least one row; the docstring of
-`WorkflowSpec.tabulate` states the rules for each kind of parameter.
+Each parameter named becomes a `list` of its type as written, such as
+`sample: Sample` becoming `list[Sample]` with at least one row; a table named
+in `empty` may have no rows, and has none by default. The docstring of
+`WorkflowSpec.tabulate` states the rules.
 
-`tabulate` fills the field `tables` of `WorkflowSpec`, which maps each index to
-its attached columns. A spec whose outputs differ from those of a single-run
-spec, such as a stitch of all angles, or that has no single-run spec, such as a
-sum of counts over the runs of a scan, declares its tables itself:
-`WorkflowSpec(..., tables={'angle': ()})`. Its required index carries
-`Field(min_length=1)`, as one that `tabulate` makes, so that the model, its
-schema, and the backend agree that the table has a row. A list parameter makes
-a table only when `tables` names it.
+`tabulate` fills the field `tables` of `WorkflowSpec`, a tuple of the names of
+the tables. A spec whose outputs differ from those of a single-run spec, such
+as a stitch of all angles, or that has no single-run spec, such as a sum of
+counts over the runs of a scan, declares its tables itself:
+`WorkflowSpec(..., tables=('angle',))`, with
+`angle: list[AngleFile] = Field(min_length=1)`, as `tabulate` makes it, so that
+the model, its schema, and the backend agree that the table has a row. A list
+parameter makes a table only when `tables` names it.
 
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
-lacks or has wrong is given next to the run, as a column of the run's table, so
-the request and its record hold it. Such a column takes an inline value in one
-row and a reference to a computed value in another, as a transmission computed
-for one run and not another.
+lacks or has wrong is given next to the run, as a field of the row's group,
+given field by field, so the request and its record hold it. Such a field takes
+an inline value in one row and a reference to a computed value in another, as a
+transmission computed for one run and not another. A blank of a template is a
+whole parameter, and a group is one key of a sciline pipeline. So a stage of
+the single-run spec that tunes a transmission has `sample` as its blank, and
+reads the run again at each call.
 
-The framework compares index values as the record holds them and, for an index
-whose type has a JSON form, also by the values read, so that a time slice is
-never summed twice (the essapps README, `docs/developer/README.md`, section
-Stages and accumulators).
+The framework compares rows whole, as the record holds them, so the same run
+with another transmission is another row. For a table whose element type has a
+JSON form, it also compares the rows read, so that a time slice is never summed
+twice (the essapps README, `docs/developer/README.md`, section Stages and
+accumulators).
 
-With one row in each table whose index is given, and none where it is left out,
-a request of the multi-run spec is a request of the single-run spec.
-`ess.spec.testing.check_one_row` checks that a package's single-run and
-multi-run bindings agree on such requests.
+With one row in each table, a request of the multi-run spec is a request of the
+single-run spec. `ess.spec.testing.check_one_row` checks that a package's
+single-run and multi-run bindings agree on such requests.
 
 ### Two forms, one-way projection
 
@@ -435,7 +451,7 @@ output, and dims and units of an output for a UI.
   reference within a schema, so a reference held in a schema, as a default or
   an example, would be read as one.
 - **A reference to a whole list** filling a list parameter. The table rules,
-  such as equal lengths, could then be checked only in the call phase.
+  such as distinct rows, could then be checked only in the call phase.
 - **The framework running model validators of the params model.** A stage and a
   driver never make a whole params instance, so such a check would hold for
   some requests of a spec and not for others.
@@ -446,9 +462,13 @@ output, and dims and units of an output for a UI.
 - **Multi-run models written by hand**, next to the single-run model. They
   repeat the single-run model, and the one-row symmetry holds only by
   convention.
-- **Rows as models**, pairing a run with its transmission run in a model of two
-  fields. The columns of a table pair them; such a model holds a file, so it is
-  not a group, and a reference would stand for part of it.
-- **Tables named apart from their fields.** A second namespace, which blanks,
-  pushes, and the driver would mix with the names of fields. The index names
-  its table instead.
+- **A table as several list parameters of equal length**, an *index* such as
+  the runs, with *columns* attached to it, such as the transmission of each
+  run. The values of one run are then spread over several lists and paired by
+  position; a blank, a push, and a driver name a table by its index, a name
+  that stands for several parameters; and a column left out of a push needs a
+  value to fill it. A group given field by field holds the values of one run
+  in one row.
+- **Tables named apart from their parameters.** A second namespace, which
+  blanks, pushes, and the driver would mix with the names of parameters. The
+  parameter names its table instead.

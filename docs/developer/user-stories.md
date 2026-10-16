@@ -30,13 +30,14 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICER` | `log: RunFile` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: SampleFile`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `FIND_CENTRE` | `direct_beam: DirectBeamFile` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleFile]` with the column `transmission: list[TransmissionArray \| None]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
+| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRun]`, a table; `can: list[CanFile \| None]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
 A parameter's type decides how a request gives its value (README.md):
 
 | A parameter's type | In the toy specs | Given as |
 |---|---|---|
 | a file: a `NewType` of `Path` | each `...File` | a dataset reference |
+| a group that holds a file | `SampleRun` | field by field, or a dataset reference for its file |
 | has a JSON form: a group | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an inline value, or a reference to an output that fits |
 | any other type | `CentreArray`, `Normalization`, `TransmissionArray`, `Parts`, `sc.Variable` | a reference to an output that fits |
 
@@ -45,12 +46,13 @@ Every field has a type of its own within its spec.
 Each `...File` is a `NewType` of `Path`, such as `SampleFile = NewType('SampleFile', Path)`, and a dataset reference fits each of them.
 An output without a type in the list of toy specs has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
 `Parts` is a model of two `sc.Variable`s.
+`SampleRun` is a group of `file: SampleFile` and `transmission: TransmissionArray | None`, `None` by default.
 A reference to an output fits a parameter when the output's type fits the parameter's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, and every curve fits `EXPORT`'s `result: sc.Variable`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
-The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with its runs as the index and no attached columns; that of `SLICES` has the time ranges as the index.
-These specs declare their tables with `tables=`, and each index, being required, carries `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
-`tabulate` makes `CENTRED_MULTI` from a single-run spec with params `centre: Centre`, `sample: SampleFile`, `transmission: TransmissionArray | None`, and `can: CanFile | None`, with `tables={'sample': ('transmission',), 'can': ()}`.
-So `sample` is a required index with the column `transmission`, and `can` is an index that may have no rows.
+The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
+These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
+`tabulate` makes `CENTRED_MULTI` from a single-run spec with params `centre: Centre`, `sample: SampleRun`, and `can: CanFile | None`, with `tables=('sample', 'can')` and `empty=('can',)`.
+So `sample` is a table that needs a row, and `can` is a table that may have no rows.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
 `IOFQ` and `VANADIUM`, which the stories stage, are bound to the functions `iofq` and `vanadium` by a toy binding that serves plain requests and stages.
@@ -563,7 +565,7 @@ assert len(client.provenance(total).datasets()) == 300         # run 5, measured
 ```
 
 `watch` yields run 5 once, although its file arrives twice.
-A second push of run 5 would be refused, since the index values of a table are distinct.
+A second push of run 5 would be refused, since the rows of a table are distinct.
 Each push reduces one run and adds it to the volume in place, so one volume is kept, not one per cut.
 Each cut pins the state after its push and copies only the selected cut, and the next push is added once the copy is made.
 `freeze` turns the last state into a record without a copy: its value is the volume itself, written once to the store.
@@ -777,8 +779,8 @@ with pytest.raises(LookupError, match=r'push 1 failed: time_range\[3\]: repeats'
 
 The client reads how many slices there are, since a reference names one row, never a whole list.
 The state's request holds the references, so it says where each slice came from.
-The index values of a table are compared as the request holds them and, since `TimeRange` has a JSON form, also by the values read.
-So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one index value.
+The rows of a table are compared as the request holds them and, since `TimeRange` has a JSON form, also by the rows read.
+So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one row.
 The repeat is found when the push is read, so the push fails and stops the accumulator, as any push whose data fail does.
 
 ### I2. A beam centre typed in or computed
@@ -818,15 +820,16 @@ r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
 t611 = client.compute(CONTRIBUTE, params={'sample': r611})     # transmission 1 / 4
 total = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=0.0)},
                                     blanks=('sample', 'can')))
-total.push(sample=[r611, r612], transmission=[t611.ref('transmission'), None])
+total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
 
 assert client.output(total, 'centred').values.tolist() == [2.25, 2.75]   # [1, 3] / 4 + [2, 2]
 assert client.provenance(total).records() == [t611]
 ```
 
-A push gives each row of a column inline or by reference: here a reference in one row and `None` in the other.
-`TransmissionArray` has no JSON form, so a row takes a reference, or `None` since the column is optional.
-No can is pushed: `can` is an index that may have no rows.
+A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
+Run 612 is given as a dataset reference, which stands for a `SampleRun` with the transmission `None`.
+`TransmissionArray` has no JSON form, so a transmission takes a reference, or `None` since the field is optional.
+No can is pushed: `can` is a table that may have no rows.
 
 ## Open
 

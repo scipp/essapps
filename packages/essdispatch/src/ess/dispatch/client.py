@@ -177,7 +177,7 @@ class Accumulator:
         entering one state in order::
 
             acc.push(sample=[dataset(run=611), dataset(run=612)])
-            acc.push(sample=[{'file': dataset(run=613), 'transmission': t.ref('t')}])
+            acc.push(sample=[{'run': dataset(run=613), 'transmission': t.ref('t')}])
 
         Each row is given inline, such as a group as a model or a dict, or
         by reference, as its type allows; a group that holds a file field by

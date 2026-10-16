@@ -56,13 +56,19 @@ class TransmissionFraction(BaseModel):
     value: float = Field(gt=0, le=1)
 
 
-class IofQParams(BaseModel):
-    reduction: Reduction = Field(default_factory=Reduction)
-    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
-    sample: SampleFile
+class Sample(BaseModel):
+    """A sample run, and the transmission given next to it."""
+
+    run: SampleFile
     transmission: TransmissionFraction | None = Field(
         default=None, description="The sample's; None takes the one in its file."
     )
+
+
+class IofQParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+    sample: Sample
     can: CanFile
 
 
@@ -83,7 +89,7 @@ IOFQ = WorkflowSpec(
 IOFQ_MULTI = IOFQ.tabulate(
     name='toy-sans-iofq-multi',
     version=1,
-    tables={'sample': ('transmission',), 'can': ()},
+    tables=('sample', 'can'),
     title='I(Q) of summed runs',
     description='I(Q) of the summed sample runs, minus that of the summed can runs.',
 )
@@ -209,8 +215,8 @@ LOADED: list[dict] = []
 or an accumulator saves."""
 
 
-def read_sample(file: SampleFile) -> RunData[SampleRun]:
-    return RunData[SampleRun](json.loads(file.read_text()))
+def read_sample(sample: Sample) -> RunData[SampleRun]:
+    return RunData[SampleRun](json.loads(sample.run.read_text()))
 
 
 def read_can(file: CanFile) -> RunData[CanRun]:
@@ -236,9 +242,10 @@ def numerator(
 
 
 def sample_denominator(
-    data: RunData[SampleRun], transmission: TransmissionFraction | None
+    data: RunData[SampleRun], sample: Sample
 ) -> Denominator[SampleRun]:
-    value = data['transmission'] if transmission is None else transmission.value
+    given = sample.transmission
+    value = data['transmission'] if given is None else given.value
     return Denominator[SampleRun](sc.scalar(data['monitor'] * value, unit='counts'))
 
 
@@ -283,20 +290,20 @@ class IofQDriver:
     per run type, and computes I(Q) once from the sums.
 
     Each run's numerator and denominator come from a ``sciline.Stage`` of the
-    single-run binding's pipeline, cut at the binding's keys of its table's
-    columns, and I(Q) from one cut at the sums. A sum is made with ``a + b``,
-    so that no value the driver was given, or a stage returned, is modified.
+    single-run binding's pipeline, cut at the binding's key of its table,
+    and I(Q) from one cut at the sums. A sum is made with ``a + b``, so that
+    no value the driver was given, or a stage returned, is modified.
     """
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         workflow = single.pipeline(fixed)
         self._contribute = {
-            index: sciline.Stage(
+            table: sciline.Stage(
                 workflow,
-                inputs=[single.keys[name] for name in IOFQ_MULTI.columns(index)],
+                inputs=[single.keys[table]],
                 outputs=(Numerator[run], Denominator[run]),
             )
-            for index, run in (('sample', SampleRun), ('can', CanRun))
+            for table, run in (('sample', SampleRun), ('can', CanRun))
         }
         sums = [
             key[run] for key in (Numerator, Denominator) for run in (SampleRun, CanRun)
@@ -304,11 +311,10 @@ class IofQDriver:
         self._finalize = sciline.Stage(workflow, inputs=sums, outputs=(IofQ,))
         self._sums: dict[str, dict[Any, sc.Variable]] = {}  # per table, by key
 
-    def push(self, table: str, columns: Mapping[str, Sequence[Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         stage = self._contribute[table]
-        keys = [single.keys[name] for name in columns]
-        for row in zip(*columns.values(), strict=True):
-            parts = stage.compute(dict(zip(keys, row, strict=True)))
+        for row in rows:
+            parts = stage.compute({single.keys[table]: row})
             old = self._sums.get(table)
             self._sums[table] = (
                 parts if old is None else {k: old[k] + v for k, v in parts.items()}
@@ -329,7 +335,8 @@ def forward(params: ForwardParams) -> ForwardOutputs:
 
 
 def find_centre(params: FindCentreParams) -> FindCentreOutputs:
-    counts = sc.array(dims=['pixel'], values=read_sample(params.sample)['counts'])
+    data = json.loads(params.sample.read_text())
+    counts = sc.array(dims=['pixel'], values=data['counts'])
     centre = (counts * PIXELS).sum() / counts.sum()
     return FindCentreOutputs(centre=BeamCentre(x=centre.fields.x.value, y=0.0))
 

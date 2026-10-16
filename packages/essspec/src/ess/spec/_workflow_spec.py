@@ -41,11 +41,11 @@ as ``Reduction``. A group that holds a file, such as a run and the values
 given next to it, is given *field by field*: each of its fields inline or by
 reference, as a parameter is, so the file comes from a dataset::
 
-    class SampleRun(BaseModel):
-        file: SampleFile
+    class Sample(BaseModel):
+        run: SampleFile
         transmission: TransmissionFraction | None = None
 
-    {'sample': {'file': dataset(run=101), 'transmission': t.ref('transmission')}}
+    {'sample': {'run': dataset(run=101), 'transmission': t.ref('transmission')}}
     {'sample': dataset(run=101)}  # the one required file; defaults for the rest
 
 Like the params model, such a group is never validated whole. A request
@@ -285,7 +285,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
         Each parameter named becomes a ``list`` of its type as written, with
         at least one row, or, if ``empty`` names it, with none by default:
-        ``sample: SampleRun`` becomes ``list[SampleRun]``, and
+        ``sample: Sample`` becomes ``list[Sample]``, and
         ``can: CanFile | None = None`` with ``empty=('can',)`` becomes
         ``list[CanFile | None]``, empty by default. The validators and
         constraints of a parameter named, such as an ``AfterValidator`` or

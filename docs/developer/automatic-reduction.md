@@ -18,7 +18,7 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves.
-A blank that a dataset fills is a file parameter, such as `sample: SampleFile`, and the dataset reference is its value: `apply` fills file parameters only.
+A blank that a dataset fills is a file parameter, such as `can: CanFile`, or a group that holds one required file, such as `sample: Sample`, and the dataset reference is its value: `apply` fills no other parameters.
 So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `sample` and `can`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
@@ -38,7 +38,7 @@ rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(r
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each dataset is a row of the template's blank table: the dataset reference is the row's value of the index `runs`.
+Each dataset is a row of the template's blank table `runs`: the dataset reference is the row.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python

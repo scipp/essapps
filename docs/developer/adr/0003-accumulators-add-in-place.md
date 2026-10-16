@@ -54,8 +54,8 @@ All outputs of a state are computed at once, the first time a pin needs them, si
 Two pins of one state compute once.
 
 **Checks at pin, not at push.**
-A push checks each value by its column's element type alone, and that its index values are new to the table.
-When a state is first pinned, the backend checks the number of rows of each table by the length constraints of its columns, so a required index has a row.
+A push checks each row by the table's element type alone, and that its rows are new to the table.
+When a state is first pinned, the backend checks the number of rows of each table by its length constraints, so a table that needs a row has one.
 So a push costs the same however many rows came before it, and a table with a minimum length of two can be filled one row per push.
 Opening an accumulator validates each fixed value by its own field alone.
 The framework never runs a model validator of the params model, on a template, a push, or a state: a driver never gets a whole params instance.

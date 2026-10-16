@@ -58,7 +58,7 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | parameter | a field of the params model |
 | inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
-| group | a pydantic model with a JSON form, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given inline |
+| group | a pydantic model, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given inline. A group that holds a file, such as `Sample`, a run and the values given next to it, is given *field by field* (see Specs and bindings). |
 | data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
 | fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
@@ -69,10 +69,10 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | label, member | names under which records are found later |
 | template | a spec with *fixed values* for some parameters and *blanks* for the others |
 | fixed value | the value a template gives a parameter, as a request does |
-| blank | a parameter, or a table (named by its index), that a template leaves open |
+| blank | a parameter that a template leaves open, a table among them |
 | store, persist | the *store* keeps outputs outside the backend's memory. To *persist* an output is to have it written there. |
 | dataset source | where a backend finds datasets |
-| table, index, column, row | a *table* is a set of list parameters of equal length, named by its *index* and pushed together; its other parameters are *columns*, and one position is a *row* (see Combining runs: tables) |
+| table, row | a *table* is a list parameter whose *rows* an accumulator takes a push at a time (see Combining runs: tables) |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
 | push | one call that gives an accumulator rows of one of its tables |
@@ -122,12 +122,15 @@ CanFile = NewType('CanFile', Path)                # a NeXus file of an empty-can
 Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
+class Sample(BaseModel):                          # a group that holds a file
+    run: SampleFile
+    transmission: Transmission | None = None
+
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleFile
+    sample: Sample
     can: CanFile | None = None                    # the empty-can run, if any
     beam_centre: BeamCentre | None = None
-    transmission: Transmission | None = None
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
@@ -143,9 +146,19 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
+| a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
+A reference to a dataset stands for the whole group: its one required file, and its other fields at their defaults.
+`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
+
+```python
+{'sample': {'run': dataset(run=611), 'transmission': t611.ref('transmission')}}
+{'sample': dataset(run=611)}                      # the run, and the transmission None
+```
+
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
 A workflow that takes nothing has the params model `NoParams`.
 A request computes every output its spec declares.
@@ -156,11 +169,12 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - Each parameter is a type, possibly optional, or a list of one.
 - Each output is a type, possibly optional, or a list or a dict of one.
-- A group holds no file.
+- A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
 Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
+Like the params model, a group given field by field is never validated whole.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
@@ -171,7 +185,7 @@ The simplest binding is a function that takes an instance of the spec's params m
 
 ```python
 def iofq(params: IofQParams) -> IofQOutputs:
-    ...                                     # params.reduction.bins; params.sample is a local path
+    ...                                     # params.reduction.bins; params.sample.run is a local path
     return IofQOutputs(iofq=result)
 
 draft = function_binding(IOFQ, iofq)        # from ess.spec
@@ -258,7 +272,7 @@ A file is always given by reference: `dataset(path=...)` names a file by its pat
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for a value, or for one row of a list parameter: never for a whole list, and never for part of a group.
+A reference stands for a value, for one row of a list parameter, or for one field of a group given field by field, such as `sample.run`: never for a whole list, and never for part of any other group.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -267,8 +281,8 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
 ```
 
-The framework looks for references at two places only: the top of each value, and the top of each element of a value that is a JSON array.
-At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; or the JSON form of an inline value, such as a group with extra fields that holds the key `@ref`.
+The framework looks for references at three places only: the top of each value, the top of each element of a value that is a JSON array, and each field of an object at one of these two places, such as `sample.run` or `sample[2].transmission`.
+At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; a field of a group given inline whole, such as `reduction.bins`; or the JSON form of an inline value, such as a group with extra fields that holds the key `@ref`.
 Deeper inside a value, `@ref` is plain data.
 So the framework finds the references of a request without the spec.
 
@@ -284,7 +298,7 @@ Then the data fit when the output's type, with its `NewType`s removed one by one
 | `IofQ` | `sc.DataArray`, as an export takes it | yes |
 | `sc.DataArray` | `Transmission`, a `NewType` of `sc.DataArray` | yes: a role narrows a general output |
 | `IofQ` | `Transmission` | no: two `NewType`s of `sc.DataArray` |
-| a dataset | `SampleFile` | yes: a dataset fits a file parameter only |
+| a dataset | `SampleFile`, also as the field `run` of a `Sample` | yes: a dataset fits a file only |
 
 A generic alias, such as a sciline scope `SampleSurfaceNormal[SampleRun]`, fits only itself.
 
@@ -425,21 +439,18 @@ client.datasets.metadata(run)['sample']                       # the source's cur
 
 Many reductions combine several runs, such as the sample and can runs of SANS.
 A spec takes them as *tables*, next to the values that all runs share.
-A table is a set of list parameters of equal length, pushed together.
-Its *index* is the parameter that names it, such as the sample runs.
-Its other *columns* are attached to the index, such as a correction of each run.
-Each position is a *row*, and each row is given inline or by reference, as its type allows.
-As in a pandas DataFrame, the index values of a table are distinct.
+A table is a list parameter whose *rows* an accumulator takes a push at a time, such as the sample runs.
+Each row is given inline or by reference, as its type allows.
+The rows of a table are distinct.
 
 A *multi-run spec* is made from the *single-run spec* of the same reduction by naming the parameters that become tables:
 
 ```python
-IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'))
+IOFQ_MULTI = IOFQ.tabulate(name='sans-iofq-multi', version=1, tables=('sample', 'can'), empty=('can',))
 ```
 
-Each parameter named becomes a `list`, and is the index of a table.
-An index loses `| None`: `sample: SampleFile` becomes `list[SampleFile]` with at least one row, and `can: CanFile | None = None` becomes `list[CanFile]`, empty by default, so a can left out is a table without rows.
-An index is `X`, or `X | None = None`, and `tabulate` refuses any other.
+Each parameter named becomes a `list` of its type as written, with at least one row: `sample: Sample` becomes `list[Sample]`.
+A table named in `empty=` may have no rows, and has none by default: `can: CanFile | None = None` becomes `list[CanFile | None]`, so a can left out is a table without rows.
 The validators and constraints of a parameter named check each row.
 The other parameters, such as `reduction` and `beam_centre`, and the outputs model are those of `IOFQ`.
 The params model is made anew, without the model validators of `IofQParams`, which read fields whose types change.
@@ -450,39 +461,23 @@ result = client.compute(IOFQ_MULTI, params={'sample': [dataset(run=611), dataset
                                              'can': [dataset(run=614)]})
 ```
 
-**Columns.** A value that differs per run, such as a motor position, is in the run's file.
-A value that the file lacks or has wrong is a column next to the run, so the request and its record hold it.
-`SANS` is a spec like `IOFQ`, with the parameter `sample_geometry: SampleGeometry | None`, a group that replaces the geometry in the sample's file.
-Its multi-run spec attaches that parameter to the sample runs, with `tables` as a dict from each index to its columns:
+**A row of several values.** A value that differs per run, such as a motor position, is in the run's file.
+A value that the file lacks or has wrong is a field of the row's group, next to the run, so the request and its record hold it.
+Each field of a row is given in its own form.
+Here the transmission of run 611 is the output of `t611`, and run 612 takes the default, `None`:
 
 ```python
-SANS_MULTI = SANS.tabulate(name='sans-multi', version=1,
-                           tables={'sample': ('sample_geometry',), 'can': ()})
+client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611), 'transmission': t611.ref('transmission')},
+                                              dataset(run=612)]})
 ```
 
-An attached column keeps its type as written: `sample_geometry` becomes `list[SampleGeometry | None]`.
-A column whose type allows `None` and that a request or a push leaves out is `None` in each row.
-A column of any other type is given with its index every time.
-
-Each row of a column is given in its own form.
-`transmission` is a column of the sample runs in this multi-run spec, computed by a record for one run and absent for the other:
-
-```python
-IOFQ_T = IOFQ.tabulate(name='sans-iofq-t', version=1,
-                       tables={'sample': ('transmission',), 'can': ()})
-client.compute(IOFQ_T, params={'sample': [dataset(run=611), dataset(run=612)],
-                               'transmission': [t611.ref('transmission'), None]})
-```
-
-`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`.
-
-A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables={'runs': ()})`.
-Its required index carries `Field(min_length=1)`, as one that `tabulate` makes, such as `runs: list[RunFile] = Field(min_length=1)`, so the model, its schema, and the backend agree that the table has a row.
+A spec whose outputs differ from those of a single-run spec, such as `STITCH`, a stitch of all angles, or that has no single-run spec, such as `VOLUME`, which sums counts over runs, declares its tables itself: `WorkflowSpec(..., tables=('runs',))`, with `runs: list[RunFile] = Field(min_length=1)`, as `tabulate` makes it, so the model, its schema, and the backend agree that the table has a row.
 A list parameter makes a table only when `tables` names it; otherwise it is a value like any other.
 
-The *table rules* are: the columns of a table have equal length, a table with a required index has a row, and the index values are distinct.
+The *table rules* are: the number of rows of a table meets its length constraints, such as a table that needs a row, and the rows of a table are distinct.
 
-**Single-run and multi-run specs.** With one row in each table whose index is given, and none where it is left out, a request of `IOFQ_MULTI` is a request of `IOFQ`, and gives the same outputs (the one-row symmetry, see Symmetries).
+**Single-run and multi-run specs.** With one row in each table, a request of `IOFQ_MULTI` is a request of `IOFQ`, and gives the same outputs (the one-row symmetry, see Symmetries).
+A request of `IOFQ` without a can, `can=None`, is the request of `IOFQ_MULTI` with `can=[None]`, so a driver over a table whose rows may be `None` takes such a row as no row.
 The binding's driver handles structure below a row, such as detector banks, and decides what is summed ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Stages and accumulators
@@ -508,10 +503,12 @@ A call through the stage takes the values of the blanks, as a request does.
 It fills the blanks and makes the record of the plain request.
 The first call has the binding make its stage from the fixed values.
 The binding then computes what depends only on them, and later calls compute only the rest.
+A blank is a whole parameter, and a group is one key of the pipeline (see What a binding provides).
+So a stage that tunes the transmission of a run has `sample` as its blank, and loads the run again at each call.
 If staging fails, the stage *stops*.
 The first call and the calls waiting to run fail, and later calls are refused, each with the reason.
 
-**Accumulator.** An *accumulator* is a template whose blanks are tables, each named by its index.
+**Accumulator.** An *accumulator* is a template whose blanks are tables.
 The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)):
 
 ```python
@@ -523,18 +520,17 @@ iofq.push(can=[dataset(run=614)])
 client.output(iofq, 'iofq')                                # the output of state 3
 ```
 
-A push names one table through its index, and gives the index and its columns by name, as lists of equal length.
+A push gives rows of one table, by the table's name, as a list.
 Its rows enter one state.
 Rows of different tables have nothing to do with each other, so a push never names two tables.
-Values that belong to one run are columns of one table:
+Values that belong to one run are fields of one row, such as the transmission of run 615, the output of the record `t615`:
 
 ```python
-sans = client.accumulator(Template(SANS_MULTI, blanks=('sample', 'can')))
-sans.push(sample=[dataset(run=615)], sample_geometry=[SampleGeometry(thickness=0.2)])
-sans.push(sample=[dataset(run=616)])                       # sample_geometry is None in this row
+iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmission')},
+                  dataset(run=616)])                       # 616 with the transmission None
 ```
 
-A push of no rows is refused, and so is a push of an attached column without its index.
+A push of no rows is refused.
 A template fixes a whole table or leaves it blank, and a push into a table the template fixes is refused.
 The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order.
 State n has the outputs of its plain request.
@@ -560,23 +556,24 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the index values of fixed tables read distinct |
-| a stage call | the same, for the values given; the table rules on given tables | each given value read; the index values of given tables read distinct |
-| a push | each inline value by its column's element type; each reference readable and fitting its column; the table rules on the table with the push | each value read by its column's element type; the index values read distinct from those read before, before the driver gets them |
-| a state, at a pin | the number of rows of each table, by the length constraints of its columns | (none) |
+| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
+| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
+| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.
 
-**Distinct index values.** A push refuses an index value that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
-Index values are compared in two ways.
-In the request phase, they are compared as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key.
-So `dataset(run=611)` and `dataset(path=...)` of the same file are one value.
+**Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
+Rows are compared in two ways.
+In the request phase, they are compared whole, as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, a reference to an output by record, output, and key, and a group given field by field by each of its fields so.
+So `dataset(run=611)` and `dataset(path=...)` of the same file are one row, and the same run with another transmission is another row.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
-A plain request with a repeated index value is refused too, including one in a template.
+A plain request with a repeated row is refused too, including one in a template.
 
-In the call phase, for an index whose type has a JSON form, they are also compared by the JSON form of each value read.
-The backend keeps the index values read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
-So an inline value and a reference to an output whose value is equal are one index value, and a time slice is never summed twice:
+In the call phase, for a table whose element type has a JSON form, rows are also compared by the JSON form of each row read.
+The backend keeps the rows read so far for each blank table, and compares each push's rows with them before the driver gets the rows.
+So an inline value and a reference to an output whose value is equal are one row, and a time slice is never summed twice.
+`SANS` is a spec like `IOFQ`, with the parameter `time_range: TimeRange`:
 
 ```python
 SLICES = SANS.tabulate(name='sans-slices', version=1, tables=('time_range',))
@@ -590,7 +587,7 @@ acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the pu
 A repeat found in the call phase fails the push, which stops the accumulator.
 The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
-Only the call phase catches that repeat, and only for an index whose type has a JSON form.
+Only the call phase catches that repeat, and only for a table whose element type has a JSON form.
 
 The accumulator *stops* if
 
@@ -682,7 +679,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', {'sample': [path_611]})      # once per push: one table, by its index
+driver.push('sample', [Sample(run=path_611)])      # once per push: rows of one table
 driver.outputs()                                   # once per state that is read
 ```
 
@@ -691,25 +688,25 @@ A stage or an accumulator is made from some values only, so `make_stage` and `ma
 
 ```python
 {'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
- 'sample': [path_611, path_612], 'sample_geometry': [None, geometry]}           # each column of a table under its own name
+ 'sample': [Sample(run=path_611), Sample(run=path_612, transmission=t612)]}      # a table as the list of its rows
 ```
 
-`fixed` holds the fixed values, and `blanks` names the others, a table by its index.
+`fixed` holds the fixed values, and `blanks` names the others, a table among them.
 A parameter in neither takes the spec's default.
 `compute`, `make_stage`, and the callable it returns may be called from several threads at once, and none modifies the values it is given.
 The callable may return the same object in several calls, so records made through one stage share what does not depend on the blanks.
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
 The function does not get the blanks, so a field that changes the graph cannot be a blank.
-Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `SampleFile`, or `CanFile | None`.
+Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `Sample`, or `CanFile | None`.
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
-A table sets the key of each of its columns to its list.
+A table sets the key of its type, a list, to its rows.
+A group is one key, so a provider takes it apart, such as one that reads the file `sample.run`.
 A workflow with keys of its own names them with `keys=`:
 
 ```python
 PipelineBinding(IOFQ, make_pipeline,
-                keys={'sample': Filename[SampleRun], 'can': Filename[BackgroundRun],
-                      'iofq': BackgroundSubtractedIofQ})
+                keys={'can': Filename[BackgroundRun], 'iofq': BackgroundSubtractedIofQ})
 ```
 
 Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
@@ -718,26 +715,28 @@ A stage computes what does not depend on the blanks once, through `sciline.Stage
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.
 `binding.keys` and `binding.pipeline(fixed)` give the keys and the graph of a `PipelineBinding`, so that the driver of the multi-run spec reuses them ([roles/toy_sans.py](roles/toy_sans.py)).
-A driver passes `pipeline` the fixed values it is made with: every value that is not a column of a table, defaults filled in.
-So a field that is a column of the multi-run spec cannot shape the graph, as a blank cannot.
+A driver passes `pipeline` the fixed values it is made with: every value that is not a table, defaults filled in.
+So a parameter that is a table of the multi-run spec cannot shape the graph, as a blank cannot.
 
-**A driver.** A *driver* is an object with `push(table, columns)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
+**A driver.** A *driver* is an object with `push(table, rows)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
-`DriverBinding` makes a driver from the fixed values that are not columns of a table, and pushes the rows of each table in `fixed`, one push per table.
+`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
 A table without rows is not pushed, so a driver never gets a push of no rows.
 A plain request is an accumulator with no blanks, read once.
 For the toy SANS reduction, a driver sums each run's numerator and denominator per table, and divides once:
 
 ```python
 class IofQDriver:
-    def __init__(self, fixed):                    # the fixed values that are not columns of a table
+    def __init__(self, fixed):                    # the fixed values that are not tables
         self._bins = fixed['reduction'].bins
         self._sums = {}                           # per table: numerator and denominator
 
-    def push(self, table, columns):
-        for file in columns[table]:               # the index: a file per row
-            parts = numerator_and_denominator(file, self._bins)
+    def push(self, table, rows):
+        for row in rows:                          # a Sample, or a can run's path
+            if row is None:                       # a can left out, as one_row gives it
+                continue
+            parts = numerator_and_denominator(row, self._bins)
             old = self._sums.get(table)
             self._sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
 
@@ -767,7 +766,7 @@ Code that calls a driver itself keeps the same order:
 ```python
 driver = binding.make_accumulator(fixed, blanks=('runs',))
 for run in runs:
-    driver.push('runs', {'runs': [run]})
+    driver.push('runs', [run])
     counts = driver.outputs().counts      # may be the array the next push adds into
     show(counts['q', 0])                  # done with it before the next push
 ```
@@ -809,7 +808,7 @@ for run in client.datasets.watch(Selector(role='sample')):
 ## Batch and automatic reduction
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
-`apply` fills a template once per dataset: the dataset itself is the value of the template's blank file parameter.
+`apply` fills a template once per dataset: the dataset itself is the value of the template's blank file parameter, or of its blank group that holds one required file, such as `sample`.
 A *lookup* fills further blank file parameters, such as the latest can run before each sample run.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
@@ -853,7 +852,7 @@ Each symmetry names a change that a caller may make without changing the outputs
 
 | Symmetry | The caller may change | Unchanged | Kept by | Given |
 |---|---|---|---|---|
-| one-row | the single-run spec ↔ the multi-run spec, with one row in each table whose index is given and none where it is left out | the outputs | the workflow package | that its driver computes what its pipeline computes |
+| one-row | the single-run spec ↔ the multi-run spec, with one row in each table | the outputs | the workflow package | that its driver computes what its pipeline computes |
 | caching | a call through a stage ↔ the plain request | the record and its outputs | the framework for the record; the `sciline.Stage` of a `PipelineBinding` for the outputs | a pure pipeline |
 | arrival | rows pushed one at a time, or in groups ↔ the same rows in one plain request | the outputs of state n | the driver | the driver's promises |
 | order | the order of pushes into different tables | the outputs once the same rows are in | the driver | the driver's promises |
@@ -864,7 +863,7 @@ Arrival, order, and placement hold up to rounding.
 
 - `check_one_row(single, multi, params)`: the binding of the multi-run spec, given the one-row request made from `params`, an instance of the single-run spec's params model, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
-- `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{index: {column: list}}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a column of a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
+- `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{table: rows}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
 
 ## Left to the system
 
