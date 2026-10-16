@@ -20,7 +20,7 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     client: Client, measure: Measure
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    tune = client.stage(Template(IOFQ, inputs={'sample': run}, blanks=('reduction',)))
+    tune = client.stage(Template(IOFQ, params={'sample': run}, blanks=('reduction',)))
     for bins, threshold in [(1, 0.0), (4, 0.0), (4, 1.5), (2, 1.5)]:
         reduction = Reduction(bins=bins, threshold=threshold)
         client.compute(tune, params={'reduction': reduction}, label='tuning')
@@ -29,7 +29,6 @@ def test_b1_tune_a_sans_reduction_and_save_the_result_as_a_template(
     beamtime = Template(
         final.request.spec,
         params=final.request.params,
-        inputs=final.request.inputs,
         blanks=('sample',),
     )
     new = measure(2, [2.0, 1.0, 4.0, 3.0])
@@ -61,8 +60,7 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
 
     again = client.compute(
         NORMALIZE,
-        params={'scaling': Scaling(scale=2.0)},
-        inputs={'runs': [r611, r613]},
+        params={'scaling': Scaling(scale=2.0), 'runs': [r611, r613]},
     )
 
     assert [
@@ -76,12 +74,11 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
 
 def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    volume = client.compute(ANGLE, inputs={'sample': run})
+    volume = client.compute(ANGLE, params={'sample': run})
     cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]
     fit = client.compute(
         CUT,
-        params={'position': Position(index=2)},
-        inputs={'volume': volume.ref('counts')},
+        params={'position': Position(index=2), 'volume': volume.ref('counts')},
     )
 
     assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]

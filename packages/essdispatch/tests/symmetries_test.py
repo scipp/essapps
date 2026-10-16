@@ -45,9 +45,6 @@ class Reduction(BaseModel):
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-
-
-class IofQInputs(BaseModel):
     sample: SampleFile
     can: CanFile | None = None
 
@@ -64,7 +61,6 @@ IOFQ = WorkflowSpec(
     title='iofq',
     description='toy spec iofq',
     params=IofQParams,
-    inputs=IofQInputs,
     outputs=IofQOutputs,
 )
 IOFQ_MULTI = IOFQ.tabulate(name='iofq-multi', version=1, tables=('sample', 'can'))
@@ -157,18 +153,18 @@ SAMPLE, CAN = dataset(run=611), dataset(run=614)
 SAMPLES = [SAMPLE, dataset(run=612)]
 
 
-def _single(client: Client, **inputs: Any) -> sc.Variable:
-    return client.output(client.compute(IOFQ, inputs=inputs), 'iofq')
+def _single(client: Client, **params: Any) -> sc.Variable:
+    return client.output(client.compute(IOFQ, params=params), 'iofq')
 
 
 def _one_row(client: Client) -> sc.Variable:
-    inputs = {'sample': [SAMPLE], 'can': [CAN]}
-    return client.output(client.compute(IOFQ_MULTI, inputs=inputs), 'iofq')
+    params = {'sample': [SAMPLE], 'can': [CAN]}
+    return client.output(client.compute(IOFQ_MULTI, params=params), 'iofq')
 
 
 def _through_a_stage(client: Client) -> sc.Variable:
     stage = client.stage(
-        Template(IOFQ, inputs={'sample': SAMPLE, 'can': CAN}, blanks=('reduction',))
+        Template(IOFQ, params={'sample': SAMPLE, 'can': CAN}, blanks=('reduction',))
     )
     client.compute(stage, params={'reduction': Reduction(bins=1)})
     record = client.compute(stage, params={'reduction': Reduction(bins=2)})
@@ -209,10 +205,10 @@ def test_every_way_gives_the_iofq_of_the_single_run_spec(
     scipp.testing.assert_allclose(way(client), _single(client, sample=SAMPLE, can=CAN))
 
 
-def test_an_input_left_out_is_a_table_without_rows(client: Client) -> None:
-    multi = client.compute(IOFQ_MULTI, inputs={'sample': [SAMPLE]})
+def test_a_table_left_out_is_a_table_without_rows(client: Client) -> None:
+    multi = client.compute(IOFQ_MULTI, params={'sample': [SAMPLE]})
 
-    assert multi.request.inputs['can'] == []
+    assert multi.request.params['can'] == []
     scipp.testing.assert_allclose(
         client.output(multi, 'iofq'), _single(client, sample=SAMPLE)
     )
@@ -221,9 +217,9 @@ def test_an_input_left_out_is_a_table_without_rows(client: Client) -> None:
 def test_a_call_through_a_stage_makes_the_record_of_the_plain_request(
     client: Client,
 ) -> None:
-    stage = client.stage(Template(IOFQ, inputs={'sample': SAMPLE}, blanks=('can',)))
-    staged = client.compute(stage, inputs={'can': CAN})
-    plain = client.compute(IOFQ, inputs={'sample': SAMPLE, 'can': CAN})
+    stage = client.stage(Template(IOFQ, params={'sample': SAMPLE}, blanks=('can',)))
+    staged = client.compute(stage, params={'can': CAN})
+    plain = client.compute(IOFQ, params={'sample': SAMPLE, 'can': CAN})
 
     assert staged.request == plain.request
     assert staged.id != plain.id
@@ -238,7 +234,7 @@ def test_a_pipeline_makes_no_accumulators_and_a_driver_no_stages(
     client: Client,
 ) -> None:
     with pytest.raises(SubmitError, match='its binding makes no accumulators'):
-        client.accumulator(Template(IOFQ, inputs={'can': CAN}, blanks=('sample',)))
+        client.accumulator(Template(IOFQ, params={'can': CAN}, blanks=('sample',)))
     tables = {'sample': [SAMPLE], 'can': [CAN]}
     with pytest.raises(SubmitError, match='its binding makes no stages'):
-        client.stage(Template(IOFQ_MULTI, inputs=tables, blanks=('reduction',)))
+        client.stage(Template(IOFQ_MULTI, params=tables, blanks=('reduction',)))

@@ -38,9 +38,6 @@ IofQ = NewType('IofQ', np.ndarray)
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-
-
-class IofQInputs(BaseModel):
     sample: SampleFile
     can: CanFile | None = None
 
@@ -50,11 +47,11 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     can_iofq: CanIofQ | None = None
 
 
-def _spec(name: str, **models: type[BaseModel]) -> WorkflowSpec[Any, Any, Any]:
+def _spec(name: str, **models: type[BaseModel]) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(name=name, version=1, title=name, description=name, **models)
 
 
-IOFQ = _spec('iofq', params=IofQParams, inputs=IofQInputs, outputs=IofQOutputs)
+IOFQ = _spec('iofq', params=IofQParams, outputs=IofQOutputs)
 IOFQ_MULTI = IOFQ.tabulate(name='iofq-multi', version=1, tables=('sample', 'can'))
 
 
@@ -208,7 +205,7 @@ def iofq(counts: list[float], bins: int = 2) -> np.ndarray:
 def test_a_plain_request_computes_the_outputs_model(
     single: PipelineBinding, samples: list[Path], cans: list[Path]
 ) -> None:
-    outputs = single.compute(IofQParams(), IofQInputs(sample=samples[0], can=cans[0]))
+    outputs = single.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert isinstance(outputs, IofQOutputs)
     np.testing.assert_allclose(outputs.iofq, iofq(SAMPLES[0]) - iofq(CANS[0]))
     np.testing.assert_allclose(outputs.can_iofq, iofq(CANS[0]))
@@ -217,7 +214,7 @@ def test_a_plain_request_computes_the_outputs_model(
 def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
     single: PipelineBinding, samples: list[Path]
 ) -> None:
-    outputs = single.compute(IofQParams(), IofQInputs(sample=samples[0]))
+    outputs = single.compute(IofQParams(sample=samples[0]))
     np.testing.assert_allclose(outputs.iofq, iofq(SAMPLES[0]))
     assert outputs.can_iofq is None
 
@@ -266,9 +263,7 @@ def test_the_bindings_keep_the_symmetries(
     cans: list[Path],
 ) -> None:
     for can in (cans[0], None):
-        check_one_row(
-            single, multi, IofQParams(), IofQInputs(sample=samples[0], can=can)
-        )
+        check_one_row(single, multi, IofQParams(sample=samples[0], can=can))
     runs = {'sample': samples[0], 'can': cans[0]}
     check_caching(single, runs, [reduction(2), reduction(1), reduction(2)])
     tables = {'sample': {'sample': samples}, 'can': {'can': cans}}
@@ -282,15 +277,12 @@ def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
     cans: list[Path],
     tmp_path: Path,
 ) -> None:
-    summed = IofQInputs(
+    summed = IofQParams(
         sample=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0)),
         can=write(tmp_path, 'cans', np.sum(CANS, axis=0)),
     )
-    rows = IOFQ_MULTI.inputs(sample=samples, can=cans)
-    np.testing.assert_allclose(
-        multi.compute(IofQParams(), rows).iofq,
-        single.compute(IofQParams(), summed).iofq,
-    )
+    rows = IOFQ_MULTI.params(sample=samples, can=cans)
+    np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)
 
 
 def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
@@ -320,7 +312,7 @@ def test_pipeline_sets_each_fixed_value_at_its_key(
 ) -> None:
     pipeline = single.pipeline({**reduction(4), 'sample': samples[0], 'can': None})
     np.testing.assert_allclose(pipeline.compute(IofQ), iofq(SAMPLES[0], 4))
-    with pytest.raises(ValueError, match=r"\['iofq'\]: not parameters or inputs"):
+    with pytest.raises(ValueError, match=r"\['iofq'\]: not parameters of"):
         single.pipeline({'iofq': None})
 
 
@@ -337,7 +329,7 @@ class TotalOutputs(BaseModel):
     total: SampleTotal
 
 
-TOTAL = _spec('total', params=IofQParams, inputs=IofQInputs, outputs=TotalOutputs)
+TOTAL = _spec('total', params=IofQParams, outputs=TotalOutputs)
 TOTAL_MULTI = TOTAL.tabulate(name='total-multi', version=1, tables=('sample',))
 
 
@@ -355,7 +347,7 @@ def test_keys_name_keys_of_the_workflows_own(samples: list[Path]) -> None:
         lambda _: sciline.Pipeline([load, total]),
         keys={'sample': Filename, 'total': Total},
     )
-    outputs = binding.compute(IofQParams(), IofQInputs(sample=samples[0]))
+    outputs = binding.compute(IofQParams(sample=samples[0]))
     assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
 
 
@@ -369,8 +361,8 @@ def test_a_table_sets_the_key_of_each_column_to_its_list(samples: list[Path]) ->
         keys={'total': Total},
     )
     expected = TotalOutputs(total=2 * np.sum(SAMPLES))
-    inputs = TOTAL_MULTI.inputs(sample=samples)
-    assert binding.compute(IofQParams(), inputs) == expected
+    params = TOTAL_MULTI.params(sample=samples)
+    assert binding.compute(params) == expected
     stage = binding.make_stage({}, ('sample',))
     assert stage({'sample': samples}) == expected
     check_caching(binding, {}, [{'sample': samples}, {'sample': samples[:1]}])
@@ -384,10 +376,8 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
     binding = PipelineBinding(
         TOTAL_MULTI, make_pipeline, keys={'sample': None, 'total': Total}
     )
-    inputs = TOTAL_MULTI.inputs(sample=samples)
-    assert binding.compute(IofQParams(), inputs) == TotalOutputs(
-        total=2 * np.sum(SAMPLES)
-    )
+    params = TOTAL_MULTI.params(sample=samples)
+    assert binding.compute(params) == TotalOutputs(total=2 * np.sum(SAMPLES))
     with pytest.raises(ValueError, match=r"\['sample'\]: without a key, cannot be"):
         binding.make_stage({}, ('sample',))
 
@@ -409,3 +399,16 @@ def test_keys_that_do_not_fit_the_spec_are_refused(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         PipelineBinding(TOTAL, lambda _: sciline.Pipeline([load, total]), keys=keys)
+
+
+class TwoFiles(BaseModel):
+    first: SampleFile
+    second: SampleFile
+
+
+def test_two_parameters_of_one_type_need_a_key_each() -> None:
+    spec = _spec('twins', params=TwoFiles, outputs=TotalOutputs)
+    with pytest.raises(
+        ValueError, match='twins: first and second: two fields have one key'
+    ):
+        PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))

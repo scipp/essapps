@@ -34,10 +34,11 @@ class Rule:
     """
     Apply a template to each new dataset the selector matches.
 
-    A dataset fills the blank input itself. With ``series``, a request instead
-    takes every dataset with the same value of that metadata field so far, in
-    run order, and that value is its member. The blank is then a table, named
-    by its index, an input, and each dataset is a row of it.
+    A dataset fills the blank, a file parameter, itself. With ``series``, a
+    request instead takes every dataset with the same value of that metadata
+    field so far, in run order, and that value is its member. The blank is
+    then a table, named by its index, a file parameter, and each dataset is
+    a row of it.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
@@ -142,7 +143,7 @@ class TriggerLoop:
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         blank = dataset_blank(rule.template, None)
         return {
-            value: rule.template.fill(inputs={blank: refs})
+            value: rule.template.fill(params={blank: refs})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }

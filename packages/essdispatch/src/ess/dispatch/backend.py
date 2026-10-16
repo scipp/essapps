@@ -58,8 +58,8 @@ pending request is refused. A request, or a read of outputs, that may read an
 output only because it is persisted waits for its write, and fails if the
 write fails. A client reads the outputs it keeps from memory, and persisted
 ones from the store, so it never gets the value another client holds; a
-workflow reads its inputs from memory while the backend holds them,
-whichever client keeps them.
+workflow reads the outputs it references from memory while the backend holds
+them, whichever client keeps them.
 
 A request waits until every record it references has completed, the record
 of an accumulator's state until the accumulator has reached that state, and
@@ -76,29 +76,26 @@ A request lives in two phases. In the *request phase*, when it is submitted,
 the backend checks what it can without data (see ``checks.py``), and, under
 its lock, what depends on history and on what the client keeps: each
 reference to a record or an accumulator is one the client may read, and its
-data fit the input's field. In the *call phase*, on a worker, the backend
+data fit the parameter's field. In the *call phase*, on a worker, the backend
 reads the data each reference names, a local path for a dataset, and
-validates the params from their JSON form, which the log holds, so that both
-phases see the same values. For a plain request it builds the inputs
-instance from the data, which runs the inputs model's own validators; for a
-stage or an accumulator, it validates each value by its own field. The
-binding gets instances of the params and inputs models, or the values by
-name, and returns one of the outputs model: an output that the spec declares
-optional and the binding returns as ``None`` is left out, and a record whose
-binding returns anything else fails.
+validates each value alone by its field: a literal from its JSON form, which
+the log holds, so that both phases see the same values, and a data value from
+the object read (see :func:`.checks.validated`). For a plain request it makes
+the params instance from these values without validating again, so the
+params model's model validators never run; a stage or an accumulator gets
+the values by name. The binding returns an instance of the outputs model: an
+output that the spec declares optional and the binding returns as ``None``
+is left out, and a record whose binding returns anything else fails.
 
 A stage checks its template's values when it is made, and resolves dataset
-names: each fixed value by its own field, without the params model's own
-validators, which run on each request through the stage. It keeps the
-outputs they reference until it has staged. A request through it must have
-its values outside the blanks. The first such request to run has the binding
-make its stage with the template's values by name, each input read and
-validated by its own field, and every request through the stage runs through
-the callable the binding returned, with the values of the blanks, so a
-binding that holds values computes only what depends on the blanks. The
-inputs model's own validators run only on a plain request, since a stage
-makes no whole inputs instance. The record of a request through a
-stage that has staged still names the template's values, but these
+names: each fixed value by its own field. It keeps the outputs they
+reference until it has staged. A request through it must have its values
+outside the blanks. The first such request to run has the binding make its
+stage with the template's values by name, each read and validated by its own
+field, and every request through the stage runs through the callable the
+binding returned, with the values of the blanks, so a binding that holds
+values computes only what depends on the blanks. The record of a request
+through a stage that has staged still names the template's values, but these
 references are provenance only: they are not checked against what the client
 keeps, waited for, or read, except by a restart, which runs the record as its
 plain request (see :meth:`Backend._restart`). If staging fails, the stage
@@ -110,21 +107,21 @@ An accumulator opens from a template whose blanks are tables, each named by
 its index, checked as a stage's template is. Each push gives the columns of
 one blank table: its index and the columns attached to it, as lists of equal
 length, one or more rows; a column left out is ``None`` in each row if its
-type allows it. A push is checked by its columns' types alone, and refused if
-it repeats an index value the table holds; the accumulator keeps the index
-values logged, so this takes time in proportion to the push. The driver gets
-each step's values as the log holds them, so that it and the record of a
-state agree. Opening and pushing return once
-these checks pass and the event is logged, as a submission does: they check
+type allows it. A push is checked by its columns' element types alone, and
+refused if it repeats an index value the table holds; the accumulator keeps
+the index values logged, so this takes time in proportion to the push. The
+driver gets each step's values as the log holds them, so that it and the
+record of a state agree. Opening and pushing return once these checks pass
+and the event is logged, as a submission does: they check
 the records they reference against what the backend knows now, and refuse
 one that has failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order
 they were logged, on the workers: opening has the binding make the driver
-from the template's values by name, each input read and validated by its
-own field, and each push is one push of the table's columns into the driver,
-which may add the rows in place; each value is first validated by its
-column's type, and a data value that fails its check fails the push. A step
+from the template's values by name, each read and validated by its own
+field, and each push is one push of the table's columns into the driver,
+which may add the rows in place; each value is first read and validated by
+its column's element type, and a value that fails its check fails the push. A step
 starts once the records it references have completed, and a push once the
 readers of the state before it are done. If a step fails, or a record it
 references has not completed, the accumulator stops: it takes no more pushes
@@ -143,14 +140,12 @@ and its number of pushes, and the records of the requests reference that
 record's outputs. No client keeps the record of a state, so only the requests
 of that submission read it. A push or a template reads no accumulator. A
 state may be read only if its plain request would be accepted. The first read
-of a state checks that request's params model and that a table with a
-required index has a row, outside the backend's lock, and a read of a state
-whose request would be refused is refused with that request's reason. So the
-params model's own validators apply at reads, not at pushes. They must not
-change a value: the driver got the values typed one by one, and nothing
-checks that the plain request holds the same. The inputs model's own
-validators run on no state, since its rows go to the driver one push at a
-time; a state's request, submitted again as a plain request, runs them.
+of a state checks the number of rows of each blank table against the length
+constraints of its columns, such as a row in a table with a required index,
+outside the backend's lock, and a read of a state whose request would be
+refused is refused with that request's reason. Every other check was made
+when a value was given, and the params model's model validators run on no
+state.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
@@ -202,7 +197,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel
-from pydantic_core import to_json
 
 from ess.spec import (
     AccumulatorBinding,
@@ -219,7 +213,7 @@ from ess.spec import (
 from ess.spec.field_types import base, optional
 from ess.spec.refs import iter_refs, map_refs
 
-from .checks import Checks, check_fit, distinct, model_of, refs
+from .checks import Checks, check_fit, distinct, refs, validated
 from .datasets import DatasetSource, Selector, readable
 from .log import (
     Event,
@@ -237,7 +231,7 @@ from .records import Record, Request, SpecId, Status, SubmitError, Template
 from .store import Store
 from .views import PENDING, Views, WriteFailed
 
-type Spec = WorkflowSpec[Any, Any, Any]
+type Spec = WorkflowSpec[Any, Any]
 
 
 class ClientEnded(RuntimeError):
@@ -295,11 +289,11 @@ def _selected(value: Any, select: Selection) -> Any:
     return value.copy()
 
 
-def _output_reads(inputs: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """The outputs of records that ``inputs`` reference, by record ID and name."""
+def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The outputs of records that ``params`` reference, by record ID and name."""
     return [
         (ref.record, ref.output)
-        for _, ref in iter_refs(inputs)
+        for _, ref in iter_refs(params)
         if isinstance(ref, OutputRef)
     ]
 
@@ -347,7 +341,7 @@ class _Stage:
         self.binding = binding
         self.template = template
         self.given = given
-        self.reads = _output_reads(template.inputs)
+        self.reads = _output_reads(template.params)
         self.call: StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
@@ -360,8 +354,8 @@ class _Stage:
         """
         if self.call is None:
             return request
-        inputs = {k: v for k, v in request.inputs.items() if k in self.given}
-        return request.model_copy(update={'inputs': inputs})
+        params = {k: v for k, v in request.params.items() if k in self.given}
+        return request.model_copy(update={'params': params})
 
 
 _Step = tuple[str | None, dict[str, Any], list[tuple[str, str]]]
@@ -387,9 +381,9 @@ class _Accumulator:
     JSON form, with their rows (see :func:`.checks.distinct`).
 
     ``checked`` holds the number of pushes of the last state whose plain
-    request was validated, and why it would be refused, or ``None``. Two
-    reads that validate different states at once may overwrite each other's,
-    which costs only another validation.
+    request was checked, and why it would be refused, or ``None``. Two
+    reads that check different states at once may overwrite each other's,
+    which costs only another check.
     ``stopped`` says why the accumulator takes no more pushes or readers, or
     is ``None``: it failed, or the record of its freeze completed. ``released``
     says its client released it or ended: it then keeps only the steps that a
@@ -658,7 +652,8 @@ class Backend:
 
     def _unreadable(self, record_id: str, runs: Collection[str]) -> str | None:
         """
-        Why a record pending at a restart cannot read its inputs, or ``None``;
+        Why a record pending at a restart cannot read what it references, or
+        ``None``;
         ``runs`` are the pending records that run. Lock held.
         """
         views = self._views
@@ -807,7 +802,7 @@ class Backend:
             return {key for key in keys if self._access(caller, key, also)}
 
         requests = [
-            r.model_copy(update={'inputs': map_refs(r.inputs, state_record)})
+            r.model_copy(update={'params': map_refs(r.params, state_record)})
             for r in requests
         ]
         stored = [from_store(e, r) for e, r in zip(entries, requests, strict=True)]
@@ -923,20 +918,20 @@ class Backend:
             read, also = request, ()
             if stage is not None:
                 read, also = stage.read_part(request), stage.reads
-            self._check_reads(read.spec, read.inputs, caller, states, also)
+            self._check_reads(read.spec, read.params, caller, states, also)
         except SubmitError as error:
             raise entry.refused(error) from None
 
     def _check_reads(
         self,
         spec_id: SpecId,
-        inputs: Mapping[str, Any],
+        params: Mapping[str, Any],
         caller: _Client,
         states: Mapping[str, _Pinned],
         also: Collection[tuple[str, str]] = (),
     ) -> None:
         """
-        Check the outputs of records and accumulators that ``inputs``, of the
+        Check the outputs of records and accumulators that ``params``, of the
         spec, read; lock held. Each must be one the client may read (see
         :meth:`_readable`), declared by its spec, returned if its record has
         completed, and fit its field (see :func:`.checks.check_fit`).
@@ -951,7 +946,7 @@ class Backend:
         ``also``, what the stage keeps, which :meth:`_check_stage` has checked
         it for; one through a stage that has staged reads only its blanks.
         """
-        for where, ref, tp in refs(self._bindings[spec_id].spec.inputs, inputs):
+        for where, ref, tp in refs(self._bindings[spec_id].spec, params):
             if isinstance(ref, DatasetRef):
                 continue  # checked when resolved
             source = self._readable(ref, where, caller, states, also)
@@ -983,12 +978,8 @@ class Backend:
         if stage.spec != request.spec:
             raise SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
         raw, template = entry.request, stage.template
-        given = {
-            k: v
-            for k, v in {**raw.params, **raw.inputs}.items()
-            if k not in stage.given
-        }
-        fixed = {**template.params, **template.inputs}
+        given = {k: v for k, v in raw.params.items() if k not in stage.given}
+        fixed = template.params
         differ = (given.keys() ^ fixed.keys()) | {
             k for k in given.keys() & fixed.keys() if given[k] != fixed[k]
         }
@@ -1011,7 +1002,7 @@ class Backend:
         pinned in ``states`` readable. A record must be one whose outputs the
         client keeps, pending or completed, or its output must be among
         ``also``, which the request's stage keeps, or be persisted: whether a
-        request is accepted does not depend on how far its inputs have run.
+        request is accepted does not depend on how far what it reads has run.
         So no client reads the record of a state, which only the submission
         that made it keeps (see the module docstring), unless a freeze
         persisted it.
@@ -1078,7 +1069,7 @@ class Backend:
         self, record_id: str, from_store: Collection[tuple[str, str]] = ()
     ) -> None:
         """
-        Start the record, or let it wait for its unfinished inputs; lock held.
+        Start the record, or let it wait for what it reads to finish; lock held.
 
         A record of a state reads only the state, which it waits for; the
         pushes have read the outputs its rows reference. A record through a
@@ -1179,40 +1170,32 @@ class Backend:
         request = record.request
         spec = self._bindings[request.spec].spec
         if stage is None:
-            params = spec.params.model_validate_json(to_json(request.params))
-            inputs = spec.inputs.model_validate(self._read(request.inputs))
-            returned = self._bindings[request.spec].compute(params, inputs)
+            params = spec.params.model_construct(
+                **self._typed(request.spec, request.params)
+            )
+            returned = self._bindings[request.spec].compute(params)
         else:
-            values = {**request.params, **request.inputs}
-            fixed = {n: v for n, v in values.items() if n not in stage.given}
+            fixed = {n: v for n, v in request.params.items() if n not in stage.given}
             call = self._staged(
                 stage,
                 lambda: stage.binding.make_stage(
                     self._typed(request.spec, fixed), stage.template.blanks
                 ),
             )
-            given = {n: v for n, v in values.items() if n in stage.given}
+            given = {n: v for n, v in request.params.items() if n in stage.given}
             returned = call(self._typed(request.spec, given))
         return _outputs_of(request.spec, spec.outputs, returned)
 
-    def _typed(
-        self, spec_id: SpecId, values: Mapping[str, Any], *, rows: bool = False
-    ) -> dict[str, Any]:
+    def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
         """
-        ``values`` of a request by name as a stage or a driver takes them; no
-        lock. Each parameter is validated by its own field from its JSON form,
-        which the log holds, and each input read and validated by its own
-        field, or with ``rows`` as the columns of rows pushed (see
-        :func:`.checks.model_of`).
+        ``values`` of a request by name as the binding takes them; no lock.
+        The data each reference names is read, and each value is validated
+        alone by its field, a column of a table by its element type (see
+        :func:`.checks.validated`). A plain request makes the params instance
+        from them, and a stage or a driver takes them by name.
         """
         spec = self._bindings[spec_id].spec
-        params, inputs = spec.split(values)
-        params_model = model_of(spec.params, params, rows=rows)
-        inputs_model = model_of(spec.inputs, inputs, rows=rows)
-        return {
-            **dict(params_model.model_validate_json(to_json(params))),
-            **dict(inputs_model.model_validate(self._read(inputs))),
-        }
+        return {n: validated(spec, n, v) for n, v in self._read(values).items()}
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
@@ -1248,9 +1231,9 @@ class Backend:
         reads, stage.reads = stage.reads, []
         self._let_go(reads)
 
-    def _read(self, inputs: Mapping[str, Any]) -> dict[str, Any]:
+    def _read(self, params: Mapping[str, Any]) -> dict[str, Any]:
         """
-        ``inputs`` by name with the data their references name read: outputs
+        ``params`` by name with the data their references name read: outputs
         held in memory, or one element of each, under the backend's lock, and
         outside it, outputs written and no longer held from the store, and
         the paths of datasets. The caller reads only what something keeps for
@@ -1258,7 +1241,7 @@ class Backend:
         """
         held: dict[Ref, Any] = {}
         with self._changed:
-            for _, ref in iter_refs(inputs):
+            for _, ref in iter_refs(params):
                 if not isinstance(ref, OutputRef):
                     continue
                 key = (ref.record, ref.output)
@@ -1266,7 +1249,7 @@ class Backend:
                     raise _not_returned(f'record {ref.record} output {ref.output}')
                 if key in self._outputs:
                     held[ref] = _element(self._outputs[key], ref.key)
-        return map_refs(inputs, lambda r: held[r] if r in held else self._stored(r))
+        return map_refs(params, lambda r: held[r] if r in held else self._stored(r))
 
     def _stored(self, ref: Ref) -> Any:
         """
@@ -1489,9 +1472,9 @@ class Backend:
 
     def _satisfied(self, record_id: str, key: str) -> None:
         """Start the record once ``key`` was the last thing it waited for; lock held."""
-        inputs = self._waiting[record_id]
-        inputs.discard(key)
-        if not inputs:
+        waiting = self._waiting[record_id]
+        waiting.discard(key)
+        if not waiting:
             del self._waiting[record_id]
             self._executor.submit(self._run, record_id)
 
@@ -1647,7 +1630,7 @@ class Backend:
         stage_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            self._check_reads(spec_id, stored.inputs, caller, {})
+            self._check_reads(spec_id, stored.params, caller, {})
             given = spec.blank_fields(stored.blanks)
             stage = caller.stages[stage_id] = _Stage(binding, stored, given)
             self._readers.update(stage.reads)
@@ -1680,25 +1663,22 @@ class Backend:
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             caller = self._client(client)
-            self._check_reads(spec_id, stored.inputs, caller, {})
+            self._check_reads(spec_id, stored.params, caller, {})
             # The blank tables without rows, so that the pushes extend them
             # into the plain request of each state.
             empty = {c: [] for b in blanks for c in spec.columns(b)}
-            params, inputs = spec.split({**fixed, **empty})
             self._append(
                 Opened(
                     accumulator=accumulator_id,
                     proposal=caller.proposal,
                     template=stored,
-                    params=params,
-                    inputs=inputs,
+                    params={**fixed, **empty},
                 )
             )
             opened = self._views.accumulators[accumulator_id]
             acc = _Accumulator(accumulator_id, opened.template, binding)
             caller.accumulators[accumulator_id] = acc
-            logged = {**opened.params, **opened.inputs}
-            self._queue(acc, None, {n: logged[n] for n in fixed})
+            self._queue(acc, None, {n: opened.params[n] for n in fixed})
         return accumulator_id, acc.template
 
     def push(
@@ -1721,24 +1701,16 @@ class Backend:
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
         index, values = checks.push(acc.template.blanks, columns, caller.proposal)
-        params, inputs = checks.spec.split(values)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
             rows = distinct(index, values[index], acc.seen[index])
-            self._check_reads(spec_id, inputs, caller, {})
-            self._append(
-                Pushed(
-                    accumulator=accumulator_id,
-                    table=index,
-                    params=params,
-                    inputs=inputs,
-                )
-            )
+            self._check_reads(spec_id, values, caller, {})
+            self._append(Pushed(accumulator=accumulator_id, table=index, params=values))
             acc.seen[index].update(rows)
             pushed = self._views.pushes[accumulator_id][-1]
-            self._queue(acc, index, {**pushed.params, **pushed.inputs})
+            self._queue(acc, index, pushed.params)
 
     def freeze(
         self,
@@ -1809,7 +1781,7 @@ class Backend:
 
         The step holds the outputs it reads until it is done.
         """
-        reads = _output_reads(self._bindings[acc.template.spec].spec.split(values)[1])
+        reads = _output_reads(values)
         self._readers.update(reads)
         acc.steps.append((table, values, reads))
         self._accumulating.add(acc)
@@ -1848,8 +1820,8 @@ class Backend:
         Make the accumulator's driver or push into it, as its next step
         says; on a worker, outside the backend's lock.
 
-        The values are given by name, each input read and each value
-        validated by its own field. If the step fails, the accumulator stops,
+        The values are given by name, each read and validated by its own
+        field (see :meth:`_typed`). If the step fails, the accumulator stops,
         since the driver may hold part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
@@ -1857,7 +1829,7 @@ class Backend:
         # busy, or on this worker.
         table, values, reads = acc.steps[0]
         try:
-            typed = self._typed(acc.template.spec, values, rows=table is not None)
+            typed = self._typed(acc.template.spec, values)
             if table is None:
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:
@@ -1903,12 +1875,10 @@ class Backend:
 
         That request is the one its records list (see ``views.py``): the
         template's fixed values, with each blank table filled by the columns
-        pushed, in push order. The params model, its own validators included,
-        runs on it and must not change a value (see the module docstring),
-        and a table with a required index must have a row (see
-        :meth:`.checks.Checks.state`). ``acc.checked`` keeps the answer for
-        the last state validated. The check takes time in proportion to the
-        rows of the params' tables, so it runs outside the backend's lock.
+        pushed, in push order. The number of rows of each blank table must
+        meet the length constraints of its columns, so a table with a
+        required index must have a row (see :meth:`.checks.Checks.state`).
+        ``acc.checked`` keeps the answer for the last state checked.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:

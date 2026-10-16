@@ -39,9 +39,6 @@ Diff = NewType('Diff', float)
 
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-
-
-class SubInputs(BaseModel):
     sample: SampleValue
     can: CanValue | None = None
 
@@ -50,11 +47,11 @@ class SubOutputs(BaseModel):
     diff: Diff | None
 
 
-def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any, Any]:
+def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(name=name, version=1, title=name, description=name, **fields)
 
 
-SUB = _spec('sub', params=SubParams, inputs=SubInputs, outputs=SubOutputs)
+SUB = _spec('sub', params=SubParams, outputs=SubOutputs)
 SUB_MULTI = SUB.tabulate(name='sub-multi', version=1, tables=('sample', 'can'))
 
 
@@ -66,11 +63,11 @@ def subtract(scale: Scale, sample: float, can: float | None) -> SubOutputs:
 class Calls:
     """Plain requests and stages of a spec that call ``function`` with every value."""
 
-    spec: WorkflowSpec[Any, Any, Any]
+    spec: WorkflowSpec[Any, Any]
     function: Callable[..., BaseModel]
 
-    def compute(self, params: BaseModel, inputs: BaseModel) -> BaseModel:
-        return self.function(**dict(params), **dict(inputs))
+    def compute(self, params: BaseModel) -> BaseModel:
+        return self.function(**dict(params))
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
@@ -155,7 +152,7 @@ Part = NewType('Part', object)
 Joined = NewType('Joined', object)
 
 
-class PartsInputs(BaseModel):
+class PartsParams(BaseModel):
     parts: list[Part] = Field(min_length=1)
 
 
@@ -163,7 +160,7 @@ class JoinedOutputs(BaseModel):
     joined: Joined | None
 
 
-PARTS = _spec('parts', inputs=PartsInputs, outputs=JoinedOutputs, tables=['parts'])
+PARTS = _spec('parts', params=PartsParams, outputs=JoinedOutputs, tables=['parts'])
 
 
 class JoinsInPlace:
@@ -240,16 +237,16 @@ def test_caching_fails_for_a_stage_that_holds_the_outputs_of_its_first_call() ->
 
 
 def test_one_row_gives_a_row_where_the_index_is_given_and_none_elsewhere() -> None:
-    params, inputs = one_row(SUB_MULTI, SubParams(), SubInputs(sample=5.0))
-    assert params == SubParams()
-    assert (inputs.sample, inputs.can) == ([5.0], [])
+    request = one_row(SUB_MULTI, SubParams(sample=5.0))
+    assert request.scale == Scale()
+    assert (request.sample, request.can) == ([5.0], [])
 
 
 def test_one_row_gives_attached_columns_a_row_of_the_value() -> None:
     weighted = SUB.tabulate(name='weighted', version=1, tables={'sample': ('scale',)})
-    params, inputs = one_row(weighted, SubParams(), SubInputs(sample=5.0, can=1.0))
-    assert params.scale == [Scale()]
-    assert (inputs.sample, inputs.can) == ([5.0], 1.0)
+    request = one_row(weighted, SubParams(sample=5.0, can=1.0))
+    assert request.scale == [Scale()]
+    assert (request.sample, request.can) == ([5.0], 1.0)
 
 
 @pytest.mark.parametrize('can', [1.0, None])
@@ -259,8 +256,7 @@ def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs(
     check_one_row(
         Calls(SUB, subtract),
         DriverBinding(SUB_MULTI, Sums),
-        SubParams(scale=Scale(factor=2.0)),
-        SubInputs(sample=5.0, can=can),
+        SubParams(scale=Scale(factor=2.0), sample=5.0, can=can),
     )
 
 
@@ -269,8 +265,7 @@ def test_one_row_fails_if_the_outputs_differ() -> None:
         check_one_row(
             Calls(SUB, subtract),
             DriverBinding(SUB_MULTI, IgnoresCans),
-            SubParams(scale=Scale(factor=2.0)),
-            SubInputs(sample=5.0, can=1.0),
+            SubParams(scale=Scale(factor=2.0), sample=5.0, can=1.0),
         )
 
 
@@ -278,7 +273,8 @@ Data = NewType('Data', object)
 Out = NewType('Out', object)
 
 
-class DataInputs(BaseModel):
+class DataParams(BaseModel):
+    scale: Scale = Field(default_factory=Scale)
     data: Data | None = None
 
 
@@ -286,7 +282,7 @@ class DataOutputs(BaseModel):
     out: Out
 
 
-DATA = _spec('data', params=SubParams, inputs=DataInputs, outputs=DataOutputs)
+DATA = _spec('data', params=DataParams, outputs=DataOutputs)
 
 
 def returning(value: Any) -> Calls:
@@ -301,8 +297,7 @@ def test_arrays_are_compared_up_to_rtol(make: Callable[[list[float]], Any]) -> N
         check_one_row(
             returning(make([1.0, 2.0])),
             returning(make([1.0, changed])),
-            SubParams(),
-            DataInputs(),
+            DataParams(),
             **rtol,
         )
 
@@ -359,12 +354,12 @@ def test_one_row_fails_for_an_output_that_shares_memory_with_a_value(
     data: Any,
 ) -> None:
     copied, viewed = Calls(DATA, first_half_copied), Calls(DATA, first_half)
-    inputs = DataInputs(data=data)
-    check_one_row(copied, copied, SubParams(), inputs)
+    params = DataParams(data=data)
+    check_one_row(copied, copied, params)
     with pytest.raises(
         AssertionError, match=r"^one-row, single-run: output \['out'\]\S* shares"
     ):
-        check_one_row(viewed, copied, SubParams(), inputs)
+        check_one_row(viewed, copied, params)
 
 
 def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> None:

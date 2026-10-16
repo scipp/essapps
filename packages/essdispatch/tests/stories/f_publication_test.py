@@ -20,24 +20,22 @@ def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: Measure
 ) -> None:
     centre_run, run = measure(1, [1.0, 1.0, 1.0, 1.0]), measure(2, [2.0, 3.0, 4.0, 5.0])
-    centre = client.compute(BEAM_CENTRE, inputs={'direct_beam': centre_run})
+    centre = client.compute(BEAM_CENTRE, params={'direct_beam': centre_run})
     tune = client.stage(
         Template(
             IOFQ,
-            inputs={'sample': run, 'beam_centre': centre.ref('centre')},
+            params={'sample': run, 'beam_centre': centre.ref('centre')},
             blanks=('reduction',),
         )
     )
     result = client.compute(tune, params={'reduction': Reduction(threshold=1.5)})
     pid = client.publish(result.ref('iofq'), 'scicat')
-    plain = client.compute(
-        IOFQ, params=result.request.params, inputs=result.request.inputs
-    )
+    plain = client.compute(IOFQ, params=result.request.params)
 
     provenance = scicat.entries[pid].provenance
     assert provenance == client.provenance(result) == client.provenance(plain)
     assert set(provenance.datasets()) == {centre_run, run}
-    assert [r.request.inputs for r in provenance.records()] == [centre.request.inputs]
+    assert [r.request.params for r in provenance.records()] == [centre.request.params]
     assert {'essdispatch', 'scipp'} <= provenance.software.keys()
 
 
@@ -50,16 +48,16 @@ def test_f2_reproduce_after_two_upgrades(
 ) -> None:
     result = client.compute(
         IOFQ,
-        params={'reduction': Reduction(threshold=1.5)},
-        inputs={'sample': measure(1, [1.0, 2.0, 3.0, 4.0])},
+        params={
+            'reduction': Reduction(threshold=1.5),
+            'sample': measure(1, [1.0, 2.0, 3.0, 4.0]),
+        },
     )
     upgraded = upgrade(versions={'scipp': '99.0'})
 
     with pytest.raises(SubmitError, match='scipp'):
         upgraded.recompute(result)
-    again = upgraded.compute(
-        result.request.spec, params=result.request.params, inputs=result.request.inputs
-    )
+    again = upgraded.compute(result.request.spec, params=result.request.params)
 
     assert again.request == result.request
     assert upgraded.provenance(again).software['scipp'] == '99.0'

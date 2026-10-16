@@ -80,7 +80,7 @@ class Provenance(BaseModel, frozen=True):
 
     ``request`` is the record's request, or for the state of an accumulator,
     the plain request over the rows pushed so far. ``records`` lists every
-    record read through all inputs, nearest first, the records of the states
+    record read through all references, nearest first, the records of the states
     of accumulators among them; it stops at datasets.
     """
 
@@ -145,9 +145,9 @@ class Accumulator:
     earlier rows are not computed again. The outputs of a state are computed
     all at once, at the first pin that needs them, and kept until the next
     push is added; no output is computed for a state that nobody pins. The
-    first pin of a state also checks its plain request: the params model,
-    its own validators included, and a row in each table with a required
-    index.
+    first pin of a state also checks its plain request: the number of rows
+    of each table, by the length constraints of its columns, such as a row
+    in each table with a required index.
 
     A push, and a submission that pins, return once logged, so a controller
     does not slow down when the backend falls behind. A controller that should
@@ -180,27 +180,27 @@ class Accumulator:
             acc.push(sample=[dataset(run=611), dataset(run=612)])
             acc.push(sample=[dataset(run=613)], sample_geometry=[geometry])
 
-        A parameter is given as a group, a model or a dict, and an input by
-        reference. A column left out is ``None`` in each row if its type
-        allows it, and a column whose element type is not optional is given in
-        every push. A
-        push names one table, through its index: a column without its index
-        is refused, and so are an index of a table the template fixes, an
-        index value the table holds already or that the push repeats, and a
-        push of no rows. Index values are compared as the record holds them:
-        a dataset by its identity, a reference to an output by record,
-        output, and key, and a literal by equality.
+        A group is given by value, as a model or a dict, and a data value by
+        reference. A column left out is ``None``
+        in each row if its type allows it, and a column whose element type is
+        not optional is given in every push. A push names one table, through
+        its index: a column without its index is refused, and so are an index
+        of a table the template fixes, an index value the table holds already
+        or that the push repeats, and a push of no rows. Index values are
+        compared as the record holds them: a dataset by its identity, a
+        reference to an output by record, output, and key, and a literal by
+        equality.
 
         One push is one push into the binding's driver. A push references
         datasets or outputs of records, never an accumulator. Each value is
-        checked by its column's type; rules on the whole state, such as the
-        params model's own validators and a row in a table with a required
-        index, are checked when a state is pinned. A record that has failed
-        or was cancelled is refused, and one that is pending is not waited
-        for. The push returns once it is logged. The backend adds the pushes
-        one at a time, in the order logged, each once the records it
-        references have completed and the readers of the state before it are
-        done (see :mod:`ess.dispatch.backend`).
+        checked by its column's element type; the number of rows of a table,
+        such as a row in a table with a required index, is checked when a
+        state is pinned. A record that has failed or was cancelled is
+        refused, and one that is pending is not waited for. The push returns
+        once it is logged. The backend adds the pushes one at a time, in the
+        order logged, each once the records it references have completed and
+        the readers of the state before it are done (see
+        :mod:`ess.dispatch.backend`).
 
         If adding fails, such as for data that fail their column's check, or
         a record has not completed, the accumulator stops for good: the
@@ -298,7 +298,6 @@ class Client:
         what: Any,
         *,
         params: Mapping[str, Any] | BaseModel | None = None,
-        inputs: Mapping[str, Any] | None = None,
         label: str | None = None,
         member: str | None = None,
         persist: bool | Sequence[str] = False,
@@ -306,12 +305,13 @@ class Client:
         """
         Submit a spec or a stage with values, or requests.
 
-        A spec takes its params, an instance of its params model or a dict of
-        its fields, and its inputs, a reference for each input, or a list of
-        references for a list field::
+        A spec takes its params, a dict by name or an instance of its params
+        model if every value is a literal: a group as a model or a dict, and
+        a reference for a data value, or a list of these for a list
+        parameter::
 
-            client.submit(IOFQ, params=IofQParams(reduction=Reduction(bins=4)),
-                          inputs={'sample': dataset(run=60339)})
+            client.submit(IOFQ, params={'reduction': Reduction(bins=4),
+                                        'sample': dataset(run=60339)})
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape
@@ -323,10 +323,10 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError`` naming the field at fault, after the request's
         key or index if several are given: an invalid value, an unknown spec
-        or dataset, a value that is not a reference where an input takes
-        one, a reference the client may not read, or one whose data do not
-        fit its field. Then no request of the call is submitted; the records
-        of earlier calls stay.
+        or dataset, a value that is not a reference where a data value is
+        expected, a reference where a literal is, a reference the client may
+        not read, or one whose data do not fit its field. Then no request of
+        the call is submitted; the records of earlier calls stay.
 
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
@@ -336,16 +336,16 @@ class Client:
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
-            what = Request(what, params=params, inputs=inputs)
+            what = Request(what, params=params)
         elif isinstance(what, Stage):
-            stage, what = what.id, what.template.fill(params=params, inputs=inputs)
+            stage, what = what.id, what.template.fill(params=params)
         elif isinstance(what, Accumulator):
             raise TypeError(
                 'an accumulator is read by referencing it in a request: '
                 'accumulator.ref(output)'
             )
-        elif params is not None or inputs is not None:
-            raise TypeError('params and inputs go with a spec or a stage')
+        elif params is not None:
+            raise TypeError('params go with a spec or a stage')
         if isinstance(what, Mapping):
             if member is not None:
                 raise TypeError('the keys of a dict are the members')
@@ -412,7 +412,7 @@ class Client:
         by its index. A template a request would refuse is refused here, with
         the blanks left out, and so is one that references an accumulator,
         and one whose spec's binding makes no accumulators. The driver gets
-        each value validated by its own field, an input as its data; the
+        each value validated by its own field, a data value as its data; the
         accumulator's template holds the values as the backend resolved them.
         A record the template references that has failed or was cancelled is
         refused, and one that is pending is not waited for. Opening returns

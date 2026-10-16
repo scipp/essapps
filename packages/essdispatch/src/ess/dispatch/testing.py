@@ -20,11 +20,11 @@ from pydantic import BaseModel
 
 from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec
 from ess.spec.binding import fixed_values
-from ess.spec.testing import instances
+from ess.spec.testing import instance
 
 from .datasets import Selector
 
-type Spec = WorkflowSpec[Any, Any, Any]
+type Spec = WorkflowSpec[Any, Any]
 
 
 def read_dataset(path: Path) -> Any:
@@ -143,8 +143,8 @@ class FakeStore:
 @dataclass
 class StagedFunction:
     """
-    A binding that makes stages, over a function that takes instances of the
-    spec's params and inputs models and returns one of its outputs model, as
+    A binding that makes stages, over a function that takes an instance of
+    the spec's params model and returns one of its outputs model, as
     ``function_binding`` takes. A stage holds nothing: each call calls the
     function. ``staged`` lists the blanks of each stage made, and
     ``fail_next`` makes the next stage fail. Neither is guarded against calls
@@ -153,12 +153,12 @@ class StagedFunction:
     """
 
     spec: Spec
-    function: Callable[[Any, Any], BaseModel]
+    function: Callable[[Any], BaseModel]
     staged: list[tuple[str, ...]] = field(default_factory=list)
     fail_next: bool = False
 
-    def compute(self, params: Any, inputs: Any) -> BaseModel:
-        return self.function(params, inputs)
+    def compute(self, params: Any) -> BaseModel:
+        return self.function(params)
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
@@ -168,20 +168,20 @@ class StagedFunction:
             raise OSError('staging failed')
         self.staged.append(tuple(blanks))
         values = fixed_values(self.spec, fixed, blanks)
-        return lambda given: self.function(*instances(self.spec, {**values, **given}))
+        return lambda given: self.function(instance(self.spec, {**values, **given}))
 
 
 class KeptRows:
     """
     A driver that keeps the rows pushed into each table of ``spec``, and at
-    each read calls ``function`` with instances of the spec's params and
-    inputs models, of the fixed values and the rows so far.
+    each read calls ``function`` with an instance of the spec's params model,
+    of the fixed values and the rows so far.
     """
 
     def __init__(
         self,
         spec: Spec,
-        function: Callable[[Any, Any], BaseModel],
+        function: Callable[[Any], BaseModel],
         fixed: Mapping[str, Any],
     ) -> None:
         self._spec = spec
@@ -197,14 +197,14 @@ class KeptRows:
 
     def outputs(self) -> BaseModel:
         columns = {n: list(c) for n, c in self._columns.items()}
-        return self._function(*instances(self._spec, {**self._fixed, **columns}))
+        return self._function(instance(self._spec, {**self._fixed, **columns}))
 
 
-def kept_rows(spec: Spec, function: Callable[[Any, Any], BaseModel]) -> DriverBinding:
+def kept_rows(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:
     """
     A ``DriverBinding`` whose drivers keep the rows (:class:`KeptRows`):
-    ``function`` takes the params and the inputs, as ``function_binding``
-    takes, each table as lists of every row so far.
+    ``function`` takes the params, as ``function_binding`` takes, each table
+    as lists of every row so far.
 
     A fake for tests that need an accumulator over a plain function, not a
     recommended driver: each read computes over every row again. A package

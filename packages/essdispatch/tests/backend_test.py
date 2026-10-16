@@ -24,14 +24,14 @@ from ess.dispatch import (
 )
 from ess.dispatch.log import Event, Log
 from ess.dispatch.testing import FakeDatasets, StagedFunction, read_dataset
-from ess.spec import NoParams, WorkflowSpec, function_binding
+from ess.spec import WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
 A = NewType('A', float)
 B = NewType('B', float)
 
 
-class LoadInputs(BaseModel):
+class LoadParams(BaseModel):
     sample: SampleFile
 
 
@@ -45,9 +45,6 @@ class Shift(BaseModel):
 
 class AddParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-
-
-class AddInputs(BaseModel):
     a: A
     b: B
 
@@ -55,23 +52,21 @@ class AddInputs(BaseModel):
 def _spec(
     name: str,
     *,
-    params: type[BaseModel] = NoParams,
-    inputs: type[BaseModel] = LoadInputs,
+    params: type[BaseModel] = LoadParams,
     outputs: type[BaseModel] = ValueOutputs,
-) -> WorkflowSpec[Any, Any, Any]:
+) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=name,
         params=params,
-        inputs=inputs,
         outputs=outputs,
     )
 
 
 LOAD = _spec('load')
-ADD = _spec('add', params=AddParams, inputs=AddInputs)
+ADD = _spec('add', params=AddParams)
 NOTHING = _spec('nothing')  # its workflow returns None as a required output
 UNTYPED = _spec('untyped')  # its workflow returns a dict
 
@@ -82,6 +77,7 @@ class Scale(BaseModel):
 
 class ScaledParams(BaseModel):
     scale: Scale | None = None
+    sample: SampleFile
 
 
 class PartsOutputs(BaseModel):
@@ -102,6 +98,7 @@ class Box(BaseModel):
 
 class BoxParams(BaseModel):
     box: Box = Field(default_factory=Box)
+    sample: SampleFile
 
 
 class Values(BaseModel):
@@ -120,9 +117,10 @@ class Strict(BaseModel, strict=True):
 class ModeParams(BaseModel):
     values: Values = Field(default_factory=Values)
     strict: Strict = Field(default_factory=Strict)
+    sample: SampleFile
 
 
-def slow(params: ModeParams, inputs: LoadInputs) -> ValueOutputs:
+def slow(params: ModeParams) -> ValueOutputs:
     return ValueOutputs(value=float(params.strict.mode is Mode.slow))
 
 
@@ -134,23 +132,23 @@ MODES = _spec('modes', params=ModeParams)
 SUM = SCALED.tabulate(name='sum', version=1, tables={'sample': ('scale',)})
 
 
-def add(params: AddParams, inputs: AddInputs) -> ValueOutputs:
-    return ValueOutputs(value=inputs.a + inputs.b + params.shift.offset)
+def add(params: AddParams) -> ValueOutputs:
+    return ValueOutputs(value=params.a + params.b + params.shift.offset)
 
 
-def total(params: Any, inputs: Any) -> ValueOutputs:
+def total(params: Any) -> ValueOutputs:
     factors = [1.0 if s is None else s.factor for s in params.scale]
-    loaded = [read_dataset(path) for path in inputs.sample]
+    loaded = [read_dataset(path) for path in params.sample]
     return ValueOutputs(value=sum(f * x for f, x in zip(factors, loaded, strict=True)))
 
 
-def split(params: NoParams, inputs: LoadInputs) -> PartsOutputs:
-    value = read_dataset(inputs.sample)
+def split(params: LoadParams) -> PartsOutputs:
+    value = read_dataset(params.sample)
     return PartsOutputs(parts={'whole': value, 'half': value / 2})
 
 
-def pieces(params: NoParams, inputs: LoadInputs) -> PiecesOutputs:
-    value = read_dataset(inputs.sample)
+def pieces(params: LoadParams) -> PiecesOutputs:
+    value = read_dataset(params.sample)
     return PiecesOutputs(pieces=[value, value / 2])
 
 
@@ -160,8 +158,8 @@ class Gate:
     def __init__(self) -> None:
         self.open = threading.Event()
 
-    def load(self, params: NoParams, inputs: LoadInputs) -> ValueOutputs:
-        run = read_dataset(inputs.sample)
+    def load(self, params: LoadParams) -> ValueOutputs:
+        run = read_dataset(params.sample)
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
@@ -186,14 +184,12 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
     bindings = [
         function_binding(LOAD, gate.load),
         function_binding(ADD, add),
-        function_binding(
-            NOTHING, lambda p, i: ValueOutputs.model_construct(value=None)
-        ),
-        function_binding(UNTYPED, lambda p, i: {'value': 1.0}),
+        function_binding(NOTHING, lambda p: ValueOutputs.model_construct(value=None)),
+        function_binding(UNTYPED, lambda p: {'value': 1.0}),
         function_binding(SUM, total),
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
-        function_binding(ANYTHING, lambda p, i: ValueOutputs(value=0.0)),
+        function_binding(ANYTHING, lambda p: ValueOutputs(value=0.0)),
         StagedFunction(MODES, slow),
     ]
     backend = Backend(datasets, bindings)
@@ -208,16 +204,16 @@ def client(backend: Backend) -> Client:
 
 
 def load(n: int) -> Request:
-    return Request(LOAD, inputs={'sample': dataset(run=n)})
+    return Request(LOAD, params={'sample': dataset(run=n)})
 
 
 def operands(a: Any, b: Any) -> dict[str, Any]:
     return {'a': a, 'b': b}
 
 
-def test_a_request_waits_for_its_pending_inputs(client: Client, gate: Gate) -> None:
+def test_a_request_waits_for_its_pending_references(client: Client, gate: Gate) -> None:
     a, b = client.submit([load(1), load(2)])
-    total = client.submit(ADD, inputs=operands(a.ref('value'), b.ref('value')))
+    total = client.submit(ADD, params=operands(a.ref('value'), b.ref('value')))
 
     assert client.status(total) is Status.PENDING
     gate.open.set()
@@ -228,7 +224,7 @@ def test_closing_waits_until_no_record_is_pending(
     backend: Backend, client: Client, gate: Gate
 ) -> None:
     a = client.submit(load(1))
-    total = client.submit(ADD, inputs=operands(a.ref('value'), a.ref('value')))
+    total = client.submit(ADD, params=operands(a.ref('value'), a.ref('value')))
     threading.Timer(0.05, gate.open.set).start()
     backend.close()
 
@@ -266,8 +262,8 @@ def test_a_failed_append_stops_the_backend(datasets: FakeDatasets, gate: Gate) -
 
 def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) -> None:
     bad, good = client.submit([load(3), load(1)])
-    first = client.submit(ADD, inputs=operands(bad.ref('value'), good.ref('value')))
-    second = client.submit(ADD, inputs=operands(first.ref('value'), good.ref('value')))
+    first = client.submit(ADD, params=operands(bad.ref('value'), good.ref('value')))
+    second = client.submit(ADD, params=operands(first.ref('value'), good.ref('value')))
     gate.open.set()
 
     assert client.wait([bad, good, first, second]) == [
@@ -283,7 +279,7 @@ def test_a_failed_input_fails_everything_downstream(client: Client, gate: Gate) 
 
 def test_cancel_ends_what_has_not_started(client: Client, gate: Gate) -> None:
     a, b = client.submit([load(1), load(2)])
-    total = client.submit(ADD, inputs=operands(a.ref('value'), b.ref('value')))
+    total = client.submit(ADD, params=operands(a.ref('value'), b.ref('value')))
     client.cancel(total)
     gate.open.set()
 
@@ -294,8 +290,7 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
     a = client.submit(load(1))
     typo = Request(
         ADD,
-        params={'shift': {'offset': 'x'}},
-        inputs=operands(a.ref('value'), a.ref('value')),
+        params={'shift': {'offset': 'x'}, **operands(a.ref('value'), a.ref('value'))},
     )
 
     with pytest.raises(SubmitError, match='offset'):
@@ -306,8 +301,7 @@ def test_one_refused_request_refuses_the_submission(client: Client) -> None:
 def _boxed(value: Any) -> Request:
     return Request(
         ANYTHING,
-        params={'box': {'item': {'value': value}}},
-        inputs={'sample': dataset(run=1)},
+        params={'box': {'item': {'value': value}}, 'sample': dataset(run=1)},
     )
 
 
@@ -333,16 +327,18 @@ def test_a_number_that_is_not_finite_is_refused_in_a_set(client: Client) -> None
     with pytest.raises(SubmitError, match=r'^values: has no JSON form that reads'):
         client.submit(
             MODES,
-            params={'values': {'values': [1.0, float('inf')]}},
-            inputs={'sample': dataset(run=1)},
+            params={
+                'values': {'values': [1.0, float('inf')]},
+                'sample': dataset(run=1),
+            },
         )
 
 
 def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     strict = {'strict': Strict(mode=Mode.slow)}
-    plain = client.compute(MODES, params=strict, inputs={'sample': dataset(run=1)})
+    plain = client.compute(MODES, params={**strict, 'sample': dataset(run=1)})
     stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
-    staged = client.compute(stage, inputs={'sample': dataset(run=1)})
+    staged = client.compute(stage, params={'sample': dataset(run=1)})
 
     assert plain.request.params['strict'] == {'mode': 'slow'}
     assert client.output(plain, 'value') == client.output(staged, 'value') == 1.0
@@ -351,8 +347,7 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
 def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
     typo = Request(
         ANYTHING,
-        params={'box': {'item': {'unknown': 1}}},
-        inputs={'sample': dataset(run=1)},
+        params={'box': {'item': {'unknown': 1}}, 'sample': dataset(run=1)},
     )
 
     with pytest.raises(
@@ -365,14 +360,14 @@ def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
     missing = {'@ref': 'output', 'record': 'missing', 'output': 'value'}
 
     with pytest.raises(SubmitError, match='a: unknown record missing'):
-        client.submit(ADD, inputs=operands(missing, missing))
+        client.submit(ADD, params=operands(missing, missing))
 
 
 def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
     unknown = {'@ref': 'record', 'record': 'r1', 'output': 'value'}
 
     with pytest.raises(SubmitError, match=r"^a: .*'record' is not a kind of reference"):
-        client.submit(ADD, inputs=operands(unknown, unknown))
+        client.submit(ADD, params=operands(unknown, unknown))
 
 
 def test_a_malformed_reference_is_refused(client: Client) -> None:
@@ -383,7 +378,7 @@ def test_a_malformed_reference_is_refused(client: Client) -> None:
         with pytest.raises(
             SubmitError, match=rf'^b: .*: not a reference to .*{problem}'
         ):
-            client.submit(ADD, inputs=operands(dataset(run=1), malformed))
+            client.submit(ADD, params=operands(dataset(run=1), malformed))
 
 
 def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
@@ -392,7 +387,7 @@ def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) 
     missing = {'@ref': 'output', 'record': loaded.id, 'output': 'total'}
 
     with pytest.raises(SubmitError, match="b: load/v1 has no output 'total'"):
-        client.submit(ADD, inputs=operands(loaded.ref('value'), missing))
+        client.submit(ADD, params=operands(loaded.ref('value'), missing))
 
 
 def test_a_reference_to_another_proposal_is_refused(
@@ -404,7 +399,7 @@ def test_a_reference_to_another_proposal_is_refused(
     loaded = mine.compute(load(1))
 
     with pytest.raises(SubmitError, match='belongs to proposal p1'):
-        theirs.submit(ADD, inputs=operands(loaded.ref('value'), loaded.ref('value')))
+        theirs.submit(ADD, params=operands(loaded.ref('value'), loaded.ref('value')))
 
 
 def test_an_unknown_dataset_is_refused(client: Client) -> None:
@@ -423,14 +418,14 @@ def test_a_dataset_of_another_proposal_is_refused(
         client.submit(load(4))
 
 
-def test_a_list_input_takes_a_list_of_references(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^sample: .* is not a list of references$'):
-        client.submit(SUM, inputs={'sample': dataset(run=1)})
+def test_a_table_takes_a_list_of_rows(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^sample: .* is not a list of rows$'):
+        client.submit(SUM, params={'sample': dataset(run=1)})
 
 
 def test_a_file_given_as_a_string_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'sample: .* is not a reference'):
-        client.submit(LOAD, inputs={'sample': '/data/run-1.json'})
+        client.submit(LOAD, params={'sample': '/data/run-1.json'})
 
 
 def test_a_file_given_by_path_is_the_dataset_of_that_path(
@@ -438,7 +433,7 @@ def test_a_file_given_by_path_is_the_dataset_of_that_path(
 ) -> None:
     gate.open.set()
     path = datasets.path(datasets.resolve(dataset(run=1)))
-    by_path = client.compute(LOAD, inputs={'sample': dataset(path=path)})
+    by_path = client.compute(LOAD, params={'sample': dataset(path=path)})
 
     assert by_path.request == client.compute(load(1)).request
     assert client.output(by_path, 'value') == 1.0
@@ -446,23 +441,20 @@ def test_a_file_given_by_path_is_the_dataset_of_that_path(
 
 def test_a_dataset_fits_a_file_field_only(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'a: dataset .* does not fit A'):
-        client.submit(ADD, inputs=operands(dataset(run=1), dataset(run=2)))
+        client.submit(ADD, params=operands(dataset(run=1), dataset(run=2)))
 
 
 def test_an_output_that_does_not_fit_its_field_is_refused(client: Client) -> None:
     loaded = client.submit(load(1))
 
     with pytest.raises(SubmitError, match=r'sample: .*, of type float, does not fit'):
-        client.submit(LOAD, inputs={'sample': loaded.ref('value')})
+        client.submit(LOAD, params={'sample': loaded.ref('value')})
 
 
-def test_an_input_given_as_a_parameter_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match='sample: an input of load/v1, given in'):
-        client.submit(LOAD, params={'sample': dataset(run=1)})
-
-
-def test_a_required_input_left_out_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['sample'\]: required inputs"):
+def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
+    with pytest.raises(
+        SubmitError, match=r"\['sample'\]: required parameters, not given"
+    ):
         client.submit(LOAD)
 
 
@@ -516,14 +508,14 @@ def test_reading_an_output_of_a_failed_record_raises(
 
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['scale'\]: not parameters or inputs"):
-        client.submit(LOAD, params={'scale': {}}, inputs={'sample': dataset(run=1)})
+    with pytest.raises(SubmitError, match=r"\['scale'\]: not parameters of"):
+        client.submit(LOAD, params={'scale': {}, 'sample': dataset(run=1)})
 
 
 def test_a_workflow_that_returns_none_as_a_required_output_fails(
     client: Client,
 ) -> None:
-    nothing = client.compute(NOTHING, inputs={'sample': dataset(run=1)})
+    nothing = client.compute(NOTHING, params={'sample': dataset(run=1)})
 
     assert (
         client.failure(nothing) == 'the workflow of nothing/v1 returned None as value'
@@ -531,7 +523,7 @@ def test_a_workflow_that_returns_none_as_a_required_output_fails(
 
 
 def test_a_workflow_that_returns_no_outputs_instance_fails(client: Client) -> None:
-    untyped = client.compute(UNTYPED, inputs={'sample': dataset(run=1)})
+    untyped = client.compute(UNTYPED, params={'sample': dataset(run=1)})
 
     assert client.failure(untyped) == (
         'the workflow of untyped/v1 returned dict, not ValueOutputs'
@@ -542,7 +534,7 @@ def test_a_long_chain_fails_as_a_whole(client: Client, gate: Gate) -> None:
     chain = [client.submit(load(3))]
     for _ in range(1500):
         a, b = chain[-1].ref('value'), chain[0].ref('value')
-        chain.append(client.submit(ADD, inputs=operands(a, b)))
+        chain.append(client.submit(ADD, params=operands(a, b)))
     gate.open.set()
 
     assert set(client.wait(chain)) == {Status.FAILED}
@@ -563,19 +555,21 @@ def test_a_record_holds_its_request_with_defaults_filled_in(
 ) -> None:
     gate.open.set()
     a = client.compute(load(1))
-    total = client.compute(ADD, inputs=operands(a.ref('value'), a.ref('value')))
+    total = client.compute(ADD, params=operands(a.ref('value'), a.ref('value')))
 
-    assert total.request.params == {'shift': {'offset': 0.0}}
-    assert total.request.inputs == operands(a.ref('value'), a.ref('value'))
+    assert total.request.params == {
+        'shift': {'offset': 0.0},
+        **operands(a.ref('value'), a.ref('value')),
+    }
     assert total.request.upstream() == [a.ref('value'), a.ref('value')]
 
 
 def test_a_reference_with_a_key_reads_an_element_of_an_output(client: Client) -> None:
-    split = client.submit(SPLIT, inputs={'sample': dataset(run=2)})
+    split = client.submit(SPLIT, params={'sample': dataset(run=2)})
     whole, half = (
         split.ref('parts').model_copy(update={'key': k}) for k in ('whole', 'half')
     )
-    total = client.compute(ADD, inputs=operands(whole, half))
+    total = client.compute(ADD, params=operands(whole, half))
 
     assert client.output(total, 'value') == 3.0
 
@@ -585,20 +579,20 @@ def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
 ) -> None:
     a = client.submit(load(1))
     with pytest.raises(SubmitError, match='element of an output without elements'):
-        client.submit(ADD, inputs=operands(a.ref('value', key='0'), a.ref('value')))
+        client.submit(ADD, params=operands(a.ref('value', key='0'), a.ref('value')))
 
 
 def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> None:
-    split = client.submit(PIECES, inputs={'sample': dataset(run=2)})
+    split = client.submit(PIECES, params={'sample': dataset(run=2)})
     whole, half = (split.ref('pieces', key=k) for k in ('0', '1'))
 
-    assert client.output(client.compute(ADD, inputs=operands(whole, half))) == {
+    assert client.output(client.compute(ADD, params=operands(whole, half))) == {
         'value': 3.0
     }
     for key in ('half', '01', '+1', '-1', ' 1'):
         named = split.ref('pieces', key=key)
         with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of'):
-            client.submit(ADD, inputs=operands(named, half))
+            client.submit(ADD, params=operands(named, half))
 
 
 def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
@@ -616,7 +610,7 @@ def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -
     failed = client.compute(load(3))
 
     with pytest.raises(SubmitError, match=f'a: record {failed.id} failed'):
-        client.submit(ADD, inputs=operands(failed.ref('value'), failed.ref('value')))
+        client.submit(ADD, params=operands(failed.ref('value'), failed.ref('value')))
 
 
 def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
@@ -629,17 +623,19 @@ def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
 
 def test_a_column_left_out_is_none_in_each_row(client: Client) -> None:
     runs = [dataset(run=1), dataset(run=2)]
-    summed = client.compute(SUM, inputs={'sample': runs})
+    summed = client.compute(SUM, params={'sample': runs})
 
-    assert summed.request.params == {'scale': [None, None]}
+    assert summed.request.params['scale'] == [None, None]
     assert client.output(summed, 'value') == 3.0
 
 
 def test_a_table_takes_a_column_attached_to_its_index(client: Client) -> None:
     summed = client.compute(
         SUM,
-        params={'scale': [Scale(factor=10.0), None]},
-        inputs={'sample': [dataset(run=1), dataset(run=2)]},
+        params={
+            'scale': [Scale(factor=10.0), None],
+            'sample': [dataset(run=1), dataset(run=2)],
+        },
     )
 
     assert client.output(summed, 'value') == 12.0
@@ -649,14 +645,16 @@ def test_the_columns_of_a_table_have_equal_length(client: Client) -> None:
     with pytest.raises(SubmitError, match='scale: 1 rows, but sample has 2'):
         client.submit(
             SUM,
-            params={'scale': [Scale()]},
-            inputs={'sample': [dataset(run=1), dataset(run=2)]},
+            params={
+                'scale': [Scale()],
+                'sample': [dataset(run=1), dataset(run=2)],
+            },
         )
 
 
 def test_a_table_with_a_required_index_has_a_row(client: Client) -> None:
     with pytest.raises(SubmitError, match='sample'):
-        client.submit(SUM, inputs={'sample': []})
+        client.submit(SUM, params={'sample': []})
 
 
 def test_an_index_value_given_twice_is_refused(
@@ -665,7 +663,7 @@ def test_an_index_value_given_twice_is_refused(
     path = datasets.path(datasets.resolve(dataset(run=1)))
 
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
-        client.submit(SUM, inputs={'sample': [dataset(run=1), dataset(path=path)]})
+        client.submit(SUM, params={'sample': [dataset(run=1), dataset(path=path)]})
 
 
 def test_a_column_without_its_index_is_refused(client: Client) -> None:

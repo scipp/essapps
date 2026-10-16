@@ -23,23 +23,23 @@ from .field_types import optional, plain
 Key = Any
 
 
-class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
+class PipelineBinding[P: BaseModel, O: BaseModel]:
     """
     A sciline pipeline behind a spec: plain requests and stages.
 
     ``make_pipeline`` makes the pipeline from the fixed values, by name, with
     defaults filled in, so that the graph may depend on them; it gets no
     blank, and each call must return a pipeline of its own, such as a copy.
-    Each parameter and input sets the sciline key of its type as written,
-    without ``Annotated`` metadata, such as ``Reduction`` or
-    ``CanFile | None``; a column of a table sets the
+    Each parameter sets the sciline key of its type as written, without
+    ``Annotated`` metadata, such as ``Reduction`` or ``CanFile | None``; a
+    column of a table sets the
     key of its type, a list, to its list. Each output is computed as the key
     of its type without ``| None``, since an optional output means that the
     graph may lack it, not that a provider returns ``None``; an output that a
     provider returns as ``X | None`` needs ``keys=``. ``keys`` names another
-    key of a parameter, an input, or an output, for a workflow with keys of
-    its own; for a parameter or an input, ``None`` sets no key, for a field
-    that ``make_pipeline`` uses itself::
+    key of a parameter or an output, for a workflow with keys of its own,
+    such as for two parameters of one type; for a parameter, ``None`` sets
+    no key, for a field that ``make_pipeline`` uses itself::
 
         PipelineBinding(
             IOFQ,
@@ -61,19 +61,19 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     ``fixed_values`` of :mod:`ess.spec.binding`, and a field without a key
     cannot be a blank.
 
-    The author of the pipeline promises that it is pure: it modifies no input,
-    and returns the same results for the same inputs.
+    The author of the pipeline promises that it is pure: it modifies no value
+    it is given, and returns the same results for the same values.
     """
 
     def __init__(
         self,
-        spec: WorkflowSpec[P, I, O],
+        spec: WorkflowSpec[P, O],
         make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
         *,
         keys: Mapping[str, Key | None] | None = None,
     ) -> None:
         keys = dict(keys or {})
-        declared = spec.params.model_fields | spec.inputs.model_fields
+        declared = spec.params.model_fields
         outputs = spec.outputs.model_fields
         if unknown := keys.keys() - declared.keys() - outputs.keys():
             raise ValueError(f'{sorted(unknown)}: not fields of {spec.name}')
@@ -98,8 +98,8 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
     @property
     def keys(self) -> Mapping[str, Key | None]:
         """
-        The sciline key of each parameter, input, and output, by name;
-        ``None`` for a parameter or an input that sets none.
+        The sciline key of each parameter and output, by name; ``None`` for a
+        parameter that sets none.
         """
         return self._keys
 
@@ -114,16 +114,15 @@ class PipelineBinding[P: BaseModel, I: BaseModel, O: BaseModel]:
         the multi-run spec cannot shape the graph, as a blank cannot.
         """
         spec = self.spec
-        declared = spec.params.model_fields.keys() | spec.inputs.model_fields.keys()
-        if unknown := sorted(fixed.keys() - declared):
-            raise ValueError(f'{unknown}: not parameters or inputs of {spec.name}')
+        if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
+            raise ValueError(f'{unknown}: not parameters of {spec.name}')
         pipeline = self._make_pipeline(fixed)
         for key, value in self._by_key(fixed).items():
             pipeline[key] = value
         return pipeline
 
-    def compute(self, params: P, inputs: I) -> O:
-        return self.make_stage({**dict(params), **dict(inputs)}, ())({})
+    def compute(self, params: P) -> O:
+        return self.make_stage(dict(params), ())({})
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]

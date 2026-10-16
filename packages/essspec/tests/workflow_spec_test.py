@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ess.spec import NoInputs, NoParams, SerializedWorkflowSpec, WorkflowSpec
+from ess.spec import NoParams, SerializedWorkflowSpec, WorkflowSpec
 
 
 class Reduction(BaseModel):
@@ -88,19 +88,16 @@ class ComputedParams(BaseModel):
         return self.reduction.bins
 
 
-class IofQParams(BaseModel):
+class IofQParams(BaseModel, arbitrary_types_allowed=True):
     reduction: Reduction = Field(default_factory=Reduction)
     sample_geometry: SampleGeometry | None = None
     time_range: TimeRange | None = None
-
-
-class IofQInputs(BaseModel, arbitrary_types_allowed=True):
     sample: SampleFile = Field(title='Sample run')
     can: CanFile | None = None
     beam_centre: BeamCentre | None = None
 
     @model_validator(mode='after')
-    def _can_needs_a_centre(self) -> 'IofQInputs':
+    def _can_needs_a_centre(self) -> 'IofQParams':
         if self.can is not None and self.beam_centre is None:
             raise ValueError('a can needs a beam centre')
         return self
@@ -111,7 +108,11 @@ class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     banks: dict[str, Banks] | None = None
 
 
-def spec(**fields: Any) -> WorkflowSpec[Any, Any, Any]:
+class Loose(BaseModel, extra='allow'):
+    """A group that takes any field, ``@ref`` among them."""
+
+
+def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
     """A spec of the toy models, with ``fields`` replacing any of them."""
     defaults = {
         'name': 'sans-iofq',
@@ -119,7 +120,6 @@ def spec(**fields: Any) -> WorkflowSpec[Any, Any, Any]:
         'title': 'I(Q)',
         'description': 'Reduces a sample run to I(Q).',
         'params': IofQParams,
-        'inputs': IofQInputs,
         'outputs': IofQOutputs,
     }
     return WorkflowSpec(**{**defaults, **fields})
@@ -144,20 +144,17 @@ def annotations(model: type[BaseModel]) -> dict[str, Any]:
 
 
 class TestMetadata:
-    def test_params_and_inputs_default_to_models_without_fields(self) -> None:
+    def test_params_default_to_a_model_without_fields(self) -> None:
         minimal = WorkflowSpec(
             name='wf', version=1, title='W', description='D', outputs=IofQOutputs
         )
         assert minimal.params is NoParams
-        assert minimal.inputs is NoInputs
         assert minimal.tables == {}
         assert minimal.code_revision is None
 
-    def test_no_params_and_no_inputs_refuse_any_value(self) -> None:
+    def test_no_params_refuse_any_value(self) -> None:
         with pytest.raises(pydantic.ValidationError):
             NoParams(anything=1)
-        with pytest.raises(pydantic.ValidationError):
-            NoInputs(anything=1)
 
     def test_outputs_are_required(self) -> None:
         with pytest.raises(pydantic.ValidationError):
@@ -174,20 +171,14 @@ class TestMetadata:
         with pytest.raises(pydantic.ValidationError):
             IOFQ.title = 'Other'
 
-    def test_fields_by_name(self) -> None:
-        assert IOFQ.side('reduction') == 'params'
-        assert IOFQ.side('sample') == 'inputs'
-        assert IOFQ.field('sample').title == 'Sample run'
-        with pytest.raises(KeyError, match='iofq'):
-            IOFQ.side('iofq')
-
-    def test_split_divides_values_by_name_into_params_and_inputs(self) -> None:
-        assert IOFQ.split({'reduction': Reduction(), 'sample': Path('a.nxs')}) == (
-            {'reduction': Reduction()},
-            {'sample': Path('a.nxs')},
-        )
-        with pytest.raises(KeyError, match='iofq'):
-            IOFQ.split({'iofq': None})
+    def test_a_group_is_given_by_value_and_a_data_value_by_reference(self) -> None:
+        assert [n for n in IofQParams.model_fields if IOFQ.by_value(n)] == [
+            'reduction',
+            'sample_geometry',
+            'time_range',
+        ]
+        assert IOFQ_MULTI.by_value('sample_geometry')
+        assert not IOFQ_MULTI.by_value('sample')
 
     def test_an_index_as_a_blank_leaves_open_every_column_of_its_table(self) -> None:
         assert IOFQ_MULTI.blank_fields(('sample', 'beam_centre')) == {
@@ -201,7 +192,6 @@ class TestMetadata:
 class TestModelRules:
     def test_the_example_spec_is_accepted(self) -> None:
         assert IOFQ.params is IofQParams
-        assert IOFQ.inputs is IofQInputs
         assert IOFQ.outputs is IofQOutputs
 
     @pytest.mark.parametrize(
@@ -209,54 +199,68 @@ class TestModelRules:
         [
             {'params': model('P', reduction=(list[Reduction], []))},
             {'params': model('P', reduction=(list[Reduction | None], []))},
-            {'inputs': model('I', runs=(list[SampleFile], []))},
-            {'inputs': model('I', runs=(list[SampleFile | None], []))},
-            {'inputs': model('I', parts=(BaseModel, ...))},
+            {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
+            {'params': model('P', runs=(list[SampleFile], []))},
+            {'params': model('P', runs=(list[SampleFile | None], []))},
+            {'params': model('P', parts=(BaseModel, ...))},
+            {'params': model('P', bins=(int, ...))},
+            {'params': model('P', a=(SampleFile, ...), b=(list[SampleFile], []))},
+            {'params': model('P', steps=(list[TimeRange], Field(min_length=2)))},
+            {
+                'params': model(
+                    'P', steps=(list[TimeRange], Field([], min_length=0, max_length=3))
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    steps=(list[Annotated[TimeRange, AfterValidator(lambda r: r)]], []),
+                )
+            },
+            {
+                'params': model(
+                    'P', mask=(model('Mask', values=(sc.Variable, ...)), ...)
+                )
+            },
             {'outputs': model('O', iofq=(list[IofQ], ...))},
             {'outputs': model('O', iofq=(dict[str, IofQ | None], ...))},
             {'outputs': model('O', path=(Path | None, None))},
             {'params': model('P', reduction=(ReductionOfCan, ...))},
             {'params': model('P', tree=(Node, ...))},
-            {'inputs': model('I', centre=(validated('Centre', x=(float, ...)), ...))},
+            {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
         ],
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
         spec(**fields)
+
+    def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
+        # The framework never calls it (see the backend's tests); a binding may.
+        assert IofQParams.__pydantic_decorators__.model_validators
+        with pytest.raises(pydantic.ValidationError, match='a can needs a beam'):
+            IofQParams.model_validate({'sample': 'a.nxs', 'can': 'b.nxs'})
 
     @pytest.mark.parametrize(
         ('fields', 'reason'),
         [
             (
                 {'outputs': model('O', sample=(IofQ, ...))},
-                'sample: a field of both IofQInputs and O',
-            ),
-            (
-                {'inputs': model('I', sample=(SampleFile, ...), can=(SampleFile, ...))},
-                'sample and can: both of type SampleFile; give each a NewType',
-            ),
-            (
-                {'inputs': model('I', a=(SampleFile, ...), b=(list[SampleFile], []))},
-                'a and b: both of type SampleFile',
-            ),
-            (
-                {'outputs': model('O', centre=(BeamCentre | None, None))},
-                'beam_centre and centre: both of type BeamCentre',
+                'sample: a field of both IofQParams and O',
             ),
             (
                 {'params': model('P', bins=(int, 2))},
-                'P.bins: a parameter is a group',
+                'P.bins: the default of a data value is None or an empty list',
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
-                'P.reduction: a parameter is a group',
+                'P.reduction: a parameter is a type, possibly optional, or a list',
             ),
             (
                 {'params': model('P', reduction=(list[Reduction] | None, None))},
-                'P.reduction: a parameter is a group',
+                'P.reduction: a parameter is a type',
             ),
             (
                 {'params': model('P', run=(model('Run', path=(Path, ...)), ...))},
-                'P.run: a parameter holds no file',
+                'P.run: a group holds no file',
             ),
             (
                 {
@@ -264,32 +268,20 @@ class TestModelRules:
                         'P', runs=(model('Runs', paths=(list[Path], [])), ...)
                     )
                 },
-                'P.runs: a parameter holds no file',
+                'P.runs: a group holds no file',
             ),
             (
                 {
                     'params': model(
-                        'P', run=(model('Run', path=(Path | None, None)), ...)
+                        'P', run=(list[model('Run', path=(Path | None, None))], [])
                     )
                 },
-                'P.run: a parameter holds no file',
-            ),
-            (
-                {
-                    'params': model(
-                        'P', mask=(model('Mask', values=(sc.Variable, ...)), ...)
-                    )
-                },
-                'P: every parameter has a JSON form',
+                'P.run: a group holds no file',
             ),
             (
                 {'params': validated('P', reduction=(Reduction, ...))},
                 r"P: no decorators but model validators, {'field_validators': "
                 r"\['_check'\]}",
-            ),
-            (
-                {'inputs': validated('I', sample=(SampleFile, ...))},
-                r"I: no decorators but model validators, {'field_validators': ",
             ),
             (
                 {'params': SerializedParams},
@@ -302,32 +294,90 @@ class TestModelRules:
                 r"{'computed_fields': \['bins'\]}",
             ),
             (
-                {'inputs': model('I', runs=(dict[str, SampleFile], {}))},
-                'I.runs: an input is a data value',
+                {'params': model('P', reduction=(Reduction, Field(alias='r')))},
+                'P.reduction: a parameter has no alias',
             ),
             (
-                {'inputs': model('I', sample=(SampleFile | CanFile, ...))},
-                'I.sample: an input is a data value',
+                {
+                    'params': model(
+                        'P',
+                        reduction=(
+                            Reduction,
+                            Field(default_factory=lambda data: Reduction()),
+                        ),
+                    )
+                },
+                'P.reduction: the default_factory of a parameter takes no other',
             ),
             (
-                {'inputs': model('I', runs=(list[list[SampleFile]], []))},
-                'I.runs: an input is a data value',
+                {
+                    'params': model(
+                        'P',
+                        steps=(Annotated[list[TimeRange], AfterValidator(len)], []),
+                    )
+                },
+                'P.steps: a list parameter carries only length constraints',
             ),
             (
-                {'inputs': model('I', runs=(list[SampleFile] | None, None))},
-                'I.runs: an input is a data value',
+                {'params': model('P', steps=(list[TimeRange], Field([], strict=True)))},
+                'P.steps: a list parameter carries only length constraints',
             ),
             (
-                {'inputs': model('I', runs=(list, []))},
-                'I.runs: an input is a data value',
+                {
+                    'params': model(
+                        'P',
+                        time_range=(TimeRange, TimeRange(start=float('nan'), stop=1)),
+                    )
+                },
+                'P.time_range: the default has no JSON form that reads back',
             ),
             (
-                {'inputs': model('I', sample=(SampleFile, Path('run.nxs')))},
-                'I.sample: the default of an input is None or an empty list',
+                {
+                    'params': model(
+                        'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
+                    )
+                },
+                'P.loose: a default is a value, not a reference',
             ),
             (
-                {'inputs': model('I', runs=(list[SampleFile], [Path('run.nxs')]))},
-                'I.runs: the default of an input is None or an empty list',
+                {
+                    'params': model(
+                        'P',
+                        loose=(
+                            list[Loose],
+                            [Loose(**{'@ref': 'output', 'record': 'r'})],
+                        ),
+                    )
+                },
+                'P.loose: a default is a value, not a reference',
+            ),
+            (
+                {'params': model('P', runs=(dict[str, SampleFile], {}))},
+                'P.runs: a parameter is a type',
+            ),
+            (
+                {'params': model('P', sample=(SampleFile | CanFile, ...))},
+                'P.sample: a parameter is a type',
+            ),
+            (
+                {'params': model('P', runs=(list[list[SampleFile]], []))},
+                'P.runs: a parameter is a type',
+            ),
+            (
+                {'params': model('P', runs=(list[SampleFile] | None, None))},
+                'P.runs: a parameter is a type',
+            ),
+            (
+                {'params': model('P', runs=(list, []))},
+                'P.runs: a parameter is a type',
+            ),
+            (
+                {'params': model('P', sample=(SampleFile, Path('run.nxs')))},
+                'P.sample: the default of a data value is None or an empty list',
+            ),
+            (
+                {'params': model('P', runs=(list[SampleFile], [Path('run.nxs')]))},
+                'P.runs: the default of a data value is None or an empty list',
             ),
             (
                 {'outputs': model('O', iofq=(IofQ | Banks, ...))},
@@ -344,16 +394,15 @@ class TestModelRules:
             spec(**fields)
 
     def test_every_problem_is_reported_at_once(self) -> None:
-        params = model('P', bins=(int, 2))
-        inputs = model('I', sample=(SampleFile, Path('run.nxs')))
-        with pytest.raises(ValueError, match=r'P\.bins: .*; I\.sample: '):
-            spec(params=params, inputs=inputs)
+        params = model('P', bins=(int, 2), sample=(SampleFile, Path('run.nxs')))
+        with pytest.raises(ValueError, match=r'P\.bins: .*; P\.sample: '):
+            spec(params=params)
 
 
 class TestTables:
     def test_a_spec_may_declare_tables_of_its_list_fields(self) -> None:
         stitch = spec(
-            inputs=model('I', sample=(list[SampleFile], Field(min_length=1))),
+            params=model('P', sample=(list[SampleFile], Field(min_length=1))),
             outputs=model('O', iofq=(IofQ, ...), runs=(list[Banks], ...)),
             tables=['sample'],
         )
@@ -362,12 +411,12 @@ class TestTables:
         assert stitch.table_of('sample') == 'sample'
 
     def test_a_list_field_is_a_table_only_where_tables_names_it(self) -> None:
-        listing = spec(inputs=model('I', sample=(list[SampleFile], ...)))
+        listing = spec(params=model('P', sample=(list[SampleFile], ...)))
         assert listing.tables == {}
         assert listing.table_of('sample') is None
 
     @pytest.mark.parametrize(
-        ('inputs', 'tables', 'reason'),
+        ('params', 'tables', 'reason'),
         [
             (
                 {'sample': (SampleFile, ...)},
@@ -387,7 +436,7 @@ class TestTables:
             (
                 {'sample': (list[SampleFile], Field(min_length=1))},
                 ['run'],
-                "'run': not a parameter or an input",
+                'run: not a parameter of sans-iofq',
             ),
             (
                 {
@@ -399,9 +448,9 @@ class TestTables:
             ),
         ],
     )
-    def test_refused(self, inputs: dict[str, Any], tables: Any, reason: str) -> None:
+    def test_refused(self, params: dict[str, Any], tables: Any, reason: str) -> None:
         with pytest.raises(ValueError, match=reason):
-            spec(inputs=model('I', **inputs), tables=tables)
+            spec(params=model('P', **params), tables=tables)
 
     def test_an_index_is_required_or_empty_by_default(self) -> None:
         params = model('P', reduction=(list[Reduction], [Reduction()]))
@@ -420,13 +469,11 @@ class TestTabulate:
         assert IOFQ_MULTI.table_of('sample_geometry') == 'sample'
         assert IOFQ_MULTI.table_of('beam_centre') is None
 
-    def test_each_field_named_becomes_a_list_on_its_side(self) -> None:
+    def test_each_field_named_becomes_a_list(self) -> None:
         assert annotations(IOFQ_MULTI.params) == {
             'reduction': Reduction,
             'sample_geometry': list[SampleGeometry | None],
             'time_range': TimeRange | None,
-        }
-        assert annotations(IOFQ_MULTI.inputs) == {
             'sample': list[SampleFile],
             'can': list[CanFile],
             'beam_centre': BeamCentre | None,
@@ -434,46 +481,53 @@ class TestTabulate:
 
     def test_a_required_index_takes_at_least_one_row(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='sample'):
-            IOFQ_MULTI.inputs(sample=[])
+            IOFQ_MULTI.params(sample=[], sample_geometry=[])
 
     def test_an_optional_index_is_empty_by_default(self) -> None:
-        inputs = IOFQ_MULTI.inputs(sample=[Path('run.nxs')])
-        assert inputs.can == []
-        assert inputs.beam_centre is None
+        params = IOFQ_MULTI.params(sample=[Path('run.nxs')], sample_geometry=[None])
+        assert params.can == []
+        assert params.beam_centre is None
 
     def test_an_attached_column_has_no_default(self) -> None:
         assert IOFQ_MULTI.params.model_fields['sample_geometry'].is_required()
-        params = IOFQ_MULTI.params(sample_geometry=[None, {'thickness': 0.2}])
+        params = IOFQ_MULTI.params(
+            sample=[Path('a.nxs'), Path('b.nxs')],
+            sample_geometry=[None, {'thickness': 0.2}],
+        )
         assert params.sample_geometry == [None, SampleGeometry(thickness=0.2)]
 
     def test_the_field_validators_of_the_types_still_run(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='thickness must be'):
-            IOFQ_MULTI.params(sample_geometry=[{'thickness': -1.0}])
+            IOFQ_MULTI.params(
+                sample=[Path('a.nxs')], sample_geometry=[{'thickness': -1.0}]
+            )
 
     def test_the_model_validators_are_not_carried_over(self) -> None:
         with pytest.raises(pydantic.ValidationError, match='a can needs a beam centre'):
-            IofQInputs(sample=Path('a.nxs'), can=Path('b.nxs'))
-        IOFQ_MULTI.inputs(sample=[Path('a.nxs')], can=[Path('b.nxs')])
+            IofQParams(sample=Path('a.nxs'), can=Path('b.nxs'))
+        IOFQ_MULTI.params(
+            sample=[Path('a.nxs')], sample_geometry=[None], can=[Path('b.nxs')]
+        )
 
-    def test_a_side_without_a_field_named_keeps_its_model(self) -> None:
+    def test_the_outputs_are_kept(self) -> None:
         runs = IOFQ.tabulate(name='runs', version=1, tables=('sample', 'can'))
-        assert runs.params is IofQParams
         assert runs.outputs is IofQOutputs
         assert runs.tables == {'sample': (), 'can': ()}
 
-    def test_an_index_may_be_a_parameter(self) -> None:
+    def test_an_index_may_be_a_group(self) -> None:
         slices = IOFQ.tabulate(name='slices', version=1, tables=('time_range',))
         assert slices.params.model_fields['time_range'].annotation == list[TimeRange]
-        assert slices.inputs is IofQInputs
+        assert slices.params.model_fields['sample'].annotation == SampleFile
+        assert slices.by_value('time_range')
 
     def test_refuses_an_index_with_a_default_but_none(self) -> None:
         with pytest.raises(ValueError, match=r"\['reduction'\]: an index is X, or"):
             IOFQ.tabulate(name='geometries', version=1, tables=('reduction',))
 
     def test_refuses_an_optional_index_without_a_default(self) -> None:
-        inputs = model('I', sample=(SampleFile, ...), can=(CanFile | None, ...))
+        params = model('P', sample=(SampleFile, ...), can=(CanFile | None, ...))
         with pytest.raises(ValueError, match=r"\['can'\]: an index is X, or X \| None"):
-            spec(inputs=inputs).tabulate(name='runs', version=1, tables=('can',))
+            spec(params=params).tabulate(name='runs', version=1, tables=('can',))
 
     def test_the_validators_of_a_field_named_check_each_row(self) -> None:
         def known(path: Path) -> Path:
@@ -481,36 +535,36 @@ class TestTabulate:
                 raise ValueError('unknown run')
             return path
 
-        inputs = model(
-            'I',
+        params = model(
+            'P',
             sample=(Annotated[SampleFile, AfterValidator(known)], ...),
             can=(Annotated[CanFile, AfterValidator(known)] | None, None),
         )
-        runs = spec(inputs=inputs).tabulate(
+        runs = spec(params=params).tabulate(
             name='runs', version=1, tables=('sample', 'can')
         )
-        runs.inputs(sample=[Path('run.nxs')], can=[Path('run.nxs')])
+        runs.params(sample=[Path('run.nxs')], can=[Path('run.nxs')])
         for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
-                runs.inputs(**{'sample': [Path('run.nxs')], **rows})
-        assert runs.serialize().inputs_schema['properties']['sample']['items'] == {
+                runs.params(**{'sample': [Path('run.nxs')], **rows})
+        assert runs.serialize().params_schema['properties']['sample']['items'] == {
             'dataType': 'SampleFile'
         }
 
     def test_keeps_the_display_metadata_of_a_column(self) -> None:
         sample = Field(examples=[Path('a.nxs')], json_schema_extra={'unit': 'file'})
-        runs = spec(inputs=model('I', sample=(SampleFile, sample))).tabulate(
+        runs = spec(params=model('P', sample=(SampleFile, sample))).tabulate(
             name='runs', version=1, tables=('sample',)
         )
-        field = runs.field('sample')
+        field = runs.params.model_fields['sample']
         assert field.examples == [[Path('a.nxs')]]
         assert field.json_schema_extra == {'unit': 'file'}
 
     @pytest.mark.parametrize(
         ('tables', 'reason'),
         [
-            (('run',), r"\['run'\]: not parameters or inputs of sans-iofq"),
-            ({'sample': ('iofq',)}, r"\['iofq'\]: not parameters or inputs"),
+            (('run',), r"\['run'\]: not parameters of sans-iofq"),
+            ({'sample': ('iofq',)}, r"\['iofq'\]: not parameters of sans-iofq"),
         ],
     )
     def test_refuses_names_that_are_not_fields(self, tables: Any, reason: str) -> None:
@@ -522,32 +576,33 @@ class TestTabulate:
             IOFQ_MULTI.tabulate(name='multi', version=1, tables=('beam_centre',))
 
     def test_refuses_a_list_field(self) -> None:
-        listing = spec(inputs=model('I', sample=(list[SampleFile], ...)))
+        listing = spec(params=model('P', sample=(list[SampleFile], ...)))
         with pytest.raises(ValueError, match=r"\['sample'\]: lists already"):
             listing.tabulate(name='multi', version=1, tables=('sample',))
 
 
 class TestSerialization:
-    def test_params_schema_is_the_json_schema_of_the_model(self) -> None:
-        assert IOFQ.serialize().params_schema == IofQParams.model_json_schema()
+    def test_a_group_has_its_json_schema(self) -> None:
+        schema = IOFQ.serialize().params_schema
+        assert schema['title'] == 'IofQParams'
+        assert list(schema['properties']) == list(IofQParams.model_fields)
+        assert schema['properties']['reduction'] == {'$ref': '#/$defs/Reduction'}
+        assert schema['$defs']['Reduction'] == Reduction.model_json_schema()
+        assert schema['required'] == ['sample']
 
-    def test_inputs_and_outputs_name_the_type_of_each_value(self) -> None:
+    def test_data_values_and_outputs_name_the_type_of_each_value(self) -> None:
         serialized = IOFQ.serialize()
-        assert serialized.inputs_schema == {
-            'title': 'IofQInputs',
-            'type': 'object',
-            'properties': {
-                'sample': {'dataType': 'SampleFile', 'title': 'Sample run'},
-                'can': {
-                    'anyOf': [{'dataType': 'CanFile'}, {'type': 'null'}],
-                    'default': None,
-                },
-                'beam_centre': {
-                    'anyOf': [{'dataType': 'BeamCentre'}, {'type': 'null'}],
-                    'default': None,
-                },
+        properties = serialized.params_schema['properties']
+        assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
+            'sample': {'dataType': 'SampleFile', 'title': 'Sample run'},
+            'can': {
+                'anyOf': [{'dataType': 'CanFile'}, {'type': 'null'}],
+                'default': None,
             },
-            'required': ['sample'],
+            'beam_centre': {
+                'anyOf': [{'dataType': 'BeamCentre'}, {'type': 'null'}],
+                'default': None,
+            },
         }
         assert serialized.outputs_schema['properties'] == {
             'iofq': {
@@ -569,7 +624,7 @@ class TestSerialization:
 
     def test_tables_are_arrays_and_listed(self) -> None:
         serialized = IOFQ_MULTI.serialize()
-        properties = serialized.inputs_schema['properties']
+        properties = serialized.params_schema['properties']
         assert properties['sample'] == {
             'type': 'array',
             'items': {'dataType': 'SampleFile'},
@@ -582,7 +637,7 @@ class TestSerialization:
             'default': [],
         }
         assert serialized.tables == {'sample': ('sample_geometry',), 'can': ()}
-        assert serialized.params_schema['required'] == ['sample_geometry']
+        assert serialized.params_schema['required'] == ['sample_geometry', 'sample']
 
     def test_metadata_is_kept(self) -> None:
         serialized = spec(version=2, code_revision='abc123').serialize()

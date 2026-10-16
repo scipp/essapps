@@ -4,8 +4,8 @@
 A batch: one template filled for each of many datasets.
 
 A lookup fills further blanks per dataset, such as the can measured most
-recently before a sample. A blank a dataset fills is an input, which takes the
-dataset itself. Datasets are ordered by their run number.
+recently before a sample. A blank a dataset fills is a file parameter, which
+takes the dataset itself. Datasets are ordered by their run number.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class Lookup:
         self.rules = rules
 
     def fill(self, ref: DatasetRef, source: Datasets) -> dict[str, DatasetRef]:
-        """Each blank, an input, with the dataset found."""
+        """Each blank, a file parameter, with the dataset found."""
         return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
@@ -69,11 +69,11 @@ def apply(
     Fill the template for each dataset.
 
     ``source`` answers metadata queries, such as ``client.datasets``. Each
-    dataset fills the one blank the lookup leaves, an input. The requests are
-    keyed by member: the value of the metadata field ``member_field`` of each
-    dataset. Submitting them under a label makes the keys the members of their
-    records. Raises ``LookupError`` if the request of a dataset cannot be
-    made.
+    dataset fills the one blank the lookup leaves, a file parameter. The
+    requests are keyed by member: the value of the metadata field
+    ``member_field`` of each dataset. Submitting them under a label makes the
+    keys the members of their records. Raises ``LookupError`` if the request
+    of a dataset cannot be made.
     """
     requests, failed = try_apply(
         template,
@@ -114,5 +114,5 @@ def try_apply(
             continue
         if member in requests:
             raise ValueError(f'two datasets have {member_field} {member}')
-        requests[member] = template.fill(inputs={blank: ref, **found})
+        requests[member] = template.fill(params={blank: ref, **found})
     return requests, failed

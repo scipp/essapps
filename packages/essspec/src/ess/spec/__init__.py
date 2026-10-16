@@ -4,7 +4,7 @@
 The specs of workflows, which UIs and backends read, and the bindings that
 the backend calls to compute a spec's requests.
 
-The package exports the specs, the references a request gives its inputs by,
+The package exports the specs, the references a request gives data by,
 the bindings and their protocols, and :class:`Quantity`. See
 :mod:`ess.spec._workflow_spec` for the design and ADR 0001
 (docs/developer/adr in the package) for the rationale. The helpers are in
@@ -18,7 +18,7 @@ The package does not import :mod:`~.conversions` (needs scipp),
 (checks of the symmetries a binding promises). Import them directly.
 """
 
-from ._workflow_spec import NoInputs, NoParams, SerializedWorkflowSpec, WorkflowSpec
+from ._workflow_spec import NoParams, SerializedWorkflowSpec, WorkflowSpec
 from .binding import (
     AccumulatorBinding,
     Binding,
@@ -38,7 +38,6 @@ __all__ = [
     'DatasetRef',
     'Driver',
     'DriverBinding',
-    'NoInputs',
     'NoParams',
     'OutputRef',
     'Quantity',

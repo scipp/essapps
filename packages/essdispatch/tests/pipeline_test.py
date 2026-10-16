@@ -48,9 +48,6 @@ def total(loaded: Loaded, offsets: Offsets) -> Total:
 class ShiftParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
     annotation: Annotation = Field(default_factory=Annotation)
-
-
-class SampleInputs(BaseModel):
     sample: SampleFile
 
 
@@ -64,13 +61,13 @@ SHIFT = WorkflowSpec(
     title='shift',
     description='shift',
     params=ShiftParams,
-    inputs=SampleInputs,
     outputs=ShiftOutputs,
 )
 
 
 class TotalParams(BaseModel):
     offsets: list[Offset] = Field(min_length=1)
+    sample: SampleFile
 
 
 class TotalOutputs(BaseModel):
@@ -83,7 +80,6 @@ TOTAL = WorkflowSpec(
     title='total',
     description='total',
     params=TotalParams,
-    inputs=SampleInputs,
     outputs=TotalOutputs,
     tables=('offsets',),
 )
@@ -129,11 +125,11 @@ def client(
 
 def test_a_stage_loads_its_run_once(client: Client, loaded: list[float]) -> None:
     sample = {'sample': dataset(run=1)}
-    tune = client.stage(Template(SHIFT, inputs=sample, blanks=('shift',)))
+    tune = client.stage(Template(SHIFT, params=sample, blanks=('shift',)))
     tuned = [
         client.compute(tune, params={'shift': Shift(offset=x)}) for x in (0.5, 1.5, 2.5)
     ]
-    plain = client.compute(SHIFT, params={'shift': Shift(offset=1.5)}, inputs=sample)
+    plain = client.compute(SHIFT, params={'shift': Shift(offset=1.5), **sample})
 
     assert [client.output(r, 'value') for r in tuned] == [10.5, 11.5, 12.5]
     assert client.output(plain, 'value') == 11.5
@@ -146,16 +142,16 @@ def test_a_pipeline_takes_a_table_whole_and_makes_no_accumulators(
 ) -> None:
     offsets = [Offset(offset=x) for x in (0.5, 1.5, 2.5)]
     sample = {'sample': dataset(run=1)}
-    plain = client.compute(TOTAL, params={'offsets': offsets}, inputs=sample)
+    plain = client.compute(TOTAL, params={'offsets': offsets, **sample})
 
     assert client.output(plain, 'total') == 34.5
     with pytest.raises(SubmitError, match='its binding makes no accumulators'):
-        client.accumulator(Template(TOTAL, inputs=sample, blanks=('offsets',)))
+        client.accumulator(Template(TOTAL, params=sample, blanks=('offsets',)))
 
 
 def test_a_stage_takes_a_table_as_a_blank(client: Client) -> None:
     sample = {'sample': dataset(run=1)}
-    tune = client.stage(Template(TOTAL, inputs=sample, blanks=('offsets',)))
+    tune = client.stage(Template(TOTAL, params=sample, blanks=('offsets',)))
     tuned = client.compute(tune, params={'offsets': [Offset(offset=1.0)]})
 
     assert client.output(tuned, 'total') == 11.0
@@ -163,7 +159,7 @@ def test_a_stage_takes_a_table_as_a_blank(client: Client) -> None:
 
 def test_a_blank_no_output_depends_on_is_accepted(client: Client) -> None:
     annotate = client.stage(
-        Template(SHIFT, inputs={'sample': dataset(run=1)}, blanks=('annotation',))
+        Template(SHIFT, params={'sample': dataset(run=1)}, blanks=('annotation',))
     )
     noted = client.compute(annotate, params={'annotation': {'note': 'first try'}})
 
@@ -178,7 +174,7 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     backend = Backend(datasets, [binding])
     client = Client(backend, proposal='p1', submitter='anna')
     annotate = client.stage(
-        Template(SHIFT, inputs={'sample': dataset(run=1)}, blanks=('annotation',))
+        Template(SHIFT, params={'sample': dataset(run=1)}, blanks=('annotation',))
     )
 
     record = client.compute(annotate, params={'annotation': {'note': 'x'}})

@@ -5,8 +5,8 @@ Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 
 A dataset made by ``measure`` is a file of a list of counts. The toy specs
 compute what the table in user-stories.md says, so that every number can be
-checked by hand. Each toy workflow takes its params and inputs as instances of
-its spec's models, a file as a path, and reads the counts of each file.
+checked by hand. Each toy workflow takes an instance of its spec's params model,
+where a file is a path, and reads the counts of each file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -49,7 +49,7 @@ from ess.spec.testing import assert_close
 
 
 class Data(BaseModel):
-    """Base of the toy inputs and outputs models, which hold scipp objects."""
+    """Base of the toy params and outputs models, which hold scipp objects."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -59,16 +59,14 @@ def _spec(
     outputs: type[BaseModel],
     *,
     params: type[BaseModel] = NoParams,
-    inputs: type[BaseModel],
     tables: tuple[str, ...] = (),
-) -> WorkflowSpec[Any, Any, Any]:
+) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=f'toy spec {name}',
         params=params,
-        inputs=inputs,
         outputs=outputs,
         tables=tables,
     )
@@ -101,11 +99,8 @@ class Reduction(BaseModel):
     threshold: float = 0.0
 
 
-class IofQParams(BaseModel):
+class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
-
-
-class IofQInputs(Data):
     sample: SampleFile
     can: CanFile | None = None
     beam_centre: BeamCentre | None = None
@@ -117,17 +112,17 @@ class IofQOutputs(Data):
     masked: Masked
 
 
-IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams, inputs=IofQInputs)
+IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams)
 
 
-def iofq(params: IofQParams, inputs: IofQInputs) -> IofQOutputs:
+def iofq(params: IofQParams) -> IofQOutputs:
     reduction = params.reduction
-    can = 0.0 if inputs.can is None else _counts(inputs.can)
-    counts = _counts(inputs.sample) - can
+    can = 0.0 if params.can is None else _counts(params.can)
+    counts = _counts(params.sample) - can
     masked = np.where(counts < reduction.threshold, 0.0, counts)
-    centre = inputs.beam_centre
+    centre = params.beam_centre
     reduced = masked - (0.0 if centre is None else centre.value)
-    norm = inputs.normalization
+    norm = params.normalization
     reduced = reduced / (1.0 if norm is None else norm.value)
     return IofQOutputs(
         iofq=IofQ(_array(reduced.reshape(reduction.bins, -1).sum(axis=1))),
@@ -140,8 +135,12 @@ class ReductionV2(BaseModel):
     mask_below: float = 0.0
 
 
-class IofQV2Params(BaseModel):
+class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
+    sample: SampleFile
+    can: CanFile | None = None
+    beam_centre: BeamCentre | None = None
+    normalization: Normalization | None = None
 
 
 IOFQ_V2 = WorkflowSpec(
@@ -150,18 +149,17 @@ IOFQ_V2 = WorkflowSpec(
     title='sans-iofq',
     description='toy spec sans-iofq, version 2: threshold renamed mask_below',
     params=IofQV2Params,
-    inputs=IofQInputs,
     outputs=IofQOutputs,
 )
 
 
-def iofq_v2(params: IofQV2Params, inputs: IofQInputs) -> IofQOutputs:
+def iofq_v2(params: IofQV2Params) -> IofQOutputs:
     reduction = params.reduction
     renamed = Reduction(bins=reduction.bins, threshold=reduction.mask_below)
-    return iofq(IofQParams(reduction=renamed), inputs)
+    return iofq(IofQParams(**{**dict(params), 'reduction': renamed}))
 
 
-class BeamCentreInputs(Data):
+class BeamCentreParams(Data):
     direct_beam: DirectBeamFile
 
 
@@ -169,12 +167,12 @@ class CentreOutputs(Data):
     centre: BeamCentre
 
 
-BEAM_CENTRE = _spec('beam-centre', CentreOutputs, inputs=BeamCentreInputs)
+BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 
-def beam_centre(params: NoParams, inputs: BeamCentreInputs) -> CentreOutputs:
+def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
-        centre=BeamCentre(sc.scalar(float(_counts(inputs.direct_beam).mean())))
+        centre=BeamCentre(sc.scalar(float(_counts(params.direct_beam).mean())))
     )
 
 
@@ -184,11 +182,8 @@ class Scaling(BaseModel):
     scale: float = 1.0
 
 
-class VanadiumParams(BaseModel):
+class VanadiumParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-
-
-class VanadiumInputs(Data):
     vanadium: VanadiumFile
 
 
@@ -196,24 +191,19 @@ class VanadiumOutputs(Data):
     normalization: Normalization
 
 
-VANADIUM = _spec(
-    'vanadium', VanadiumOutputs, params=VanadiumParams, inputs=VanadiumInputs
-)
+VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 
 
-def vanadium(params: VanadiumParams, inputs: VanadiumInputs) -> VanadiumOutputs:
-    total = float(_counts(inputs.vanadium).sum())
+def vanadium(params: VanadiumParams) -> VanadiumOutputs:
+    total = float(_counts(params.vanadium).sum())
     return VanadiumOutputs(
         normalization=Normalization(sc.scalar(total * params.scaling.scale))
     )
 
 
-class RunsInputs(Data):
-    runs: list[RunFile] = Field(min_length=1)
-
-
-class NormalizeParams(BaseModel):
+class NormalizeParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
+    runs: list[RunFile] = Field(min_length=1)
 
 
 Normalized = NewType('Normalized', sc.Variable)
@@ -224,11 +214,7 @@ class NormalizedOutputs(Data):
 
 
 NORMALIZE = _spec(
-    'normalize',
-    NormalizedOutputs,
-    params=NormalizeParams,
-    inputs=RunsInputs,
-    tables=('runs',),
+    'normalize', NormalizedOutputs, params=NormalizeParams, tables=('runs',)
 )
 
 
@@ -238,7 +224,7 @@ def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
     )
 
 
-class BackgroundInputs(Data):
+class BackgroundParams(Data):
     sample_runs: list[SampleFile] = Field(min_length=1)
     background_runs: list[BackgroundFile] = Field(min_length=1)
 
@@ -253,7 +239,7 @@ class BackgroundOutputs(Data):
 BACKGROUND = _spec(
     'background',
     BackgroundOutputs,
-    inputs=BackgroundInputs,
+    params=BackgroundParams,
     tables=('sample_runs', 'background_runs'),
 )
 
@@ -276,7 +262,7 @@ class Parts(Data):
     denominator: sc.Variable
 
 
-class ContributeInputs(Data):
+class ContributeParams(Data):
     sample: SampleFile
 
 
@@ -285,11 +271,11 @@ class ContributeOutputs(Data):
     transmission: Transmission
 
 
-CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, inputs=ContributeInputs)
+CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams)
 
 
-def contribute(params: NoParams, inputs: ContributeInputs) -> ContributeOutputs:
-    counts = _counts(inputs.sample)
+def contribute(params: ContributeParams) -> ContributeOutputs:
+    counts = _counts(params.sample)
     return ContributeOutputs(
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
@@ -298,7 +284,7 @@ def contribute(params: NoParams, inputs: ContributeInputs) -> ContributeOutputs:
     )
 
 
-class PartsInputs(Data):
+class PartsParams(Data):
     parts: list[Parts]
 
 
@@ -311,12 +297,12 @@ class PartsOutputs(Data):
     denominator: TotalDenominator
 
 
-PARTS_SUM = _spec('sans-parts-sum', PartsOutputs, inputs=PartsInputs)
+PARTS_SUM = _spec('sans-parts-sum', PartsOutputs, params=PartsParams)
 
 
-def parts_sum(params: NoParams, inputs: PartsInputs) -> PartsOutputs:
+def parts_sum(params: PartsParams) -> PartsOutputs:
     def total(field: str) -> sc.Variable:
-        return functools.reduce(sc.add, [getattr(p, field) for p in inputs.parts])
+        return functools.reduce(sc.add, [getattr(p, field) for p in params.parts])
 
     return PartsOutputs(
         numerator=TotalNumerator(total('numerator')),
@@ -334,7 +320,7 @@ class Summing:
     def __init__(
         self,
         finalize: Callable[..., BaseModel],
-        spec: WorkflowSpec[Any, Any, Any],
+        spec: WorkflowSpec[Any, Any],
         fixed: Mapping[str, Any],
     ) -> None:
         self._finalize = finalize
@@ -350,7 +336,7 @@ class Summing:
 
 
 def summing(
-    spec: WorkflowSpec[Any, Any, Any], finalize: Callable[..., BaseModel]
+    spec: WorkflowSpec[Any, Any], finalize: Callable[..., BaseModel]
 ) -> DriverBinding:
     """The binding of a spec over tables of runs, by :class:`Summing`."""
     return DriverBinding(spec, functools.partial(Summing, finalize, spec))
@@ -363,16 +349,20 @@ class CountsOutputs(Data):
     counts: Counts
 
 
-class AngleInputs(Data):
+class AngleParams(Data):
     sample: SampleFile
 
 
-ANGLE = _spec('angle', CountsOutputs, inputs=AngleInputs)
-VOLUME = _spec('volume', CountsOutputs, inputs=RunsInputs, tables=('runs',))
+class RunsParams(Data):
+    runs: list[RunFile] = Field(min_length=1)
 
 
-def angle(params: NoParams, inputs: AngleInputs) -> CountsOutputs:
-    return CountsOutputs(counts=Counts(_array(_counts(inputs.sample))))
+ANGLE = _spec('angle', CountsOutputs, params=AngleParams)
+VOLUME = _spec('volume', CountsOutputs, params=RunsParams, tables=('runs',))
+
+
+def angle(params: AngleParams) -> CountsOutputs:
+    return CountsOutputs(counts=Counts(_array(_counts(params.sample))))
 
 
 def volume(runs: np.ndarray) -> CountsOutputs:
@@ -383,11 +373,8 @@ class Position(BaseModel):
     index: int
 
 
-class CutParams(BaseModel):
+class CutParams(Data):
     position: Position
-
-
-class CutInputs(Data):
     volume: sc.Variable
 
 
@@ -398,14 +385,14 @@ class CutOutputs(Data):
     cut: Cut
 
 
-CUT = _spec('cut', CutOutputs, params=CutParams, inputs=CutInputs)
+CUT = _spec('cut', CutOutputs, params=CutParams)
 
 
-def cut(params: CutParams, inputs: CutInputs) -> CutOutputs:
-    return CutOutputs(cut=Cut(inputs.volume['q', params.position.index].copy()))
+def cut(params: CutParams) -> CutOutputs:
+    return CutOutputs(cut=Cut(params.volume['q', params.position.index].copy()))
 
 
-class StitchInputs(Data):
+class StitchParams(Data):
     runs: list[RunFile] = Field(min_length=1)
     reference: ReferenceFile
 
@@ -417,19 +404,19 @@ class StitchOutputs(Data):
     stitched: Stitched
 
 
-STITCH = _spec('stitch', StitchOutputs, inputs=StitchInputs, tables=('runs',))
+STITCH = _spec('stitch', StitchOutputs, params=StitchParams, tables=('runs',))
 
 
-def stitch(params: NoParams, inputs: StitchInputs) -> StitchOutputs:
-    reference = _counts(inputs.reference)
-    curves = [_counts(run) / reference for run in inputs.runs]
+def stitch(params: StitchParams) -> StitchOutputs:
+    reference = _counts(params.reference)
+    curves = [_counts(run) / reference for run in params.runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
     return StitchOutputs(stitched=Stitched(_array(np.concatenate(scaled))))
 
 
-class ExportInputs(Data):
+class ExportParams(Data):
     result: sc.Variable
 
 
@@ -437,11 +424,11 @@ class ExportOutputs(BaseModel):
     text: str
 
 
-EXPORT = _spec('export', ExportOutputs, inputs=ExportInputs)
+EXPORT = _spec('export', ExportOutputs, params=ExportParams)
 
 
-def export(params: NoParams, inputs: ExportInputs) -> ExportOutputs:
-    return ExportOutputs(text=','.join(str(v) for v in inputs.result.values))
+def export(params: ExportParams) -> ExportOutputs:
+    return ExportOutputs(text=','.join(str(v) for v in params.result.values))
 
 
 TOYS: dict[SpecId, Binding[Any, Any, Any]] = {
@@ -513,7 +500,7 @@ def upgrade(
     it, and that backend once its persisted work is done.
     """
 
-    def upgrade(specs: list[WorkflowSpec[Any, Any, Any]] | None = None) -> Client:
+    def upgrade(specs: list[WorkflowSpec[Any, Any]] | None = None) -> Client:
         for client in clients:
             client.close()
         backends[-1].close()
@@ -613,10 +600,8 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
 
         if record.id not in replays:
             request = record.request
-            inputs = map_refs(request.inputs, source)
-            replays[record.id] = client.compute(
-                record.spec, params=request.params, inputs=inputs
-            )
+            params = map_refs(request.params, source)
+            replays[record.id] = client.compute(record.spec, params=params)
         return replays[record.id]
 
     for record in list(records.values()):

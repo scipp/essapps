@@ -3,9 +3,9 @@
 """
 References: how a request names data that exist elsewhere.
 
-A request gives each input by reference, never by value: an output of an
-earlier record, a dataset the framework did not compute, or, in a request
-not yet accepted, an output of an accumulator that the framework holds.
+A request gives each data value by reference: an output of an earlier
+record, a dataset the framework did not compute, or, in a request not yet
+accepted, an output of an accumulator that the framework holds.
 A reference is what a request names and what a record keeps; turning it into
 the data a workflow takes, a local path or an object, is the business of
 whatever runs the workflow.
@@ -95,7 +95,7 @@ class AccumulatorRef(_Ref, frozen=True):
 
 Ref = OutputRef | DatasetRef | AccumulatorRef
 """
-A reference: the value of an input in a request.
+A reference: a data value in a request.
 
 An ``AccumulatorRef`` is only a placeholder in a request before it is
 submitted; no record holds one.
@@ -142,17 +142,17 @@ def _ref_at(where: str, value: Any) -> Ref | None:
         raise ValueError(f'{where}: {error}') from None
 
 
-def iter_refs(inputs: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
+def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
     """
-    Each reference in the inputs of a request, with its place, such as
+    Each reference in the params of a request, with its place, such as
     ``sample`` or ``runs[2]``.
 
-    The inputs are by name, each a reference, ``None``, or a list of these; a
-    reference is a :data:`Ref` or its plain (JSON) form. Any other value is
-    skipped, for the validation of the inputs to refuse; a malformed
+    The params are by name. A reference is a :data:`Ref` or its plain (JSON)
+    form, and is looked for at the top of each value, and at the top of each
+    element of a list, never deeper. Any other value is skipped; a malformed
     reference raises ``ValueError`` (see :func:`as_ref`).
     """
-    for name, value in inputs.items():
+    for name, value in params.items():
         if isinstance(value, list):
             for i, item in enumerate(value):
                 if (ref := _ref_at(f'{name}[{i}]', item)) is not None:
@@ -161,10 +161,10 @@ def iter_refs(inputs: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
             yield name, ref
 
 
-def map_refs(inputs: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
+def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
     """
-    The inputs of a request, by name, with each reference replaced by
-    ``fn(ref)``; the inputs are as :func:`iter_refs` takes them, and any other
+    The params of a request, by name, with each reference replaced by
+    ``fn(ref)``; the params are as :func:`iter_refs` takes them, and any other
     value is kept.
     """
 
@@ -175,5 +175,5 @@ def map_refs(inputs: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, A
         name: [one(f'{name}[{i}]', v) for i, v in enumerate(value)]
         if isinstance(value, list)
         else one(name, value)
-        for name, value in inputs.items()
+        for name, value in params.items()
     }

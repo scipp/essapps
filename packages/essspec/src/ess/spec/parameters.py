@@ -99,9 +99,8 @@ class Quantity(BaseModel, frozen=True):
     A scalar or short vector with a unit, as plain data: a literal.
 
     The small-value type for values that a user reads or types, such as a
-    scale factor. As a parameter it is a group, or a field of one. A value
-    that a workflow computes, such as a beam centre, is an input of the
-    workflows that read it, typed by its own type, such as a scipp variable.
+    scale factor. As a parameter it is a group like any other, or a field of
+    one.
     """
 
     value: float | tuple[float, ...] = Field(description="The value(s).")

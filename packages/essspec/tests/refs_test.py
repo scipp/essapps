@@ -29,7 +29,7 @@ def test_dataset_identity_is_an_opaque_string() -> None:
     )
 
 
-INPUTS = {
+PARAMS = {
     'sample': OUTPUT_REF,
     'runs': [DATASET_REF, None, {'@ref': 'output', 'record': 'f2', 'output': 'file'}],
     'can': None,
@@ -38,8 +38,8 @@ INPUTS = {
 }
 
 
-def test_iter_refs_gives_each_reference_of_the_inputs_with_its_place() -> None:
-    assert [(p, str(r)) for p, r in iter_refs(INPUTS)] == [
+def test_iter_refs_gives_each_reference_of_the_params_with_its_place() -> None:
+    assert [(p, str(r)) for p, r in iter_refs(PARAMS)] == [
         ('sample', 'r1.data'),
         ('runs[0]', 'pid-1'),
         ('runs[2]', 'f2.file'),
@@ -48,7 +48,7 @@ def test_iter_refs_gives_each_reference_of_the_inputs_with_its_place() -> None:
 
 
 def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
-    assert map_refs(INPUTS, str) == {
+    assert map_refs(PARAMS, str) == {
         'sample': 'r1.data',
         'runs': ['pid-1', None, 'f2.file'],
         'can': None,

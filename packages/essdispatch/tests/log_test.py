@@ -47,9 +47,6 @@ class Selection(BaseModel):
 
 class LoadParams(BaseModel):
     selection: Selection = Field(default_factory=Selection)
-
-
-class LoadInputs(BaseModel):
     sample: SampleFile
 
 
@@ -63,7 +60,6 @@ LOAD = WorkflowSpec(
     title='load',
     description='load',
     params=LoadParams,
-    inputs=LoadInputs,
     outputs=Value,
 )
 
@@ -74,9 +70,6 @@ class Weight(BaseModel):
 
 class PartParams(BaseModel):
     weight: Weight | None = None
-
-
-class PartInputs(BaseModel):
     part: Part
 
 
@@ -86,15 +79,14 @@ PART = WorkflowSpec(
     title='part',
     description='one part of a total',
     params=PartParams,
-    inputs=PartInputs,
     outputs=Value,
 )
 TOTAL = PART.tabulate(name='total', version=1, tables={'part': ('weight',)})
 
 
-def total(params: Any, inputs: Any) -> Value:
+def total(params: Any) -> Value:
     factors = [1.0 if w is None else w.factor for w in params.weight]
-    return Value(value=sum(f * p for f, p in zip(factors, inputs.part, strict=True)))
+    return Value(value=sum(f * p for f, p in zip(factors, params.part, strict=True)))
 
 
 @pytest.fixture
@@ -127,11 +119,11 @@ def start(
     """A client of a new backend over the log at a path."""
     backends: list[Backend] = []
 
-    def load(params: LoadParams, inputs: LoadInputs) -> Value:
+    def load(params: LoadParams) -> Value:
         low, high = window = params.selection.window
         windows.append(window)
         loading.wait(timeout=5)
-        return Value(value=read_dataset(inputs.sample) * (high - low))
+        return Value(value=read_dataset(params.sample) * (high - low))
 
     def start(path: Path) -> Client:
         bind = [StagedFunction(LOAD, load), kept_rows(TOTAL, total)]
@@ -182,7 +174,7 @@ def _total(client: Client) -> Accumulator:
 
 
 def _read(total: Accumulator) -> dict[str, Any]:
-    """The inputs of a request of TOTAL that reads the value of ``total``."""
+    """The params of a request of TOTAL that reads the value of ``total``."""
     return {'part': [total.ref('value')]}
 
 
@@ -198,19 +190,19 @@ def test_a_backend_started_from_a_log_has_the_records_of_the_one_that_wrote_it(
 ) -> None:
     first = start(tmp_path / 'log')
     loads = {
-        str(n): first.compute(LOAD, inputs=_sample(n), label='loads', member=str(n))
+        str(n): first.compute(LOAD, params=_sample(n), label='loads', member=str(n))
         for n in (1, 2, 3)
     }
     total = _total(first)
     for load in loads.values():
         total.push(part=[load.ref('value')])
-    read = first.compute(TOTAL, inputs=_read(total))
+    read = first.compute(TOTAL, params=_read(total))
 
     again = restart(tmp_path / 'log')
 
     assert again.records() == first.records()
     assert again.records(label='loads') == list(loads.values())
-    state = _record(again, read.request.inputs['part'][0].record)
+    state = _record(again, read.request.params['part'][0].record)
     assert again.provenance(read) == first.provenance(read)
     assert again.provenance(read).records() == [state, *loads.values()]
 
@@ -223,11 +215,11 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
 ) -> None:
     first = start(tmp_path / 'log')
     load = first.compute(
-        LOAD, params={'selection': {'window': (1.0, 2.0)}}, inputs=_sample(3)
+        LOAD, params={'selection': {'window': (1.0, 2.0)}, **_sample(3)}
     )
 
     again = restart(tmp_path / 'log')
-    rerun = again.compute(LOAD, params=load.request.params, inputs=load.request.inputs)
+    rerun = again.compute(LOAD, params=load.request.params)
 
     assert again.records()[0] == load
     assert load.request.params['selection']['window'] == [1.0, 2.0]  # as JSON holds it
@@ -239,11 +231,11 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    loads = [client.compute(LOAD, inputs=_sample(n)) for n in (1, 2, 3)]
+    loads = [client.compute(LOAD, params=_sample(n)) for n in (1, 2, 3)]
     total = _total(client)
     for load in loads:
         total.push(part=[load.ref('value')])
-    read = client.compute(TOTAL, inputs=_read(total))
+    read = client.compute(TOTAL, params=_read(total))
 
     events = Log.read(tmp_path / 'log')
     assert events[6:10] == [
@@ -251,15 +243,13 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
             accumulator=total.id,
             proposal='p1',
             template=Template(TOTAL, blanks=('part',)),
-            params={'weight': []},
-            inputs={'part': []},
+            params={'weight': [], 'part': []},
         ),
         *(
             Pushed(
                 accumulator=total.id,
                 table='part',
-                params={'weight': [None]},
-                inputs={'part': [load.ref('value')]},
+                params={'weight': [None], 'part': [load.ref('value')]},
             )
             for load in loads
         ),
@@ -269,20 +259,22 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
         id=state.id, accumulator=total.id, pushes=3, outputs=('value',)
     )
     assert reader.id == read.id
-    assert read.request.inputs == {'part': [OutputRef(record=state.id, output='value')]}
+    assert read.request.params['part'] == [OutputRef(record=state.id, output='value')]
     assert _record(client, state.id).request == Request(
         TOTAL,
-        params={'weight': [None] * 3},
-        inputs={'part': [load.ref('value') for load in loads]},
+        params={
+            'weight': [None] * 3,
+            'part': [load.ref('value') for load in loads],
+        },
     )
     assert client.output(read, 'value') == 6.0
 
 
-def test_a_push_is_logged_as_its_columns_by_side_with_references_as_written(
+def test_a_push_is_logged_as_its_columns_by_name_with_references_as_written(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    loads = [client.compute(LOAD, inputs=_sample(n)) for n in (1, 2)]
+    loads = [client.compute(LOAD, params=_sample(n)) for n in (1, 2)]
     total = _total(client)
     total.push(
         part=[load.ref('value') for load in loads], weight=[Weight(factor=3), None]
@@ -292,10 +284,12 @@ def test_a_push_is_logged_as_its_columns_by_side_with_references_as_written(
     assert pushed == Pushed(
         accumulator=total.id,
         table='part',
-        params={'weight': [{'factor': 3.0}, None]},
-        inputs={'part': [load.ref('value') for load in loads]},
+        params={
+            'weight': [{'factor': 3.0}, None],
+            'part': [load.ref('value') for load in loads],
+        },
     )
-    assert all(isinstance(ref, OutputRef) for ref in pushed.inputs['part'])
+    assert all(isinstance(ref, OutputRef) for ref in pushed.params['part'])
     assert client.output(total, 'value') == 5.0
 
 
@@ -303,12 +297,11 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     sample = DatasetRef(dataset='uuid:run-1')
     part = OutputRef(record='r1', output='values', key='0')
     events: list[Event] = [
-        _submitted('r2', Request(LOAD, inputs={'sample': sample})),
+        _submitted('r2', Request(LOAD, params={'sample': sample})),
         Pushed(
             accumulator='a1',
             table='part',
-            params={'weight': [None]},
-            inputs={'part': [part]},
+            params={'weight': [None], 'part': [part]},
         ),
     ]
     _write(tmp_path / 'log', *events)
@@ -326,14 +319,14 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    done = first.compute(LOAD, inputs=_sample(1))
+    done = first.compute(LOAD, params=_sample(1))
     loading.clear()
-    pending = first.submit(LOAD, inputs=_sample(2))
+    pending = first.submit(LOAD, params=_sample(2))
     total = _total(first)
     total.push(part=[done.ref('value')])
     total.push(part=[pending.ref('value')])  # waits for ``pending``
-    read = first.submit(TOTAL, inputs=_read(total))
-    state = _record(first, read.request.inputs['part'][0].record)
+    read = first.submit(TOTAL, params=_read(total))
+    state = _record(first, read.request.params['part'][0].record)
 
     again = restart(tmp_path / 'log')
     loading.set()
@@ -342,9 +335,9 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     assert again.status(records) == [Status.CANCELLED] * 3  # no client keeps them
     assert again.failure(records) == ['the backend restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
-        again.submit(TOTAL, inputs={'part': [pending.ref('value')]})
+        again.submit(TOTAL, params={'part': [pending.ref('value')]})
     with pytest.raises(SubmitError, match='released or is unknown'):
-        again.submit(TOTAL, inputs=_read(total))  # the accumulator did not survive
+        again.submit(TOTAL, params=_read(total))  # the accumulator did not survive
 
 
 def test_outputs_are_not_in_the_log(
@@ -352,7 +345,7 @@ def test_outputs_are_not_in_the_log(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, inputs=_sample(1))
+    load = start(tmp_path / 'log').compute(LOAD, params=_sample(1))
 
     again = restart(tmp_path / 'log')
 
@@ -366,7 +359,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     start: Callable[[Path], Client],
     restart: Callable[[Path], Client],
 ) -> None:
-    load = start(tmp_path / 'log').compute(LOAD, inputs=_sample(1))
+    load = start(tmp_path / 'log').compute(LOAD, params=_sample(1))
 
     again = restart(tmp_path / 'log')
 
@@ -379,9 +372,9 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    client.stage(Template(LOAD, inputs=_sample(1), blanks=('selection',)))
+    client.stage(Template(LOAD, params=_sample(1), blanks=('selection',)))
     total = _total(client)
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     total.push(part=[load.ref('value')])
 
     assert [type(e) for e in Log.read(tmp_path / 'log')] == [
@@ -396,11 +389,11 @@ def test_a_refused_call_writes_nothing_to_the_log(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     written = len(Log.read(tmp_path / 'log'))
 
     with pytest.raises(SubmitError, match='not parameters'):
-        client.submit(LOAD, params={'bins': 2}, inputs=_sample(1))
+        client.submit(LOAD, params={'bins': 2, **_sample(1)})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))
     with pytest.raises(SubmitError, match='makes no accumulators'):
@@ -410,7 +403,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
     written += 2  # the accumulator opened, and the push
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
-        client.submit(TOTAL, inputs={'part': [other]})
+        client.submit(TOTAL, params={'part': [other]})
     with pytest.raises(SubmitError, match='not columns of a table'):
         total.push(other=[load.ref('value')])
     with pytest.raises(SubmitError, match='pushed without part'):
@@ -428,7 +421,7 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
 ) -> None:
     resource = pytest.importorskip('resource')
     path = tmp_path / 'log'
-    request = Request(LOAD, inputs={'sample': datasets.resolve(dataset(run=1))})
+    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
     with Log(path) as log:
         log.append(_submitted('load', request))
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -455,7 +448,7 @@ def test_a_last_line_cut_short_is_dropped(
     tmp_path: Path, datasets: FakeDatasets
 ) -> None:
     path = tmp_path / 'log'
-    request = Request(LOAD, inputs={'sample': datasets.resolve(dataset(run=1))})
+    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
     _write(path, _submitted('load', request))
     with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing
@@ -468,7 +461,7 @@ def test_a_last_line_cut_short_is_dropped(
 def test_a_line_that_is_not_an_event_is_refused(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
-    start(tmp_path / 'log').compute(LOAD, inputs=_sample(1))
+    start(tmp_path / 'log').compute(LOAD, params=_sample(1))
     lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
     (tmp_path / 'log').write_bytes(b''.join([lines[0], b'{}\n', *lines[1:]]))
 

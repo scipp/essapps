@@ -16,7 +16,8 @@ with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
 ``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
 (see :func:`plain`). :func:`fits` says whether data
 of one type can be the value of a field of another, so that an output of one
-spec can feed an input of another.
+spec can feed a parameter of another. :func:`model_of` makes a model of one
+field, which validates a value by that field alone.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ import operator
 from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import Annotated, Any, NewType, Union, get_args, get_origin
+
+from pydantic import BaseModel, Field, create_model
 
 
 def plain(tp: Any) -> Any:
@@ -148,3 +151,27 @@ def _reaches(sub: Any, sup: Any) -> bool:
     if sub is sup:
         return True
     return isinstance(sub, type) and isinstance(sup, type) and issubclass(sub, sup)
+
+
+def model_of(
+    model: type[BaseModel], name: str, *, rows: bool = False
+) -> type[BaseModel]:
+    """
+    A model of the field ``name`` of ``model`` alone, with its config and
+    without its validators: it validates one value by its own field, as every
+    value of a request is validated, in both phases. The params model has no
+    decorators but model validators, which the framework never calls; a check
+    of one value belongs to the value's type.
+
+    With ``rows``, the field is a column of rows pushed into a table: it is
+    validated by its element type alone, with that type's metadata, without
+    the field's length constraints on the whole table.
+    """
+    return _model_of(model, name, rows)
+
+
+@functools.cache
+def _model_of(model: type[BaseModel], name: str, rows: bool) -> type[BaseModel]:
+    info = model.model_fields[name]
+    field: dict[str, Any] = {name: (info.annotation, Field() if rows else info)}
+    return create_model(model.__name__, __config__=model.model_config, **field)

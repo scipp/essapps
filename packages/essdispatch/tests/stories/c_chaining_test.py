@@ -26,14 +26,14 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(
-        BEAM_CENTRE, inputs={'direct_beam': centre_run}, label='beam-centre'
+        BEAM_CENTRE, params={'direct_beam': centre_run}, label='beam-centre'
     )
     samples = [
         measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
         measure(3, [5.0, 4.0, 3.0, 2.0], role='sample'),
     ]
     template = Template(
-        IOFQ, inputs={'beam_centre': centre.ref('centre')}, blanks=('sample',)
+        IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('sample',)
     )
 
     requests = apply(template, samples, client.datasets, member_field='run')
@@ -55,15 +55,14 @@ def test_c2_vanadium_from_the_catalogue(
 ) -> None:
     vanadium = other.compute(
         VANADIUM,
-        params={'scaling': Scaling(scale=2.0)},
-        inputs={'vanadium': measure(1, [1.0, 1.0])},
+        params={'scaling': Scaling(scale=2.0), 'vanadium': measure(1, [1.0, 1.0])},
     )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
     published = datasets.add_published(scicat.entries[pid])
 
     sample = measure(2, [4.0, 8.0])
     result = client.compute(
-        IOFQ, inputs={'sample': sample, 'normalization': dataset(pid=pid)}
+        IOFQ, params={'sample': sample, 'normalization': dataset(pid=pid)}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
@@ -79,8 +78,8 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(13, [4.0, 2.0], angle=2.0),
         measure(14, [2.0, 0.5], angle=4.0),
     ]
-    stitched = client.submit(STITCH, inputs={'runs': angles, 'reference': reference})
-    exported = client.compute(EXPORT, inputs={'result': stitched.ref('stitched')})
+    stitched = client.submit(STITCH, params={'runs': angles, 'reference': reference})
+    exported = client.compute(EXPORT, params={'result': stitched.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
     assert set(client.provenance(exported).datasets()) == {reference, *angles}
@@ -95,13 +94,13 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
         for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
     ]
     series = client.accumulator(
-        Template(STITCH, inputs={'reference': reference}, blanks=('runs',))
+        Template(STITCH, params={'reference': reference}, blanks=('runs',))
     )
     reads, plains = [], []
     for n, run in enumerate(runs, start=1):
         series.push(runs=[run])  # STITCH keeps the rows and stitches at each read
         plain = client.compute(
-            STITCH, inputs={'runs': runs[:n], 'reference': reference}
+            STITCH, params={'runs': runs[:n], 'reference': reference}
         )
         reads.append(client.output(series, 'stitched'))
         plains.append(client.output(plain, 'stitched'))
@@ -115,10 +114,10 @@ def test_c5_vanadium_and_sample_tuned_together(
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.stage(
-        Template(VANADIUM, inputs={'vanadium': vanadium_run}, blanks=('scaling',))
+        Template(VANADIUM, params={'vanadium': vanadium_run}, blanks=('scaling',))
     )
     reduce = client.stage(
-        Template(IOFQ, inputs={'sample': sample}, blanks=('normalization',))
+        Template(IOFQ, params={'sample': sample}, blanks=('normalization',))
     )
     reduced = []
     for scale in (1.0, 2.0):
@@ -128,7 +127,7 @@ def test_c5_vanadium_and_sample_tuned_together(
         normalization = processed.ref('normalization')
         reduced.append(
             client.compute(
-                reduce, inputs={'normalization': normalization}, label='iofq'
+                reduce, params={'normalization': normalization}, label='iofq'
             )
         )
 
@@ -137,5 +136,5 @@ def test_c5_vanadium_and_sample_tuned_together(
         [1.0, 2.0],
     ]  # [4, 8] divided by 2, then by 4
     assert client.records(label='iofq') == reduced
-    normalization = reduced[-1].request.inputs['normalization']
+    normalization = reduced[-1].request.params['normalization']
     assert normalization == client.latest('vanadium').ref('normalization')

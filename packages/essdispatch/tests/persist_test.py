@@ -32,7 +32,7 @@ from ess.dispatch.testing import (
     kept_rows,
     read_dataset,
 )
-from ess.spec import Binding, NoParams, WorkflowSpec, function_binding
+from ess.spec import Binding, WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
 Extra = NewType('Extra', float)
@@ -47,7 +47,7 @@ class Box:
         self.value = value
 
 
-class RunInputs(BaseModel):
+class RunParams(BaseModel):
     sample: SampleFile
 
 
@@ -57,11 +57,11 @@ class Loaded(BaseModel):
     note: Note | None = None
 
 
-class SourceInputs(BaseModel):
+class SourceParams(BaseModel):
     source: float
 
 
-class OffsetInputs(BaseModel):
+class OffsetParams(BaseModel):
     source: float
     shift: Offset
 
@@ -70,7 +70,7 @@ class ShiftedOutputs(BaseModel):
     value: Shifted
 
 
-class PartInputs(BaseModel):
+class PartParams(BaseModel):
     part: Part
 
 
@@ -86,32 +86,32 @@ class Boxed(BaseModel, arbitrary_types_allowed=True):
     value: Box
 
 
-class BoxInputs(BaseModel, arbitrary_types_allowed=True):
+class BoxParams(BaseModel, arbitrary_types_allowed=True):
     source: Box
 
 
 def _spec(
-    name: str, inputs: type[BaseModel], outputs: type[BaseModel]
-) -> WorkflowSpec[Any, Any, Any]:
+    name: str, params: type[BaseModel], outputs: type[BaseModel]
+) -> WorkflowSpec[Any, Any]:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=name,
-        inputs=inputs,
+        params=params,
         outputs=outputs,
     )
 
 
-LOAD = _spec('load', RunInputs, Loaded)
-SHIFT = _spec('shift', SourceInputs, ShiftedOutputs)
-TOTAL = _spec('part', PartInputs, Value).tabulate(
+LOAD = _spec('load', RunParams, Loaded)
+SHIFT = _spec('shift', SourceParams, ShiftedOutputs)
+TOTAL = _spec('part', PartParams, Value).tabulate(
     name='total', version=1, tables=('part',)
 )
-LIST = _spec('list', RunInputs, Listed)  # a value that can be changed in place
-BOX = _spec('box', RunInputs, Boxed)  # a value that can be referenced weakly
-UNBOX = _spec('unbox', BoxInputs, Value)
-OFFSET = _spec('offset', OffsetInputs, ShiftedOutputs)
+LIST = _spec('list', RunParams, Listed)  # a value that can be changed in place
+BOX = _spec('box', RunParams, Boxed)  # a value that can be referenced weakly
+UNBOX = _spec('unbox', BoxParams, Value)
+OFFSET = _spec('offset', OffsetParams, ShiftedOutputs)
 
 
 def _sample(n: int) -> dict[str, Any]:
@@ -166,28 +166,28 @@ def boxes() -> list[weakref.ref[Box]]:
 
 @pytest.fixture
 def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
-    def load(params: NoParams, inputs: RunInputs) -> Loaded:
-        run = read_dataset(inputs.sample)
+    def load(params: RunParams) -> Loaded:
+        run = read_dataset(params.sample)
         loading.wait(timeout=5)
         return Loaded(value=run, extra=-run)
 
-    def box(params: NoParams, inputs: RunInputs) -> Boxed:
-        boxes.append(weakref.ref(value := Box(read_dataset(inputs.sample))))
+    def box(params: RunParams) -> Boxed:
+        boxes.append(weakref.ref(value := Box(read_dataset(params.sample))))
         return Boxed(value=value)
 
-    def total(params: NoParams, inputs: Any) -> Value:
-        return Value(value=sum(inputs.part))
+    def total(params: Any) -> Value:
+        return Value(value=sum(params.part))
 
-    def offset(params: NoParams, inputs: OffsetInputs) -> ShiftedOutputs:
-        return ShiftedOutputs(value=inputs.source + inputs.shift)
+    def offset(params: OffsetParams) -> ShiftedOutputs:
+        return ShiftedOutputs(value=params.source + params.shift)
 
     return [
         function_binding(LOAD, load),
-        function_binding(SHIFT, lambda p, i: ShiftedOutputs(value=i.source + 10.0)),
+        function_binding(SHIFT, lambda p: ShiftedOutputs(value=p.source + 10.0)),
         kept_rows(TOTAL, total),
-        function_binding(LIST, lambda p, i: Listed(value=[read_dataset(i.sample)])),
+        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample)])),
         function_binding(BOX, box),
-        function_binding(UNBOX, lambda p, i: Value(value=i.source.value)),
+        function_binding(UNBOX, lambda p: Value(value=p.source.value)),
         StagedFunction(OFFSET, offset),
     ]
 
@@ -223,7 +223,7 @@ def client(connect: Callable[[], Client]) -> Client:
 def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1), persist=('value',))
+    load = client.compute(LOAD, params=_sample(1), persist=('value',))
 
     other = connect()
     assert other.output(load, 'value') == 1.0
@@ -232,8 +232,8 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     with pytest.raises(LookupError, match='not kept by this client'):
         client.output(load, 'extra')  # dropped once the record completed
     with pytest.raises(SubmitError, match='not kept by this client'):
-        client.submit(SHIFT, inputs={'source': load.ref('extra')})
-    shift = other.compute(SHIFT, inputs={'source': load.ref('value')})
+        client.submit(SHIFT, params={'source': load.ref('extra')})
+    shift = other.compute(SHIFT, params={'source': load.ref('value')})
     assert other.output(shift, 'value') == 11.0
 
 
@@ -241,7 +241,7 @@ def test_a_record_persisted_at_submission_completes_once_written(
     client: Client, store: GatedStore
 ) -> None:
     store.gate.clear()
-    load = client.submit(LOAD, inputs=_sample(1), persist=True)
+    load = client.submit(LOAD, params=_sample(1), persist=True)
 
     assert client.status(load) is Status.PENDING
     store.gate.set()
@@ -253,22 +253,22 @@ def test_a_failed_write_fails_a_record_persisted_at_submission(
     client: Client, store: GatedStore
 ) -> None:
     store.fill()
-    load = client.submit(LOAD, inputs=_sample(1), persist=True)
+    load = client.submit(LOAD, params=_sample(1), persist=True)
 
     assert client.wait(load) is Status.FAILED
     assert client.failure(load) == 'the write failed: no space left on device'
     with pytest.raises(RuntimeError, match='no space left'):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match='failed'):
-        client.submit(SHIFT, inputs={'source': load.ref('value')})
+        client.submit(SHIFT, params={'source': load.ref('value')})
 
 
 def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
     client: Client, store: GatedStore
 ) -> None:
     store.gate.clear()
-    load = client.submit(LOAD, inputs=_sample(1), persist=True)
-    shift = client.submit(SHIFT, inputs={'source': load.ref('value')})
+    load = client.submit(LOAD, params=_sample(1), persist=True)
+    shift = client.submit(SHIFT, params={'source': load.ref('value')})
     store.fill()
     store.gate.set()
 
@@ -282,15 +282,15 @@ def test_a_reader_of_a_record_persisted_at_submission_fails_with_its_write(
 def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     other = connect()
     with pytest.raises(SubmitError, match='not kept by this client'):
-        other.submit(SHIFT, inputs={'source': load.ref('value')})
+        other.submit(SHIFT, params={'source': load.ref('value')})
 
     store.gate.clear()
     client.persist(load, 'value')
     # The request waits for the write.
-    shift = other.submit(SHIFT, inputs={'source': load.ref('value')})
+    shift = other.submit(SHIFT, params={'source': load.ref('value')})
     assert client.output(load, 'value') == 1.0  # from memory meanwhile
     assert other.status(shift) is Status.PENDING
     store.gate.set()
@@ -306,11 +306,11 @@ def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
 def test_a_failed_write_of_persist_fails_only_the_persist_request(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     store.gate.clear()
     client.persist(load)
     other = connect()
-    shift = other.submit(SHIFT, inputs={'source': load.ref('value')})
+    shift = other.submit(SHIFT, params={'source': load.ref('value')})
     store.fill()
     store.gate.set()
 
@@ -321,7 +321,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     with pytest.raises(LookupError, match='the write failed: no space left'):
         other.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: no space left'):
-        other.submit(SHIFT, inputs={'source': load.ref('value')})
+        other.submit(SHIFT, params={'source': load.ref('value')})
 
     store.free()
     client.persist(load)  # ask again
@@ -329,7 +329,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
 
 
 def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     client.persist(load, 'value')
     client.persist([load, load], 'value', 'extra')
     client.release(load)
@@ -342,27 +342,27 @@ def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> 
 def test_persist_is_refused_for_what_the_client_cannot_persist(
     client: Client, connect: Callable[[], Client], datasets: FakeDatasets
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
 
     with pytest.raises(SubmitError, match='not kept by this client'):
         connect().persist(load)
     with pytest.raises(SubmitError, match=r"no outputs \['other'\]"):
         client.persist(load, 'other')
     with pytest.raises(SubmitError, match=r"no outputs \['other'\] to persist"):
-        client.submit(LOAD, inputs=_sample(1), persist=('other',))
+        client.submit(LOAD, params=_sample(1), persist=('other',))
     with local(
         proposal='p1',
         datasets=datasets,
-        bind=[function_binding(LOAD, lambda p, i: Loaded(value=0.0, extra=0.0))],
+        bind=[function_binding(LOAD, lambda p: Loaded(value=0.0, extra=0.0))],
     ) as alone:
         with pytest.raises(SubmitError, match='needs a store'):
-            alone.submit(LOAD, inputs=_sample(1), persist=True)
+            alone.submit(LOAD, params=_sample(1), persist=True)
 
 
 def test_an_output_the_workflow_did_not_return_is_persisted_as_not_returned(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1), persist=True)
+    load = client.compute(LOAD, params=_sample(1), persist=True)
 
     with pytest.raises(LookupError, match='did not return it'):
         connect().output(load, 'note')
@@ -373,7 +373,7 @@ def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
     client: Client, connect: Callable[[], Client], loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(LOAD, inputs=_sample(1))
+    load = client.submit(LOAD, params=_sample(1))
     client.persist(load, 'value')
     client.release(load)  # the persist request keeps it
     loading.set()
@@ -384,7 +384,7 @@ def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
 def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     total = client.accumulator(Template(TOTAL, blanks=('part',)))
     total.push(part=[load.ref('value')])
     frozen = client.freeze(total, persist=True)
@@ -399,7 +399,7 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     datasets: FakeDatasets, bind: list[Binding], store: GatedStore
 ) -> None:
     client = local(proposal='p1', datasets=datasets, bind=bind, store=store)
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     store.gate.clear()
     client.persist(load)
     closing = threading.Thread(target=client.close)
@@ -416,7 +416,7 @@ def test_persisting_a_pending_record_does_not_delay_its_completion(
     client: Client, store: GatedStore, loading: threading.Event
 ) -> None:
     loading.clear()
-    load = client.submit(LOAD, inputs=_sample(1))
+    load = client.submit(LOAD, params=_sample(1))
     client.persist(load, 'value')
     store.gate.clear()
     loading.set()
@@ -426,12 +426,12 @@ def test_persisting_a_pending_record_does_not_delay_its_completion(
     store.gate.set()
 
 
-def test_a_record_lets_go_of_its_inputs_before_its_write(
+def test_a_record_lets_go_of_its_references_before_its_write(
     client: Client, store: GatedStore, boxes: list[weakref.ref[Box]]
 ) -> None:
-    box = client.submit(BOX, inputs=_sample(1))
+    box = client.submit(BOX, params=_sample(1))
     store.gate.clear()
-    unbox = client.submit(UNBOX, inputs={'source': box.ref('value')}, persist=True)
+    unbox = client.submit(UNBOX, params={'source': box.ref('value')}, persist=True)
     client.release(box)  # only ``unbox`` reads it
     assert store.entered.wait(timeout=5)
 
@@ -445,7 +445,7 @@ def test_a_record_lets_go_of_its_inputs_before_its_write(
 def test_another_client_reads_a_persisted_value_from_the_store(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    listed = client.compute(LIST, inputs=_sample(1))
+    listed = client.compute(LIST, params=_sample(1))
     client.persist(listed)
     other = connect()
 
@@ -457,7 +457,7 @@ def test_another_client_reads_a_persisted_value_from_the_store(
 def test_reading_every_output_raises_if_a_write_failed(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     store.fill()
     client.persist(load, 'value')
 
@@ -471,8 +471,8 @@ def test_reading_every_output_raises_if_a_write_failed(
 def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
     client: Client, store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
-    shift = client.compute(SHIFT, inputs={'source': load.ref('value')})
+    load = client.compute(LOAD, params=_sample(1))
+    shift = client.compute(SHIFT, params={'source': load.ref('value')})
     store.fill()
     client.persist(load, 'value')
     client.persist(shift)
@@ -488,7 +488,7 @@ def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
 def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     store.fill()
     client.persist(load, 'value')
     with pytest.raises(LookupError, match='the write failed'):
@@ -502,7 +502,7 @@ def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
 def test_a_frozen_record_kept_by_the_client_is_persisted_later(
     client: Client, connect: Callable[[], Client]
 ) -> None:
-    load = client.compute(LOAD, inputs=_sample(1))
+    load = client.compute(LOAD, params=_sample(1))
     total = client.accumulator(Template(TOTAL, blanks=('part',)))
     total.push(part=[load.ref('value')])
     frozen = client.freeze(total)
@@ -552,12 +552,12 @@ def test_a_restart_runs_pending_persisted_work_and_cancels_the_rest(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    done = first.compute(LOAD, inputs=_sample(2), persist=('value',))
+    done = first.compute(LOAD, params=_sample(2), persist=('value',))
     loading.clear()
-    load = first.submit(LOAD, inputs=_sample(1))  # read by persisted work
-    alone = first.submit(LOAD, inputs=_sample(2))  # read by nothing persisted
+    load = first.submit(LOAD, params=_sample(1))  # read by persisted work
+    alone = first.submit(LOAD, params=_sample(2))  # read by nothing persisted
     total = first.submit(
-        TOTAL, inputs={'part': [load.ref('value'), done.ref('value')]}, persist=True
+        TOTAL, params={'part': [load.ref('value'), done.ref('value')]}, persist=True
     )
 
     again = restart(tmp_path / 'log')
@@ -579,19 +579,19 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    kept = first.compute(LOAD, inputs=_sample(1))
+    kept = first.compute(LOAD, params=_sample(1))
     loading.clear()
-    pending = first.submit(LOAD, inputs=_sample(2))
+    pending = first.submit(LOAD, params=_sample(2))
     total = first.accumulator(Template(TOTAL, blanks=('part',)))
     total.push(part=[pending.ref('value')])  # its state waits for ``pending``
     unpersisted = first.submit(
-        TOTAL, inputs={'part': [kept.ref('value'), pending.ref('value')]}, persist=True
+        TOTAL, params={'part': [kept.ref('value'), pending.ref('value')]}, persist=True
     )
-    of_state = first.submit(SHIFT, inputs={'source': total.ref('value')}, persist=True)
+    of_state = first.submit(SHIFT, params={'source': total.ref('value')}, persist=True)
     (input_,) = of_state.request.upstream()
     state = next(r for r in first.records() if r.id == input_.record)
     downstream = first.submit(
-        SHIFT, inputs={'source': pending.ref('value')}, persist=True
+        SHIFT, params={'source': pending.ref('value')}, persist=True
     )
 
     again = restart(tmp_path / 'log')
@@ -619,18 +619,18 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
     loading: threading.Event,
 ) -> None:
     first = start(tmp_path / 'log')
-    kept = first.compute(LOAD, inputs=_sample(1))
-    stored = first.compute(LOAD, inputs=_sample(2), persist=('value',))
+    kept = first.compute(LOAD, params=_sample(1))
+    stored = first.compute(LOAD, params=_sample(2), persist=('value',))
     loading.clear()
-    offset = first.submit(LOAD, inputs=_sample(2))
+    offset = first.submit(LOAD, params=_sample(2))
     calls = []
     for fixed in (kept, stored):
         stage = first.stage(
-            Template(OFFSET, inputs={'source': fixed.ref('value')}, blanks=('shift',))
+            Template(OFFSET, params={'source': fixed.ref('value')}, blanks=('shift',))
         )
-        first.compute(stage, inputs={'shift': kept.ref('value')})  # stages it
+        first.compute(stage, params={'shift': kept.ref('value')})  # stages it
         calls.append(
-            first.submit(stage, inputs={'shift': offset.ref('value')}, persist=True)
+            first.submit(stage, params={'shift': offset.ref('value')}, persist=True)
         )
 
     again = restart(tmp_path / 'log')
@@ -650,7 +650,7 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
     store: GatedStore,
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, inputs=_sample(1))
+    load = first.compute(LOAD, params=_sample(1))
     store.gate.clear()
     first.persist(load, 'value')
 
@@ -659,14 +659,14 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
     with pytest.raises(LookupError, match='the write failed: the backend restarted'):
         again.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: the backend restarted'):
-        again.submit(SHIFT, inputs={'source': load.ref('value')})
+        again.submit(SHIFT, params={'source': load.ref('value')})
 
 
 def test_a_restart_runs_again_a_record_written_but_not_finished(
     tmp_path: Path, start: Callable[[Path], Client], store: GatedStore
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, inputs=_sample(1), persist=('value',))
+    load = first.compute(LOAD, params=_sample(1), persist=('value',))
     lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
     assert isinstance(Log.read(tmp_path / 'log')[-1], Finished)
     (tmp_path / 'crashed').write_bytes(b''.join(lines[:-1]))  # before it finished
@@ -685,7 +685,7 @@ def test_a_restart_runs_a_pending_record_that_the_client_persisted(
 ) -> None:
     first = start(tmp_path / 'log')
     loading.clear()
-    load = first.submit(LOAD, inputs=_sample(1))
+    load = first.submit(LOAD, params=_sample(1))
     first.persist(load, 'value')
 
     again = restart(tmp_path / 'log')
@@ -702,10 +702,10 @@ def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
     store: GatedStore,
 ) -> None:
     first = start(tmp_path / 'log')
-    load = first.compute(LOAD, inputs=_sample(1))
+    load = first.compute(LOAD, params=_sample(1))
     store.gate.clear()
     first.persist(load, 'value')
-    shift = first.submit(SHIFT, inputs={'source': load.ref('value')}, persist=True)
+    shift = first.submit(SHIFT, params={'source': load.ref('value')}, persist=True)
 
     again = restart(tmp_path / 'log')
 

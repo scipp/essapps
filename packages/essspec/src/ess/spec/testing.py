@@ -9,8 +9,8 @@ needs no known result. With a single-run binding ``single`` (a
 ``DriverBinding``) of ``IOFQ_MULTI = IOFQ.tabulate(...)``, and the function
 ``make_driver`` that ``multi`` makes its drivers with::
 
-    params = IofQParams(reduction=Reduction(bins=2))
-    check_one_row(single, multi, params, IofQInputs(sample=run_101, can=run_110))
+    params = IofQParams(reduction=Reduction(bins=2), sample=run_101, can=run_110)
+    check_one_row(single, multi, params)
     check_caching(single, {'sample': run_101}, [{'reduction': ...}, ...])
     check_arrival_and_order(
         make_driver,
@@ -37,16 +37,16 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
+from .field_types import model_of
 
 Columns = Mapping[str, Sequence[Any]]
 """A table's columns by name, the index among them, as a push gives them."""
 
 
 def check_one_row(
-    single: Binding[Any, Any, Any],
-    multi: Binding[Any, Any, Any],
+    single: Binding[Any, Any],
+    multi: Binding[Any, Any],
     params: BaseModel,
-    inputs: BaseModel,
     *,
     rtol: float = 1e-12,
 ) -> None:
@@ -55,48 +55,48 @@ def check_one_row(
     whose index is given and none where it is left out, gives the outputs of
     the binding of the single-run spec that ``tabulate`` made it from.
 
-    ``params`` and ``inputs`` are a request of ``single``, instances of its
-    spec's models; the request of ``multi`` is made from them.
+    ``params`` is a request of ``single``, an instance of its spec's params
+    model; the request of ``multi`` is made from it.
     """
-    multi_params, multi_inputs = one_row(multi.spec, params, inputs)
-    expected = single.compute(params, inputs)
-    actual = multi.compute(multi_params, multi_inputs)
-    _check_no_shared_memory(expected, (params, inputs), where='one-row, single-run')
-    _check_no_shared_memory(
-        actual, (multi_params, multi_inputs), where='one-row, multi-run'
-    )
+    multi_params = one_row(multi.spec, params)
+    expected = single.compute(params)
+    actual = multi.compute(multi_params)
+    _check_no_shared_memory(expected, params, where='one-row, single-run')
+    _check_no_shared_memory(actual, multi_params, where='one-row, multi-run')
     assert_close(actual, expected, rtol=rtol, where='one-row')
 
 
-def one_row(
-    spec: WorkflowSpec[Any, Any, Any], params: BaseModel, inputs: BaseModel
-) -> tuple[BaseModel, BaseModel]:
+def one_row(spec: WorkflowSpec[Any, Any], params: BaseModel) -> BaseModel:
     """
     The request of the multi-run ``spec`` with one row in each table whose
-    index is given in the request ``params`` and ``inputs`` of the
-    single-run spec, and none where it is ``None``.
+    index is given in the request ``params`` of the single-run spec, and none
+    where it is ``None``.
     """
-    values = {**dict(params), **dict(inputs)}
+    values = dict(params)
     for index in spec.tables:
         rows = 0 if values[index] is None else 1
         for name in spec.columns(index):
             values[name] = [values[name]] * rows
-    return instances(spec, values)
+    return instance(spec, values)
 
 
-def instances(
-    spec: WorkflowSpec[Any, Any, Any], values: Mapping[str, Any]
-) -> tuple[BaseModel, BaseModel]:
+def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseModel:
     """
-    Instances of the spec's params and inputs models from ``values`` by name,
-    as a stage or a driver takes them.
+    An instance of the spec's params model from ``values`` by name, as a
+    stage or a driver takes them, made as the backend makes one: each value
+    validated by its own field, without the model validators.
     """
-    params, inputs = spec.split(values)
-    return spec.params.model_validate(params), spec.inputs.model_validate(inputs)
+    model: type[BaseModel] = spec.params
+    return model.model_construct(
+        **{
+            n: getattr(model_of(model, n).model_validate({n: v}), n)
+            for n, v in values.items()
+        }
+    )
 
 
 def check_caching(
-    binding: StageBinding[Any, Any, Any],
+    binding: StageBinding[Any, Any],
     fixed: Mapping[str, Any],
     calls: Sequence[Mapping[str, Any]],
     *,
@@ -117,8 +117,7 @@ def check_caching(
     call = binding.make_stage(fixed, blanks)
     for n, values in enumerate(calls, start=1):
         given = fixed_values(spec, {**fixed, **values}, ())
-        params, inputs = instances(spec, given)
-        expected = binding.compute(params, inputs)
+        expected = binding.compute(instance(spec, given))
         actual = call(values)
         where = f'caching, call {n} {values}'
         _check_no_shared_memory(expected, given, where=f'{where}, plain')

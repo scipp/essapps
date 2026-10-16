@@ -3,9 +3,9 @@
 """
 Requests and records: what a user asks for and what the backend made of it.
 
-Both are plain data. A request names a spec, the values of its parameters,
-and its inputs, each by reference; a record is the request with every value
-filled in, as the backend accepted it. A record never changes. Its status,
+Both are plain data. A request names a spec and its params by name, each a
+literal or a reference; a record is the request with every value filled in,
+as the backend accepted it. A record never changes. Its status,
 which changes once from pending to finished, is asked of the client.
 """
 
@@ -34,7 +34,8 @@ def as_values(value: Any) -> Any:
 
     So a request, a template, and a push take a params model or a group as a
     model or as a dict alike. Defaults are left out, as they are of a dict, so
-    that the backend fills in those of its own spec.
+    that the backend fills in those of its own spec; a reference is kept
+    whole, since its kind is a default.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
         return value.model_dump(exclude_unset=True)
@@ -45,31 +46,32 @@ def as_values(value: Any) -> Any:
     return value
 
 
-def read_refs(inputs: Any) -> Any:
+def read_refs(params: Any) -> Any:
     """
-    Inputs by name with each reference in its plain (JSON) form read as a
-    :data:`~ess.spec.Ref`; anything but a mapping is left for validation to
-    refuse. Raises ``SubmitError`` for a malformed reference.
+    Params by name with each reference in its plain (JSON) form read as a
+    :data:`~ess.spec.Ref`, where a request may hold one (see
+    :func:`ess.spec.refs.iter_refs`); anything but a mapping is left for
+    validation to refuse. Raises ``SubmitError`` for a malformed reference.
     """
-    if not isinstance(inputs, Mapping):
-        return inputs
+    if not isinstance(params, Mapping):
+        return params
     try:
-        return map_refs(inputs, lambda ref: ref)
+        return map_refs(params, lambda ref: ref)
     except ValueError as error:
         raise SubmitError(str(error)) from None
 
 
-Inputs = Annotated[dict[str, Any], BeforeValidator(read_refs)]
+Params = Annotated[dict[str, Any], BeforeValidator(read_refs)]
 """
-The inputs of a request by name, each a reference, ``None``, or a list of
-them; so every way of making one, the log's JSON among them, holds
+The params of a request by name, each a literal, a reference, ``None``, or a
+list of these; so every way of making one, the log's JSON among them, holds
 references as :data:`~ess.spec.Ref`.
 """
 
 
 def _given(values: Mapping[str, Any] | BaseModel | None) -> dict[str, Any]:
-    """The values of one side of a request, as :func:`as_values` gives them."""
-    return {} if values is None else as_values(values)
+    """Params by name, as :func:`as_values` gives them, references read."""
+    return {} if values is None else read_refs(as_values(values))
 
 
 class SpecId(BaseModel, frozen=True):
@@ -79,7 +81,7 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec[Any, Any, Any] | SpecId | dict[str, Any]) -> SpecId:
+    def of(cls, spec: WorkflowSpec[Any, Any] | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
         if isinstance(spec, WorkflowSpec):
@@ -92,37 +94,32 @@ class SpecId(BaseModel, frozen=True):
 
 class Request(BaseModel, frozen=True):
     """
-    A spec, the values of its parameters, and its inputs, by name.
+    A spec and its params, by name.
 
-    ``params`` is a params model or a dict of its fields, each a group as a
-    model or a dict. ``inputs`` holds a reference for each input, or a list of
-    references for a list field; a file is always given by reference, such as
-    ``dataset(path=...)``. Every reference of a request is in its inputs, so
+    ``params`` is an instance of the params model, if every value is a
+    literal, or a dict by name: a group as a model or a dict, given by value,
+    and a reference for a data value; a list of these for a list parameter.
+    A file is always given by reference, such as ``dataset(path=...)``. A
+    reference is found at the top of a value or of an element of a list, so
     the references of a request are found without its spec.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     spec: SpecId
-    params: dict[str, Any] = Field(default_factory=dict)
-    inputs: Inputs = Field(default_factory=dict)
+    params: Params = Field(default_factory=dict)
 
     def __init__(
         self,
-        spec: WorkflowSpec[Any, Any, Any] | SpecId,
+        spec: WorkflowSpec[Any, Any] | SpecId,
         *,
         params: Mapping[str, Any] | BaseModel | None = None,
-        inputs: Mapping[str, Any] | None = None,
     ) -> None:
-        super().__init__(
-            spec=SpecId.of(spec),
-            params=_given(params),
-            inputs=read_refs(_given(inputs)),
-        )
+        super().__init__(spec=SpecId.of(spec), params=_given(params))
 
     def upstream(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
-        return [ref for _, ref in iter_refs(self.inputs) if isinstance(ref, OutputRef)]
+        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, OutputRef)]
 
     def accumulators(self) -> list[AccumulatorRef]:
         """
@@ -131,12 +128,12 @@ class Request(BaseModel, frozen=True):
         of the state it reads.
         """
         return [
-            ref for _, ref in iter_refs(self.inputs) if isinstance(ref, AccumulatorRef)
+            ref for _, ref in iter_refs(self.params) if isinstance(ref, AccumulatorRef)
         ]
 
     def datasets(self) -> list[DatasetRef]:
         """The datasets this request names directly."""
-        return [ref for _, ref in iter_refs(self.inputs) if isinstance(ref, DatasetRef)]
+        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, DatasetRef)]
 
 
 @dataclass(frozen=True, init=False)
@@ -144,8 +141,8 @@ class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    Values are given by side, as a request's are. A blank is a parameter, an
-    input, or a table, named by its index; a template fixes a whole table or
+    Values are given as a request's are. A blank is a parameter, or a table,
+    named by its index; a template fixes a whole table or
     leaves it blank. Naming a field as a blank drops the value given for it,
     and the backend drops the columns given for a blank table, so a template
     can be made from any request's values or a whole params model, which it
@@ -153,48 +150,33 @@ class Template:
     """
 
     spec: SpecId
-    params: dict[str, Any]
-    inputs: Inputs
+    params: Params
     blanks: tuple[str, ...]
 
     def __init__(
         self,
-        spec: WorkflowSpec[Any, Any, Any] | SpecId,
+        spec: WorkflowSpec[Any, Any] | SpecId,
         *,
         params: Mapping[str, Any] | BaseModel | None = None,
-        inputs: Mapping[str, Any] | None = None,
         blanks: Collection[str] = (),
     ) -> None:
-        def kept(values: Mapping[str, Any]) -> dict[str, Any]:
-            return {k: v for k, v in values.items() if k not in blanks}
-
         blanks = tuple(blanks)
+        kept = {k: v for k, v in _given(params).items() if k not in blanks}
         object.__setattr__(self, 'spec', SpecId.of(spec))
-        object.__setattr__(self, 'params', kept(_given(params)))
-        object.__setattr__(self, 'inputs', kept(read_refs(_given(inputs))))
+        object.__setattr__(self, 'params', kept)
         object.__setattr__(self, 'blanks', blanks)
 
-    def fill(
-        self,
-        *,
-        params: Mapping[str, Any] | BaseModel | None = None,
-        inputs: Mapping[str, Any] | None = None,
-    ) -> Request:
+    def fill(self, *, params: Mapping[str, Any] | BaseModel | None = None) -> Request:
         """
-        The request with the blanks filled by ``params`` and ``inputs``; a
-        blank table by its index and the columns attached to it.
+        The request with the blanks filled by ``params``; a blank table by
+        its index and the columns attached to it.
         """
-        params, inputs = _given(params), _given(inputs)
-        given = params.keys() | inputs.keys()
-        if missing := [b for b in self.blanks if b not in given]:
+        params = _given(params)
+        if missing := [b for b in self.blanks if b not in params]:
             raise ValueError(f'fill the blanks {self.blanks}, missing {missing}')
-        if fixed := sorted(given & (self.params.keys() | self.inputs.keys())):
+        if fixed := sorted(params.keys() & self.params.keys()):
             raise ValueError(f'{fixed}: fixed by the template, not blanks')
-        return Request(
-            self.spec,
-            params={**self.params, **params},
-            inputs={**self.inputs, **inputs},
-        )
+        return Request(self.spec, params={**self.params, **params})
 
 
 class Status(StrEnum):
@@ -208,9 +190,9 @@ class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it.
 
-    ``request`` has every value filled in, params in JSON's types and inputs
-    as references: dataset names resolved, the defaults of params and inputs
-    filled, a column left out of a table filled, and each reference to an
+    ``request`` has every value filled in, literals in JSON's types and data
+    values as references: dataset names resolved, defaults filled, a column
+    left out of a table filled, and each reference to an
     accumulator replaced by a reference to the record of the state it reads,
     a record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and

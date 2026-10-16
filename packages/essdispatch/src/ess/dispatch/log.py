@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend's history: an append-only log of what ran, with which inputs,
+The backend's history: an append-only log of what ran, with which params,
 and what came of it.
 
 There are six events: a submission, a record that finished, an accumulator
@@ -40,7 +40,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter
 
-from .records import Inputs, Request, Status, Template, read_refs
+from .records import Params, Request, Status, Template, read_refs
 
 
 class NewRecord(BaseModel, frozen=True):
@@ -99,8 +99,8 @@ class Opened(BaseModel, frozen=True):
     """
     An accumulator that opened, with its template as the backend accepted it.
 
-    The template's blanks are the tables that the pushes fill. ``params`` and
-    ``inputs`` hold the template's other values, defaults filled in, in JSON's
+    The template's blanks are the tables that the pushes fill. ``params``
+    holds the template's other values, defaults filled in, literals in JSON's
     types, and the columns of the blank tables, without rows: the driver was
     made with the other values, and with the columns pushed they give the
     plain request of a state. ``template`` holds the values as the
@@ -112,22 +112,20 @@ class Opened(BaseModel, frozen=True):
     accumulator: str
     proposal: str
     template: Template
-    params: dict[str, Any]
-    inputs: Inputs
+    params: Params
 
 
 class Pushed(BaseModel, frozen=True):
     """
     A push into an accumulator: rows of the table of index ``table``, as its
-    columns by side, each a list, of equal length, names resolved, a column
+    columns by name, each a list, of equal length, names resolved, a column
     left out filled.
     """
 
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
     table: str
-    params: dict[str, list[Any]]
-    inputs: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
+    params: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
 
 
 class Persist(BaseModel, frozen=True):

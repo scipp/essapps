@@ -21,17 +21,17 @@ from ess.dispatch import (
     apply,
 )
 from ess.dispatch.testing import FakeDatasets, FakeStore, read_dataset
-from ess.spec import NoParams, WorkflowSpec, function_binding
+from ess.spec import WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
 CanFile = NewType('CanFile', Path)
 
 
-class LoadInputs(BaseModel):
+class LoadParams(BaseModel):
     sample: SampleFile
 
 
-class SubtractInputs(BaseModel):
+class SubtractParams(BaseModel):
     sample: SampleFile
     can: CanFile
 
@@ -42,41 +42,39 @@ class Scale(BaseModel):
 
 class ScaleParams(BaseModel):
     scale: Scale
+    sample: SampleFile
 
 
 class ValueOutputs(BaseModel):
     value: float
 
 
-def _spec(
-    name: str, inputs: type[BaseModel], params: type[BaseModel] = NoParams
-) -> WorkflowSpec:
+def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
     return WorkflowSpec(
         name=name,
         version=1,
         title=name,
         description=name,
         params=params,
-        inputs=inputs,
         outputs=ValueOutputs,
     )
 
 
-LOAD = _spec('load', LoadInputs)
-SUBTRACT = _spec('subtract', SubtractInputs)
-SCALE = _spec('scale', LoadInputs, ScaleParams)
+LOAD = _spec('load', LoadParams)
+SUBTRACT = _spec('subtract', SubtractParams)
+SCALE = _spec('scale', ScaleParams)
 
 
-def load(params: NoParams, inputs: LoadInputs) -> ValueOutputs:
-    return ValueOutputs(value=read_dataset(inputs.sample))
+def load(params: LoadParams) -> ValueOutputs:
+    return ValueOutputs(value=read_dataset(params.sample))
 
 
-def subtract(params: NoParams, inputs: SubtractInputs) -> ValueOutputs:
-    return ValueOutputs(value=read_dataset(inputs.sample) - read_dataset(inputs.can))
+def subtract(params: SubtractParams) -> ValueOutputs:
+    return ValueOutputs(value=read_dataset(params.sample) - read_dataset(params.can))
 
 
-def scale(params: ScaleParams, inputs: LoadInputs) -> ValueOutputs:
-    return ValueOutputs(value=params.scale.factor * read_dataset(inputs.sample))
+def scale(params: ScaleParams) -> ValueOutputs:
+    return ValueOutputs(value=params.scale.factor * read_dataset(params.sample))
 
 
 @pytest.fixture
@@ -166,7 +164,7 @@ def test_a_rule_whose_requests_cannot_be_made_does_not_stop_the_others(
     assert loop.status(load).reason is None
 
 
-def test_a_dataset_fills_a_blank_input_never_a_parameter(
+def test_a_dataset_fills_a_blank_data_value_never_a_group(
     client: Client, datasets: FakeDatasets
 ) -> None:
     sample = datasets.measure(1, 5.0, role='sample')
@@ -177,15 +175,15 @@ def test_a_dataset_fills_a_blank_input_never_a_parameter(
     )
     rule = Rule(
         'scale',
-        Template(SCALE, inputs={'sample': sample}, blanks=('scale',)),
+        Template(SCALE, params={'sample': sample}, blanks=('scale',)),
         selector=Selector(role='sample'),
         label='scaled',
     )
     loop = TriggerLoop(client, rules=[rule])
 
     assert client.output(client.compute(scaled['1']), 'value') == 10.0
-    assert scaled['1'].inputs['sample'] == sample
+    assert scaled['1'].params['sample'] == sample
     assert loop.step() == []
-    assert (
-        loop.status(rule).reason == '1: scale: a parameter of scale/v1, given in inputs'
+    assert loop.status(rule).reason == (
+        '1: scale: uuid:run-1 is a reference; scale is given by value'
     )

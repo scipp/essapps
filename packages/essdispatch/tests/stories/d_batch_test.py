@@ -54,7 +54,7 @@ def test_d2_overnight_cluster_batch(
     corrupt(runs['7'])
     for member, run in runs.items():
         client.submit(
-            IOFQ, inputs={'sample': run}, label='night', member=member, persist=True
+            IOFQ, params={'sample': run}, label='night', member=member, persist=True
         )
     client.close()  # the laptop is closed; the persisted runs go on
 
@@ -67,7 +67,6 @@ def test_d2_overnight_cluster_batch(
         morning.submit(
             r.request.spec,
             params=r.request.params,
-            inputs=r.request.inputs,
             label=r.label,
             member=r.member,
             persist=True,
@@ -137,7 +136,7 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
 
     before = client.records(label='scan')
-    runs = [r.request.inputs['sample'] for r in before]
+    runs = [r.request.params['sample'] for r in before]
     renamed = apply(
         replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
     )
@@ -180,7 +179,7 @@ def test_d7_rotation_scan_over_three_hundred_angles(
 
     assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
     assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
-    assert total.request == Request(VOLUME, inputs={'runs': pushed})  # push order
+    assert total.request == Request(VOLUME, params={'runs': pushed})  # push order
     assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)
     assert len(provenance.datasets()) == 300  # run 5, measured again, once

@@ -33,9 +33,6 @@ Diff = NewType('Diff', float)
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
     weight: Weight | None = None
-
-
-class SubInputs(BaseModel):
     sample: SampleValue
     can: CanValue | None = None
 
@@ -50,7 +47,6 @@ SUB = WorkflowSpec(
     title='Subtract',
     description='The scaled, weighted sample minus the can.',
     params=SubParams,
-    inputs=SubInputs,
     outputs=SubOutputs,
 )
 SUB_MULTI = SUB.tabulate(
@@ -58,9 +54,9 @@ SUB_MULTI = SUB.tabulate(
 )
 
 
-def subtract(params: SubParams, inputs: SubInputs) -> SubOutputs:
+def subtract(params: SubParams) -> SubOutputs:
     weight = params.weight.w if params.weight else 1.0
-    total = weight * inputs.sample - (inputs.can or 0.0)
+    total = weight * params.sample - (params.can or 0.0)
     return SubOutputs(diff=params.scale.factor * total)
 
 
@@ -131,8 +127,8 @@ def test_fixed_values_take_a_table_as_its_columns() -> None:
     [
         (SAMPLE_TABLE, ('sample',), r"\['sample', 'weight'\]: both fixed and blank"),
         ({'weight': [None]}, ('sample',), r"\['weight'\]: both fixed and blank"),
-        ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters or inputs"),
-        ({}, ('speed',), r"\['speed'\]: not parameters, inputs, or tables"),
+        ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters of"),
+        ({}, ('speed',), r"\['speed'\]: not parameters or tables"),
         ({}, ('weight',), r"\['weight'\]: columns of a table; a blank names a"),
         (
             {'sample': 5.0, 'weight': None},
@@ -175,9 +171,8 @@ def test_each_fixed_table_with_rows_is_one_push_of_its_columns(
 def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
     binding: DriverBinding, recorder: Recorder
 ) -> None:
-    params = SUB_MULTI.params(weight=SAMPLE_TABLE['weight'])
-    inputs = SUB_MULTI.inputs(sample=SAMPLE_TABLE['sample'], can=[1.0])
-    assert binding.compute(params, inputs) == SubOutputs(diff=36.0)
+    params = SUB_MULTI.params(**SAMPLE_TABLE, can=[1.0])
+    assert binding.compute(params) == SubOutputs(diff=36.0)
     assert recorder.pushes == [('sample', SAMPLE_TABLE), ('can', {'can': [1.0]})]
 
 
@@ -199,13 +194,11 @@ def test_an_accumulator_refuses_values_that_do_not_fit(
         binding.make_accumulator(fixed, blanks)
 
 
-def test_a_function_gets_the_params_and_the_inputs_as_model_instances() -> None:
+def test_a_function_gets_the_params_as_a_model_instance() -> None:
     binding = function_binding(SUB, subtract)
     assert binding.spec is SUB
-    params = SubParams(weight=Weight(w=2.0))
-    assert binding.compute(params, SubInputs(sample=5.0, can=1.0)) == SubOutputs(
-        diff=18.0
-    )
+    params = SubParams(weight=Weight(w=2.0), sample=5.0, can=1.0)
+    assert binding.compute(params) == SubOutputs(diff=18.0)
 
 
 def test_each_binding_serves_the_protocols_of_its_strategy(
