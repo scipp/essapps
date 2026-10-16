@@ -1281,7 +1281,9 @@ def test_a_template_that_fixes_a_repeated_index_value_is_refused(
         blanks=('low',),
     )
 
-    with pytest.raises(SubmitError, match=r'^high\[1\]: repeats high\[0\], {"record"'):
+    with pytest.raises(
+        SubmitError, match=r'^high\[1\]: repeats high\[0\], {"@ref":"output"'
+    ):
         client.accumulator(fixed)
 
 
@@ -1317,6 +1319,7 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
         ({'weight': weight}, {'values': [1.0]}),  # a value where a reference goes
         ({'weight': [{'value': 'x'}]}, {'values': value}),  # an invalid literal
         ({'weight': weight}, {'values': [dataset(run=1)]}),  # a dataset, no file
+        ({'weight': weight}, {'values': [{'@ref': 'run'}]}),  # no kind of reference
     ]
     weighted = client.accumulator(Template(WEIGHTED, blanks=('values',)))
     for params, inputs in pushes:
@@ -1330,7 +1333,8 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
 def test_a_push_takes_lists_of_values(client: Client) -> None:
     load = client.compute(_load(1))
     total = _total(client)
-    for column in (load.ref('value'), {'record': load.id, 'output': 'value'}, 'x'):
+    plain = {'@ref': 'output', 'record': load.id, 'output': 'value'}
+    for column in (load.ref('value'), plain, 'x'):
         with pytest.raises(TypeError, match='parts: a column is a list of values'):
             total.push(parts=column)  # type: ignore[arg-type]
 

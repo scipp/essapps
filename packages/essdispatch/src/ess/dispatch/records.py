@@ -49,9 +49,14 @@ def read_refs(inputs: Any) -> Any:
     """
     Inputs by name with each reference in its plain (JSON) form read as a
     :data:`~ess.spec.Ref`; anything but a mapping is left for validation to
-    refuse.
+    refuse. Raises ``SubmitError`` for a malformed reference.
     """
-    return map_refs(inputs, lambda ref: ref) if isinstance(inputs, Mapping) else inputs
+    if not isinstance(inputs, Mapping):
+        return inputs
+    try:
+        return map_refs(inputs, lambda ref: ref)
+    except ValueError as error:
+        raise SubmitError(str(error)) from None
 
 
 Inputs = Annotated[dict[str, Any], BeforeValidator(read_refs)]
@@ -110,7 +115,9 @@ class Request(BaseModel, frozen=True):
         inputs: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
-            spec=SpecId.of(spec), params=_given(params), inputs=_given(inputs)
+            spec=SpecId.of(spec),
+            params=_given(params),
+            inputs=read_refs(_given(inputs)),
         )
 
     def upstream(self) -> list[OutputRef]:
@@ -226,10 +233,15 @@ class Record(BaseModel, frozen=True):
     def spec(self) -> SpecId:
         return self.request.spec
 
-    def ref(self, output: str) -> OutputRef:
+    def ref(self, output: str, key: str | None = None) -> OutputRef:
+        """
+        A reference to ``output``, or to its element ``key`` if it is a list
+        or a dict; the key of an element of a list is its index, such as
+        ``'0'``.
+        """
         if output not in self.outputs:
             raise KeyError(f'{self.spec} has no output {output!r}')
-        return OutputRef(record=self.id, output=output)
+        return OutputRef(record=self.id, output=output, key=key)
 
     def refs(self, *outputs: str) -> dict[str, OutputRef]:
         """A reference to each of ``outputs`` by name; to every output if none."""

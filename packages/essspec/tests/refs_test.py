@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import pytest
+
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef
 from ess.spec.refs import as_ref, iter_refs, map_refs
 
-OUTPUT_REF = {'record': 'r1', 'output': 'data'}
-DATASET_REF = {'dataset': 'pid-1'}
-ACCUMULATOR_REF = {'accumulator': 'a1', 'output': 'data'}
+OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
+DATASET_REF = {'@ref': 'dataset', 'dataset': 'pid-1'}
+ACCUMULATOR_REF = {'@ref': 'accumulator', 'accumulator': 'a1', 'output': 'data'}
 
 
 def test_references_print_what_they_name() -> None:
@@ -29,7 +31,7 @@ def test_dataset_identity_is_an_opaque_string() -> None:
 
 INPUTS = {
     'sample': OUTPUT_REF,
-    'runs': [DATASET_REF, None, {'record': 'f2', 'output': 'file'}],
+    'runs': [DATASET_REF, None, {'@ref': 'output', 'record': 'f2', 'output': 'file'}],
     'can': None,
     'sum': AccumulatorRef(accumulator='a1', output='data'),
     'centre': 'not a reference',
@@ -55,15 +57,55 @@ def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
     }
 
 
-def test_as_ref_decides_what_a_reference_is() -> None:
+def test_the_json_form_of_a_reference_names_its_kind() -> None:
+    assert OutputRef(record='r1', output='data').model_dump() == {
+        **OUTPUT_REF,
+        'key': None,
+    }
+    assert DatasetRef(dataset='pid-1').model_dump() == DATASET_REF
+    assert AccumulatorRef(accumulator='a1', output='data').model_dump() == (
+        ACCUMULATOR_REF
+    )
+    element = OutputRef(record='r1', output='banks', key='a')
+    assert element.model_dump_json() == (
+        '{"@ref":"output","record":"r1","output":"banks","key":"a"}'
+    )
+    assert OutputRef.model_validate_json(element.model_dump_json()) == element
+
+
+def test_as_ref_decides_what_a_reference_is_by_its_kind() -> None:
     ref = OutputRef(record='r', output='o')
     assert as_ref(ref) is ref
     assert as_ref(OUTPUT_REF) == OutputRef(record='r1', output='data')
     assert as_ref(DATASET_REF) == DatasetRef(dataset='pid-1')
     assert as_ref(ACCUMULATOR_REF) == AccumulatorRef(accumulator='a1', output='data')
-    assert as_ref({'record': 'r1', 'output': 'o', 'extra': 1}) is None
-    assert as_ref({'dataset': 'pid', 'extra': 1}) is None
-    assert as_ref({**ACCUMULATOR_REF, 'upto': 2}) is None
-    assert as_ref({**ACCUMULATOR_REF, 'record': 'r1'}) is None
+    assert as_ref({'record': 'r1', 'output': 'data'}) is None
+    assert as_ref({'dataset': 'pid-1'}) is None
     assert as_ref({'value': 1.0}) is None
     assert as_ref('r1.data') is None
+
+
+@pytest.mark.parametrize(
+    ('value', 'error'),
+    [
+        ({'@ref': 'record', 'record': 'r1'}, "'record' is not a kind of reference"),
+        ({'@ref': None, 'dataset': 'pid-1'}, 'None is not a kind of reference'),
+        ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
+        ({**DATASET_REF, 'run': 1}, 'run: Extra inputs are not permitted'),
+        ({**ACCUMULATOR_REF, 'record': 'r1'}, 'record: Extra inputs'),
+        ({**DATASET_REF, 'dataset': ''}, 'dataset: String should have at least'),
+    ],
+)
+def test_as_ref_refuses_an_unknown_kind_or_malformed_fields(
+    value: dict[str, object], error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        as_ref(value)
+
+
+def test_iter_refs_and_map_refs_name_the_place_of_a_malformed_reference() -> None:
+    inputs = {'runs': [DATASET_REF, {'@ref': 'run'}]}
+    with pytest.raises(ValueError, match=r"^runs\[1\]: .*'run' is not a kind"):
+        list(iter_refs(inputs))
+    with pytest.raises(ValueError, match=r"^runs\[1\]: .*'run' is not a kind"):
+        map_refs(inputs, str)

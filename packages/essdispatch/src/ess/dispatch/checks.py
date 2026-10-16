@@ -334,7 +334,11 @@ def _ref(where: str, value: Any, tp: Any, nullable: bool) -> list[tuple[str, Ref
     """The reference ``value`` at ``where``, or none for an allowed ``None``."""
     if value is None and nullable:
         return []
-    if (ref := as_ref(value)) is None:
+    try:
+        ref = as_ref(value)
+    except ValueError as error:
+        raise SubmitError(f'{where}: {error}') from None
+    if ref is None:
         raise SubmitError(
             f'{where}: {value!r} is not a reference; data are given by reference, '
             'a file as dataset(path=...)'

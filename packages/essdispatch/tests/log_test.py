@@ -35,7 +35,7 @@ from ess.dispatch.log import (
     Submitted,
 )
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import AccumulatorRef, OutputRef, WorkflowSpec
+from ess.spec import AccumulatorRef, DatasetRef, OutputRef, WorkflowSpec
 
 SampleFile = NewType('SampleFile', Path)
 Part = NewType('Part', float)
@@ -297,6 +297,26 @@ def test_a_push_is_logged_as_its_columns_by_side_with_references_as_written(
     )
     assert all(isinstance(ref, OutputRef) for ref in pushed.inputs['part'])
     assert client.output(total, 'value') == 5.0
+
+
+def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) -> None:
+    sample = DatasetRef(dataset='uuid:run-1')
+    part = OutputRef(record='r1', output='values', key='0')
+    events: list[Event] = [
+        _submitted('r2', Request(LOAD, inputs={'sample': sample})),
+        Pushed(
+            accumulator='a1',
+            table='part',
+            params={'weight': [None]},
+            inputs={'part': [part]},
+        ),
+    ]
+    _write(tmp_path / 'log', *events)
+
+    submitted, pushed = (tmp_path / 'log').read_text().splitlines()
+    assert '"sample":{"@ref":"dataset","dataset":"uuid:run-1"}' in submitted
+    assert '{"@ref":"output","record":"r1","output":"values","key":"0"}' in pushed
+    assert Log.read(tmp_path / 'log') == events
 
 
 def test_records_pending_in_the_log_are_cancelled_at_a_restart(

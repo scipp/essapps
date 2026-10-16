@@ -362,16 +362,34 @@ def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
 
 
 def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
-    missing = {'record': 'missing', 'output': 'value'}
+    missing = {'@ref': 'output', 'record': 'missing', 'output': 'value'}
 
     with pytest.raises(SubmitError, match='a: unknown record missing'):
         client.submit(ADD, inputs=operands(missing, missing))
 
 
+def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
+    unknown = {'@ref': 'record', 'record': 'r1', 'output': 'value'}
+
+    with pytest.raises(SubmitError, match=r"^a: .*'record' is not a kind of reference"):
+        client.submit(ADD, inputs=operands(unknown, unknown))
+
+
+def test_a_malformed_reference_is_refused(client: Client) -> None:
+    for malformed, problem in [
+        ({'@ref': 'output', 'record': 'r1'}, 'output: Field required'),
+        ({'@ref': 'dataset', 'dataset': 'run:1', 'run': 1}, 'run: Extra inputs'),
+    ]:
+        with pytest.raises(
+            SubmitError, match=rf'^b: .*: not a reference to .*{problem}'
+        ):
+            client.submit(ADD, inputs=operands(dataset(run=1), malformed))
+
+
 def test_a_reference_to_a_missing_output_is_refused(client: Client, gate: Gate) -> None:
     gate.open.set()
     loaded = client.compute(load(1))
-    missing = {'record': loaded.id, 'output': 'total'}
+    missing = {'@ref': 'output', 'record': loaded.id, 'output': 'total'}
 
     with pytest.raises(SubmitError, match="b: load/v1 has no output 'total'"):
         client.submit(ADD, inputs=operands(loaded.ref('value'), missing))
@@ -566,23 +584,19 @@ def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
     client: Client,
 ) -> None:
     a = client.submit(load(1))
-    element = {'record': a.id, 'output': 'value', 'key': '0'}
-
     with pytest.raises(SubmitError, match='element of an output without elements'):
-        client.submit(ADD, inputs=operands(element, a.ref('value')))
+        client.submit(ADD, inputs=operands(a.ref('value', key='0'), a.ref('value')))
 
 
 def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> None:
     split = client.submit(PIECES, inputs={'sample': dataset(run=2)})
-    whole, half = (
-        split.ref('pieces').model_copy(update={'key': k}) for k in ('0', '1')
-    )
+    whole, half = (split.ref('pieces', key=k) for k in ('0', '1'))
 
     assert client.output(client.compute(ADD, inputs=operands(whole, half))) == {
         'value': 3.0
     }
     for key in ('half', '01', '+1', '-1', ' 1'):
-        named = split.ref('pieces').model_copy(update={'key': key})
+        named = split.ref('pieces', key=key)
         with pytest.raises(SubmitError, match=r'^a: .*: the key of an element of'):
             client.submit(ADD, inputs=operands(named, half))
 
