@@ -99,7 +99,7 @@ One developer wrote more than three quarters of the commits to `ewokscore`, `ewo
 
 ## Do not borrow
 
-- Ewoks as the run request or the service: it lacks records, references to pending records, held state, labels, and SciCat publication, and brings a broker, a second store of job state, and pickled values.
+- Ewoks as the run request or the service: it lacks records, references to pending records, accumulators, labels, and SciCat publication, and brings a broker, a second store of job state, and pickled values.
 - Calibration chosen from state at trigger time, and a listener that starts at the newest arrival.
 - Skipping work because an output file exists.
 

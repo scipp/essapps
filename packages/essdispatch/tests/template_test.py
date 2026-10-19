@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel, Field, model_validator
 
 from ess.dispatch import BLANK, Client, SubmitError, Template, dataset, local
-from ess.dispatch.testing import FakeDatasets
+from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows
 from ess.spec import Array, NexusFile, WorkflowSpec
 
 
@@ -108,7 +108,11 @@ def client() -> Iterator[Client]:
     with local(
         proposal='p1',
         datasets=datasets,
-        bind={SCALE: scale, TOTAL: total, RANGE: width},
+        bind=[
+            StagedFunction(SCALE, scale),
+            kept_rows(TOTAL, total),
+            StagedFunction(RANGE, width),
+        ],
     ) as client:
         yield client
 
@@ -130,7 +134,7 @@ def test_an_accumulator_takes_a_table_with_a_minimum_length_as_a_blank(
         Template.from_spec(TOTAL, runs=BLANK, scaling=Factor(factor=10.0))
     )
     for n in (1, 2):
-        acc.push({'runs': Run(file=dataset(run=n))})
+        acc.push('runs', [Run(file=dataset(run=n))])
     assert client.output(acc, 'value') == 30.0
 
 

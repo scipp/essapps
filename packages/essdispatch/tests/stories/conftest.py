@@ -14,6 +14,7 @@ is run again as its request by that client, and must give the same outputs
 
 from __future__ import annotations
 
+import functools
 import operator
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any
@@ -26,18 +27,19 @@ from pydantic import BaseModel, Field
 from ess.dispatch import Backend, Client, ClientEnded, Record, Status
 from ess.dispatch.log import Log
 from ess.dispatch.records import map_refs
-from ess.dispatch.testing import FakeDatasets, FakeStore
+from ess.dispatch.testing import FakeDatasets, FakeStore, StagedFunction, kept_rows
 from ess.spec import (
     Array,
+    Binding,
     DatasetRef,
-    Function,
-    HeldState,
+    DriverBinding,
     NexusFile,
     OpaqueFile,
     OutputRef,
     Ref,
     WorkflowSpec,
-    combine,
+    function_binding,
+    table_fields,
 )
 from ess.spec.testing import assert_close
 
@@ -249,49 +251,44 @@ class PartsSumParams(BaseModel):
 PARTS_SUM = _spec('sans-parts-sum', PartsSumParams, NormalizationParts)
 
 
-class _Sums:
+def parts_sum(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        name: functools.reduce(operator.add, (part[name] for part in parts))
+        for name in NormalizationParts.model_fields
+    }
+
+
+class Summing:
+    """
+    A driver over tables of runs, a toy ``StreamProcessor``: the counts of
+    each table's runs are summed, and ``finalize`` computes the outputs from
+    the sums, by table name, and the fixed values.
+    """
+
     def __init__(
         self,
         finalize: Callable[..., dict[str, Any]],
         tables: Sequence[str],
-        **fixed: Any,
+        fixed: Mapping[str, Any],
     ) -> None:
         self._finalize = finalize
         self._fixed = fixed
         self._sums: dict[str, Any] = dict.fromkeys(tables, 0.0)
 
-    def push(self, rows: Mapping[str, Mapping[str, Any]]) -> None:
-        for table, row in rows.items():
+    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+        for row in rows:
             self._sums[table] += _counts(row['file'])  # in place from the second row
 
     def outputs(self) -> Mapping[str, Any]:
         return self._finalize(**self._sums, **self._fixed)
 
 
-class Summing:
-    """
-    The binding of a spec over tables of runs, a toy ``StreamProcessor``: the
-    counts of each table's runs are summed, and ``finalize`` computes the
-    outputs from the sums, by table name, and the other values.
-    """
-
-    def __init__(self, finalize: Callable[..., dict[str, Any]], *tables: str) -> None:
-        self._finalize = finalize
-        self._tables = tables
-
-    def stage(self, fixed: Mapping[str, Any], blanks: Sequence[str]) -> Function:
-        def compute(**values: Any) -> Mapping[str, Any]:
-            params = {**fixed, **values}
-            sums = {
-                t: sum((_counts(row['file']) for row in params.pop(t)), 0.0)
-                for t in self._tables
-            }
-            return self._finalize(**sums, **params)
-
-        return compute
-
-    def held_state(self, fixed: Mapping[str, Any]) -> HeldState:
-        return _Sums(self._finalize, self._tables, **fixed)
+def summing(
+    spec: WorkflowSpec, finalize: Callable[..., dict[str, Any]]
+) -> DriverBinding:
+    """The binding of a spec over tables of runs, by :class:`Summing`."""
+    tables = tuple(table_fields(spec.params))
+    return DriverBinding(spec, functools.partial(Summing, finalize, tables))
 
 
 class Counts(BaseModel):
@@ -381,21 +378,25 @@ def export(result: Mapping[str, Any]) -> dict[str, str]:
     return {'text': ','.join(str(v) for v in result['data'].values)}
 
 
-TOYS = {
-    IOFQ: iofq,
-    IOFQ_V2: iofq_v2,
-    BEAM_CENTRE: beam_centre,
-    VANADIUM: vanadium,
-    NORMALIZE: Summing(normalize, 'runs'),
-    BACKGROUND: Summing(background, 'sample_runs', 'background_runs'),
-    CONTRIBUTE: contribute,
-    ANGLE: angle,
-    CUT: cut,
-    STITCH: stitch,
-    EXPORT: export,
-    PARTS_SUM: combine(operator.add),
-    VOLUME: Summing(volume, 'runs'),
+TOYS: dict[WorkflowSpec, Binding] = {
+    binding.spec: binding
+    for binding in [
+        StagedFunction(IOFQ, iofq),
+        function_binding(IOFQ_V2, iofq_v2),
+        function_binding(BEAM_CENTRE, beam_centre),
+        StagedFunction(VANADIUM, vanadium),
+        summing(NORMALIZE, normalize),
+        summing(BACKGROUND, background),
+        function_binding(CONTRIBUTE, contribute),
+        function_binding(ANGLE, angle),
+        function_binding(CUT, cut),
+        kept_rows(STITCH, stitch),
+        function_binding(EXPORT, export),
+        function_binding(PARTS_SUM, parts_sum),
+        summing(VOLUME, volume),
+    ]
 }
+"""The binding of each toy spec, by spec."""
 
 
 @pytest.fixture
@@ -419,7 +420,7 @@ def backends(
     datasets: FakeDatasets, store: FakeStore, history: Log
 ) -> Iterator[list[Backend]]:
     """The backend, and those that upgrades started after it; the current one last."""
-    backends = [Backend(datasets, TOYS, log=history, store=store)]
+    backends = [Backend(datasets, list(TOYS.values()), log=history, store=store)]
     yield backends
     for backend in backends:
         backend.close()
@@ -450,7 +451,7 @@ def upgrade(
         for client in clients:
             client.close()
         backends[-1].close()
-        bind = TOYS if specs is None else {s: TOYS[s] for s in specs}
+        bind = list(TOYS.values()) if specs is None else [TOYS[s] for s in specs]
         backends.append(Backend(datasets, bind, log=history, store=store))
         clients.append(Client(backends[-1], proposal='p1', submitter='anna'))
         return clients[-1]

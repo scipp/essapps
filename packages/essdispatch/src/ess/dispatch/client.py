@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The client: what a notebook, an application, or a driver calls.
+The client: what a notebook, an application, or a controller calls.
 
 A client talks to one backend for one proposal. Calls that take records or
 requests accept one, a list, or a dict, and return the same shape.
@@ -39,7 +39,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel
 
-from ess.spec import AccumulatorRef, Binding, DatasetRef, Function, WorkflowSpec
+from ess.spec import AccumulatorRef, Binding, DatasetRef, WorkflowSpec
 
 from .backend import Backend, Entry, Selection
 from .datasets import DatasetSource, Selector
@@ -99,7 +99,7 @@ class Datasets:
     """
     The datasets of the backend's dataset source that the proposal may read.
 
-    Forms and drivers find datasets here: they list them, wait for new ones,
+    Forms and controllers find datasets here: they list them, wait for new ones,
     and read their metadata. A request names a dataset with ``dataset(...)``.
     """
 
@@ -140,17 +140,18 @@ class Accumulator:
     Its outputs are those of the plain request over the rows pushed so far,
     read by the client that opened it as a record's are: with
     ``client.output``, or by a request through :meth:`ref` and :meth:`refs`.
-    A binding with a held state of its own adds each row to it, so earlier
-    rows are not computed again; for any other binding, the backend keeps the
-    rows and computes the plain request over all of them for each state read.
-    The outputs of a state are computed all at once, at the first pin that
-    needs them, and kept until the next push is added; no output is computed
-    for a state that nobody pins. The first pin of a state also validates its
-    plain request, which takes time in proportion to the rows.
+    The spec's binding makes a driver for it, such as a ``DriverBinding``
+    does, and each push is one push into the driver, which adds the rows, so
+    earlier rows are not computed again. The outputs of a state are computed
+    all at once, at the first pin that needs them, and kept until the next
+    push is added; no output is computed for a state that nobody pins. The
+    first pin of a state also validates its plain request, which takes time
+    in proportion to the rows.
 
-    A push, and a submission that pins, return once logged, so a driver does
-    not slow down when the backend falls behind. A driver that should skip
-    pins meanwhile checks whether the record of its previous pin has finished.
+    A push, and a submission that pins, return once logged, so a controller
+    does not slow down when the backend falls behind. A controller that should
+    skip pins meanwhile checks whether the record of its previous pin has
+    finished.
 
     ``template`` holds the other values as the backend accepted them,
     ``outputs`` the output names the spec declares, and ``id`` names the
@@ -162,18 +163,23 @@ class Accumulator:
         template: Template,
         accumulator_id: str,
         outputs: tuple[str, ...],
-        push: Callable[[Mapping[str, Row]], None],
+        push: Callable[[str, Sequence[Row]], None],
     ) -> None:
         self.template = template
         self.id = accumulator_id
         self.outputs = outputs
         self._push = push
 
-    def push(self, rows: Mapping[str, Row | BaseModel]) -> None:
+    def push(self, table: str, rows: Sequence[Row | BaseModel]) -> None:
         """
-        Add one row to each named table of the template, as a request over the
-        table takes it, a row model or a dict; the rows enter one state. A name
-        that is not one of the template's blanks is refused.
+        Add rows to a table of the template, each as a request over the table
+        takes it, a row model or a dict; the rows enter one state, in order. A
+        table that is not one of the template's blanks is refused, and so is a
+        push of no rows.
+
+        One push is one push into the binding's driver. Rows of different
+        tables have nothing to do with each other, so a push names one table;
+        rows that belong together are one row of a model with several fields.
 
         A row names datasets or references outputs of records, never an
         accumulator. It is checked by its table's row model; rules on a whole
@@ -189,11 +195,15 @@ class Accumulator:
         If adding fails, or a record has not completed, the accumulator stops
         for good: the records of states it did not reach fail, and so do the
         requests that read them, and every later push and pin is refused. The
-        reason names the step, such as ``push 0`` for the first push. A driver
-        that should skip a run whose reduction failed waits for that record
-        before it pushes.
+        reason names the step, such as ``push 0`` for the first push. A
+        controller that should skip a run whose reduction failed waits for
+        that record before it pushes.
         """
-        self._push(as_values(dict(rows)))
+        if isinstance(rows, BaseModel | Mapping) or not isinstance(rows, Sequence):
+            raise TypeError(
+                f'rows is a list of rows of {table}, such as [row], not {rows!r}'
+            )
+        self._push(table, as_values(list(rows)))
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -296,8 +306,8 @@ class Client:
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
         are dropped once a record completes. Each record completes once they
-        are written, and fails if the write fails. Unattended drivers submit
-        this way.
+        are written, and fails if the write fails. Unattended controllers
+        submit this way.
         """
         stage = None
         if isinstance(what, WorkflowSpec | SpecId):
@@ -356,9 +366,10 @@ class Client:
     def stage(self, template: Template) -> Stage:
         """
         A stage of the template; the client keeps it until it releases it.
+        The spec's binding must make stages, as a ``PipelineBinding`` does.
         The stage keeps the outputs its template references until its first
-        call has staged the binding, so the records they belong to may be
-        released. If staging fails, the stage stops: the calls through it
+        call has had the binding make its stage, so the records they belong
+        to may be released. If staging fails, the stage stops: the calls through it
         fail, and later ones are refused.
 
         A template a request would refuse is refused here. The stage's
@@ -374,14 +385,15 @@ class Client:
 
         The template's blanks are one or more of the spec's table fields. A
         template a request would refuse is refused here, with the blanks left
-        out, and so is one that references an accumulator. The held state gets
-        each value typed by its own field and that field's validators; the
+        out, and so is one that references an accumulator, and one whose
+        spec's binding makes no accumulators. The driver gets each value typed
+        by its own field and that field's validators; the
         accumulator's template holds the values as the backend resolved them.
         A record the template references that has failed or was cancelled is
         refused, and one that is pending is not waited for. Opening returns
         once the template is checked; the backend reads its values once, after
         the records they reference have completed, and the accumulator stops
-        if the binding then fails to open.
+        if the binding then fails to make its driver.
         """
         accumulator_id, resolved = self._backend.open_accumulator(
             template, client=self._id
@@ -398,10 +410,10 @@ class Client:
         so far; the client keeps it, and the accumulator takes no more pushes.
         With ``persist``, the store keeps it instead, as with ``submit``.
 
-        The record's outputs are what the held state returns, computed once
+        The record's outputs are what the driver returns, computed once
         and not copied. Once the record has completed, the accumulator is
         read through it: a read of the accumulator is refused and names the
-        record, and the held state is dropped once its readers are done. A
+        record, and the driver is dropped once its readers are done. A
         freeze is refused, and the accumulator takes pushes again, if the
         plain request of the state would be refused; a push made meanwhile
         waits for that answer. If the record fails or is cancelled, the
@@ -523,12 +535,15 @@ def local(
     *,
     proposal: str,
     datasets: DatasetSource,
-    bind: Mapping[WorkflowSpec[Any], Binding | Function],
+    bind: Sequence[Binding],
     submitter: str = 'user',
     store: Store | None = None,
 ) -> Client:
     """
     A client of its own backend in this process, running the workflows bound here.
+
+    ``bind`` lists a binding for each spec the backend runs, such as
+    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``.
 
     Closing the client closes the backend, which waits until what is persisted
     is written. Without a ``store``, persisting is refused. The backend keeps

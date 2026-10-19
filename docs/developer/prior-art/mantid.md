@@ -75,7 +75,7 @@ For us: how ESS files will say what role a run plays is the Open question that b
 
 **A settings change resets the whole table.**
 Any change in the settings tabs resets every row and group ([RunsTablePresenter.cpp L296-L300](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/qt/scientific_interfaces/ISISReflectometry/GUI/RunsTable/RunsTablePresenter.cpp#L296-L300)), and the next Process or autoprocessing resume reduces all of them again, whether the change affected them or not.
-For us: a record never changes, and a changed template affects only requests made from it later; reducing old runs again is a driver's explicit submission.
+For us: a record never changes, and a changed template affects only requests made from it later; reducing old runs again is a controller's explicit submission.
 
 **Exclusions carry a reason.**
 A user can type an exclude reason next to a run in the search results; excluded runs are not transferred to the table, and the reasons save with the batch ([QtSearchModel.cpp L180-L181](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/qt/scientific_interfaces/ISISReflectometry/GUI/Runs/QtSearchModel.cpp#L180-L181), [RunsPresenter.cpp L492](https://github.com/mantidproject/mantid/blob/0a137707b24563d2e5d690951651fcee052ce635/qt/scientific_interfaces/ISISReflectometry/GUI/Runs/RunsPresenter.cpp#L492)).

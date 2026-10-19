@@ -21,7 +21,7 @@ from ess.dispatch import (
 )
 from ess.dispatch.log import Event, Log
 from ess.dispatch.testing import FakeDatasets
-from ess.spec import Array, NexusFile, WorkflowSpec
+from ess.spec import Array, NexusFile, WorkflowSpec, function_binding
 
 
 class Run(BaseModel):
@@ -103,7 +103,12 @@ def datasets() -> FakeDatasets:
 
 @pytest.fixture
 def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
-    backend = Backend(datasets, {LOAD: gate.load, ADD: add, NOTHING: lambda sample: {}})
+    bindings = [
+        function_binding(LOAD, gate.load),
+        function_binding(ADD, add),
+        function_binding(NOTHING, lambda sample: {}),
+    ]
+    backend = Backend(datasets, bindings)
     yield backend
     gate.open.set()
     backend.close()
@@ -153,7 +158,7 @@ class FullDisk(Log):
 
 def test_a_failed_append_stops_the_backend(datasets: FakeDatasets, gate: Gate) -> None:
     log = FullDisk()
-    backend = Backend(datasets, {LOAD: gate.load}, log=log)
+    backend = Backend(datasets, [function_binding(LOAD, gate.load)], log=log)
     client = Client(backend, proposal='p1', submitter='anna')
     record = client.submit(load(1))
     log.full = True
@@ -212,7 +217,7 @@ def test_a_value_that_cannot_be_stored_is_refused(datasets: FakeDatasets) -> Non
         item: Item
 
     spec = _spec('anything', AnyParams)
-    backend = Backend(datasets, {spec: lambda item: {}})
+    backend = Backend(datasets, [function_binding(spec, lambda item: {})])
     client = Client(backend, proposal='p1', submitter='anna')
     try:
         with pytest.raises(SubmitError, match=r'^second: item: cannot be stored'):

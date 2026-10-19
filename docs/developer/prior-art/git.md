@@ -78,7 +78,7 @@ Git hooks live in `$GIT_DIR/hooks`, outside the tracked tree ([gitrepository-lay
 CI services read their configuration from a tracked file, show the status of each run to anyone with access, and leave re-running failed jobs to a person, with the same commit as the first run ([GitHub docs][rerun]).
 The trigger loop matches the last point: a failed record counts as handled, and running it again is the user's decision ([automatic-reduction.md](../automatic-reduction.md#the-trigger-loop)).
 It differs on the second: a rule's status lives in the `TriggerLoop` object, which an operator in another process cannot read ([#24][i24]).
-This bears on the open question in [#33][i33], whether rules are plain data that a driving server can list.
+This bears on the open question in [#33][i33], whether rules are plain data that a server running the trigger loop can list.
 
 **Where git's model does not apply.**
 Git merges histories by text.

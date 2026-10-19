@@ -102,7 +102,7 @@ class Opened(BaseModel, frozen=True):
 
     The template's blanks are the tables that the pushes fill. ``fixed`` holds
     the template's other values, each typed by its field, defaults filled in:
-    the held state was opened with them, and with the rows pushed they give
+    the driver was made with them, and with the rows pushed they give
     the plain request of a state. ``template`` holds the values as the client
     gave them, names resolved, which the client gets back, as it does a
     stage's template.
@@ -116,11 +116,12 @@ class Opened(BaseModel, frozen=True):
 
 
 class Pushed(BaseModel, frozen=True):
-    """A push into an accumulator: one row for each table it names."""
+    """A push into an accumulator: rows of one table, in order."""
 
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
-    rows: dict[str, Row]
+    table: str
+    rows: list[Row]
 
 
 class Persist(BaseModel, frozen=True):

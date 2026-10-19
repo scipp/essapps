@@ -34,7 +34,7 @@ Property: a local file reaches the service only when a request that names it is 
 ### B2. Add a run to a sum
 
 Actor: user in a notebook. Goal: after a new run finishes, the sum including it comes back quickly.
-Property: with a binding that has a held state of its own, such as `Summing`, pushing a run into an accumulator reduces only that run, and reading the sum computes the outputs from the held state, without reading any earlier run again. With the held state that keeps the rows, each read reduces every run so far again.
+Property: with a driver that sums, such as `Summing`, pushing a run into an accumulator reduces only that run, and reading the sum computes the outputs from the driver, without reading any earlier run again. A driver that keeps the rows instead reduces every run so far again at each read.
 
 ### B4. Explore a 4D volume
 
@@ -75,10 +75,10 @@ Gap: a cancel ends the records, but a workflow that has started runs on and keep
 ### D7. Rotation scan over three hundred angles
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
-Property: with a binding that has a held state of its own and adds in place, such as `Summing`, each push reduces its run and adds it to the held state, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open). A cut copies only its selection and makes no record; a cut kept as a record makes the record of its state too, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). History therefore grows in proportion to the number of runs. The frozen volume is written once, and no copy of it is made.
+Property: with a driver that adds in place, such as `Summing`, each push reduces its run and adds it to the driver, reading no earlier run. The volume is held once; where the service holds it, and how it bounds its memory, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open). A cut copies only its selection and makes no record; a cut kept as a record makes the record of its state too, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). History therefore grows in proportion to the number of runs. The frozen volume is written once, and no copy of it is made.
 Each cut checks the plain request of its state, which takes time in proportion to the rows so far: about 1.3 ms at 300 rows, so its total over the scan grows with the square of the number of runs ([ADR 0003](adr/0003-accumulators-add-in-place.md)).
 
-Gap: reducing the runs of one scan on several nodes needs a merge of two held states (README.md open question 1).
+Gap: reducing the runs of one scan on several nodes needs a merge of two drivers (README.md open question 1).
 
 ## F. Publication and provenance
 
@@ -109,7 +109,7 @@ Property: stored outputs can be dropped by proposal, label, or age. Every record
 ### H2. Backend upgrade with runs in flight
 
 Actor: DMSC. Goal: deploy a new backend version while requests run and others wait on them.
-Property: every record pending at the upgrade with a persist request finishes without anyone submitting it again, and so do the records it reads. Whether the old instance finishes them before it stops, or the new one runs them again, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open); a record that reads an accumulator's held state finishes only if the old instance finishes it. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
+Property: every record pending at the upgrade with a persist request finishes without anyone submitting it again, and so do the records it reads. Whether the old instance finishes them before it stops, or the new one runs them again, is open ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), Open); a record that reads an accumulator's driver finishes only if the old instance finishes it. The upgrade ends every client of the old instance, and pending work that nothing persists is cancelled. Records and persisted values written before the upgrade stay readable, also when the new version stores records in another schema. A backend started on history that another backend still writes is refused, so the old and the new version never write the same history.
 
 ### H3. History ends when the work does
 
