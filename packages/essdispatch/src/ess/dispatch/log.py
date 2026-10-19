@@ -117,13 +117,12 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
 
 class Pushed(BaseModel, frozen=True, extra='forbid'):
     """
-    A push into an accumulator: rows of the table ``table``, in ``params``
-    under its name, names resolved.
+    A push into an accumulator: rows of one or more tables, in ``params``
+    under the name of each, names resolved.
     """
 
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
-    table: str
     params: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
 
 

@@ -536,13 +536,13 @@ iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bi
                                    blanks=('sample', 'can')))
 iofq.push(sample=[dataset(run=611)])                       # one row
 iofq.push(sample=[dataset(run=612), dataset(run=613)])     # two rows of one table
-iofq.push(can=[dataset(run=614)])
+iofq.push(sample=[dataset(run=617)], can=[dataset(run=614)])   # rows of two tables
 client.output(iofq, 'iofq')                                # the output of state 3
 ```
 
-A push gives rows of one table, by the table's name, as a list.
-Its rows enter one state.
-Rows of different tables have nothing to do with each other, so a push never names two tables.
+A push gives rows of one or more tables, by the name of each, as a list.
+Its rows enter one state, so states 1 and 2, which have no can row, are never read here.
+The tables of a push stand side by side, as in a request: rows of different tables have nothing to do with each other, and the first sample row is not paired with the first can row.
 Values that belong to one run are fields of one row, such as the transmission of run 615, the output of the record `t615`:
 
 ```python
@@ -698,7 +698,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', [Sample(run=path_611)])      # once per push: rows of one table
+driver.push('sample', [Sample(run=path_611)])      # once per table of a push: its rows
 driver.outputs()                                   # once per state that is read
 ```
 

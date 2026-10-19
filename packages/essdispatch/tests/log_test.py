@@ -249,7 +249,6 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
         *(
             Pushed(
                 accumulator=total.id,
-                table='part',
                 params={'part': [load.ref('value')]},
             )
             for load in loads
@@ -282,7 +281,6 @@ def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
     (pushed,) = [e for e in Log.read(tmp_path / 'log') if isinstance(e, Pushed)]
     assert pushed == Pushed(
         accumulator=total.id,
-        table='part',
         params={'part': [load.ref('value') for load in loads]},
     )
     assert all(isinstance(ref, OutputRef) for ref in pushed.params['part'])
@@ -296,7 +294,6 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
         _submitted('r2', Request(LOAD, params={'sample': sample})),
         Pushed(
             accumulator='a1',
-            table='part',
             params={'part': [part]},
         ),
     ]
@@ -402,8 +399,6 @@ def test_a_refused_call_writes_nothing_to_the_log(
         client.submit(TOTAL, params={'part': [other]})
     with pytest.raises(SubmitError, match='rows of a blank table'):
         total.push(other=[load.ref('value')])
-    with pytest.raises(SubmitError, match='the rows of one table'):
-        total.push(part=[load.ref('value')], other=[1.0])
     with pytest.raises(SubmitError, match='has no rows'):
         total.push(part=[])
     with pytest.raises(SubmitError, match=r'part\[1\]: repeats part\[0\]'):

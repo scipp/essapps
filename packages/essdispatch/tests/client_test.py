@@ -2315,6 +2315,28 @@ def test_a_state_is_read_once_its_plain_request_would_be_accepted(
     assert client.provenance(both).request == plain.request
 
 
+def test_a_push_into_two_tables_gives_one_state(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    both = client.accumulator(Template(BOTH, blanks=('samples', 'backgrounds')))
+    tables = {
+        'samples': [loads[0].ref('value')],
+        'backgrounds': [loads[1].ref('value')],
+    }
+    both.push(**tables)
+    plain = client.compute(BOTH, params=tables)
+
+    assert _sides(client.output(both)) == {'difference': [-1.0], 'total': [3.0]}
+    assert _sides(client.output(plain)) == _sides(client.output(both))
+    assert client.provenance(both).request == plain.request
+    with pytest.raises(
+        SubmitError, match=r'backgrounds\[1\]: repeats backgrounds\[0\]'
+    ):
+        both.push(samples=[loads[1].ref('value')], backgrounds=tables['backgrounds'])
+    assert _listed(client.output(both, 'total')) == [3.0]  # a refused push adds no row
+
+
 def test_a_push_is_added_once_a_read_of_the_outputs_in_progress_is_done(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:

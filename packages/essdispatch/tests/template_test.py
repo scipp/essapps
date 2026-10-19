@@ -305,22 +305,18 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
         acc.push(sample=[{'file': dataset(run=1)}])  # as row 0, a bare dataset
 
 
-def test_a_push_gives_rows_of_one_blank_table(client: Client) -> None:
+def test_a_push_gives_rows_of_blank_tables(client: Client) -> None:
     acc = client.accumulator(UNSCALED)
     row = [dataset(run=1)]
-    refused = {
-        r"blank table of the accumulator, \['sample'\], not 'scaling'": {
-            'scaling': [Factor()]
-        },
-        r"blank table of the accumulator, \['sample'\], not 'other'": {'other': row},
-        r"one table, not of \['sample', 'scaling'\]": {
-            'sample': row,
-            'scaling': [Factor()],
-        },
-        'a push into sample has no rows': {'sample': []},
-        r'one table, not of \[\]': {},
-    }
-    for reason, rows in refused.items():
+    fixed = r"blank table of the accumulator, \['sample'\], not 'scaling'"
+    refused = [
+        (fixed, {'scaling': [Factor()]}),
+        (fixed, {'sample': row, 'scaling': [Factor()]}),
+        (r"blank table of the accumulator, \['sample'\], not 'other'", {'other': row}),
+        ('a push into sample has no rows', {'sample': []}),
+        ('a push gives rows of a blank table, not none', {}),
+    ]
+    for reason, rows in refused:
         with pytest.raises(SubmitError, match=reason):
             acc.push(**rows)
 

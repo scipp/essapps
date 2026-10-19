@@ -110,21 +110,22 @@ lives until its client releases it or ends, and the requests made through it
 have run.
 
 An accumulator opens from a template whose blanks are tables, checked as a
-stage's template is. Each push gives one or more rows of one blank table. A
-push is checked by the table's element type alone, and refused if it
-repeats a row the table holds; the accumulator keeps the rows logged, by
-JSON form, so this takes time in proportion to the push. The
-driver gets each step's values as the log holds them, so that it and the
-record of a state agree. Opening and pushing return once these checks pass
-and the event is logged, as a submission does: they check
-the records they reference against what the backend knows now, and refuse
+stage's template is. Each push gives one or more rows of one or more blank
+tables, which enter one state. A push is checked by each table's element
+type alone, and refused if it repeats a row its table holds; the
+accumulator keeps the rows logged, by JSON form, so this takes time in
+proportion to the push. The driver gets each step's values as the log
+holds them, so that it and the record of a state agree. Opening and pushing
+return once these checks pass and the event is logged, as a submission does:
+they check the records they reference against what the backend knows now, and refuse
 one that has failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order they
 were logged, on the workers: opening has the binding make the driver from the
 template's values by name, each read and validated by its own field, and each
-push is one push of the table's rows into the driver, which may add the rows
-in place; each row is first read and validated by the table's element type,
+push is one push into the driver per table it gives rows of, in the order
+given, which may add the rows in place; each row is first read and
+validated by its table's element type,
 and a row that fails its check fails the push, as does a row read whose JSON
 form repeats one of the table read before; the accumulator keeps these JSON
 forms, which a restart need not rebuild, since no accumulator survives it. A
@@ -369,10 +370,11 @@ class _Stage:
         return request.model_copy(update={'params': params})
 
 
-_Step = tuple[str | None, dict[str, Any], list[tuple[str, str]]]
+_Step = tuple[dict[str, Any], list[tuple[str, str]]]
 """
-A step of an accumulator: the table it pushes into, or ``None`` for the
-opening, its values by name, and the outputs of records it reads.
+A step of an accumulator: its values by name, the template's fixed values
+for the opening and the rows of each table for a push, and the outputs of
+records it reads.
 """
 
 
@@ -383,9 +385,9 @@ class _Accumulator:
 
     ``added`` is the number of pushes in the driver, ``None`` until the
     driver is made. ``steps`` holds each step not yet done, in the order
-    logged, as the table it pushes into and its values by name, as the log
-    holds them: first the template's fixed values, with no table, until the
-    driver is made, then the rows of each push. Each comes with the
+    logged, as its values by name, as the log holds them: first the
+    template's fixed values, until the driver is made, then the rows of each
+    push by table. Each comes with the
     outputs of records it reads, which it holds as a reader. ``busy`` says a
     worker makes the driver or pushes into it, outside the backend's lock.
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
@@ -1639,7 +1641,7 @@ class Backend:
         needed = max(pinned, default=done) - done
         dropped = []
         while len(acc.steps) > max(needed, int(acc.busy)):
-            dropped.append(acc.steps.pop()[2])
+            dropped.append(acc.steps.pop()[1])
         for reads in dropped:
             self._let_go(reads)
         self._advance(acc)
@@ -1712,18 +1714,19 @@ class Backend:
             opened = self._views.accumulators[accumulator_id]
             acc = _Accumulator(accumulator_id, opened.template, binding)
             caller.accumulators[accumulator_id] = acc
-            self._queue(acc, None, {n: opened.params[n] for n in fixed})
+            self._queue(acc, {n: opened.params[n] for n in fixed})
         return accumulator_id, acc.template
 
     def push(
         self, accumulator_id: str, rows: Mapping[str, list[Any]], client: str
     ) -> None:
         """
-        Log a push of rows of one table, by its name; they enter one state.
+        Log a push of rows of one or more tables, by name; they enter one
+        state.
 
         The rows are checked (see :meth:`.checks.Checks.push`), and so are
         the records they reference, as a request's are, without waiting for
-        those that are pending. A row the table holds is refused.
+        those that are pending. A row its table holds is refused.
         The push is logged before it is added, so the pushes into one
         accumulator are added in the order they were logged (see
         :meth:`_advance`). A push waits while a freeze is being checked, and
@@ -1734,17 +1737,18 @@ class Backend:
             acc = self._accumulator(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
-        table, values = checks.push(acc.template.blanks, rows, caller.proposal)
+        values = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
                 raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
-            seen = distinct(table, values[table], acc.seen[table])
+            seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
             self._check_reads(spec_id, values, caller, {})
-            self._append(Pushed(accumulator=accumulator_id, table=table, params=values))
-            acc.seen[table].update(seen)
+            self._append(Pushed(accumulator=accumulator_id, params=values))
+            for table, rows_seen in seen.items():
+                acc.seen[table].update(rows_seen)
             pushed = self._views.pushes[accumulator_id][-1]
-            self._queue(acc, table, pushed.params)
+            self._queue(acc, pushed.params)
 
     def freeze(
         self,
@@ -1805,19 +1809,17 @@ class Backend:
                 acc.freezing = False
                 self._let_go([(acc, upto)])
 
-    def _queue(
-        self, acc: _Accumulator, table: str | None, values: dict[str, Any]
-    ) -> None:
+    def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
         Queue a step of the accumulator: opening its driver with the
-        template's fixed values, with no ``table``, or a push of rows of
-        ``table``; lock held.
+        template's fixed values, first, or a push of rows by table; lock
+        held.
 
         The step holds the outputs it reads until it is done.
         """
         reads = _output_reads(values)
         self._readers.update(reads)
-        acc.steps.append((table, values, reads))
+        acc.steps.append((values, reads))
         self._accumulating.add(acc)
         self._advance(acc)
 
@@ -1861,13 +1863,14 @@ class Backend:
         # Read outside the lock: only this worker removes the step it does,
         # _unneeded keeps a busy step, and _stop runs only when no step is
         # busy, or on this worker.
-        table, values, reads = acc.steps[0]
+        values, reads = acc.steps[0]
         try:
             typed = self._typed(acc.template.spec, values, acc.rows_read)
-            if table is None:
+            if acc.added is None:  # the opening, which makes the driver
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:
-                acc.driver.push(table, typed[table])
+                for table, rows in typed.items():
+                    acc.driver.push(table, rows)
         except Exception as error:  # the binding refuses the values or rows
             with self._changed:
                 self._stop(acc, f'{acc.step} failed: {str(error) or repr(error)}')

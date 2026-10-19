@@ -109,7 +109,7 @@ class Views:
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
     record of a state. ``accumulators`` holds the event that opened each
-    accumulator, and ``pushes`` its pushes in order, each rows of one table.
+    accumulator, and ``pushes`` its pushes in order, each rows of its tables.
 
     ``persisted`` names the outputs each record persists at submission; their
     write is the record's: pending while it is, written once it completes.

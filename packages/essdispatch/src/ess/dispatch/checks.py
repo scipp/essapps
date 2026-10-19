@@ -13,7 +13,7 @@ method for each thing checked::
     checks = Checks(IOFQ, datasets)
     request = checks.request(request, proposal)            # a plain request
     template, fixed = checks.template(template, proposal)  # a stage or an accumulator
-    table, rows = checks.push(blanks, rows, proposal)
+    rows = checks.push(blanks, rows, proposal)
     refused = checks.state(plain, blanks)                  # at a pin or a read
 
 The checks of a request; a template, a push, and a state check part of these:
@@ -140,29 +140,26 @@ class Checks:
 
     def push(
         self, blanks: Collection[str], rows: Mapping[str, Any], proposal: str
-    ) -> tuple[str, dict[str, list[Any]]]:
+    ) -> dict[str, list[Any]]:
         """
-        The table a push gives rows of, and its rows by the table's name, as
-        the log holds them.
+        The rows of a push by the name of their table, as the log holds them.
 
-        A push gives one or more rows of one of the ``blanks``, a table. Each
-        row is checked by the table's element type, as a request's is.
-        Whether a row repeats one the table holds is the backend's to check,
-        which knows the table (see :func:`distinct`).
+        A push gives one or more rows of each of one or more of the
+        ``blanks``, tables. Each row is checked by its table's element type,
+        as a request's is. Whether a row repeats one the table holds is the
+        backend's to check, which knows the table (see :func:`distinct`).
         """
-        if len(rows) != 1:
-            raise SubmitError(
-                f'a push gives the rows of one table, not of {sorted(rows)}'
-            )
-        ((table, given),) = rows.items()
-        if table not in blanks:
-            raise SubmitError(
-                f'a push gives rows of a blank table of the accumulator, '
-                f'{list(blanks)}, not {table!r}'
-            )
-        if not given:
-            raise SubmitError(f'a push into {table} has no rows')
-        return table, self._values(read_refs({table: given}), proposal)
+        if not rows:
+            raise SubmitError('a push gives rows of a blank table, not none')
+        for table, given in rows.items():
+            if table not in blanks:
+                raise SubmitError(
+                    f'a push gives rows of a blank table of the accumulator, '
+                    f'{list(blanks)}, not {table!r}'
+                )
+            if not given:
+                raise SubmitError(f'a push into {table} has no rows')
+        return self._values(read_refs(dict(rows)), proposal)
 
     def state(self, plain: Request, blanks: Collection[str]) -> str | None:
         """
