@@ -31,7 +31,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     defaults filled in, so that the graph may depend on them; it gets no
     blank, and each call must return a pipeline of its own, such as a copy.
     Each parameter sets the sciline key of its type as written, without
-    ``Annotated`` metadata, such as ``Reduction`` or ``CanFile | None``; a
+    ``Annotated`` metadata, such as ``Reduction`` or ``BeamCentre | None``; a
     table sets the key of its type, a list, to its list. Each output is
     computed as the key of its type without ``| None``, since an optional
     output means that the graph may lack it, not that a provider returns

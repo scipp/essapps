@@ -17,7 +17,7 @@ A notebook without the framework:
 ```python
 curves = {}
 for run in (60339, 60340, 60341):
-    curves[run] = reduce_iofq(run, bins=100)
+    curves[run] = reduce_iofq(run, can=60338, bins=100)
 ```
 
 The same with the framework:
@@ -26,14 +26,15 @@ The same with the framework:
 records = {}
 for run in (60339, 60340, 60341):
     records[run] = client.submit(IOFQ, params={'reduction': Reduction(bins=100),
-                                               'sample': dataset(run=run)})
+                                               'sample': dataset(run=run),
+                                               'can': dataset(run=60338)})
 client.wait(records)
 client.output(records[60339], 'iofq')
 ```
 
 `client` connects to the framework (see Client and backend).
 `IOFQ` is the spec of the I(Q) reduction, which names its params and outputs (see Specs and bindings).
-`dataset(run=run)` names the raw data of a run (see Datasets), here as the parameter `sample`.
+`dataset(run=run)` names the raw data of a run (see Datasets), here as the parameter `sample`, and `dataset(run=60338)` the empty-can run that each reduction subtracts.
 `client.submit` returns a *record* at once.
 The three reductions run in parallel, possibly on another machine.
 `client.wait` blocks until they have finished, and `client.output` reads an output by name.
@@ -132,7 +133,7 @@ class IofQSettings(BaseModel):                    # the parameters that all runs
 
 class IofQParams(IofQSettings):
     sample: Sample
-    can: CanFile | None = None                    # the empty-can run, if any
+    can: CanFile                                  # the empty-can run
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
@@ -173,6 +174,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
+- A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
 Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
@@ -180,6 +182,12 @@ Like the params model, a group given field by field is never validated whole.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
+
+**Defaults.** A default never changes which quantity an output is.
+`reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file: the output is I(Q) either way.
+The can run has none.
+I(Q) without the can subtracted is another quantity, so it is another spec, not `IOFQ` with `can=None`.
+A request or a template that leaves out the can is then refused, instead of computing the other quantity.
 
 **Binding.** A binding is what the backend calls to compute a spec's requests.
 The workflow author makes it from a pipeline, a driver, or a function, each for one spec.
@@ -210,7 +218,8 @@ A *request* is a spec and its params, given by keyword:
 
 ```python
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
-                                      'sample': dataset(run=60339)})   # submit, then wait
+                                      'sample': dataset(run=60339),
+                                      'can': dataset(run=60338)})      # submit, then wait
 client.output(result, 'iofq')            # raises if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
@@ -261,10 +270,10 @@ A reference to a pending record is allowed, so a chain is submitted without wait
 The same beam centre is typed in by one user and computed by another:
 
 ```python
-result = client.submit(IOFQ, params={'sample': dataset(run=60339),
+result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
                                      'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})       # pending
-result = client.submit(IOFQ, params={'sample': dataset(run=60339),
+result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
                                      'beam_centre': centre.ref('centre')})            # a reference
 ```
 
@@ -311,7 +320,7 @@ A *member* names one part of a label, such as one sample or one temperature.
 Both are optional and given at submission, not in the request.
 
 ```python
-client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': run},
+client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': run, 'can': can},
                label='iofq', member='250K')
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # dict keys become the members
 client.latest('iofq', member='250K')                  # the newest record of this member
@@ -327,7 +336,8 @@ A blank is a whole parameter, never a field of a group.
 `Template` takes the fixed values as a request does, and all but the spec by keyword:
 
 ```python
-template = Template(IOFQ, params={'reduction': Reduction(bins=100)}, blanks=('sample',))
+template = Template(IOFQ, params={'reduction': Reduction(bins=100), 'can': dataset(run=60338)},
+                    blanks=('sample',))
 ```
 
 `Template` validates each fixed inline value by its own field, and checks that each fixed reference is readable and fits its field.
@@ -378,7 +388,7 @@ So another client, even one in the same process, reads a value only once it is p
 
 ```python
 centre = client.compute(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})
-result = client.submit(IOFQ, params={'sample': dataset(run=60339),
+result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
@@ -399,7 +409,8 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, params={'sample': dataset(run=60341)}, label='night', persist=('iofq',))   # only the store keeps iofq
+client.submit(IOFQ, params={'sample': dataset(run=60341), 'can': dataset(run=60338)},
+              label='night', persist=('iofq',))             # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
 morning.output(morning.records(label='night')[0], 'iofq')   # read from the store
 ```
@@ -451,14 +462,14 @@ Its params model shares the other parameters, `reduction` and `beam_centre`, wit
 ```python
 class IofQMultiParams(IofQSettings):
     sample: list[Sample] = Field(min_length=1)
-    can: list[CanFile | None] = Field(default_factory=list)   # a can left out is a table without rows
+    can: list[CanFile] = Field(min_length=1)
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
 `tables` names the tables.
-A table has at least one row, `Field(min_length=1)`, or, if it may have no rows, a default of `[]`.
+A table has no default, so a request gives every table, `[]` for one without rows; `Field(min_length=1)` states that it needs a row.
 The validators and constraints of the element type check each row.
 A request that gives every row is a plain request:
 
@@ -474,7 +485,8 @@ Here the transmission of run 611 is the output of `t611`, and run 612 takes the 
 
 ```python
 client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611), 'transmission': t611.ref('transmission')},
-                                              dataset(run=612)]})
+                                              dataset(run=612)],
+                                   'can': [dataset(run=614)]})
 ```
 
 A multi-run spec may have outputs of its own, such as `STITCH`, a stitch of all angles, or no single-run spec, such as `VOLUME`, which sums counts over runs.
@@ -485,8 +497,6 @@ The *table rules* are: the number of rows of a table meets its length constraint
 
 **Single-run and multi-run specs.** With one row in each table, a request of `IOFQ_MULTI` is a request of `IOFQ`, and gives the same outputs (the one-row symmetry, see Symmetries).
 The specs agree since `IofQMultiParams` shares the other parameters of `IofQParams` and each of its tables is a list of the single-run type; `check_one_row` checks it.
-A request of `IOFQ` without a can, `can=None`, is the request of `IOFQ_MULTI` with one can row, `can=[None]`; what that row means is the workflow's, here that no can is subtracted.
-`can=[]`, a table without rows, is another request, which a driver may refuse.
 The binding's driver handles structure below a row, such as detector banks, and decides what is summed ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
 
 ## Stages and accumulators
@@ -503,7 +513,8 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'sample': dataset(run=60339)}, blanks=('reduction',)))
+tune = client.stage(Template(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338)},
+                             blanks=('reduction',)))
 for bins in (50, 100, 200):
     client.compute(tune, params={'reduction': Reduction(bins=bins)}, label='iofq')   # the first call loads the run
 ```
@@ -706,7 +717,7 @@ The callable may return the same object in several calls, so records made throug
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
 The function does not get the blanks, so a field that changes the graph cannot be a blank.
-Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `Sample`, or `CanFile | None`.
+Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `Sample`, or `BeamCentre | None`.
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
 A table sets the key of its type, a list, to its rows.
 A group is one key, so a provider takes it apart, such as one that reads the file `sample.run`.
@@ -742,19 +753,14 @@ class IofQDriver:
 
     def push(self, table, rows):
         for row in rows:                          # a Sample, or a can run's path
-            if row is None:                       # a can row of None: subtract no can
-                continue
             parts = numerator_and_denominator(row, self._bins)
             old = self._sums.get(table)
             self._sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
 
-    def outputs(self):                            # raises without a sample row
+    def outputs(self):                            # a state read has a sample row and a can row
         sample_num, sample_den = self._sums['sample']
-        result = sample_num / sample_den
-        if 'can' in self._sums:
-            can_num, can_den = self._sums['can']
-            result = result - can_num / can_den
-        return IofQOutputs(iofq=IofQ(result))
+        can_num, can_den = self._sums['can']
+        return IofQOutputs(iofq=IofQ(sample_num / sample_den - can_num / can_den))
 ```
 
 A workflow that needs every row at once, such as `STITCH`, writes a driver that keeps its rows and computes over all of them at each read.
@@ -809,7 +815,7 @@ The binding of `VOLUME` is a driver that sums, so the loop holds one volume and 
 
 ```python
 for run in client.datasets.watch(Selector(role='sample')):
-    record = client.submit(IOFQ, params={'sample': run})
+    record = client.submit(IOFQ, params={'sample': run, 'can': dataset(run=60338)})
     show(client.output(record, 'iofq'))
 ```
 

@@ -18,6 +18,7 @@ from .conftest import (
     BACKGROUND,
     CONTRIBUTE,
     IOFQ,
+    IOFQ_CAN,
     NORMALIZE,
     PARTS_SUM,
     VANADIUM,
@@ -101,7 +102,7 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     first = measure(2, [5.0, 6.0], role='sample')
     can_3 = measure(3, [2.0, 2.0], role='can')
     second = measure(4, [6.0, 9.0], role='sample')
-    template = Template(IOFQ, blanks=('sample', 'can'))
+    template = Template(IOFQ_CAN, blanks=('sample', 'can'))
     cans = Lookup(can=LastBefore(Selector(role='can')))
 
     requests = apply(

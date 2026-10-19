@@ -5,8 +5,7 @@ Each check passes for a binding or driver that keeps its symmetry and fails
 for one with a bug that breaks it.
 
 The toy spec ``SUB`` takes a sample and a can value and gives
-``diff = factor * (sample - can)``; ``SUB_MULTI`` sums the rows of each table,
-a can row of ``None`` as no can.
+``diff = factor * (sample - can)``; ``SUB_MULTI`` sums the rows of each table.
 """
 
 from collections.abc import Callable, Collection, Mapping
@@ -42,13 +41,13 @@ Diff = NewType('Diff', float)
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
     sample: SampleValue
-    can: CanValue | None = None
+    can: CanValue
 
 
 class SubMultiParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
     sample: list[SampleValue] = Field(min_length=1)
-    can: list[CanValue | None] = Field(default_factory=list)
+    can: list[CanValue] = Field(min_length=1)
 
 
 class SubOutputs(BaseModel):
@@ -65,8 +64,8 @@ SUB_MULTI = _spec(
 )
 
 
-def subtract(scale: Scale, sample: float, can: float | None) -> SubOutputs:
-    return SubOutputs(diff=scale.factor * (sample - (can or 0.0)))
+def subtract(scale: Scale, sample: float, can: float) -> SubOutputs:
+    return SubOutputs(diff=scale.factor * (sample - can))
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,7 @@ class Sums:
         self.sums = {'sample': 0.0, 'can': 0.0}
 
     def push(self, table: str, rows: Rows) -> None:
-        self.sums[table] += sum(row for row in rows if row is not None)
+        self.sums[table] += sum(rows)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self.factor * (self.sums['sample'] - self.sums['can']))
@@ -237,8 +236,9 @@ def test_caching_passes_for_a_stage_that_computes_each_call() -> None:
 
 def test_caching_fails_for_a_stage_that_holds_the_outputs_of_its_first_call() -> None:
     calls = [{'scale': Scale(factor=f)} for f in (1.0, 2.0)]
+    runs = {'sample': 5.0, 'can': 1.0}
     with pytest.raises(AssertionError, match=r"caching, call 2 \{'scale': "):
-        check_caching(RemembersFirstCall(SUB, subtract), {'sample': 5.0}, calls)
+        check_caching(RemembersFirstCall(SUB, subtract), runs, calls)
 
 
 def test_one_row_gives_each_table_a_row_of_the_value() -> None:
@@ -247,18 +247,11 @@ def test_one_row_gives_each_table_a_row_of_the_value() -> None:
     assert (request.sample, request.can) == ([5.0], [1.0])
 
 
-def test_one_row_gives_a_row_of_none_for_an_optional_value_that_is_none() -> None:
-    assert one_row(SUB_MULTI, SubParams(sample=5.0)).can == [None]
-
-
-@pytest.mark.parametrize('can', [1.0, None])
-def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs(
-    can: float | None,
-) -> None:
+def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs() -> None:
     check_one_row(
         Calls(SUB, subtract),
         DriverBinding(SUB_MULTI, Sums),
-        SubParams(scale=Scale(factor=2.0), sample=5.0, can=can),
+        SubParams(scale=Scale(factor=2.0), sample=5.0, can=1.0),
     )
 
 

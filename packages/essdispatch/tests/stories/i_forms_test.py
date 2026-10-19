@@ -77,6 +77,7 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
     client: Client, measure: Measure
 ) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
+    can = measure(620, [1.0, 1.0])
     t611 = client.compute(CONTRIBUTE, params={'sample': r611})  # transmission 1/4
     total = client.accumulator(
         Template(
@@ -84,6 +85,7 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
         )
     )
     total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
+    total.push(can=[can])
 
-    assert client.output(total, 'centred').values.tolist() == [2.25, 2.75]
+    assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]
     assert client.provenance(total).records() == [t611]

@@ -111,18 +111,18 @@ class IofQSettings(BaseModel, arbitrary_types_allowed=True):
 
 class IofQParams(IofQSettings):
     sample: SampleFile = Field(title='Sample run')
-    can: CanFile | None = None
+    can: CanFile
 
     @model_validator(mode='after')
-    def _can_needs_a_centre(self) -> 'IofQParams':
-        if self.can is not None and self.beam_centre is None:
-            raise ValueError('a can needs a beam centre')
+    def _sample_is_not_the_can(self) -> 'IofQParams':
+        if self.sample == self.can:
+            raise ValueError('the sample run is not the can run')
         return self
 
 
 class IofQMultiParams(IofQSettings):
     sample: list[SampleFile] = Field(min_length=1, title='Sample run')
-    can: list[CanFile | None] = Field(default_factory=list)
+    can: list[CanFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
@@ -228,7 +228,7 @@ class TestMetadata:
     def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
         assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
-    @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[CanFile | None]])
+    @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
         assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
@@ -287,8 +287,8 @@ class TestModelRules:
     def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
         # The framework never calls it (see the backend's tests); a binding may.
         assert IofQParams.__pydantic_decorators__.model_validators
-        with pytest.raises(pydantic.ValidationError, match='a can needs a beam'):
-            IofQParams.model_validate({'sample': 'a.nxs', 'can': 'b.nxs'})
+        with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
+            IofQParams.model_validate({'sample': 'a.nxs', 'can': 'a.nxs'})
 
     @pytest.mark.parametrize(
         ('fields', 'reason'),
@@ -520,7 +520,7 @@ class TestTables:
         params = model(
             'P',
             sample=(list[SampleFile | None], ...),
-            reduction=(list[Reduction], [Reduction()]),
+            reduction=(list[Reduction], ...),
         )
         assert spec(params=params, tables=['sample', 'reduction']).tables == (
             'sample',
@@ -544,6 +544,11 @@ class TestTables:
                 {'sample': (list[SampleFile], Field(min_length=1))},
                 ['sample', 'sample'],
                 'sample: a table named twice',
+            ),
+            (
+                {'sample': (list[SampleFile], Field(default_factory=list))},
+                ['sample'],
+                'sample: a table has no default',
             ),
         ],
     )
@@ -579,13 +584,14 @@ class TestTables:
         params = model(
             'P',
             sample=(list[Annotated[SampleFile, AfterValidator(known)]], ...),
-            can=(list[Annotated[CanFile, AfterValidator(known)] | None], []),
+            can=(list[Annotated[CanFile, AfterValidator(known)]], ...),
         )
         runs = spec(params=params, tables=('sample', 'can'))
-        runs.params(sample=[Path('run.nxs')], can=[Path('run.nxs')])
+        known_rows = {'sample': [Path('run.nxs')], 'can': [Path('run.nxs')]}
+        runs.params(**known_rows)
         for rows in ({'sample': [Path('other.nxs')]}, {'can': [Path('other.nxs')]}):
             with pytest.raises(pydantic.ValidationError, match='unknown run'):
-                runs.params(**{'sample': [Path('run.nxs')], **rows})
+                runs.params(**{**known_rows, **rows})
         assert runs.serialize().params_schema['properties']['sample']['items'] == (
             file_ref('SampleFile')
         )
@@ -607,6 +613,10 @@ def inline(schema: dict[str, Any]) -> dict[str, Any]:
     return {**schema, 'not': {'required': ['@ref']}}
 
 
+CAN = {'can': DatasetRef(dataset='run:loki/3')}
+"""The can that each request of ``IOFQ`` gives, left out of the cases below."""
+
+
 class ScaledParams(BaseModel):
     scale: float = Field(default=1.0, gt=0, title='Scale', description='A factor.')
     mode: Mode = Mode.fast
@@ -626,7 +636,7 @@ class TestSerialization:
             **Reduction.model_json_schema(),
             'additionalProperties': False,
         }
-        assert schema['required'] == ['sample']
+        assert schema['required'] == ['sample', 'can']
         assert schema['additionalProperties'] is False
 
     def test_a_reference_is_an_object_with_its_kind_under_at_ref(self) -> None:
@@ -658,11 +668,7 @@ class TestSerialization:
         properties = IOFQ.serialize().params_schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
             'sample': {**file_ref('SampleFile'), 'title': 'Sample run'},
-            'can': {
-                'anyOf': [file_ref('CanFile'), {'type': 'null'}],
-                'default': None,
-                'title': 'Can',
-            },
+            'can': {**file_ref('CanFile'), 'title': 'Can'},
             'beam_centre': {
                 'anyOf': [data_ref('CentreArray'), {'type': 'null'}],
                 'default': None,
@@ -695,12 +701,12 @@ class TestSerialization:
         }
         assert properties['can'] == {
             'type': 'array',
-            'items': {'anyOf': [file_ref('CanFile'), {'type': 'null'}]},
-            'default': [],
+            'items': file_ref('CanFile'),
             'title': 'Can',
+            'minItems': 1,
         }
         assert serialized.tables == ('sample', 'can')
-        assert serialized.params_schema['required'] == ['sample']
+        assert serialized.params_schema['required'] == ['sample', 'can']
 
     def test_outputs_name_the_type_of_each_value(self) -> None:
         assert IOFQ.serialize().outputs_schema['properties'] == {
@@ -741,7 +747,7 @@ class TestSerialization:
         jsonschema = pytest.importorskip('jsonschema')
         schema = IOFQ.serialize().params_schema
         jsonschema.Draft202012Validator.check_schema(schema)
-        jsonschema.validate(to_jsonable_python(params), schema)
+        jsonschema.validate(to_jsonable_python({**CAN, **params}), schema)
 
     @pytest.mark.parametrize(
         'params',
@@ -769,7 +775,7 @@ class TestSerialization:
         jsonschema = pytest.importorskip('jsonschema')
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(
-                to_jsonable_python(params), IOFQ.serialize().params_schema
+                to_jsonable_python({**CAN, **params}), IOFQ.serialize().params_schema
             )
 
     def test_the_schema_of_tables_takes_rows_of_both_forms(self) -> None:

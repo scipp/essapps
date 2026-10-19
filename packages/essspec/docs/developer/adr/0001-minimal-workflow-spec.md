@@ -145,7 +145,7 @@ class Sample(BaseModel):                          # a group that holds a file
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
-    can: CanFile | None = None
+    can: CanFile
     beam_centre: BeamCentre | None = None
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
@@ -159,9 +159,9 @@ Two requests, written with essdispatch: `client` connects to a backend,
 finds the beam centre, so `finder.ref('centre')` names its output `centre`:
 
 ```python
-client.submit(IOFQ, params={'sample': dataset(run=60339),
+client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
                             'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
-client.submit(IOFQ, params={'sample': dataset(run=60339),
+client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
                             'beam_centre': finder.ref('centre')})            # a reference
 ```
 
@@ -180,6 +180,7 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - A default is a value, never a reference: of a type with a JSON form, a value
   that round-trips and whose JSON form is neither an `@ref` object nor a list
   holding one; of any other type, `None` or `[]`.
+- A table has no default (see the multi-run spec below).
 - The params model has no field validators, serializers, computed fields, or
   aliases, and no `default_factory` that takes the other values. A list
   parameter carries only length constraints, such as `Field(min_length=2)`. The
@@ -195,6 +196,13 @@ check across parameters, such as a transmission mode that requires a
 transmission run, is the binding's or the driver's, and fails when the request
 runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
+
+A default never changes which quantity an output is. The default of
+`reduction` is a setting, and the transmission `None` of a `Sample` takes the
+one in the run's file: the output is I(Q) either way. The can run has no
+default. I(Q) without the can subtracted is another quantity, so it is another
+spec, not `IOFQ` with `can=None`, and a request or a template that leaves out
+the can is refused instead of computing the other quantity.
 
 **References.** A reference names an output of an earlier record (`OutputRef`:
 record, output name, and optionally the key of one element of a list or dict
@@ -307,9 +315,10 @@ IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title=..., descript
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
-Each table is a `list` of the single-run type, with `Field(min_length=1)` if
-it needs a row, or `Field(default_factory=list)` if it may have no rows. The
-model states the length constraints, so that the model, its schema, and the
+Each table is a `list` of the single-run type, without a default, so a
+request gives every table, `[]` for one without rows, and a template that
+forgets a table is refused. `Field(min_length=1)` states that a table needs a
+row. The model states the length constraints, so that the model, its schema, and the
 backend agree that the table has a row. The field `tables` of `WorkflowSpec`
 is a tuple of the names of the tables. A list parameter makes a table only when
 `tables` names it. A spec whose outputs differ from those of a single-run spec,

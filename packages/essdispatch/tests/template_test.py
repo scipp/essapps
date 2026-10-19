@@ -43,7 +43,7 @@ class ScaleParams(BaseModel):
 
 
 class TotalParams(BaseModel):
-    scaling: list[Factor | None] = Field(default_factory=list)
+    scaling: list[Factor | None]
     sample: list[WeightedRun] = Field(min_length=1)
 
 
@@ -105,6 +105,8 @@ MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
 USE_MANY = _spec('use-many', params=PositivesParams, tables=('positive',))
 CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
+UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
+"""The sample runs of ``TOTAL`` as a blank table, without scaling."""
 
 
 def scale(params: ScaleParams) -> Value:
@@ -304,7 +306,7 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
 
 
 def test_a_push_gives_rows_of_one_blank_table(client: Client) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
+    acc = client.accumulator(UNSCALED)
     row = [dataset(run=1)]
     refused = {
         r"blank table of the accumulator, \['sample'\], not 'scaling'": {
@@ -326,7 +328,7 @@ def test_a_push_gives_rows_of_one_blank_table(client: Client) -> None:
 def test_a_state_with_no_row_in_a_table_that_needs_one_cannot_be_read(
     client: Client,
 ) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
+    acc = client.accumulator(UNSCALED)
 
     with pytest.raises(
         LookupError, match='sample: the table has no row; it needs at least 1'
@@ -360,20 +362,23 @@ def test_the_table_rules_hold_on_the_fixed_tables_of_a_template(
             client.accumulator(template)
 
 
-def test_a_table_that_may_be_empty_left_out_has_no_rows(client: Client) -> None:
-    plain = client.compute(TOTAL, params={'sample': [dataset(run=1)]})
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
+def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None:
+    plain = client.compute(TOTAL, params={'sample': [dataset(run=1)], 'scaling': []})
+    acc = client.accumulator(UNSCALED)
     acc.push(sample=[dataset(run=1)])
 
-    assert plain.request.params['scaling'] == []
     assert client.provenance(acc).request == plain.request
     assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
+    with pytest.raises(
+        SubmitError, match=r"\['scaling'\]: required parameters, not given"
+    ):
+        client.accumulator(Template(TOTAL, blanks=('sample',)))
 
 
 def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
     client: Client, datasets: FakeDatasets
 ) -> None:
-    acc = client.accumulator(Template(TOTAL, blanks=('sample',)))
+    acc = client.accumulator(UNSCALED)
     datasets.corrupt(datasets.resolve(dataset(run=1)))
     acc.push(sample=[dataset(run=1)])
 

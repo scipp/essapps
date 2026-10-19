@@ -29,13 +29,13 @@ Diff = NewType('Diff', float)
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
     sample: SampleValue
-    can: CanValue | None = None
+    can: CanValue
 
 
 class SubMultiParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
     sample: list[SampleValue] = Field(min_length=1)
-    can: list[CanValue | None] = Field(default_factory=list)
+    can: list[CanValue] = Field(min_length=1)
 
 
 class SubOutputs(BaseModel):
@@ -61,12 +61,31 @@ SUB_MULTI = WorkflowSpec(
 )
 
 
+class SumParams(BaseModel):
+    scale: Scale = Field(default_factory=Scale)
+    sample: list[SampleValue]
+
+
+SUM = WorkflowSpec(
+    name='sum',
+    version=1,
+    title='Sum',
+    description='The scaled sum of the sample runs, zero for none.',
+    params=SumParams,
+    outputs=SubOutputs,
+    tables=('sample',),
+)
+
+
 def subtract(params: SubParams) -> SubOutputs:
-    return SubOutputs(diff=params.scale.factor * (params.sample - (params.can or 0.0)))
+    return SubOutputs(diff=params.scale.factor * (params.sample - params.can))
 
 
 class Recorder:
-    """Makes drivers of ``SUB_MULTI``; records what they are made with and pushed."""
+    """
+    Makes drivers of ``SUB_MULTI`` and ``SUM``; records what they are made with
+    and pushed.
+    """
 
     def __init__(self) -> None:
         self.made: list[Mapping[str, Any]] = []
@@ -105,12 +124,12 @@ SAMPLES = [5.0, 7.0]
 
 
 def test_fixed_values_fill_in_the_default_of_each_parameter_in_neither() -> None:
-    assert fixed_values(SUB_MULTI, {'scale': Scale(factor=3.0)}, ('sample',)) == {
-        'scale': Scale(factor=3.0),
-        'can': [],
+    assert fixed_values(SUB_MULTI, {'can': [1.0]}, ('sample',)) == {
+        'scale': Scale(),
+        'can': [1.0],
     }
-    assert fixed_values(SUB, {'sample': 5.0}, ('scale',)) == {
-        'can': None,
+    assert fixed_values(SUB, {'sample': 5.0}, ('can',)) == {
+        'scale': Scale(),
         'sample': 5.0,
     }
 
@@ -163,11 +182,10 @@ def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
     assert recorder.pushes == [('sample', SAMPLES), ('can', [1.0])]
 
 
-def test_a_table_without_rows_is_not_pushed(
-    binding: DriverBinding, recorder: Recorder
-) -> None:
-    assert binding.compute(SUB_MULTI.params(sample=SAMPLES)) == SubOutputs(diff=24.0)
-    assert recorder.pushes == [('sample', SAMPLES)]
+def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:
+    binding = DriverBinding(SUM, recorder.make_driver)
+    assert binding.compute(SUM.params(sample=[])) == SubOutputs(diff=0.0)
+    assert recorder.pushes == []
 
 
 @pytest.mark.parametrize(

@@ -142,7 +142,7 @@ class TaggedRun(BaseModel):
 class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
-    runs: list[TaggedRun] = Field(default_factory=list)
+    runs: list[TaggedRun]
     offset: Offset | None = None
 
 
@@ -181,8 +181,8 @@ class Reference(BaseModel):
 
 class StitchParams(BaseModel):
     reference: Reference
-    low: list[Low] = Field(default_factory=list)
-    high: list[High] = Field(default_factory=list)
+    low: list[Low]
+    high: list[High]
 
 
 class Curve(BaseModel):
@@ -1159,7 +1159,7 @@ def test_a_state_with_nothing_pushed_is_read_as_the_plain_request_over_no_rows(
 ) -> None:
     summed = client.accumulator(Template(SUM, blanks=('runs',)))
     total = _total(client)
-    plain = client.compute(SUM)
+    plain = client.compute(SUM, params={'runs': []})
     with pytest.raises(SubmitError, match='parts: the table has no row') as refused:
         client.submit(TOTAL, params={'parts': []})
 
@@ -1744,8 +1744,8 @@ class CopyOutputs(Data):
 
 
 class SidesParams(Data):
-    samples: list[SampleArray] = Field(default_factory=list)
-    backgrounds: list[BackgroundArray] = Field(default_factory=list)
+    samples: list[SampleArray]
+    backgrounds: list[BackgroundArray]
 
 
 class BothParams(Data):
@@ -2284,7 +2284,7 @@ def test_a_push_of_several_rows_gives_one_state(
     rows = [x.ref('value') for x in loads]
     sides.push(samples=rows)
     copied = _copy(client, sides, 'difference')
-    plain = client.compute(SIDES, params={'samples': rows})
+    plain = client.compute(SIDES, params={'samples': rows, 'backgrounds': []})
 
     assert _state(client, copied).request == plain.request
     assert _listed(client.output(copied, 'value')) == [3.0]

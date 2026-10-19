@@ -14,7 +14,8 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `can: CanFile \| None`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | counts minus the can's counts; values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS or diffraction reduction of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, or a diffraction reduction, of one run |
+| `IOFQ_CAN` | the params of `IOFQ`, and `can: CanFile` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
 | `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: CentreArray` | the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[RunFile]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
@@ -30,7 +31,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICER` | `log: RunFile` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: SampleFile`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `FIND_CENTRE` | `direct_beam: DirectBeamFile` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRun]`, a table; `can: list[CanFile \| None]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
+| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRun]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
 A parameter's type decides how a request gives its value (README.md):
 
@@ -51,8 +52,8 @@ A reference to an output fits a parameter when the output's type fits the parame
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
-`CENTRED_MULTI` has the params `centre: Centre`, `sample: list[SampleRun] = Field(min_length=1)`, and `can: list[CanFile | None] = Field(default_factory=list)`, with `tables=('sample', 'can')`.
-So `sample` is a table that needs a row, and `can` is a table that may have no rows.
+`CENTRED_MULTI` has the params `centre: Centre`, `sample: list[SampleRun] = Field(min_length=1)`, and `can: list[CanFile] = Field(min_length=1)`, with `tables=('sample', 'can')`.
+So both `sample` and `can` are tables that need a row.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 
 `IOFQ` and `VANADIUM`, which the stories stage, are bound to the functions `iofq` and `vanadium` by a toy binding that serves plain requests and stages.
@@ -186,7 +187,7 @@ can_1 = measure(1, [1.0, 1.0], role='can')
 first = measure(2, [5.0, 6.0], role='sample')
 can_3 = measure(3, [2.0, 2.0], role='can')
 second = measure(4, [6.0, 9.0], role='sample')
-template = Template(IOFQ, blanks=('sample', 'can'))
+template = Template(IOFQ_CAN, blanks=('sample', 'can'))
 cans = Lookup(can=LastBefore(Selector(role='can')))    # the latest can measured before the run
 
 requests = apply(template, [first, second], client.datasets, member_field='run', lookup=cans)
@@ -817,19 +818,20 @@ Actor: user. Goal: sum two runs, one with a transmission computed for it and one
 
 ```python
 r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
+can = measure(620, [1.0, 1.0])
 t611 = client.compute(CONTRIBUTE, params={'sample': r611})     # transmission 1 / 4
 total = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=0.0)},
                                     blanks=('sample', 'can')))
 total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
+total.push(can=[can])
 
-assert client.output(total, 'centred').values.tolist() == [2.25, 2.75]   # [1, 3] / 4 + [2, 2]
+assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]   # [1, 3] / 4 + [2, 2] - [1, 1]
 assert client.provenance(total).records() == [t611]
 ```
 
 A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
 Run 612 is given as a dataset reference, which stands for a `SampleRun` with the transmission `None`.
 `TransmissionArray` has no JSON form, so a transmission takes a reference, or `None` since the field is optional.
-No can is pushed: `can` is a table that may have no rows.
 
 ## Open
 

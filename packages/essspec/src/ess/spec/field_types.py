@@ -7,9 +7,9 @@ A spec's models carry no annotations for the framework: what the framework
 needs, it reads from the field types. A field's type is built from a few
 pieces, which these functions take apart::
 
-    CanFile | None          optional(...)   -> (CanFile, True)
+    BeamCentre | None       optional(...)   -> (BeamCentre, True)
     list[SampleFile]        element(...)    -> SampleFile
-    list[CanFile | None]    value_type(...) -> CanFile
+    list[BeamCentre | None] value_type(...) -> BeamCentre
     IofQ                    supertypes(...) -> [IofQ, sc.DataArray]
 
 with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through

@@ -4,13 +4,13 @@
 The symmetries of docs/developer/README.md on a toy package that offers a
 single-run spec and a multi-run spec with tables of its sample and can runs,
 as docs/developer/three-ways-to-run-a-spec.html shows them: a sciline pipeline of
-one sample run and an optional can run behind the single-run spec, and a
-driver over the same pipeline behind the multi-run spec.
+one sample run and one can run behind the single-run spec, and a driver over
+the same pipeline behind the multi-run spec.
 
 A run holds counts per pixel. A run's I(Q) is its counts summed into ``bins``
 bins over the pixels (the numerator) divided by its total counts (the
-denominator); the can's I(Q) is subtracted if there is a can run. Over
-several runs of a kind, the numerators and the denominators are summed before
+denominator); the can's I(Q) is subtracted from the sample's. Over several
+runs of a kind, the numerators and the denominators are summed before
 dividing.
 """
 
@@ -46,13 +46,13 @@ class Reduction(BaseModel):
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: SampleFile
-    can: CanFile | None = None
+    can: CanFile
 
 
 class IofQMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: list[SampleFile] = Field(min_length=1)
-    can: list[CanFile | None] = Field(default_factory=list)
+    can: list[CanFile] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
@@ -80,9 +80,9 @@ IOFQ_MULTI = WorkflowSpec(
 )
 
 
-def _counts(run: Path | None) -> np.ndarray:
-    """A run's counts per pixel; no run counts nothing."""
-    return np.asarray([] if run is None else read_dataset(run), dtype=float)
+def _counts(run: Path) -> np.ndarray:
+    """A run's counts per pixel."""
+    return np.asarray(read_dataset(run), dtype=float)
 
 
 def sample_numerator(run: SampleFile, reduction: Reduction) -> SampleNumerator:
@@ -93,11 +93,11 @@ def sample_denominator(run: SampleFile) -> SampleDenominator:
     return SampleDenominator(_counts(run).sum())
 
 
-def can_numerator(run: CanFile | None, reduction: Reduction) -> CanNumerator:
+def can_numerator(run: CanFile, reduction: Reduction) -> CanNumerator:
     return CanNumerator(_counts(run).reshape(reduction.bins, -1).sum(axis=1))
 
 
-def can_denominator(run: CanFile | None) -> CanDenominator:
+def can_denominator(run: CanFile) -> CanDenominator:
     return CanDenominator(_counts(run).sum())
 
 
@@ -107,8 +107,8 @@ def iofq(
     can_num: CanNumerator,
     can_den: CanDenominator,
 ) -> IofQ:
-    can = np.divide(can_num, can_den, out=np.zeros_like(can_num), where=can_den > 0)
-    return IofQ(sc.array(dims=['q'], values=sample_num / sample_den - can))
+    values = sample_num / sample_den - can_num / can_den
+    return IofQ(sc.array(dims=['q'], values=values))
 
 
 SANS = sciline.Pipeline(
@@ -120,8 +120,7 @@ SINGLE = PipelineBinding(IOFQ, lambda fixed: SANS.copy())
 class IofQDriver:
     """
     Sums the numerator and the denominator of each table's runs, and divides
-    once, at a read. The sums start at the parts of no can run, which are
-    zero, so that a request without a can run needs no push into ``can``.
+    once, at a read; refuses a state without a sample run or a can run.
     """
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
@@ -129,7 +128,7 @@ class IofQDriver:
         wf[Reduction] = fixed['reduction']
         parts = {
             'sample': (SampleFile, (SampleNumerator, SampleDenominator)),
-            'can': (CanFile | None, (CanNumerator, CanDenominator)),
+            'can': (CanFile, (CanNumerator, CanDenominator)),
         }
         self._contribute = {
             table: (key, sciline.Stage(wf, inputs=(key,), outputs=summed))
@@ -137,8 +136,7 @@ class IofQDriver:
         }
         summed = [key for _, keys in parts.values() for key in keys]
         self._finalize = sciline.Stage(wf, inputs=summed, outputs=(IofQ,))
-        key, no_can = self._contribute['can']
-        self._sums: dict[Any, Any] = no_can.compute({key: None})
+        self._sums: dict[Any, Any] = {}
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
@@ -219,13 +217,9 @@ def test_every_way_gives_the_iofq_of_the_single_run_spec(
     scipp.testing.assert_allclose(way(client), _single(client, sample=SAMPLE, can=CAN))
 
 
-def test_a_table_left_out_is_a_table_without_rows(client: Client) -> None:
-    multi = client.compute(IOFQ_MULTI, params={'sample': [SAMPLE]})
-
-    assert multi.request.params['can'] == []
-    scipp.testing.assert_allclose(
-        client.output(multi, 'iofq'), _single(client, sample=SAMPLE)
-    )
+def test_a_request_that_leaves_out_a_table_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r"\['can'\]: required parameters"):
+        client.compute(IOFQ_MULTI, params={'sample': [SAMPLE]})
 
 
 def test_a_call_through_a_stage_makes_the_record_of_the_plain_request(

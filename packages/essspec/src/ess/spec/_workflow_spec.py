@@ -77,7 +77,7 @@ framework: what the framework needs, it reads from the field types (see
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
 - Each output is a type, possibly optional, or a list or a dict of one.
-- Each table is a list parameter.
+- Each table is a list parameter without a default.
 
 A check across parameters is the binding's or the driver's, and fails when
 the request runs. The params model may state one as a model validator, but
@@ -88,7 +88,8 @@ A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs; its rows are distinct. A row with more than
 one value, such as a run and the values given next to it, is a group given
 field by field. ``tables`` names the tables. A list parameter is a table
-only where ``tables`` names it.
+only where ``tables`` names it. A request gives every table, ``[]`` for one
+without rows, so that no request leaves out a table by mistake.
 
 Two forms exist, related by a one-way projection:
 
@@ -468,6 +469,8 @@ def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
             problems.append(f'{name}: not a parameter of {spec.name}')
         elif get_origin(field.annotation) is not list:
             problems.append(f'{name}: a table is a list parameter')
+        elif not field.is_required():
+            problems.append(f'{name}: a table has no default')
     return problems
 
 

@@ -102,7 +102,6 @@ class Reduction(BaseModel):
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: SampleFile
-    can: CanFile | None = None
     beam_centre: CentreArray | None = None
     normalization: Normalization | None = None
 
@@ -116,9 +115,12 @@ IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams)
 
 
 def iofq(params: IofQParams) -> IofQOutputs:
+    return _reduce(params, _counts(params.sample))
+
+
+def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
+    """``IOFQ`` of the given counts, which may differ from the sample's."""
     reduction = params.reduction
-    can = 0.0 if params.can is None else _counts(params.can)
-    counts = _counts(params.sample) - can
     masked = np.where(counts < reduction.threshold, 0.0, counts)
     centre = params.beam_centre
     reduced = masked - (0.0 if centre is None else centre.value)
@@ -130,6 +132,17 @@ def iofq(params: IofQParams) -> IofQOutputs:
     )
 
 
+class IofQCanParams(IofQParams):
+    can: CanFile
+
+
+IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
+
+
+def iofq_can(params: IofQCanParams) -> IofQOutputs:
+    return _reduce(params, _counts(params.sample) - _counts(params.can))
+
+
 class ReductionV2(BaseModel):
     bins: int = 4
     mask_below: float = 0.0
@@ -138,7 +151,6 @@ class ReductionV2(BaseModel):
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: SampleFile
-    can: CanFile | None = None
     beam_centre: CentreArray | None = None
     normalization: Normalization | None = None
 
@@ -510,7 +522,7 @@ class SampleRun(Data):
 class CentredParams(Data):
     centre: Centre
     sample: list[SampleRun] = Field(min_length=1)
-    can: list[CanFile | None] = Field(default_factory=list)
+    can: list[CanFile] = Field(min_length=1)
 
 
 Centred = NewType('Centred', sc.Variable)
@@ -546,6 +558,7 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
     for binding in [
         StagedFunction(IOFQ, iofq),
         function_binding(IOFQ_V2, iofq_v2),
+        function_binding(IOFQ_CAN, iofq_can),
         function_binding(BEAM_CENTRE, beam_centre),
         StagedFunction(VANADIUM, vanadium),
         summing(NORMALIZE, normalize),

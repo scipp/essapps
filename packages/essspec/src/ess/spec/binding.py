@@ -118,8 +118,9 @@ class Driver[O: BaseModel](Protocol):
     - :meth:`outputs` may share memory with what the driver holds; the
       caller reads them before the next push.
     - An output that the spec declares optional may be ``None``.
-    - A driver may refuse a state, such as one with no can row yet, by
-      raising in :meth:`outputs`; later pushes may make the state valid.
+    - A driver may refuse a state, such as one whose runs it cannot
+      combine yet, by raising in :meth:`outputs`; later pushes may make the
+      state valid.
 
     A push that raises stops the accumulator, since the driver may hold part
     of its rows.
