@@ -41,7 +41,7 @@ Automatic reduction is assumed to give one I(Q) per run, with merging of runs a 
 - Automatic reduction gives one I(Q) per run. Merging runs is a later, manual step: a person judges which runs to merge and enters them in a batch-reduction table, so all runs of a merged sample exist before its reduction starts. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
 - One beam centre serves a series of samples, for example from a sample changer, and is found again when the sample environment changes. *Simon, 2026-10-05; ask the LoKI instrument scientist.*
 - One LoKI reduction takes seconds and needs little memory; time grows with the number and length of the runs combined. *Simon, 2026-10-05; measure on real LoKI files once they exist.*
-- Each sample needs its own thickness for absolute scale; esssans has none today. *ISIS batch rows carry `sample_thickness`; ask the LoKI instrument scientist.*
+- Each sample needs its own thickness for absolute scale; esssans has none today. It is one value per sample, the same for every run summed for that sample, and comes with the runs' data or from a table a person fills before the reduction. *ISIS batch rows carry `sample_thickness`; Simon, 2026-10-15; ask the LoKI instrument scientist.*
 - Results are histograms; events are not kept to bin again in Q. *LoKI notebooks set `ReturnEvents = False`, ISIS notebooks keep events; ask the LoKI instrument scientist.*
 
 ## Open

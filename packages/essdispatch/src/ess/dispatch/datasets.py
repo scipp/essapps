@@ -61,7 +61,7 @@ class DatasetSource(Protocol):
     """
     Which datasets exist, and what they hold.
 
-    A backend has one. It resolves names and reads datasets through it, and
+    A backend has one. It resolves names and finds files through it, and
     answers through it the queries of its clients: listing datasets, waiting
     for new ones, and reading their metadata. A client sees only the datasets
     its proposal may read. Tests use a fake (``testing.FakeDatasets``).
@@ -71,8 +71,11 @@ class DatasetSource(Protocol):
         """The identity of the named dataset; raises ``KeyError`` if unknown."""
         ...
 
-    def read(self, ref: DatasetRef) -> Any:
-        """The dataset's content, in the form workflows take."""
+    def path(self, ref: DatasetRef) -> Path:
+        """
+        A local path to the dataset's file, for a workflow to read; raises
+        ``OSError`` if the file cannot be had.
+        """
         ...
 
     def metadata(self, ref: DatasetRef) -> dict[str, Any]:

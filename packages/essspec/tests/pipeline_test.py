@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-import functools
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, NewType
 
 import numpy as np
@@ -13,176 +13,18 @@ from ess.spec import DriverBinding, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
-
-def _spec(name: str, params: type[BaseModel], outputs: type[BaseModel]) -> WorkflowSpec:
-    return WorkflowSpec(
-        name=name,
-        version=1,
-        title=name,
-        description=name,
-        params=params,
-        outputs=outputs,
-    )
+# A toy SANS reduction of a sample run and a can run, each a file of counts. The
+# pipeline sets each field under its type as written, such as ``CanFile``.
+# ``IofQDriver`` sums the numerator and the denominator of each table's runs,
+# and computes the outputs from the sums.
 
 
-Loaded = NewType('Loaded', float)
-Offset = NewType('Offset', float)
-Shifted = NewType('Shifted', float)
+class Reduction(BaseModel):
+    bins: int = 2
 
 
-def shift(loaded: Loaded, offset: Offset) -> Shifted:
-    return Shifted(loaded + offset)
-
-
-class Loading(BaseModel):
-    loaded: float
-
-
-class Shift(BaseModel):
-    offset: float = 0.25
-
-
-class ShiftParams(BaseModel):
-    run: Loading
-    shift: Shift | None = Field(default_factory=Shift)
-
-
-class Value(BaseModel):
-    value: float
-
-
-SHIFT = _spec('shift', ShiftParams, Value)
-
-
-@pytest.fixture
-def binding() -> PipelineBinding:
-    return PipelineBinding(
-        SHIFT,
-        sciline.Pipeline([shift]),
-        params={'run.loaded': Loaded, 'shift.offset': Offset},
-        outputs={'value': Shifted},
-    )
-
-
-def test_a_plain_request_returns_the_outputs_by_field_name(
-    binding: PipelineBinding,
-) -> None:
-    values = {'run': {'loaded': 10.0}, 'shift': {'offset': 0.5}}
-    assert binding.compute(values) == {'value': 10.5}
-
-
-def test_a_parameter_left_out_takes_the_specs_default(
-    binding: PipelineBinding,
-) -> None:
-    assert binding.compute({'run': {'loaded': 10.0}}) == {'value': 10.25}
-    staged = binding.make_stage({}, ('run',))
-    assert staged({'run': {'loaded': 10.0}}) == {'value': 10.25}
-
-
-def test_a_stage_with_a_blank_group_gives_the_plain_requests_outputs(
-    binding: PipelineBinding,
-) -> None:
-    plain = binding.compute({'run': {'loaded': 10.0}, 'shift': {'offset': 0.5}})
-    staged = binding.make_stage({'run': {'loaded': 10.0}}, ('shift',))
-    assert staged({'shift': {'offset': 0.5}}) == plain
-
-
-def test_a_group_mapped_as_a_whole_sets_its_values() -> None:
-    Settings = NewType('Settings', dict)
-
-    def from_settings(settings: Settings) -> Offset:
-        return Offset(settings['offset'])
-
-    binding = PipelineBinding(
-        SHIFT,
-        sciline.Pipeline([shift, from_settings]),
-        params={'run.loaded': Loaded, 'shift': Settings},
-        outputs={'value': Shifted},
-    )
-    values = {'run': {'loaded': 10.0}, 'shift': {'offset': 0.5}}
-    assert binding.compute(values) == {'value': 10.5}
-
-
-def test_an_optional_group_mapped_by_paths_sets_its_keys_to_none() -> None:
-    def shift_or_not(loaded: Loaded, offset: Offset) -> Shifted:
-        return Shifted(loaded + (offset or 0.0))
-
-    binding = PipelineBinding(
-        SHIFT,
-        sciline.Pipeline([shift_or_not]),
-        params={'run.loaded': Loaded, 'shift.offset': Offset},
-        outputs={'value': Shifted},
-    )
-    staged = binding.make_stage({'run': {'loaded': 10.0}}, ('shift',))
-
-    assert binding.compute({'run': {'loaded': 10.0}, 'shift': None}) == {'value': 10.0}
-    assert staged({'shift': None}) == {'value': 10.0}
-    assert staged({'shift': {'offset': 0.5}}) == {'value': 10.5}
-
-
-class RunsParams(BaseModel):
-    runs: list[Loading]
-
-
-def test_a_table_mapped_as_a_whole_sets_its_key_to_the_rows() -> None:
-    Runs = NewType('Runs', list)
-
-    def total(runs: Runs) -> Shifted:
-        return Shifted(sum(run['loaded'] for run in runs))
-
-    binding = PipelineBinding(
-        _spec('runs', RunsParams, Value),
-        sciline.Pipeline([total]),
-        params={'runs': Runs},
-        outputs={'value': Shifted},
-    )
-    rows = [{'loaded': 1.0}, {'loaded': 2.0}]
-    assert binding.compute({'runs': rows}) == {'value': 3.0}
-
-
-@pytest.mark.parametrize(
-    ('params', 'outputs', 'reason'),
-    [
-        ({'shift': Offset, 'shift.offset': Offset}, {'value': Shifted}, 'as a whole'),
-        ({'speed': Offset}, {'value': Shifted}, r"\['speed'\]: not parameters"),
-        ({'run.loaded': Loaded}, {'other': Shifted}, r"\['other'\]: not outputs"),
-        ({'run.loaded': Loaded}, {}, r"\['value'\]: outputs of shift not mapped"),
-    ],
-)
-def test_a_mapping_that_does_not_fit_the_spec_is_refused(
-    params: dict[str, Any], outputs: dict[str, Any], reason: str
-) -> None:
-    with pytest.raises(ValueError, match=reason):
-        PipelineBinding(
-            SHIFT, sciline.Pipeline([shift]), params=params, outputs=outputs
-        )
-
-
-@pytest.mark.parametrize(
-    ('fixed', 'blanks', 'reason'),
-    [
-        ({'speed': 2.0}, ('run',), r"\['speed'\]: not parameters of shift"),
-        ({}, ('shift',), r"\['run'\]: neither fixed nor blank"),
-        ({'run': {'loaded': 1.0}}, ('run',), r"\['run'\]: both fixed and blank"),
-        ({'run': {'loaded': 10.0, 'speed': 2.0}}, (), r"no sciline key.*run.speed"),
-    ],
-)
-def test_a_stage_refuses_values_that_do_not_fit(
-    binding: PipelineBinding,
-    fixed: dict[str, Any],
-    blanks: tuple[str, ...],
-    reason: str,
-) -> None:
-    with pytest.raises(ValueError, match=reason):
-        binding.make_stage(fixed, blanks)
-
-
-# A toy SANS reduction: a pipeline of one sample run and one can run, and a
-# driver over the same pipeline that sums the runs of each table.
-
-SampleFile = NewType('SampleFile', list)
-CanFile = NewType('CanFile', list)
-Bins = NewType('Bins', int)
+SampleFile = NewType('SampleFile', Path)
+CanFile = NewType('CanFile', Path)
 SampleCounts = NewType('SampleCounts', np.ndarray)
 CanCounts = NewType('CanCounts', np.ndarray)
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -190,192 +32,408 @@ SampleDenominator = NewType('SampleDenominator', np.ndarray)
 CanNumerator = NewType('CanNumerator', np.ndarray)
 CanDenominator = NewType('CanDenominator', np.ndarray)
 SampleIofQ = NewType('SampleIofQ', np.ndarray)
+CanIofQ = NewType('CanIofQ', np.ndarray)
 IofQ = NewType('IofQ', np.ndarray)
 
 
-class Run(BaseModel):
-    file: list[float]
-
-
-class Reduction(BaseModel):
-    bins: int = 2
-
-
 class IofQParams(BaseModel):
-    sample: Run
-    can: Run
     reduction: Reduction = Field(default_factory=Reduction)
+    sample: SampleFile
+    can: CanFile
 
 
-class MultiIofQParams(BaseModel):
-    sample: list[Run]
-    can: list[Run]
+class IofQMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
+    sample: list[SampleFile] = Field(min_length=1)
+    can: list[CanFile] = Field(min_length=1)
 
 
-class IofQOutputs(BaseModel):
-    sample_iofq: Any
-    iofq: Any
+class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
+    iofq: IofQ
+    can_iofq: CanIofQ
 
 
-IOFQ = _spec('iofq', IofQParams, IofQOutputs)
-IOFQ_MULTI = _spec('iofq-multi', MultiIofQParams, IofQOutputs)
-OUTPUTS = {'sample_iofq': SampleIofQ, 'iofq': IofQ}
+def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
+    return WorkflowSpec(name=name, version=1, title=name, description=name, **fields)
+
+
+IOFQ = _spec('iofq', params=IofQParams, outputs=IofQOutputs)
+IOFQ_MULTI = _spec(
+    'iofq-multi', params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can')
+)
+
+
+def sample_numerator(counts: SampleCounts, reduction: Reduction) -> SampleNumerator:
+    return SampleNumerator(counts.reshape(reduction.bins, -1).sum(axis=1))
+
+
+def sample_denominator(counts: SampleCounts) -> SampleDenominator:
+    """An array of one element, so that adding into a held value shows."""
+    return SampleDenominator(counts.sum(keepdims=True))
+
+
+def can_numerator(counts: CanCounts, reduction: Reduction) -> CanNumerator:
+    return CanNumerator(counts.reshape(reduction.bins, -1).sum(axis=1))
+
+
+def can_denominator(counts: CanCounts) -> CanDenominator:
+    return CanDenominator(counts.sum(keepdims=True))
+
+
+def sample_iofq(num: SampleNumerator, den: SampleDenominator) -> SampleIofQ:
+    return SampleIofQ(num / den)
+
+
+def can_iofq(num: CanNumerator, den: CanDenominator) -> CanIofQ:
+    return CanIofQ(num / den)
+
+
+def subtract_can(sample: SampleIofQ, can: CanIofQ) -> IofQ:
+    return IofQ(sample - can)
+
+
+MakePipeline = Callable[[Mapping[str, Any]], sciline.Pipeline]
 
 
 @pytest.fixture
-def loaded() -> list[list[float]]:
+def loaded() -> list[Path]:
     return []
 
 
 @pytest.fixture
-def sans(loaded: list[list[float]]) -> sciline.Pipeline:
-    """
-    The denominators are arrays of one element, so that adding into a value
-    that a stage holds would change the next call.
-    """
+def make_pipeline(loaded: list[Path]) -> MakePipeline:
+    def load_sample(path: SampleFile) -> SampleCounts:
+        loaded.append(path)
+        return SampleCounts(np.loadtxt(path))
 
-    def load_sample(run: SampleFile) -> SampleCounts:
-        loaded.append(run)
-        return SampleCounts(np.asarray(run, dtype=float))
+    def load_can(path: CanFile) -> CanCounts:
+        loaded.append(path)
+        return CanCounts(np.loadtxt(path))
 
-    def load_can(run: CanFile) -> CanCounts:
-        loaded.append(run)
-        return CanCounts(np.asarray(run, dtype=float))
+    def make(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        sample = [load_sample, sample_numerator, sample_denominator, sample_iofq]
+        can = [load_can, can_numerator, can_denominator, can_iofq]
+        return sciline.Pipeline([*sample, *can, subtract_can])
 
-    def sample_numerator(counts: SampleCounts, bins: Bins) -> SampleNumerator:
-        return SampleNumerator(counts.reshape(bins, -1).sum(axis=1))
+    return make
 
-    def sample_denominator(counts: SampleCounts) -> SampleDenominator:
-        return SampleDenominator(counts.sum(keepdims=True))
 
-    def can_numerator(counts: CanCounts, bins: Bins) -> CanNumerator:
-        return CanNumerator(counts.reshape(bins, -1).sum(axis=1))
-
-    def can_denominator(counts: CanCounts) -> CanDenominator:
-        return CanDenominator(counts.sum(keepdims=True))
-
-    def sample_iofq(num: SampleNumerator, den: SampleDenominator) -> SampleIofQ:
-        return SampleIofQ(num / den)
-
-    def iofq(sample: SampleIofQ, num: CanNumerator, den: CanDenominator) -> IofQ:
-        return IofQ(sample - num / den)
-
-    providers = [load_sample, load_can, sample_numerator, sample_denominator]
-    providers += [can_numerator, can_denominator, sample_iofq, iofq]
-    return sciline.Pipeline(providers)
+SAMPLE_PARTS = (SampleNumerator, SampleDenominator)
+CAN_PARTS = (CanNumerator, CanDenominator)
 
 
 class IofQDriver:
     """
-    Sums the numerator and the denominator of each table's runs, and computes
-    the outputs from the sums; refuses a state without a sample and a can run.
+    A driver of ``IOFQ_MULTI``, made from the pipeline and keys of the
+    single-run binding; refuses a state without a sample run or a can run.
     """
 
-    def __init__(self, pipeline: sciline.Pipeline, fixed: Mapping[str, Any]) -> None:
-        wf = pipeline.copy()
-        wf[Bins] = fixed['reduction']['bins']
-        parts = {
-            'sample': (SampleFile, (SampleNumerator, SampleDenominator)),
-            'can': (CanFile, (CanNumerator, CanDenominator)),
-        }
+    def __init__(self, single: PipelineBinding, fixed: Mapping[str, Any]) -> None:
+        keys = single.keys
+        pipeline = single.pipeline({'reduction': fixed['reduction']})
         self._contribute = {
-            table: (key, sciline.Stage(wf, inputs=(key,), outputs=summed))
-            for table, (key, summed) in parts.items()
+            table: (
+                keys[table],
+                sciline.Stage(pipeline, inputs=(keys[table],), outputs=parts),
+            )
+            for table, parts in (('sample', SAMPLE_PARTS), ('can', CAN_PARTS))
         }
-        summed = [key for _, keys in parts.values() for key in keys]
+        self._outputs = (keys['iofq'], keys['can_iofq'])
         self._finalize = sciline.Stage(
-            wf, inputs=summed, outputs=tuple(OUTPUTS.values())
+            pipeline, inputs=SAMPLE_PARTS + CAN_PARTS, outputs=self._outputs
         )
         self._sums: dict[Any, np.ndarray] = {}
 
-    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
-        for row in rows:
-            for k, part in stage.compute({key: row['file']}).items():
+        for path in rows:
+            for k, part in stage.compute({key: path}).items():
                 self._sums[k] = self._sums[k] + part if k in self._sums else part
 
-    def outputs(self) -> Mapping[str, Any]:
+    def outputs(self) -> IofQOutputs:
         results = self._finalize.compute(self._sums)
-        return {name: results[key] for name, key in OUTPUTS.items()}
+        iofq, can_iofq = self._outputs
+        return IofQOutputs(iofq=results[iofq], can_iofq=results[can_iofq])
 
 
 @pytest.fixture
-def make_driver(sans: sciline.Pipeline) -> functools.partial[IofQDriver]:
-    return functools.partial(IofQDriver, sans)
+def single(make_pipeline: MakePipeline) -> PipelineBinding:
+    return PipelineBinding(IOFQ, make_pipeline)
 
 
 @pytest.fixture
-def multi(make_driver: functools.partial[IofQDriver]) -> DriverBinding:
-    return DriverBinding(IOFQ_MULTI, make_driver)
-
-
-@pytest.fixture
-def single(sans: sciline.Pipeline) -> PipelineBinding:
-    params = {'sample.file': SampleFile, 'can.file': CanFile, 'reduction.bins': Bins}
-    return PipelineBinding(IOFQ, sans, params=params, outputs=OUTPUTS)
+def multi(single: PipelineBinding) -> DriverBinding:
+    return DriverBinding(IOFQ_MULTI, lambda fixed: IofQDriver(single, fixed))
 
 
 SAMPLES = [[1.0, 3.0, 2.0, 6.0], [2.0, 2.0, 0.0, 4.0]]
 CANS = [[1.0, 1.0, 1.0, 1.0], [0.0, 2.0, 2.0, 0.0]]
-ROWS = {
-    'sample': [{'file': run} for run in SAMPLES],
-    'can': [{'file': run} for run in CANS],
-}
 
 
-def _reduction(bins: int) -> dict[str, dict[str, int]]:
-    return {'reduction': {'bins': bins}}
+def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
+    path = tmp_path / f'{name}.txt'
+    np.savetxt(path, counts)
+    return path
+
+
+@pytest.fixture
+def samples(tmp_path: Path) -> list[Path]:
+    return [write(tmp_path, f'sample{i}', c) for i, c in enumerate(SAMPLES)]
+
+
+@pytest.fixture
+def cans(tmp_path: Path) -> list[Path]:
+    return [write(tmp_path, f'can{i}', c) for i, c in enumerate(CANS)]
+
+
+def reduction(bins: int) -> dict[str, Reduction]:
+    return {'reduction': Reduction(bins=bins)}
+
+
+def iofq(counts: list[float], bins: int = 2) -> np.ndarray:
+    return np.reshape(counts, (bins, -1)).sum(axis=1) / np.sum(counts)
+
+
+def test_a_plain_request_computes_the_outputs_model(
+    single: PipelineBinding, samples: list[Path], cans: list[Path]
+) -> None:
+    outputs = single.compute(IofQParams(sample=samples[0], can=cans[0]))
+    assert isinstance(outputs, IofQOutputs)
+    np.testing.assert_allclose(outputs.iofq, iofq(SAMPLES[0]) - iofq(CANS[0]))
+    np.testing.assert_allclose(outputs.can_iofq, iofq(CANS[0]))
+
+
+def test_make_pipeline_gets_the_fixed_values_with_defaults_and_no_blank(
+    make_pipeline: MakePipeline, samples: list[Path]
+) -> None:
+    made: list[Mapping[str, Any]] = []
+
+    def recording(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        made.append(fixed)
+        return make_pipeline(fixed)
+
+    PipelineBinding(IOFQ, recording).make_stage({'sample': samples[0]}, ('can',))
+    assert made == [{'sample': samples[0], 'reduction': Reduction()}]
+
+
+def test_a_stage_loads_each_run_once(
+    single: PipelineBinding, samples: list[Path], cans: list[Path], loaded: list[Path]
+) -> None:
+    tune = single.make_stage({'sample': samples[0], 'can': cans[0]}, ('reduction',))
+    for bins in (1, 2, 4):
+        np.testing.assert_allclose(
+            tune(reduction(bins)).iofq, iofq(SAMPLES[0], bins) - iofq(CANS[0], bins)
+        )
+    assert sorted(loaded) == sorted([samples[0], cans[0]])
+
+
+def test_a_stage_call_takes_the_blanks_exactly(
+    single: PipelineBinding, samples: list[Path], cans: list[Path]
+) -> None:
+    tune = single.make_stage({'sample': samples[0], 'can': cans[0]}, ('reduction',))
+    with pytest.raises(ValueError, match=r"give the blanks \['reduction'\]"):
+        tune({})
+
+
+def test_a_stage_refuses_values_that_do_not_fit(single: PipelineBinding) -> None:
+    with pytest.raises(
+        ValueError, match=r"\['sample', 'can'\]: required parameters, not given"
+    ):
+        single.make_stage({}, ('reduction',))
 
 
 def test_the_bindings_keep_the_symmetries(
     single: PipelineBinding,
     multi: DriverBinding,
-    make_driver: functools.partial[IofQDriver],
+    samples: list[Path],
+    cans: list[Path],
 ) -> None:
-    runs = {'sample': {'file': SAMPLES[0]}, 'can': {'file': CANS[0]}}
-    check_one_row(
-        single,
-        multi,
-        {**runs, **_reduction(2)},
-        {'sample': ROWS['sample'][:1], 'can': ROWS['can'][:1], **_reduction(2)},
-    )
-    check_caching(single, runs, [_reduction(2), _reduction(1), _reduction(2)])
-    check_arrival_and_order(make_driver, _reduction(2), ROWS)
+    check_one_row(single, multi, IofQParams(sample=samples[0], can=cans[0]))
+    runs = {'sample': samples[0], 'can': cans[0]}
+    check_caching(single, runs, [reduction(2), reduction(1), reduction(2)])
+    tables = {'sample': samples, 'can': cans}
+    check_arrival_and_order(multi.make_driver, reduction(2), tables)
 
 
 def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
-    single: PipelineBinding, multi: DriverBinding
+    single: PipelineBinding,
+    multi: DriverBinding,
+    samples: list[Path],
+    cans: list[Path],
+    tmp_path: Path,
 ) -> None:
-    summed = {
-        'sample': {'file': list(np.sum(SAMPLES, axis=0))},
-        'can': {'file': list(np.sum(CANS, axis=0))},
-        **_reduction(2),
-    }
-    np.testing.assert_allclose(
-        multi.compute({**ROWS, **_reduction(2)})['iofq'],
-        single.compute(summed)['iofq'],
+    summed = IofQParams(
+        sample=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0)),
+        can=write(tmp_path, 'cans', np.sum(CANS, axis=0)),
     )
-
-
-def test_a_stage_loads_each_run_once(
-    single: PipelineBinding, loaded: list[list[float]]
-) -> None:
-    tune = single.make_stage(
-        {'sample': {'file': SAMPLES[0]}, 'can': {'file': CANS[0]}}, ('reduction',)
-    )
-    for bins in (1, 2, 4):
-        tune(_reduction(bins))
-
-    assert sorted(loaded) == sorted([SAMPLES[0], CANS[0]])
+    rows = IOFQ_MULTI.params(sample=samples, can=cans)
+    np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)
 
 
 def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
-    multi: DriverBinding, loaded: list[list[float]]
+    multi: DriverBinding, samples: list[Path], cans: list[Path], loaded: list[Path]
 ) -> None:
-    driver = multi.make_accumulator({'can': ROWS['can'], **_reduction(2)}, ('sample',))
-    for row in ROWS['sample']:
-        driver.push('sample', [row])
+    driver = multi.make_accumulator({'can': cans, **reduction(2)}, ('sample',))
+    for sample in samples:
+        driver.push('sample', [sample])
         driver.outputs()
+    assert loaded == cans + samples
 
-    assert loaded == CANS + SAMPLES
+
+def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
+    assert dict(single.keys) == {
+        'reduction': Reduction,
+        'sample': SampleFile,
+        'can': CanFile,
+        'iofq': IofQ,
+        'can_iofq': CanIofQ,
+    }
+    with pytest.raises(TypeError):
+        single.keys['iofq'] = SampleIofQ  # type: ignore[index]
+
+
+def test_pipeline_sets_each_fixed_value_at_its_key(
+    single: PipelineBinding, samples: list[Path], cans: list[Path]
+) -> None:
+    pipeline = single.pipeline({**reduction(4), 'sample': samples[0], 'can': cans[0]})
+    np.testing.assert_allclose(
+        pipeline.compute(IofQ), iofq(SAMPLES[0], 4) - iofq(CANS[0], 4)
+    )
+    with pytest.raises(ValueError, match=r"\['iofq'\]: not parameters of"):
+        single.pipeline({'iofq': None})
+
+
+# Keys of a workflow's own: the pipeline reads a ``Filename`` and computes a
+# ``Total``, where the spec has a ``SampleFile`` and a ``SampleTotal``.
+
+Filename = NewType('Filename', Path)
+Counts = NewType('Counts', np.ndarray)
+Total = NewType('Total', float)
+SampleTotal = NewType('SampleTotal', float)
+SampleMean = NewType('SampleMean', float)
+
+
+class TotalMultiParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: list[SampleFile] = Field(min_length=1)
+
+
+class TotalOutputs(BaseModel):
+    total: SampleTotal
+
+
+TOTAL = _spec('total', params=IofQParams, outputs=TotalOutputs)
+TOTAL_MULTI = _spec(
+    'total-multi', params=TotalMultiParams, outputs=TotalOutputs, tables=('sample',)
+)
+
+
+def load(filename: Filename) -> Counts:
+    return Counts(np.loadtxt(filename))
+
+
+def total(counts: Counts, reduction: Reduction) -> Total:
+    return Total(reduction.bins * counts.sum())
+
+
+def test_keys_name_keys_of_the_workflows_own(
+    samples: list[Path], cans: list[Path]
+) -> None:
+    binding = PipelineBinding(
+        TOTAL,
+        lambda _: sciline.Pipeline([load, total]),
+        keys={'sample': Filename, 'total': Total},
+    )
+    outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
+    assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
+
+
+class TotalAndMeanOutputs(BaseModel):
+    total: SampleTotal
+    mean: SampleMean | None = None
+
+
+def mean(counts: Counts) -> SampleMean:
+    return SampleMean(counts.mean())
+
+
+@pytest.mark.parametrize(
+    ('providers', 'expected_mean'), [([load, total], None), ([load, total, mean], 3.0)]
+)
+def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
+    samples: list[Path],
+    cans: list[Path],
+    providers: list[Callable[..., Any]],
+    expected_mean: float | None,
+) -> None:
+    spec = _spec('total-and-mean', params=IofQParams, outputs=TotalAndMeanOutputs)
+    binding = PipelineBinding(
+        spec,
+        lambda _: sciline.Pipeline(providers),
+        keys={'sample': Filename, 'total': Total},
+    )
+    outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
+    assert outputs == TotalAndMeanOutputs(total=2 * 12.0, mean=expected_mean)
+
+
+def test_a_table_sets_the_key_of_its_type_to_its_list(samples: list[Path]) -> None:
+    def load_all(paths: list[SampleFile]) -> Counts:
+        return Counts(sum(np.loadtxt(path) for path in paths))
+
+    binding = PipelineBinding(
+        TOTAL_MULTI,
+        lambda _: sciline.Pipeline([load_all, total]),
+        keys={'total': Total},
+    )
+    expected = TotalOutputs(total=2 * np.sum(SAMPLES))
+    params = TOTAL_MULTI.params(sample=samples)
+    assert binding.compute(params) == expected
+    stage = binding.make_stage({}, ('sample',))
+    assert stage({'sample': samples}) == expected
+    check_caching(binding, {}, [{'sample': samples}, {'sample': samples[:1]}])
+
+
+def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -> None:
+    def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        counts = sum(load(path) for path in fixed['sample'])
+        return sciline.Pipeline([total], params={Counts: counts})
+
+    binding = PipelineBinding(
+        TOTAL_MULTI, make_pipeline, keys={'sample': None, 'total': Total}
+    )
+    params = TOTAL_MULTI.params(sample=samples)
+    assert binding.compute(params) == TotalOutputs(total=2 * np.sum(SAMPLES))
+    with pytest.raises(ValueError, match=r"\['sample'\]: without a key, cannot be"):
+        binding.make_stage({}, ('sample',))
+
+
+@pytest.mark.parametrize(
+    ('keys', 'reason'),
+    [
+        ({'speed': Total}, r"\['speed'\]: not fields of total"),
+        ({'total': None}, r"\['total'\]: an output is computed as a key"),
+        ({'sample': CanFile}, 'total: sample and can: two fields have one key'),
+        (
+            {'sample': Filename, 'total': Filename},
+            'total: sample and total: two fields have one key',
+        ),
+    ],
+)
+def test_keys_that_do_not_fit_the_spec_are_refused(
+    keys: dict[str, Any], reason: str
+) -> None:
+    with pytest.raises(ValueError, match=reason):
+        PipelineBinding(TOTAL, lambda _: sciline.Pipeline([load, total]), keys=keys)
+
+
+class TwoFiles(BaseModel):
+    first: SampleFile
+    second: SampleFile
+
+
+def test_two_parameters_of_one_type_need_a_key_each() -> None:
+    spec = _spec('twins', params=TwoFiles, outputs=TotalOutputs)
+    with pytest.raises(
+        ValueError, match='twins: first and second: two fields have one key'
+    ):
+        PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))

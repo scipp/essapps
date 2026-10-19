@@ -6,20 +6,11 @@ from .backend import Backend, ClientEnded
 from .batch import LastBefore, Lookup, apply
 from .client import Accumulator, Client, Datasets, Provenance, Stage, local
 from .datasets import DatasetSource, Selector, dataset
-from .records import (
-    BLANK,
-    Record,
-    Request,
-    SpecId,
-    Status,
-    SubmitError,
-    Template,
-)
+from .records import Record, Request, SpecId, Status, SubmitError, Template
 from .rules import Rule, RuleStatus, TriggerLoop
 from .store import Store
 
 __all__ = [
-    'BLANK',
     'Accumulator',
     'Backend',
     'Client',

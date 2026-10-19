@@ -35,7 +35,7 @@ Results go to SciCat and must say what produced them, but the framework must not
 - One reduction workflow is applied to many runs, with most parameters shared and some set per run or per sample. *Simon, 2026-09-04*
 - A batch can hold hundreds of independent samples, each possibly a sum of runs or angles; samples are reduced independently and never merged. *Simon, 2026-10-02*
 - SANS and reflectometry measure hundreds of runs or samples per hour, and serving their batch reduction is essential. *Simon, 2026-10-02*
-- Parameters may differ per run within one sum, and the framework must not require that summed runs be reduced alike. *Simon, 2026-09-28*
+- The runs of one sum are reduced with one set of settings. A value that differs per run, such as a motor position, comes with the run's data; a value the file lacks or has wrong is given next to the run. *Simon, 2026-10-15*
 - Users must find the results of a batch reduction they started the day before. *Simon, 2026-10-05*
 
 ### Automatically

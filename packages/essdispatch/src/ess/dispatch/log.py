@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The backend's history: an append-only log of what ran, with which inputs,
+The backend's history: an append-only log of what ran, with which params,
 and what came of it.
 
 There are six events: a submission, a record that finished, an accumulator
@@ -11,8 +11,8 @@ part of that event, and its write is the record's: the record finishes once
 the outputs are written, so no write event follows. A submission that read
 an accumulator, and a freeze, hold a
 record of the plain request of the state read, as the accumulator and its
-number of pushes, before the records that read it; the views list its rows
-when it is read. The backend's views, such as the records by ID, are built by
+number of pushes, before the records that read it; the views list its
+request when it is read. The backend's views, such as the records by ID, are built by
 applying the events in order, when they are appended and again when a backend
 starts from an existing log.
 
@@ -30,7 +30,6 @@ all of it or none of it.
 
 from __future__ import annotations
 
-import dataclasses
 import fcntl
 import os
 from collections.abc import Iterator
@@ -39,12 +38,12 @@ from io import FileIO
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter, ValidationError
 
-from .records import Request, Row, Status, Template, as_refs
+from .records import Params, Request, Status, Template, read_refs
 
 
-class NewRecord(BaseModel, frozen=True):
+class NewRecord(BaseModel, frozen=True, extra='forbid'):
     """
     One record of a submission, as the backend accepted it.
 
@@ -60,7 +59,7 @@ class NewRecord(BaseModel, frozen=True):
     persist: tuple[str, ...] = ()
 
 
-class NewStateRecord(BaseModel, frozen=True):
+class NewStateRecord(BaseModel, frozen=True, extra='forbid'):
     """
     The record of the plain request of an accumulator's state: the
     accumulator's template with each table filled by the rows of its first
@@ -74,7 +73,7 @@ class NewStateRecord(BaseModel, frozen=True):
     persist: tuple[str, ...] = ()
 
 
-class Submitted(BaseModel, frozen=True):
+class Submitted(BaseModel, frozen=True, extra='forbid'):
     kind: Literal['submitted'] = 'submitted'
     time: datetime
     proposal: str
@@ -82,7 +81,7 @@ class Submitted(BaseModel, frozen=True):
     records: tuple[NewRecord | NewStateRecord, ...]
 
 
-class Finished(BaseModel, frozen=True):
+class Finished(BaseModel, frozen=True, extra='forbid'):
     """
     A record that finished: ``failure`` says why it failed, or why the
     backend cancelled it. ``omitted`` names the optional outputs that the
@@ -96,15 +95,16 @@ class Finished(BaseModel, frozen=True):
     omitted: tuple[str, ...] = ()
 
 
-class Opened(BaseModel, frozen=True):
+class Opened(BaseModel, frozen=True, extra='forbid'):
     """
     An accumulator that opened, with its template as the backend accepted it.
 
-    The template's blanks are the tables that the pushes fill. ``fixed`` holds
-    the template's other values, each typed by its field, defaults filled in:
-    the driver was made with them, and with the rows pushed they give
-    the plain request of a state. ``template`` holds the values as the client
-    gave them, names resolved, which the client gets back, as it does a
+    The template's blanks are the tables that the pushes fill. ``params``
+    holds the template's other values, defaults filled in, inline values in
+    JSON's types, and the blank tables, without rows: the driver was made
+    with the other values, and with the rows pushed they
+    give the plain request of a state. ``template`` holds the values as the
+    client gave them, names resolved, which the client gets back, as it does a
     stage's template.
     """
 
@@ -112,19 +112,21 @@ class Opened(BaseModel, frozen=True):
     accumulator: str
     proposal: str
     template: Template
-    fixed: dict[str, Any]
+    params: Params
 
 
-class Pushed(BaseModel, frozen=True):
-    """A push into an accumulator: rows of one table, in order."""
+class Pushed(BaseModel, frozen=True, extra='forbid'):
+    """
+    A push into an accumulator: rows of one or more tables, in ``params``
+    under the name of each, names resolved.
+    """
 
     kind: Literal['pushed'] = 'pushed'
     accumulator: str
-    table: str
-    rows: list[Row]
+    params: Annotated[dict[str, list[Any]], BeforeValidator(read_refs)]
 
 
-class Persist(BaseModel, frozen=True):
+class Persist(BaseModel, frozen=True, extra='forbid'):
     """
     A request to persist outputs of a completed or pending record, made after
     its submission.
@@ -135,7 +137,7 @@ class Persist(BaseModel, frozen=True):
     outputs: tuple[str, ...]
 
 
-class Written(BaseModel, frozen=True):
+class Written(BaseModel, frozen=True, extra='forbid'):
     """
     A write that ended, of outputs that a persist request named: ``failure``
     says why it failed, or is ``None``.
@@ -154,34 +156,23 @@ Event = Annotated[
 _event: TypeAdapter[Event] = TypeAdapter(Event)
 
 
-def _with_refs(event: Event) -> Event:
-    """The event with references in values read as references, not dicts."""
-    match event:
-        case Submitted():
-            records = tuple(
-                r.model_copy(
-                    update={
-                        'request': Request(r.request.spec, as_refs(r.request.params))
-                    }
-                )
-                if isinstance(r, NewRecord)
-                else r
-                for r in event.records
-            )
-            return event.model_copy(update={'records': records})
-        case Opened():
-            params = as_refs(event.template.params)
-            template = dataclasses.replace(event.template, params=params)
-            return event.model_copy(
-                update={'template': template, 'fixed': as_refs(event.fixed)}
-            )
-        case Pushed():
-            return event.model_copy(update={'rows': as_refs(event.rows)})
-    return event
+def _events(path: Path, lines: list[bytes]) -> list[Event]:
+    """
+    The events of ``lines`` of the log file ``path``. Raises ``ValueError``
+    naming the first line that is not an event of this format, such as one
+    with a field an event lacks, which validating would drop silently.
+    """
 
+    def read(number: int, line: bytes) -> Event:
+        try:
+            return _event.validate_json(line)
+        # A request refuses a field it lacks by its __init__, as a TypeError.
+        except (ValidationError, TypeError) as error:
+            raise ValueError(
+                f'{path}, line {number}: not an event of a log of this format: {error}'
+            ) from None
 
-def _parse(line: bytes) -> Event:
-    return _with_refs(_event.validate_json(line))
+    return [read(number, line) for number, line in enumerate(lines, start=1)]
 
 
 def _complete_lines(data: bytes) -> list[bytes]:
@@ -225,22 +216,24 @@ class Log:
     a file has one writer. The operating system lets go of the file when the
     process ends, so a log opened after a crash takes it over. The events
     already in the file are read first. A last line cut short, by a crash
-    while it was written, is dropped; any other line that is not an event
-    raises. A write that fails, for example on a full disk, leaves the file
-    as it was, so no later event follows a line cut short.
+    while it was written, is dropped; any other line that is not an event of
+    this format raises ``ValueError``. A write that fails, for example on a
+    full disk, leaves the file as it was, so no later event follows a line cut
+    short.
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self._file = None if path is None else _hold(path)
+        self._file: FileIO | None = None
         self._events: list[Event] = []
-        if self._file is not None:
+        if path is not None:
+            self._file = file = _hold(path)
             try:
-                self._file.seek(0)
-                lines = _complete_lines(self._file.readall())
-                self._file.truncate(sum(map(len, lines)))
-                self._events = [_parse(line) for line in lines]
+                file.seek(0)
+                lines = _complete_lines(file.readall())
+                file.truncate(sum(map(len, lines)))
+                self._events = _events(path, lines)
             except BaseException:
-                self._file.close()
+                file.close()
                 raise
 
     @staticmethod
@@ -251,7 +244,7 @@ class Log:
         A log may be writing the file meanwhile, so a last line cut short is
         left out, not dropped from the file.
         """
-        return [_parse(line) for line in _complete_lines(path.read_bytes())]
+        return _events(path, _complete_lines(path.read_bytes()))
 
     def close(self) -> None:
         """Let go of the file, if any; the log takes no more events."""
@@ -273,7 +266,7 @@ class Log:
         whether the event was just appended or read from a file.
         """
         line = _event.dump_json(event) + b'\n'
-        stored = _parse(line)
+        stored = _event.validate_json(line)
         if self._file is not None:
             _append_line(self._file, line)
         self._events.append(stored)

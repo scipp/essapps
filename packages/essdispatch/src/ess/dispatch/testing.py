@@ -1,37 +1,53 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Fakes for tests: a dataset source whose datasets a test makes appear, a store
-held in memory, and bindings over plain functions.
+Fakes for tests: a dataset source whose datasets a test makes appear as
+files, a store held in memory, and bindings over plain functions.
 """
 
 from __future__ import annotations
 
 import copy
 import functools
+import json
 import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec, table_fields
+from pydantic import BaseModel
+
+from ess.spec import DatasetRef, DriverBinding, StageCall, WorkflowSpec
+from ess.spec.binding import fixed_values
+from ess.spec.testing import instance
 
 from .datasets import Selector
+
+type Spec = WorkflowSpec[Any, Any]
+
+
+def read_dataset(path: Path) -> Any:
+    """The content of a dataset that :class:`FakeDatasets` wrote."""
+    return json.loads(path.read_text())
 
 
 class FakeDatasets:
     """
-    A dataset source held in memory.
+    A dataset source over files in ``directory``.
 
     A dataset is identified by its run number, or by its PID if it has one.
-    Its content is whatever the test gave to :meth:`measure`, and workflows
-    read it as is. A run measured again keeps its identity and its place in
-    the order of measurement.
+    :meth:`measure` writes its content, which must have a JSON form, to a
+    file of its own, which a workflow reads with :func:`read_dataset`. A run
+    measured again keeps its identity and its place in the order of
+    measurement, and its file is written again. A dataset is named by its
+    run, its PID, or its path.
     """
 
-    def __init__(self, proposal: str) -> None:
+    def __init__(self, proposal: str, directory: Path) -> None:
         self.proposal = proposal
-        self._content: dict[DatasetRef, Any] = {}
+        self._directory = directory
+        self._paths: dict[DatasetRef, Path] = {}
         self._metadata: dict[DatasetRef, dict[str, Any]] = {}
         self._corrupt: set[DatasetRef] = set()
         self._arrived = threading.Condition()
@@ -40,8 +56,10 @@ class FakeDatasets:
         """Make run ``run`` appear, or appear again, and return its identity."""
         pid = fields.get('pid')
         ref = DatasetRef(dataset=f'pid:{pid}' if pid else f'uuid:run-{run}')
+        path = self._directory / f'run-{run}.json'
+        path.write_text(json.dumps(content))
         with self._arrived:
-            self._content[ref] = content
+            self._paths[ref] = path
             self._metadata[ref] = {'proposal': self.proposal, 'run': run, **fields}
             self._arrived.notify_all()
         return ref
@@ -56,18 +74,19 @@ class FakeDatasets:
         self._metadata[ref] |= fields
 
     def resolve(self, name: DatasetRef) -> DatasetRef:
-        if name in self._content:
+        if name in self._paths:
             return name
         kind, _, value = name.dataset.partition(':')
         for ref, metadata in self._metadata.items():
-            if str(metadata.get(kind)) == value:
+            known = str(self._paths[ref]) if kind == 'path' else metadata.get(kind)
+            if str(known) == value:
                 return ref
         raise KeyError(name)
 
-    def read(self, ref: DatasetRef) -> Any:
+    def path(self, ref: DatasetRef) -> Path:
         if ref in self._corrupt:
             raise OSError('file signature not found')
-        return self._content[ref]
+        return self._paths[ref]
 
     def metadata(self, ref: DatasetRef) -> dict[str, Any]:
         return dict(self._metadata[ref])
@@ -124,66 +143,68 @@ class FakeStore:
 @dataclass
 class StagedFunction:
     """
-    A binding that makes stages, over a function that takes each parameter by
-    name and returns the outputs by name. A stage holds nothing: each call
-    calls the function. ``staged`` lists the blanks of each stage made, and
-    ``fail_next`` makes the next stage fail. Neither is guarded against
-    calls from several threads at once, which is fine for tests that read
-    them after the calls.
+    A binding that makes stages, over a function that takes an instance of
+    the spec's params model and returns one of its outputs model, as
+    ``function_binding`` takes. A stage holds nothing: each call calls the
+    function. ``staged`` lists the blanks of each stage made, and
+    ``fail_next`` makes the next stage fail. Neither is guarded against calls
+    from several threads at once, which is fine for tests that read them
+    after the calls.
     """
 
-    spec: WorkflowSpec[Any]
-    function: Callable[..., Mapping[str, Any]]
+    spec: Spec
+    function: Callable[[Any], BaseModel]
     staged: list[tuple[str, ...]] = field(default_factory=list)
     fail_next: bool = False
 
-    def compute(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self.function(**params)
+    def compute(self, params: Any) -> BaseModel:
+        return self.function(params)
 
     def make_stage(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
-    ) -> StageCall:
+    ) -> StageCall[BaseModel]:
         if self.fail_next:
             self.fail_next = False
             raise OSError('staging failed')
         self.staged.append(tuple(blanks))
-        return lambda values: self.function(**fixed, **values)
+        values = fixed_values(self.spec, fixed, blanks)
+        return lambda given: self.function(instance(self.spec, {**values, **given}))
 
 
 class KeptRows:
     """
-    A driver that keeps the rows pushed into each of ``tables``, and calls
-    ``function`` with them and the fixed values at each read.
+    A driver that keeps the rows pushed into each table of ``spec``, and at
+    each read calls ``function`` with an instance of the spec's params model,
+    of the fixed values and the rows so far.
     """
 
     def __init__(
         self,
-        function: Callable[..., Mapping[str, Any]],
-        tables: Sequence[str],
+        spec: Spec,
+        function: Callable[[Any], BaseModel],
         fixed: Mapping[str, Any],
     ) -> None:
+        self._spec = spec
         self._function = function
         self._fixed = fixed
-        self._rows: dict[str, list[Mapping[str, Any]]] = {t: [] for t in tables}
+        self._rows: dict[str, list[Any]] = {table: [] for table in spec.tables}
 
-    def push(self, table: str, rows: Sequence[Mapping[str, Any]]) -> None:
+    def push(self, table: str, rows: Sequence[Any]) -> None:
         self._rows[table].extend(rows)
 
-    def outputs(self) -> Mapping[str, Any]:
+    def outputs(self) -> BaseModel:
         rows = {t: list(r) for t, r in self._rows.items()}
-        return self._function(**self._fixed, **rows)
+        return self._function(instance(self._spec, {**self._fixed, **rows}))
 
 
-def kept_rows(
-    spec: WorkflowSpec[Any], function: Callable[..., Mapping[str, Any]]
-) -> DriverBinding:
+def kept_rows(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:
     """
     A ``DriverBinding`` whose drivers keep the rows (:class:`KeptRows`):
-    ``function`` takes each parameter by name, a table as a list of its rows.
+    ``function`` takes the params, as ``function_binding`` takes, each table
+    as lists of every row so far.
 
     A fake for tests that need an accumulator over a plain function, not a
     recommended driver: each read computes over every row again. A package
     writes its own driver, which decides how rows combine.
     """
-    tables = tuple(table_fields(spec.params))
-    return DriverBinding(spec, functools.partial(KeptRows, function, tables))
+    return DriverBinding(spec, functools.partial(KeptRows, spec, function))

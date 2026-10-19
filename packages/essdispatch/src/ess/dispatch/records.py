@@ -3,101 +3,28 @@
 """
 Requests and records: what a user asks for and what the backend made of it.
 
-Both are plain data. A request names a spec and parameter values; a record is
-the request with every value filled in, as the backend accepted it. A record
-never changes. Its status, which changes once from pending to finished, is
-asked of the client.
+Both are plain data. A request names a spec and its params by name, each an
+inline value or a reference; a record is the request with every value filled
+in, as the backend accepted it. A record never changes. Its status, which
+changes once from pending to finished, is asked of the client.
 """
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Callable, Collection
-from dataclasses import dataclass, field
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Annotated, Any
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    create_model,
-    field_validator,
-)
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 
-from ess.spec import (
-    AccumulatorRef,
-    DatasetRef,
-    OutputRef,
-    Ref,
-    WorkflowSpec,
-    as_ref,
-    walk_refs,
-)
+from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
+from ess.spec.refs import iter_refs, map_refs
 
 
 class SubmitError(ValueError):
     """A request that cannot run, refused before any record exists."""
-
-
-def validation_problems(
-    error: ValidationError, at: tuple[str | int, ...] = ()
-) -> list[str]:
-    """What a validation error finds wrong; the places are prefixed by ``at``."""
-    return [
-        f"{'.'.join(map(str, (*at, *e['loc']))) or 'params'}: {e['msg']}"
-        for e in error.errors()
-    ]
-
-
-def model_without(model: type[BaseModel], left_out: Collection[str]) -> type[BaseModel]:
-    """
-    ``model`` without the fields ``left_out`` and without its own validators,
-    which read whole requests; it validates each value of a template by its
-    own field and that field's validators.
-    """
-    fields: dict[str, Any] = {
-        f: (info.annotation, info)
-        for f, info in model.model_fields.items()
-        if f not in left_out
-    }
-    return create_model(
-        model.__name__,
-        __config__=model.model_config,
-        __validators__=_field_validators(model, fields),
-        **fields,
-    )
-
-
-def _field_validators(
-    model: type[BaseModel], fields: Collection[str]
-) -> dict[str, Any]:
-    """
-    The field validators of ``model`` that validate any of ``fields``, for a
-    model of these fields alone; ``create_model`` takes them as validators.
-    """
-    validators = {}
-    for name, decorator in model.__pydantic_decorators__.field_validators.items():
-        info = decorator.info
-        names = ['*'] if '*' in info.fields else [f for f in info.fields if f in fields]
-        if names:
-            func = decorator.func  # bound to ``model`` if a classmethod
-            unbound = classmethod(func.__func__) if inspect.ismethod(func) else func
-            validators[name] = field_validator(*names, mode=info.mode)(unbound)
-    return validators
-
-
-def map_refs(value: Any, fn: Callable[[Any], Any]) -> Any:
-    """``value`` with each reference in dicts and lists replaced by ``fn(ref)``."""
-    if (ref := as_ref(value)) is not None:
-        return fn(ref)
-    if isinstance(value, dict):
-        return {k: map_refs(v, fn) for k, v in value.items()}
-    if isinstance(value, list):
-        return [map_refs(v, fn) for v in value]
-    return value
 
 
 def as_values(value: Any) -> Any:
@@ -105,22 +32,46 @@ def as_values(value: Any) -> Any:
     ``value`` with each model in it, but a reference, as a dict of the fields
     that were given.
 
-    So a request, a template, and a push take a params model, a group, or a
-    row as a model or as a dict alike. Defaults are left out, as they are of a
-    dict, so that the backend fills in those of its own spec.
+    So a request, a template, and a push take a params model or a group as a
+    model or as a dict alike. Defaults are left out, as they are of a dict, so
+    that the backend fills in those of its own spec; a reference is kept
+    whole, since its kind is a default.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        return as_refs(value.model_dump(exclude_unset=True))
+        return value.model_dump(exclude_unset=True)
     if isinstance(value, dict):
         return {k: as_values(v) for k, v in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, list | tuple):
         return [as_values(v) for v in value]
     return value
 
 
-def as_refs(value: Any) -> Any:
-    """``value`` with references read as references, not dicts."""
-    return map_refs(value, lambda ref: ref)
+def read_refs(params: Any) -> Any:
+    """
+    Params by name with each reference in its plain (JSON) form read as a
+    :data:`~ess.spec.Ref`, where a request may hold one (see
+    :func:`ess.spec.refs.iter_refs`); anything but a mapping is left for
+    validation to refuse. Raises ``SubmitError`` for a malformed reference.
+    """
+    if not isinstance(params, Mapping):
+        return params
+    try:
+        return map_refs(params, lambda ref: ref)
+    except ValueError as error:
+        raise SubmitError(str(error)) from None
+
+
+Params = Annotated[dict[str, Any], BeforeValidator(read_refs)]
+"""
+The params of a request by name, each an inline value, a reference, ``None``,
+or a list of these; so every way of making one, the log's JSON among them,
+holds references as :data:`~ess.spec.Ref`.
+"""
+
+
+def _given(values: Mapping[str, Any] | BaseModel | None) -> dict[str, Any]:
+    """Params by name, as :func:`as_values` gives them, references read."""
+    return {} if values is None else read_refs(as_values(values))
 
 
 class SpecId(BaseModel, frozen=True):
@@ -130,7 +81,7 @@ class SpecId(BaseModel, frozen=True):
     version: int
 
     @classmethod
-    def of(cls, spec: WorkflowSpec[Any] | SpecId | dict[str, Any]) -> SpecId:
+    def of(cls, spec: WorkflowSpec[Any, Any] | SpecId | dict[str, Any]) -> SpecId:
         if isinstance(spec, SpecId):
             return spec
         if isinstance(spec, WorkflowSpec):
@@ -143,26 +94,33 @@ class SpecId(BaseModel, frozen=True):
 
 class Request(BaseModel, frozen=True):
     """
-    A spec and its parameter values, given as a params model or as a dict of
-    its fields, each a group or a table as a model or a dict.
+    A spec and its params, by name.
+
+    ``params`` is an instance of the params model, if every value is given
+    inline, or a dict by name: an inline value, such as a group as a model or
+    a dict, or a reference, as the parameter's type allows; a list of these
+    for a list parameter.
+    A file is always given by reference, such as ``dataset(path=...)``. A
+    reference is found at the top of a value or of an element of a list, so
+    the references of a request are found without its spec.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
 
     spec: SpecId
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: Params = Field(default_factory=dict)
 
     def __init__(
         self,
-        spec: WorkflowSpec[Any] | SpecId,
-        params: dict[str, Any] | BaseModel | None = None,
+        spec: WorkflowSpec[Any, Any] | SpecId,
+        *,
+        params: Mapping[str, Any] | BaseModel | None = None,
     ) -> None:
-        values = {} if params is None else as_values(params)
-        super().__init__(spec=SpecId.of(spec), params=values)
+        super().__init__(spec=SpecId.of(spec), params=_given(params))
 
-    def inputs(self) -> list[OutputRef]:
+    def upstream(self) -> list[OutputRef]:
         """The outputs of other records this request reads."""
-        return [ref for _, ref in walk_refs(self.params) if isinstance(ref, OutputRef)]
+        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, OutputRef)]
 
     def accumulators(self) -> list[AccumulatorRef]:
         """
@@ -171,96 +129,54 @@ class Request(BaseModel, frozen=True):
         of the state it reads.
         """
         return [
-            ref for _, ref in walk_refs(self.params) if isinstance(ref, AccumulatorRef)
+            ref for _, ref in iter_refs(self.params) if isinstance(ref, AccumulatorRef)
         ]
 
     def datasets(self) -> list[DatasetRef]:
         """The datasets this request names directly."""
-        return [ref for _, ref in walk_refs(self.params) if isinstance(ref, DatasetRef)]
+        return [ref for _, ref in iter_refs(self.params) if isinstance(ref, DatasetRef)]
 
 
-class _Blank:
-    def __repr__(self) -> str:
-        return 'BLANK'
-
-
-BLANK: Any = _Blank()
-"""
-A parameter left open in a template made by :meth:`Template.from_spec`; typed
-``Any`` so that a type checker accepts it for any parameter.
-"""
-
-
-class _HasParams[**P](Protocol):
-    """A spec as a type checker sees it, through its params model's signature."""
-
-    @property
-    def params(self) -> Callable[P, BaseModel]: ...
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
+@with_config(extra='forbid')
 class Template:
     """
     A spec, some values, and blanks that each use fills.
 
-    :meth:`from_spec` writes a template with the params model's signature. The
-    constructor makes one from values in hand: naming a field as a blank drops
-    the value given for it, so a template can be made from any request's
-    values or a whole params model, which it keeps as a dict. Change a template
-    with ``dataclasses.replace``.
+    Values are given as a request's are. A blank is a parameter, a table
+    among them. Naming a field as a blank drops the value given for it, so a
+    template can be made from any request's values or a whole params model,
+    which it keeps as a dict. Change a template with ``dataclasses.replace``.
     """
 
     spec: SpecId
-    params: dict[str, Any] = field(default_factory=dict)
-    blanks: tuple[str, ...] = ()
+    params: Params
+    blanks: tuple[str, ...]
 
-    def __post_init__(self) -> None:
-        values = as_values(self.params)
-        kept = {k: v for k, v in values.items() if k not in self.blanks}
-        object.__setattr__(self, 'spec', SpecId.of(self.spec))
+    def __init__(
+        self,
+        spec: WorkflowSpec[Any, Any] | SpecId,
+        *,
+        params: Mapping[str, Any] | BaseModel | None = None,
+        blanks: Collection[str] = (),
+    ) -> None:
+        blanks = tuple(blanks)
+        kept = {k: v for k, v in _given(params).items() if k not in blanks}
+        object.__setattr__(self, 'spec', SpecId.of(spec))
         object.__setattr__(self, 'params', kept)
+        object.__setattr__(self, 'blanks', blanks)
 
-    @classmethod
-    def from_spec[**P](
-        cls, spec: _HasParams[P], /, *args: P.args, **kwargs: P.kwargs
-    ) -> Template:
+    def fill(self, *, params: Mapping[str, Any] | BaseModel | None = None) -> Request:
         """
-        A template of ``spec`` from the parameters of its params model, given
-        as the params model takes them; each parameter given as ``BLANK`` is a
-        blank::
-
-            Template.from_spec(IOFQ, sample=BLANK, reduction=Reduction(bins=100))
-
-        So pyright reports a misspelt or missing parameter and a value
-        of the wrong type, as it does for the params model. Every keyword is a
-        parameter, so this method takes no option of its own. The values
-        given are validated by their own fields (see :func:`model_without`); a
-        required parameter may be a blank. Raises ``ValueError`` with what is
-        wrong, and ``TypeError`` for a parameter given by position.
+        The request with the blanks filled by ``params``, a blank table by
+        its rows.
         """
-        if not isinstance(spec, WorkflowSpec):
-            raise TypeError(f'{spec!r}: not a WorkflowSpec')
-        spec_id, model = SpecId.of(spec), spec.params
-        if args:
-            raise TypeError(f'{spec_id}: give the parameters by name')
-        fields = model.model_fields
-        blanks = tuple(name for name in fields if kwargs.get(name) is BLANK)
-        given = {k: v for k, v in kwargs.items() if k not in blanks}
-        problems = [f'{k}: not a parameter' for k in given if k not in fields]
-        try:
-            model_without(model, blanks).model_validate(given)
-        except ValidationError as error:
-            problems += validation_problems(error)
-        if problems:
-            raise ValueError(f'{spec_id}: {"; ".join(problems)}')
-        return cls(spec_id, given, blanks)
-
-    def fill(self, values: dict[str, Any] | BaseModel) -> Request:
-        """The request with the blanks filled by ``values``."""
-        values = as_values(values)
-        if set(values) != set(self.blanks):
-            raise ValueError(f'fill the blanks {self.blanks}, got {tuple(values)}')
-        return Request(self.spec, {**self.params, **values})
+        params = _given(params)
+        if missing := [b for b in self.blanks if b not in params]:
+            raise ValueError(f'fill the blanks {self.blanks}, missing {missing}')
+        if fixed := sorted(params.keys() & self.params.keys()):
+            raise ValueError(f'{fixed}: fixed by the template, not blanks')
+        return Request(self.spec, params={**self.params, **params})
 
 
 class Status(StrEnum):
@@ -270,18 +186,15 @@ class Status(StrEnum):
     CANCELLED = 'cancelled'
 
 
-Row = dict[str, Any]
-"""One row of a table of an accumulator, as a request over the table takes it."""
-
-
 class Record(BaseModel, frozen=True):
     """
     A request as the backend accepted it.
 
-    ``request`` has every value filled in: dataset names resolved, defaults
-    filled, and each reference to an accumulator replaced by a reference to
-    the record of the state it reads, a record of the plain request of that
-    state.
+    ``request`` has every value filled in, inline values in their JSON form
+    and references as :data:`~ess.spec.Ref`: dataset names resolved, defaults
+    filled, and each reference to an
+    accumulator replaced by a reference to the record of the state it reads, a
+    record of the plain request of that state.
     ``outputs`` lists the output names the spec declares; ``label`` and
     ``member`` are given at submission and do not change the result.
 
@@ -302,10 +215,15 @@ class Record(BaseModel, frozen=True):
     def spec(self) -> SpecId:
         return self.request.spec
 
-    def ref(self, output: str) -> OutputRef:
+    def ref(self, output: str, key: str | None = None) -> OutputRef:
+        """
+        A reference to ``output``, or to its element ``key`` if it is a list
+        or a dict; the key of an element of a list is its index, such as
+        ``'0'``.
+        """
         if output not in self.outputs:
             raise KeyError(f'{self.spec} has no output {output!r}')
-        return OutputRef(record=self.id, output=output)
+        return OutputRef(record=self.id, output=output, key=key)
 
     def refs(self, *outputs: str) -> dict[str, OutputRef]:
         """A reference to each of ``outputs`` by name; to every output if none."""
