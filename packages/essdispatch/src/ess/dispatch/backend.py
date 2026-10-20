@@ -161,15 +161,17 @@ are what the driver returns, not a copy, and may share memory with the
 driver, which the next push may change in place. They are kept until the
 requests that read them have run, and the record holds the state as its
 reader until then. Reading the outputs of the accumulator copies them, or
-only the part that a selection names. So the next push waits until the
-readers of the state before it are done, since the driver cannot go back
-to that state and no reader may see its outputs change: the records of that
-state, until the requests that read them have run, even those cancelled while
-they run, and the reads of its outputs in progress. Every wait is for work
-logged before the waiter: a request waits for records submitted before it and
-for pushes logged before its submission, and a push waits for the records of
-the state before it and the requests of their submissions, all logged before
-the push, since only the submission that made a record of a state reads it.
+only the part that a selection names; a read that asks for no copy gets the
+outputs themselves, which the next push may change. So the next push waits
+until the readers of the state before it are done, since the driver cannot go
+back to that state and no reader may see its outputs change: the records of
+that state, until the requests that read them have run, even those cancelled
+while they run, and the reads of its outputs in progress. Every wait is for
+work logged before the waiter: a request waits for records submitted before
+it and for pushes logged before its submission, and a push waits for the
+records of the state before it and the requests of their submissions, all
+logged before the push, since only the submission that made a record of a
+state reads it.
 So no wait goes round in a circle.
 Releasing the accumulator or ending its client keeps the pushes up to the last
 state a reader still holds, which are still added, and drops the later ones,
@@ -186,18 +188,18 @@ and it may be frozen again; its computed outputs are dropped once the last
 reader of its state is done, since no push comes to drop them.
 
 A selection reads part of an array output of a record or an accumulator's
-state by dimension name, and copies only that part. A read of an
+state by dimension name, and copies only that part, if it copies. A read of an
 accumulator's state still has the state's outputs computed whole.
 """
 
 from __future__ import annotations
 
-import copy
 import threading
 import uuid
 from collections import Counter, deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -289,7 +291,8 @@ Selection = Mapping[str, int | slice]
 
 def _selected(value: Any, select: Selection) -> Any:
     """
-    A copy of the part of an array that ``select`` names; needs no lock.
+    The part of an array that ``select`` names, as slicing returns it: it may
+    share memory with the array. Needs no lock.
 
     An array is a value with named dimensions that slices as
     ``value[dim, index]``, such as a scipp variable or data array. A
@@ -298,7 +301,7 @@ def _selected(value: Any, select: Selection) -> Any:
     """
     for dim, index in select.items():
         value = value[dim, index]
-    return value.copy()
+    return value
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -2068,12 +2071,18 @@ class Backend:
         client: str,
         *,
         select: Selection | None = None,
+        copy: bool = True,
     ) -> dict[str, Any]:
         """
         Values of a record's outputs, once it has completed: of ``names``, or
         of every output the workflow returned if ``names`` is ``None``; with
-        ``select``, a copy of that part of each. A selection names outputs
-        declared as arrays: of a type with named dimensions, ``dims``.
+        ``select``, that part of each. A selection names outputs declared as
+        arrays: of a type with named dimensions, ``dims``.
+
+        With ``copy``, each value is the caller's own: a copy of a value the
+        client keeps, or of its part. Without, it is the value the backend
+        holds, or its part as slicing returns it. A value read from the store
+        is new on each read, and only its part is copied.
 
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
@@ -2128,9 +2137,13 @@ class Backend:
             values = {n: self._outputs[(record_id, n)] for n in names if kept}
         if not kept:
             values = {n: self._stored(record.ref(n)) for n in names}
-        if select is None:
-            return values
-        return {n: _selected(v, select) for n, v in values.items()}
+        if select is not None:
+            values = {n: _selected(v, select) for n, v in values.items()}
+        # A store reads a new value on each read, which the caller owns. Its
+        # part is copied all the same, so that the part does not hold the whole.
+        if copy and (kept or select is not None):
+            values = deepcopy(values)
+        return values
 
     def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:
         """
@@ -2153,17 +2166,21 @@ class Backend:
         client: str,
         *,
         select: Selection | None = None,
+        copy: bool = True,
     ) -> dict[str, Any]:
         """
-        Copies of outputs of the accumulator's current state: of ``names``, or
-        of every output its driver returns if ``names`` is ``None``; with
-        ``select``, of that part of each only, as :meth:`outputs` selects.
+        Outputs of the accumulator's current state: of ``names``, or of every
+        output its driver returns if ``names`` is ``None``; with ``select``,
+        that part of each, as :meth:`outputs` selects. With ``copy``, copies
+        of them; without, the outputs computed for the state, which may share
+        memory with the driver, or their parts as slicing returns them.
 
         The read pins the state after the pushes logged so far, waits until
         the accumulator has reached it, and is one of the state's readers
         while the state's plain request is checked, its outputs are computed
         if no reader has yet, and the outputs or their parts are copied (see
-        the module docstring). An accumulator that cannot be read, or stops
+        the module docstring). Without ``copy``, the next push may change the
+        values returned in place. An accumulator that cannot be read, or stops
         before it reaches the state, raises ``LookupError``.
         """
         acc, upto = self._current(accumulator_id, client, reader=True)
@@ -2183,9 +2200,9 @@ class Backend:
                 if name not in outputs:
                     raise _not_returned(f'{accumulator_id}[:{upto}].{name}')
             values = {n: outputs[n] for n in names or declared if n in outputs}
-            if select is None:
-                return copy.deepcopy(values)
-            return {n: _selected(v, select) for n, v in values.items()}
+            if select is not None:
+                values = {n: _selected(v, select) for n, v in values.items()}
+            return deepcopy(values) if copy else values
         finally:
             with self._changed:
                 self._let_go([(acc, upto)])

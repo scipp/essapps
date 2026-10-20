@@ -1930,7 +1930,7 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
     bind = [function_binding(ARRAY, array), KeepsTheSum()]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         loaded = client.compute(ARRAY, params={'sample': dataset(run=2)})
-        value = weakref.ref(client.output(loaded, 'value'))
+        value = weakref.ref(client.output(loaded, 'value', copy=False))
         stage = client.stage(Template(COPY, params={'source': loaded.ref('value')}))
         client.release(loaded)
         assert value() is not None
@@ -2180,6 +2180,57 @@ def test_a_read_is_a_copy_that_a_later_push_leaves_unchanged(
 
     assert _listed(first) == [1.0]
     assert _listed(client.output(total, 'value')) == [3.0]
+
+
+# What a read returns: the caller's own value, or the one the framework holds
+
+
+def test_modifying_a_record_s_output_read_changes_nothing_the_framework_holds(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    copying.go.clear()
+    copied = client.submit(COPY, params={'source': loads[0].ref('value')})
+    client.output(loads[0], 'value').values[0] = 99.0
+    client.output(loads[0])['value'].values[0] = 99.0
+    copying.go.set()
+
+    assert _listed(client.output(loads[0], 'value')) == [1.0]
+    assert _listed(client.output(copied, 'value')) == [1.0]
+
+
+def test_modifying_an_accumulator_s_output_read_changes_nothing_it_holds(
+    in_place: Client, loads: list[Record], copying: Copying
+) -> None:
+    client = in_place
+    total = _array_total(client)
+    total.push(parts=[loads[0].ref('value')])
+    copying.go.clear()
+    copied = _copy(client, total)
+    client.output(total, 'value').values[0] = 99.0
+    copying.go.set()
+
+    assert _listed(client.output(total, 'value')) == [1.0]
+    assert _listed(client.output(copied, 'value')) == [1.0]
+
+
+def test_a_read_without_a_copy_returns_the_value_the_framework_holds(
+    in_place: Client, loads: list[Record]
+) -> None:
+    client = in_place
+    load = loads[0]
+    total = _array_total(client)
+    total.push(parts=[load.ref('value')])
+    held = client.output(total, 'value', copy=False)
+
+    assert client.output(load, 'value', copy=False) is client.output(
+        load, 'value', copy=False
+    )
+    assert client.output(load, 'value') is not client.output(load, 'value')
+    assert client.output(total, 'value', copy=False) is held
+    total.push(parts=[loads[1].ref('value')])
+    assert _listed(client.output(total, 'value')) == [3.0]
+    assert _listed(held) == [3.0]  # the driver added push 2 into it in place
 
 
 # Several tables, and the outputs of a state
@@ -2442,7 +2493,8 @@ def test_a_freeze_is_the_record_of_the_last_state_computed_once(
     assert total.request == plain
     assert _listed(client.output(total, 'difference')) == _listed(looked) == [-1.0]
     assert subtracting.computed == 1  # the look and the freeze read one state
-    assert client.output(total, 'difference') is subtracting.returned[0]()  # no copy
+    frozen = client.output(total, 'difference', copy=False)
+    assert frozen is subtracting.returned[0]()  # no copy
     assert total in client.records()
 
 

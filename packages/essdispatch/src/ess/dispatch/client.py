@@ -494,6 +494,7 @@ class Client:
         name: str | None = None,
         *,
         select: Selection | None = None,
+        copy: bool = True,
     ) -> Any:
         """
         The value of an output, or every output returned, by name, if ``name``
@@ -504,27 +505,44 @@ class Client:
         keeps nor persisted, whose write failed, or whose value the store no
         longer holds, and ``RuntimeError`` for one that fails or is cancelled.
         An accumulator's are those of its state after the pushes so far, once
-        they are added, copied, so that like a record's they do not change.
-        The read makes no record. It raises ``LookupError`` if the state's
-        plain request would be refused, with its reason, also for a state
-        with nothing pushed.
+        they are added; later pushes do not change them. The read makes no
+        record. It raises ``LookupError`` if the state's plain request would
+        be refused, with its reason, also for a state with nothing pushed.
+
+        The value is the caller's own: modifying it changes neither what
+        pending requests read, nor what ``persist`` writes, nor what a later
+        ``output`` returns. ``copy=False`` returns the value that the
+        framework holds, to look at a large value without a copy; the caller
+        must not modify it:
+
+        - of a record the client keeps, its output, the same object on each
+          read: ``output(r, 'x', copy=False) is output(r, 'x', copy=False)``;
+        - of an accumulator, the output computed for its state, the same
+          object on each read of the state, which may share memory with the
+          driver: the next push may change it in place;
+        - of a record read from the store, the value the store reads, which
+          is new on each read and the caller's own either way.
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
-        ``{'q': slice(0, 10)}``, and copies only that part. It is refused
-        without ``name``, and for an output not declared as an array; a
-        dimension the output lacks, or an index out of range, raises what the
-        slice raises. A read of an accumulator holds back its next push while
-        the state is checked, its outputs are computed if no reader has yet,
-        and the part is copied.
+        ``{'q': slice(0, 10)}``, and copies only that part; with
+        ``copy=False``, it returns the part as slicing returns it, which may
+        share memory with the output. It is refused without ``name``, and for
+        an output not declared as an array; a dimension the output lacks, or
+        an index out of range, raises what the slice raises. A read of an
+        accumulator holds back its next push while the state is checked, its
+        outputs are computed if no reader has yet, and they or their parts
+        are copied.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
             values = self._backend.accumulator_outputs(
-                what.id, names, self._id, select=select
+                what.id, names, self._id, select=select, copy=copy
             )
         else:
-            values = self._backend.outputs(what.id, names, self._id, select=select)
+            values = self._backend.outputs(
+                what.id, names, self._id, select=select, copy=copy
+            )
         return values if name is None else values[name]
 
     def records(self, *, label: str | None = None) -> list[Record]:

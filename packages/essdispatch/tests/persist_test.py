@@ -456,6 +456,25 @@ def test_another_client_reads_a_persisted_value_from_the_store(
     assert other.output(listed, 'value') == [1.0]
 
 
+def test_modifying_an_output_read_changes_nothing_that_persist_writes(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    listed = client.compute(LIST, params=_sample(1))
+    client.output(listed, 'value').append(99.0)
+    client.persist(listed)
+
+    assert connect().output(listed, 'value') == [1.0]
+
+
+def test_a_read_from_the_store_without_a_copy_is_new_each_time(
+    client: Client, connect: Callable[[], Client]
+) -> None:
+    listed = client.compute(LIST, params=_sample(1), persist=True)
+
+    connect().output(listed, 'value', copy=False).append(99.0)
+    assert connect().output(listed, 'value', copy=False) == [1.0]
+
+
 def test_reading_every_output_raises_if_a_write_failed(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
