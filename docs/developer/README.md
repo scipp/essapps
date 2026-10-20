@@ -728,6 +728,7 @@ PipelineBinding(IOFQ, make_pipeline,
                 keys={'can': Filename[BackgroundRun], 'iofq': BackgroundSubtractedIofQ})
 ```
 
+[roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows the other routes from a spec's values to such keys: adapter providers, and providers that take the spec's models.
 Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
 For a parameter, `None` in `keys=` sets no key, for a field that `make_pipeline` uses itself.
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
