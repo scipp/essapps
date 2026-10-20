@@ -211,10 +211,11 @@ class Accumulator:
         If adding fails, such as for data that fail their table's check, or
         a record has not completed, the accumulator stops for good: the
         records of states it did not reach fail, and so do the requests that
-        read them, and every later push and pin is refused: a push or a read
-        raises ``NotReadable``. The reason names the step, such as ``push 0``
-        for the first push. A controller that should skip a run whose
-        reduction failed waits for that record before it pushes.
+        read them, and every later push and pin is refused: a push raises
+        ``SubmitError``, and a read ``NotReadable``. The reason names the
+        step, such as ``push 0`` for the first push. A controller that should
+        skip a run whose reduction failed waits for that record before it
+        pushes.
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(

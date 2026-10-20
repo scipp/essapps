@@ -1743,7 +1743,7 @@ class Backend:
         """
         with self._changed:
             caller = self._client(client)
-            acc = self._accumulator(caller, accumulator_id)
+            acc = self._pushed_into(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
         values = checks.push(acc.template.blanks, rows, caller.proposal)
@@ -1801,7 +1801,7 @@ class Backend:
                 raise SubmitError.at((), refused)
             with self._changed:
                 caller = self._client(client)
-                self._accumulator(caller, accumulator_id)  # not released or stopped
+                self._pushed_into(caller, accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
                 pinned = {accumulator_id: (acc, upto, None)}
                 self._create(
@@ -1959,16 +1959,27 @@ class Backend:
             raise NotReadable(acc.stopped)
         return acc
 
+    def _pushed_into(self, caller: _Client, accumulator_id: str) -> _Accumulator:
+        """
+        The client's accumulator for a push or a freeze; lock held. Raises as
+        :meth:`_accumulator` does, but ``SubmitError`` where a read raises
+        ``NotReadable``: a push or a freeze is refused, not read.
+        """
+        try:
+            return self._accumulator(caller, accumulator_id)
+        except NotReadable as error:
+            raise SubmitError.at((), str(error)) from None
+
     def _settled(
         self, client: str, accumulator_id: str
     ) -> tuple[_Client, _Accumulator]:
         """
-        The client and its accumulator once no freeze of it is being checked;
-        lock held, and released while it waits.
+        The client and its accumulator, for a push or a freeze, once no freeze
+        of it is being checked; lock held, and released while it waits.
         """
         while True:
             caller = self._client(client)
-            acc = self._accumulator(caller, accumulator_id)
+            acc = self._pushed_into(caller, accumulator_id)
             if not acc.freezing:
                 return caller, acc
             self._changed.wait()

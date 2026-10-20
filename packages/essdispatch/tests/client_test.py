@@ -896,10 +896,11 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
     for released in (
         lambda: client.output(load, 'value'),
         lambda: client.output(total),
-        lambda: total.push(parts=[1.0]),
     ):
         with pytest.raises(NotReadable, match='is not kept by this client'):
             released()
+    with pytest.raises(SubmitError, match='is not kept by this client'):
+        total.push(parts=[1.0])  # a push is refused, not read
     for unknown in (
         lambda: client.output(unknown_load, 'value'),
         lambda: client.output(unknown_total),
@@ -1454,7 +1455,7 @@ def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
     state = _state(client, read)
     assert client.wait(read) is Status.FAILED
     assert client.failure([state, read]) == [stopped, f'record {state.id} failed']
-    with pytest.raises(NotReadable, match=f'^{stopped}$'):
+    with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[pending.ref('value')])
 
 
@@ -1627,7 +1628,7 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     assert client.wait(after) is Status.FAILED
     assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
     assert len(state.request.params['parts']) == 2  # the push is in the log
-    with pytest.raises(NotReadable, match=f'^{stopped}$'):
+    with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[summed_loads[2].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {stopped}$'):
         client.submit(_read(total))  # it may be half added
@@ -1653,7 +1654,7 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
         stopped = 'the accumulator stopped: opening failed: cannot open'
         with pytest.raises(NotReadable, match=f'^{stopped}$'):
             client.output(summed)
-        with pytest.raises(NotReadable, match=f'^{stopped}$'):
+        with pytest.raises(SubmitError, match=f'^{stopped}$'):
             summed.push(runs=[dataset(run=1)])
 
 
@@ -2188,7 +2189,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     client.release(total)  # the copy is still a reader of its state
 
     released = f'accumulator {total.id} is not kept by this client'
-    with pytest.raises(NotReadable, match=f'^{released}$'):
+    with pytest.raises(SubmitError, match=f'^{released}$'):
         total.push(parts=[loads[1].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {released}$'):
         _copy(client, total)
