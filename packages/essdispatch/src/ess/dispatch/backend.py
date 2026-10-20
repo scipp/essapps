@@ -289,7 +289,8 @@ Selection = Mapping[str, int | slice]
 
 def _selected(value: Any, select: Selection) -> Any:
     """
-    A copy of the part of an array that ``select`` names; needs no lock.
+    The part of an array that ``select`` names, as slicing returns it: it may
+    share memory with the array. Needs no lock.
 
     An array is a value with named dimensions that slices as
     ``value[dim, index]``, such as a scipp variable or data array. A
@@ -298,7 +299,22 @@ def _selected(value: Any, select: Selection) -> Any:
     """
     for dim, index in select.items():
         value = value[dim, index]
-    return value.copy()
+    return value
+
+
+def _owned(
+    values: dict[str, Any], select: Selection | None, *, held: bool
+) -> dict[str, Any]:
+    """
+    The values read, or the part of each that ``select`` names, as the
+    caller's own; needs no lock. A value the framework holds (``held``) is
+    copied. A value read from the store is new on each read, so it is not;
+    its part is copied all the same, so that the part does not keep the
+    whole value alive.
+    """
+    if select is not None:
+        return copy.deepcopy({n: _selected(v, select) for n, v in values.items()})
+    return copy.deepcopy(values) if held else values
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -2070,10 +2086,11 @@ class Backend:
         select: Selection | None = None,
     ) -> dict[str, Any]:
         """
-        Values of a record's outputs, once it has completed: of ``names``, or
-        of every output the workflow returned if ``names`` is ``None``; with
-        ``select``, a copy of that part of each. A selection names outputs
-        declared as arrays: of a type with named dimensions, ``dims``.
+        Values of a record's outputs, once it has completed, as the caller's
+        own (see :func:`_owned`): of ``names``, or of every output the
+        workflow returned if ``names`` is ``None``; with ``select``, a copy of
+        that part of each. A selection names outputs declared as arrays: of a
+        type with named dimensions, ``dims``.
 
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
@@ -2128,9 +2145,7 @@ class Backend:
             values = {n: self._outputs[(record_id, n)] for n in names if kept}
         if not kept:
             values = {n: self._stored(record.ref(n)) for n in names}
-        if select is None:
-            return values
-        return {n: _selected(v, select) for n, v in values.items()}
+        return _owned(values, select, held=kept)
 
     def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:
         """
@@ -2183,9 +2198,7 @@ class Backend:
                 if name not in outputs:
                     raise _not_returned(f'{accumulator_id}[:{upto}].{name}')
             values = {n: outputs[n] for n in names or declared if n in outputs}
-            if select is None:
-                return copy.deepcopy(values)
-            return {n: _selected(v, select) for n, v in values.items()}
+            return _owned(values, select, held=True)
         finally:
             with self._changed:
                 self._let_go([(acc, upto)])

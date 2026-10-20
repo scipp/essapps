@@ -235,8 +235,8 @@ It holds no output values.
 Running the same request again makes a new record.
 Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
 
-In the user's process, `client.output` of a record returns the output value itself, not a copy.
-The framework never changes a record's output value (see open question 7).
+`client.output` returns a value the caller owns, wherever the backend runs: modifying it changes neither what pending requests read, nor what `persist` writes, nor what a later `client.output` returns.
+The framework never changes a record's output value.
 `select=` copies the part of an array output that it names, by dimension, and makes no record.
 On the service, only that part leaves the backend.
 
@@ -898,4 +898,3 @@ Not visible in the code of notebooks, apps, or workflow packages:
 4. **Looks that compute.** `select=` only indexes an output. A projection, or a thick slice summed, would run a spec next to the value without making a record. The design of such looks waits for the plotting work. So does reading the latest state already added, without a pin.
 5. **Accumulators on the service.** How the service holds a driver, bounds its memory, and drops it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
 6. **Persist at submission.** Should `persist=` at submission also keep the values for the client? To be decided when a story needs it.
-7. **Values modified in place.** In the user's process, a notebook that modifies a value `client.output` returned changes what later requests read and what `persist` writes. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.

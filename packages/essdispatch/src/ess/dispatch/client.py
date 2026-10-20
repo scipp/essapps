@@ -504,10 +504,14 @@ class Client:
         keeps nor persisted, whose write failed, or whose value the store no
         longer holds, and ``RuntimeError`` for one that fails or is cancelled.
         An accumulator's are those of its state after the pushes so far, once
-        they are added, copied, so that like a record's they do not change.
-        The read makes no record. It raises ``LookupError`` if the state's
-        plain request would be refused, with its reason, also for a state
-        with nothing pushed.
+        they are added; later pushes do not change them. The read makes no
+        record. It raises ``LookupError`` if the state's plain request would
+        be refused, with its reason, also for a state with nothing pushed.
+
+        The value is the caller's own: modifying it changes neither what
+        pending requests read, nor what ``persist`` writes, nor what a later
+        ``output`` returns. It is a copy of a value the client keeps or of an
+        accumulator's state, or a value read anew from the store.
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
@@ -516,7 +520,7 @@ class Client:
         dimension the output lacks, or an index out of range, raises what the
         slice raises. A read of an accumulator holds back its next push while
         the state is checked, its outputs are computed if no reader has yet,
-        and the part is copied.
+        and they or their parts are copied.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
