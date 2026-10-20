@@ -25,8 +25,8 @@ list parameter. A parameter's type decides which of the two it takes, with
 =====================================  ==========  ===========================
 A parameter's type                     Inline      By reference
 =====================================  ==========  ===========================
-a file: ``Path``, or a ``NewType``     no          to a dataset
-of it
+a file: ``Path``, pydantic's           no          to a dataset
+``FilePath``, or a ``NewType`` of one
 has a *JSON form*: pydantic makes a    yes         to an output that fits
 JSON schema of it, with the params
 model's config, and it holds no file
@@ -34,6 +34,14 @@ a group that holds a file              field by    to a dataset, for its one
                                        field       required file
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
+
+Files are recognised by their JSON schema (see
+:func:`ess.spec.field_types.is_file`), and the access check on the service
+depends on it: a file is given by reference to a dataset only, which the
+dataset source checks the proposal may read. So a workflow types its files
+as ``Path``, one of pydantic's path types, or a ``NewType`` of one. A
+``NewType`` of ``str`` used for a file is a string, given inline and never
+checked.
 
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
@@ -62,6 +70,10 @@ framework: what the framework needs, it reads from the field types (see
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
   a dict or a union of two types.
+- A parameter holds a file only as a file, possibly optional, a list of
+  files, or a group that holds a file as a field, since only these take a
+  reference to a dataset. A file anywhere else, such as in a tuple, a
+  ``TypedDict``, or a dataclass, is refused.
 - A group that holds a file holds it as a field, a file, possibly
   optional; it follows the rules of the params model below, and a field
   of it that is a list or a dict has a JSON form, since no reference stands
@@ -360,6 +372,13 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         if not (_one_or_list(field.annotation) and is_single(tp)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
+            )
+            continue
+        if holds_file(tp) and not (is_file(tp) or is_group(tp)):
+            problems.append(
+                f'{where}: a parameter holds a file only as a file, possibly '
+                'optional, a list of files, or a group that holds a file as a '
+                f'field, not inside {type_name(tp)}'
             )
             continue
         if any(
