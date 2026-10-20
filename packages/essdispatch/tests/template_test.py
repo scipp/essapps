@@ -444,7 +444,7 @@ def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
     assert 'not positive' in client.failure(client.compute(stage))
     with pytest.raises(NotReadable, match=r'push 0 failed: (?s:.*)not positive'):
         client.output(acc, 'value')
-    with pytest.raises(NotReadable, match='the accumulator stopped'):
+    with pytest.raises(SubmitError, match='the accumulator stopped'):
         acc.push(positive=[made])
 
 
