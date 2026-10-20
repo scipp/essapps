@@ -254,6 +254,7 @@ from .datasets import DatasetSource, Selector, readable
 from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
 from .lifecycle import (
     Action,
+    Checking,
     DropDriver,
     FailStates,
     LetGo,
@@ -1783,7 +1784,7 @@ class Backend:
         values = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
-            if (refused := acc.lifecycle.push_refused()) is not None:
+            if (refused := acc.lifecycle.refusal()) is not None:
                 raise SubmitError.at((), refused)
             seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
             self._check_reads(spec_id, values, caller, {})
@@ -1820,7 +1821,7 @@ class Backend:
         with self._changed:
             _, acc = self._settled(client, accumulator_id)
             persisted = self._persisted(acc.template.spec, persist)
-            if (refused := acc.lifecycle.freeze_refused()) is not None:
+            if (refused := acc.lifecycle.refusal()) is not None:
                 raise SubmitError.at((), refused)
             acc.lifecycle.start_check()
             upto = len(self._views.pushes.get(accumulator_id, ()))
@@ -1959,40 +1960,46 @@ class Backend:
         stops the accumulator, since the driver may hold part of the rows.
         """
         lifecycle = acc.lifecycle
-        opening = lifecycle.added is None
         read: dict[str, dict[bytes, int]] = {}
         try:
             typed = self._typed(acc.template.spec, step.values, acc.rows_read, read)
         except Exception as error:  # the backend refuses the values or rows
-            self._step_failed(acc, _reason(error), fatal=opening)
+            self._step_failed(acc, _reason(error), driver_changed=False)
             return
-        if opening:
+        if lifecycle.added is None:  # the opening, which makes the driver
             try:
                 params = acc.binding.spec.params
                 check_model(params, params.model_construct(**typed))
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             except Exception as error:  # the binding refuses the values
-                self._step_failed(acc, _reason(error), fatal=True)
+                self._step_failed(acc, _reason(error), driver_changed=False)
                 return
         else:
             try:
                 acc.driver.push(typed)
             except Exception as error:  # the driver refuses the rows
-                fatal = not isinstance(error, PushRefused)
-                self._step_failed(acc, _reason(error), fatal=fatal)
+                changed = not isinstance(error, PushRefused)
+                self._step_failed(acc, _reason(error), driver_changed=changed)
                 return
         with self._changed:
             for table, forms in read.items():
                 acc.rows_read.setdefault(table, {}).update(forms)
             self._advance(acc, lifecycle.step_done())
 
-    def _step_failed(self, acc: _Accumulator, reason: str, *, fatal: bool) -> None:
-        """The step that a worker did failed, for ``reason`` (see :meth:`_do_step`)."""
+    def _step_failed(
+        self, acc: _Accumulator, reason: str, *, driver_changed: bool
+    ) -> None:
+        """
+        The step that a worker did failed, for ``reason``, and the driver may
+        have changed if ``driver_changed`` (see :meth:`_do_step`).
+        """
         with self._changed:
+            lifecycle = acc.lifecycle
             held = self._held(acc)
-            self._advance(
-                acc, acc.lifecycle.step_failed(reason, fatal=fatal, held=held)
+            failed = lifecycle.step_failed(
+                reason, driver_changed=driver_changed, held=held
             )
+            self._advance(acc, failed)
 
     def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
         """
@@ -2067,7 +2074,7 @@ class Backend:
         while True:
             caller = self._client(client)
             acc = self._pushed_into(caller, accumulator_id)
-            if not acc.lifecycle.checking:
+            if not isinstance(acc.lifecycle.phase, Checking):
                 return caller, acc
             self._changed.wait()
 

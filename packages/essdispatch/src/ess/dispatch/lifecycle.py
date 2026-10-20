@@ -74,6 +74,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 from .records import Status
@@ -188,8 +189,10 @@ class Lifecycle:
     the driver is made. ``steps`` holds the steps logged and not yet started,
     in order, and ``running`` the one a worker does, if any. ``failed`` holds
     the reason of each push that failed, by its number, in the order they
-    failed, which is the order of their numbers. ``released`` says the
-    client let go of the accumulator.
+    failed, which is the order of their numbers; the backend logs each as it
+    is added here, so it equals the backend's ``Views.failed`` of the
+    accumulator, kept here too so that a lifecycle needs no views.
+    ``released`` says the client let go of the accumulator.
     """
 
     def __init__(self) -> None:
@@ -211,11 +214,6 @@ class Lifecycle:
         return self.running is not None or bool(self.steps)
 
     @property
-    def checking(self) -> bool:
-        """Whether a freeze is being checked, which pushes wait for."""
-        return isinstance(self.phase, Checking)
-
-    @property
     def unreadable(self) -> str | None:
         """Why the accumulator takes no readers, or ``None``."""
         match self.phase:
@@ -225,16 +223,16 @@ class Lifecycle:
                 return f'the accumulator is frozen: read record {record} instead'
         return None
 
-    def push_refused(self) -> str | None:
-        """Why a push is refused, or ``None``; one that waits is not refused."""
+    def refusal(self) -> str | None:
+        """
+        Why a push or a freeze is refused, or ``None``; one that waits while a
+        freeze is checked is not refused.
+        """
         if isinstance(self.phase, Freezing):
-            return f'the accumulator was frozen as record {self.phase.record}'
-        return self.unreadable
-
-    def freeze_refused(self) -> str | None:
-        """Why a freeze is refused, or ``None``."""
-        if isinstance(self.phase, Freezing):
-            return f'the accumulator is frozen as record {self.phase.record}'
+            return (
+                f'the accumulator is frozen as record {self.phase.record}; it '
+                'takes pushes and freezes again if that record fails'
+            )
         return self.unreadable
 
     def is_freeze(self, record: str) -> bool:
@@ -261,8 +259,7 @@ class Lifecycle:
         """
         The status of push ``push``, one logged: pending until done,
         completed once its rows are in, failed, or cancelled once it will
-        never be done, since the accumulator stopped before it, or was
-        released and no reader needs it.
+        never be done, since the accumulator stopped before it.
         """
         if push in self.failed:
             return Status.FAILED
@@ -278,7 +275,7 @@ class Lifecycle:
             case Status.FAILED:
                 return self.failed[push]
             case Status.CANCELLED:
-                return self.failure() or 'the accumulator was released'
+                return self.failure()
         return None
 
     @property
@@ -294,7 +291,7 @@ class Lifecycle:
         state after ``upto`` pushes, when ``known`` pushes had failed, reads
         a state whose rows are gone if one did.
         """
-        for push in list(self.failed)[known:]:
+        for push in islice(self.failed, known, None):
             if push <= upto:
                 return self.failed[push]
         return None
@@ -329,7 +326,8 @@ class Lifecycle:
                     reason = f'{self.step_name}: record {record} {other}'
                     if self.added is None:
                         return self._stop(reason, held)
-                    return self._fail(self.steps.popleft(), reason)
+                    step = self.steps.popleft()
+                    return self._fail_alone(step, self.added + 1, reason)
         self.running = self.steps.popleft()
         return [StartStep(self.running)]
 
@@ -339,22 +337,22 @@ class Lifecycle:
         self.added = 0 if self.added is None else self.added + 1
         return [LetGo(step.reads), Reached(self.added)]
 
-    def step_failed(self, reason: str, *, fatal: bool, held: bool) -> list[Action]:
+    def step_failed(
+        self, reason: str, *, driver_changed: bool, held: bool
+    ) -> list[Action]:
         """
-        The running step failed, for ``reason``. A push that is not
-        ``fatal`` fails alone; otherwise the accumulator stops, since the
-        driver may hold part of the rows, or was not made. ``held`` says a
+        The running step failed, for ``reason``. A push fails alone unless
+        the driver may have changed, ``driver_changed``; then, as at a failed
+        opening, which made no driver, the accumulator stops. ``held`` says a
         reader holds the current state.
         """
         reason = f'{self.step_name} failed: {reason}'
         if self.added is None:
-            self._take()
             return self._stop(reason, held)
-        if not fatal:
-            return self._fail(self._take(), reason)
         push = self.added + 1
-        self.failed[push] = reason
-        return [LogFailure(push, reason), *self._stop(reason, held)]
+        if not driver_changed:
+            return self._fail_alone(self._take(), push, reason)
+        return [self._logged(push, reason), *self._stop(reason, held)]
 
     def _take(self) -> Step:
         step, self.running = self.running, None
@@ -362,14 +360,15 @@ class Lifecycle:
             raise RuntimeError('no step is running')
         return step
 
-    def _fail(self, step: Step, reason: str) -> list[Action]:
-        """The next push, ``step``, fails: state k is state k-1."""
-        if self.added is None:
-            raise RuntimeError('the opening stops the accumulator')
-        push = self.added + 1
-        self.added = push
+    def _logged(self, push: int, reason: str) -> LogFailure:
+        """Push ``push`` failed, for ``reason``."""
         self.failed[push] = reason
-        return [LetGo(step.reads), LogFailure(push, reason), FailStates(push, reason)]
+        return LogFailure(push, reason)
+
+    def _fail_alone(self, step: Step, push: int, reason: str) -> list[Action]:
+        """Push ``push``, ``step``, fails alone: state k is state k-1."""
+        self.added = push
+        return [LetGo(step.reads), self._logged(push, reason), FailStates(push, reason)]
 
     def _stop(self, reason: str, held: bool) -> list[Action]:
         stopped = f'the accumulator stopped: {reason}'

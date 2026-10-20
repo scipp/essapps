@@ -128,7 +128,9 @@ def test_a_push_that_fails_before_the_driver_has_rows_fails_alone(
     advanced(opened)
 
     reason = 'push 1 failed: file signature not found'
-    assert opened.step_failed('file signature not found', fatal=False, held=True) == [
+    assert opened.step_failed(
+        'file signature not found', driver_changed=False, held=True
+    ) == [
         LetGo(step.reads),
         LogFailure(1, reason),
         FailStates(1, reason),
@@ -146,13 +148,13 @@ def test_a_push_that_may_leave_rows_in_the_driver_stops_the_accumulator(
 
     failed = 'push 1 failed: cannot add'
     reason = f'the accumulator stopped: {failed}'
-    assert opened.step_failed('cannot add', fatal=True, held=True) == [
+    assert opened.step_failed('cannot add', driver_changed=True, held=True) == [
         LogFailure(1, failed),
         LetGo(step.reads),
         LetGo(later.reads),
         FailStates(0, reason),
     ]
-    assert (opened.unreadable, opened.push_refused()) == (reason, reason)
+    assert (opened.unreadable, opened.refusal()) == (reason, reason)
     assert opened.push_failure(1) == failed
     assert (opened.push_status(2), opened.push_failure(2)) == (
         Status.CANCELLED,
@@ -165,14 +167,12 @@ def test_a_push_that_may_leave_rows_in_the_driver_stops_the_accumulator(
 
 def test_a_failed_opening_stops_the_accumulator() -> None:
     lifecycle = Lifecycle()
-    lifecycle.queue(OPENING)
+    lifecycle.queue(opening := Step({}, [('a', 'value')]))
     advanced(lifecycle)
 
     reason = 'the accumulator stopped: opening failed: no such file'
-    assert lifecycle.step_failed('no such file', fatal=False, held=False) == [
-        FailStates(0, reason),
-        DropDriver(),
-    ]
+    failed = lifecycle.step_failed('no such file', driver_changed=False, held=False)
+    assert failed == [LetGo(opening.reads), FailStates(0, reason), DropDriver()]
 
 
 def test_a_failure_since_a_pin_of_a_push_it_holds_is_found(opened: Lifecycle) -> None:
@@ -192,7 +192,6 @@ def test_a_failure_since_a_pin_of_a_push_it_holds_is_found(opened: Lifecycle) ->
 def test_pushes_wait_while_a_freeze_is_checked(opened: Lifecycle) -> None:
     opened.start_check()
 
-    assert opened.checking
     assert opened.phase == Checking()
     opened.end_check(None)  # refused
     assert opened.phase == Open()
@@ -210,8 +209,10 @@ def test_a_freeze_takes_no_pushes_and_its_record_is_read_once_completed(
     assert opened.phase == Freezing('r')
     assert opened.is_freeze('r')
     assert not opened.is_freeze('other')
-    assert opened.push_refused() == 'the accumulator was frozen as record r'
-    assert opened.freeze_refused() == 'the accumulator is frozen as record r'
+    assert opened.refusal() == (
+        'the accumulator is frozen as record r; '
+        'it takes pushes and freezes again if that record fails'
+    )
     assert (opened.unreadable, opened.status()) == (None, Status.PENDING)
     opened.freeze_finished('other', completed=True)
     assert opened.phase == Freezing('r')
@@ -230,14 +231,14 @@ def test_a_freeze_whose_record_fails_leaves_the_accumulator_open(
     opened.freeze_finished('r', completed=False)
 
     assert opened.phase == Open()
-    assert (opened.push_refused(), opened.freeze_refused()) == (None, None)
+    assert opened.refusal() is None
 
 
 def test_a_stop_while_a_freeze_is_checked_stays(opened: Lifecycle) -> None:
     opened.queue(push())
     advanced(opened)
     opened.start_check()
-    opened.step_failed('cannot add', fatal=True, held=False)
+    opened.step_failed('cannot add', driver_changed=True, held=False)
     opened.end_check(None)
 
     assert isinstance(opened.phase, Stopped)
@@ -252,10 +253,6 @@ def test_a_release_drops_the_steps_that_no_reader_needs(opened: Lifecycle) -> No
     assert opened.release([2]) == [LetGo(steps[3].reads), LetGo(steps[2].reads)]
     assert opened.released
     assert list(opened.steps) == [steps[1]]
-    assert (opened.push_status(4), opened.push_failure(4)) == (
-        Status.CANCELLED,
-        'the accumulator was released',
-    )
     assert opened.push_status(2) is Status.PENDING
     assert opened.unread(2, list) == [LetGo(steps[1].reads)]  # no reader left
     assert opened.running == steps[0]  # a running step stays
