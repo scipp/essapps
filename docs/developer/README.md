@@ -220,7 +220,7 @@ A *request* is a spec and its params, given by keyword:
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
                                       'sample': dataset(run=60339),
                                       'can': dataset(run=60338)})      # submit, then wait
-client.output(result, 'iofq')            # raises if the record failed
+client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
@@ -257,7 +257,8 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 **Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each inline value by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
 An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
 In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
-A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
+A request that cannot run is refused at submission with a `SubmitError`.
+Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
 Validation in the request phase never proves that a workflow will succeed.
@@ -383,7 +384,7 @@ A submission may reference only
 - the current state of its client's own accumulators.
 
 Any other reference is refused, even to a record that is still pending.
-`client.output` reads only the same values, and raises for any other.
+`client.output` reads only the same values, and raises `NotReadable` for any other.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
@@ -392,7 +393,7 @@ result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': datase
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
-client.output(centre, 'centre')     # raises: this client released it
+client.output(centre, 'centre')     # raises NotReadable: this client released it
 ```
 
 `client.close()`, or the end of a `with client:` block, releases everything the client keeps.

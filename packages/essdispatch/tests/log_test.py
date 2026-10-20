@@ -18,6 +18,7 @@ from ess.dispatch import (
     Accumulator,
     Backend,
     Client,
+    NotReadable,
     Record,
     Request,
     Status,
@@ -329,7 +330,7 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     assert again.failure(records) == ['the backend restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
         again.submit(TOTAL, params={'part': [pending.ref('value')]})
-    with pytest.raises(SubmitError, match='released or is unknown'):
+    with pytest.raises(SubmitError, match='is not kept by this client'):
         again.submit(TOTAL, params=_read(total))  # the accumulator did not survive
 
 
@@ -343,7 +344,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(LookupError, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='not kept by this client'):
         again.output(load, 'value')
 
 
@@ -397,9 +398,9 @@ def test_a_refused_call_writes_nothing_to_the_log(
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, params={'part': [other]})
-    with pytest.raises(SubmitError, match='rows of a blank table'):
+    with pytest.raises(SubmitError, match='not a blank table'):
         total.push(other=[load.ref('value')])
-    with pytest.raises(SubmitError, match='has no rows'):
+    with pytest.raises(SubmitError, match='gives no rows'):
         total.push(part=[])
     with pytest.raises(SubmitError, match=r'part\[1\]: repeats part\[0\]'):
         total.push(part=[load.ref('value')])

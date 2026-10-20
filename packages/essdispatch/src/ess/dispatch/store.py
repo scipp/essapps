@@ -29,6 +29,6 @@ class Store(Protocol):
         """
         The value of an output that was written. Raises ``LookupError`` if the
         store no longer holds it, for example once dropped to free disk space:
-        a client's read of it then raises ``LookupError``, as for a value that
+        a client's read of it then raises ``NotReadable``, as for a value that
         nothing keeps, and a request that reads it fails.
         """

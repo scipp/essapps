@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from ess.dispatch import (
     Backend,
     Client,
+    FieldError,
+    RecordFailed,
     Request,
     Selector,
     Status,
@@ -321,9 +323,7 @@ def _boxed(value: Any) -> Request:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r'^second: anything/v1: cannot be stored as JSON'
-    ):
+    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored as JSON'):
         client.submit({'first': _boxed(1), 'second': _boxed(len)})
     assert client.records() == []
 
@@ -525,8 +525,11 @@ def test_reading_an_output_of_a_failed_record_raises(
     gate.open.set()
     failed = client.compute(load(3))
 
-    with pytest.raises(RuntimeError, match='negative run'):
+    with pytest.raises(RecordFailed, match='negative run') as raised:
         client.output(failed, 'value')
+    assert raised.value.record == failed.id
+    assert raised.value.status is Status.FAILED
+    assert raised.value.reason == client.failure(failed)
 
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
@@ -623,8 +626,11 @@ def test_cancel_drops_what_is_running(client: Client, gate: Gate) -> None:
     gate.open.set()
 
     assert client.wait(running) is Status.CANCELLED
-    with pytest.raises(RuntimeError, match='cancelled'):
+    with pytest.raises(
+        RecordFailed, match=f'^record {running.id} cancelled$'
+    ) as raised:
         client.output(running, 'value')
+    assert (raised.value.status, raised.value.reason) == (Status.CANCELLED, None)
 
 
 def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -> None:
@@ -638,6 +644,25 @@ def test_a_reference_to_a_failed_record_is_refused(client: Client, gate: Gate) -
 def test_a_refusal_names_the_request_and_the_field(client: Client) -> None:
     with pytest.raises(SubmitError, match=r'^second: sample: unknown dataset run:9$'):
         client.submit({'first': load(1), 'second': load(9)})
+    with pytest.raises(SubmitError) as raised:
+        client.submit([load(1), load(9)])
+    assert raised.value.errors == (FieldError(1, ('sample',), 'unknown dataset run:9'),)
+    assert str(raised.value) == '[1]: sample: unknown dataset run:9'
+
+
+def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
+    typo = Request(
+        ANYTHING,
+        params={'box': {'item': {'valeu': 1, 'other': 2}}, 'sample': dataset(run=1)},
+    )
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit({'typo': typo})
+    assert [(e.entry, e.loc) for e in raised.value.errors] == [
+        ('typo', ('box', 'item', 'valeu')),
+        ('typo', ('box', 'item', 'other')),
+    ]
+    assert str(raised.value).count('typo: box.item.') == 2
 
 
 # Tables in a plain request

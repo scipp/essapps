@@ -254,6 +254,19 @@ def test_a_group_given_field_by_field_is_refused(
         client.submit(RUNS, params={'runs': [row]})
 
 
+def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None:
+    rows = [
+        {'file': dataset_ref(run=1)},
+        {'file': dataset_ref(run=2), 'shift': {'offset': 'x'}},
+    ]
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RUNS, params={'runs': rows})
+    (error,) = raised.value.errors
+    assert (error.entry, error.loc) == (None, ('runs', 1, 'shift', 'offset'))
+    assert str(raised.value) == f'runs[1].shift.offset: {error.msg}'
+
+
 def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
     client: Client, loaded: Record
 ) -> None:

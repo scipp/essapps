@@ -24,6 +24,7 @@ from ess.dispatch import (
     Backend,
     Client,
     ClientEnded,
+    NotReadable,
     Record,
     Request,
     Selector,
@@ -655,8 +656,10 @@ def test_the_stages_and_accumulators_of_another_client_are_refused(
 
     with pytest.raises(SubmitError, match='the stage was released or is unknown'):
         _shift(theirs, stage, 2.0)
-    with pytest.raises(SubmitError, match='the accumulator was released or is'):
+    with pytest.raises(SubmitError, match='is not kept by this client'):
         theirs.submit(_read(total))
+    with pytest.raises(NotReadable, match='is not kept by this client'):
+        theirs.output(total)
 
 
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(
@@ -776,7 +779,7 @@ def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> No
     client.release(load)
 
     not_kept = f'record {load.id} is not kept by this client'
-    with pytest.raises(LookupError, match=not_kept):
+    with pytest.raises(NotReadable, match=not_kept):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
         client.submit(_read(load))
@@ -797,7 +800,7 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
     loading.set()
 
     assert client.output(total, 'value') == 3.0
-    with pytest.raises(LookupError, match='not kept'):  # read, then dropped
+    with pytest.raises(NotReadable, match='not kept'):  # read, then dropped
         client.output(first, 'value')
 
 
@@ -872,12 +875,37 @@ def test_a_client_reads_and_references_only_what_it_keeps(
 
     for record in (done, pending):
         not_kept = f'record {record.id} is not kept by this client'
-        with pytest.raises(LookupError, match=not_kept):
+        with pytest.raises(NotReadable, match=not_kept):
             other.output(record, 'value')
         with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
             other.submit(_read(record))
     loading.set()
     assert other.wait(pending) is Status.COMPLETED  # its status is the proposal's
+
+
+def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
+    client: Client,
+) -> None:
+    load = client.compute(_load(1))
+    total = client.accumulator(Template(TOTAL, blanks=('parts',)))
+    client.release([load, total])
+    unknown_load = load.model_copy(update={'id': 'unknown'})
+    unknown_total = copy.copy(total)
+    unknown_total.id = 'unknown'
+
+    for released in (
+        lambda: client.output(load, 'value'),
+        lambda: client.output(total),
+        lambda: total.push(parts=[1.0]),
+    ):
+        with pytest.raises(NotReadable, match='is not kept by this client'):
+            released()
+    for unknown in (
+        lambda: client.output(unknown_load, 'value'),
+        lambda: client.output(unknown_total),
+    ):
+        with pytest.raises(KeyError, match=r"'no .* unknown in proposal p1'"):
+            unknown()
 
 
 def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
@@ -910,8 +938,9 @@ def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> No
         lambda: client.datasets.list(Selector()),
     ]
     for call in calls:
-        with pytest.raises(ClientEnded):
+        with pytest.raises(ClientEnded) as raised:
             call()
+        assert not isinstance(raised.value, RuntimeError | LookupError)
 
 
 def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(
@@ -1089,7 +1118,7 @@ def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(
     ) as refused:
         client.submit(WALK, params={**flipped, 'steps': [Step(size=1.0)]})
     reason = f'^{re.escape(str(refused.value))}$'
-    with pytest.raises(LookupError, match=reason):
+    with pytest.raises(NotReadable, match=reason):
         client.output(walk)
     with pytest.raises(SubmitError, match=reason):
         client.freeze(walk)
@@ -1143,7 +1172,7 @@ def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
         lambda: client.output(record, 'spread'),
         lambda: client.output(spread, 'spread'),
     ):
-        with pytest.raises(LookupError, match='the workflow did not return it'):
+        with pytest.raises(NotReadable, match='the workflow did not return it'):
             read()
     left_out = f'record {record.id} output spread: the workflow did not return it'
     with pytest.raises(SubmitError, match=rf'^source: {left_out}$'):
@@ -1165,7 +1194,7 @@ def test_a_state_with_nothing_pushed_is_read_as_the_plain_request_over_no_rows(
 
     assert client.output(summed, 'value') == client.output(plain, 'value') == 0.0
     assert client.provenance(summed).request == plain.request
-    with pytest.raises(LookupError, match=f'^{re.escape(str(refused.value))}$'):
+    with pytest.raises(NotReadable, match=f'^{re.escape(str(refused.value))}$'):
         client.output(total)
 
 
@@ -1354,8 +1383,12 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         client.submit(SHIFT, params={'source': extra})
     with pytest.raises(SubmitError, match=r'^shift: .* does not fit Shift'):
         client.submit(SHIFT, params={'shift': total.ref('value'), 'source': 1.0})
-    with pytest.raises(SubmitError, match=r'^source: the accumulator was released or'):
+    with pytest.raises(
+        SubmitError, match=r'^source: no accumulator .* in proposal p2$'
+    ):
         elsewhere.submit(_read(total))
+    with pytest.raises(KeyError, match='in proposal p2'):
+        elsewhere.output(total)
 
 
 def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
@@ -1421,7 +1454,7 @@ def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
     state = _state(client, read)
     assert client.wait(read) is Status.FAILED
     assert client.failure([state, read]) == [stopped, f'record {state.id} failed']
-    with pytest.raises(SubmitError, match=f'^{stopped}$'):
+    with pytest.raises(NotReadable, match=f'^{stopped}$'):
         total.push(parts=[pending.ref('value')])
 
 
@@ -1594,12 +1627,12 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     assert client.wait(after) is Status.FAILED
     assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
     assert len(state.request.params['parts']) == 2  # the push is in the log
-    with pytest.raises(SubmitError, match=f'^{stopped}$'):
+    with pytest.raises(NotReadable, match=f'^{stopped}$'):
         total.push(parts=[summed_loads[2].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {stopped}$'):
         client.submit(_read(total))  # it may be half added
     for read in (lambda: client.output(total), lambda: client.provenance(total)):
-        with pytest.raises(LookupError, match=f'^{stopped}$'):
+        with pytest.raises(NotReadable, match=f'^{stopped}$'):
             read()
     assert client.output(before, 'value') == 1.0
 
@@ -1618,9 +1651,9 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
         summed = client.accumulator(Template(SUM, blanks=('runs',)))  # returns first
 
         stopped = 'the accumulator stopped: opening failed: cannot open'
-        with pytest.raises(LookupError, match=f'^{stopped}$'):
+        with pytest.raises(NotReadable, match=f'^{stopped}$'):
             client.output(summed)
-        with pytest.raises(SubmitError, match=f'^{stopped}$'):
+        with pytest.raises(NotReadable, match=f'^{stopped}$'):
             summed.push(runs=[dataset(run=1)])
 
 
@@ -1969,7 +2002,7 @@ def test_no_client_reads_or_references_the_record_of_a_state(
     state = _state(client, copied)
 
     not_kept = f'record {state.id} is not kept by this client'
-    with pytest.raises(LookupError, match=f'^{not_kept}$'):
+    with pytest.raises(NotReadable, match=f'^{not_kept}$'):
         client.output(state, 'value')
     for refuse in (
         lambda: client.submit(COPY, params={'source': state.ref('value')}),
@@ -2154,8 +2187,8 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     copied = _copy(client, total)
     client.release(total)  # the copy is still a reader of its state
 
-    released = 'the accumulator was released or is unknown'
-    with pytest.raises(SubmitError, match=f'^{released}$'):
+    released = f'accumulator {total.id} is not kept by this client'
+    with pytest.raises(NotReadable, match=f'^{released}$'):
         total.push(parts=[loads[1].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {released}$'):
         _copy(client, total)
@@ -2163,7 +2196,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
         lambda: client.output(total, 'value'),
         lambda: client.provenance(total),
     ):
-        with pytest.raises(LookupError, match=f'^{released}$'):
+        with pytest.raises(NotReadable, match=f'^{released}$'):
             read()
     copying.go.set()
     assert _listed(client.output(copied, 'value')) == [1.0]  # read after the release
@@ -2305,7 +2338,7 @@ def test_a_state_is_read_once_its_plain_request_would_be_accepted(
     with pytest.raises(SubmitError, match=rf'^source: {reason}$'):
         _copy(client, both, 'difference')
     for read in (lambda: client.output(both), lambda: client.provenance(both)):
-        with pytest.raises(LookupError, match=f'^{reason}$'):
+        with pytest.raises(NotReadable, match=f'^{reason}$'):
             read()
     both.push(backgrounds=[loads[1].ref('value')])
     tables['backgrounds'] = [loads[1].ref('value')]
@@ -2472,11 +2505,11 @@ def test_a_frozen_accumulator_is_read_through_its_record(
     total = client.freeze(sides)
     client.wait(total)
 
-    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+    with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.output(sides)
     with pytest.raises(SubmitError, match=f'read record {total.id} instead'):
         _copy(client, sides, 'difference')
-    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+    with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.provenance(sides)
     copied = client.compute(COPY, params={'source': total.ref('difference')})
     assert _listed(client.output(copied, 'value')) == [1.0]
@@ -2587,7 +2620,7 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     subtracting.refusing = True
     sides.push(samples=[loads[1].ref('value')])  # fails to add
 
-    with pytest.raises(LookupError, match='push 1 failed: cannot add'):
+    with pytest.raises(NotReadable, match='push 1 failed: cannot add'):
         client.output(sides, 'difference')
     gc.collect()
     assert subtracting.held[0]() is None  # nothing reads it any more

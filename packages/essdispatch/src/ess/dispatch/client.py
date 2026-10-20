@@ -65,12 +65,12 @@ def _reshape(what: Any, items: list[Any]) -> Any:
     return items[0]
 
 
-def _names(what: Any) -> list[str | None]:
-    """How each item of ``what`` is named in messages: its key or its index."""
+def _names(what: Any) -> list[str | int | None]:
+    """How each item of ``what`` is named in errors: its key or its index."""
     if isinstance(what, Mapping):
         return [str(key) for key in what]
     if isinstance(what, list | tuple):
-        return [f'[{i}]' for i in range(len(what))]
+        return list(range(len(what)))
     return [None]
 
 
@@ -211,10 +211,10 @@ class Accumulator:
         If adding fails, such as for data that fail their table's check, or
         a record has not completed, the accumulator stops for good: the
         records of states it did not reach fail, and so do the requests that
-        read them, and every later push and pin is refused. The reason names
-        the step, such as ``push 0`` for the first push. A controller that
-        should skip a run whose reduction failed waits for that record before
-        it pushes.
+        read them, and every later push and pin is refused: a push or a read
+        raises ``NotReadable``. The reason names the step, such as ``push 0``
+        for the first push. A controller that should skip a run whose
+        reduction failed waits for that record before it pushes.
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(
@@ -329,12 +329,20 @@ class Client:
 
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
-        raises ``SubmitError`` naming the field at fault, after the request's
-        key or index if several are given: an invalid value, an unknown spec
-        or dataset, an inline value for a type without a JSON form, a reference
-        where none may stand, such as to a whole list, a reference the client
-        may not read, or one whose data do not fit its field. Then no request
-        of the call is submitted; the records of earlier calls stay.
+        raises ``SubmitError``: an invalid value, an unknown spec or dataset,
+        an inline value for a type without a JSON form, a reference where
+        none may stand, such as to a whole list, a reference the client may
+        not read, or one whose data do not fit its field. Each of its
+        ``errors`` names the field at fault by its place, ``loc``, and the
+        request by its key or index, ``entry``, if several are given (see
+        :class:`~ess.dispatch.errors.FieldError`)::
+
+            except SubmitError as error:
+                for e in error.errors:
+                    form.mark(e.entry, e.loc, e.msg)  # 'typo', ('reduction', 'bins')
+
+        Then no request of the call is submitted; the records of earlier
+        calls stay.
 
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
@@ -500,14 +508,15 @@ class Client:
         is None; an optional output that was not returned is left out.
 
         A record's, once it has completed, if the client keeps it, or once
-        written, if persisted; raises ``LookupError`` for a record it neither
+        written, if persisted; raises ``NotReadable`` for a record it neither
         keeps nor persisted, whose write failed, or whose value the store no
-        longer holds, and ``RuntimeError`` for one that fails or is cancelled.
-        An accumulator's are those of its state after the pushes so far, once
-        they are added, copied, so that like a record's they do not change.
-        The read makes no record. It raises ``LookupError`` if the state's
-        plain request would be refused, with its reason, also for a state
-        with nothing pushed.
+        longer holds, and ``RecordFailed`` for one that fails or is
+        cancelled. An accumulator's are those of its state after the pushes
+        so far, once they are added, copied, so that like a record's they do
+        not change. The read makes no record. It raises ``NotReadable`` for
+        an accumulator released or stopped, and if the state's plain request
+        would be refused, with its reason, also for a state with nothing
+        pushed.
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as

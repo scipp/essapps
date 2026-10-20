@@ -159,24 +159,40 @@ def _ref_at(where: str, value: Any) -> Ref | None:
         raise ValueError(f'{where}: {error}') from None
 
 
-def places(name: str, value: Any) -> list[tuple[str, str | None, Any]]:
+type Loc = tuple[str | int, ...]
+"""
+A place in the params of a request, as pydantic's errors give one: the
+parameter's name, then the index of a row or the name of a field, such as
+``('runs', 2, 'transmission')``.
+"""
+
+
+def loc_text(loc: Loc) -> str:
+    """A place as a message names it, such as ``runs[2].transmission``."""
+    return ''.join(
+        f'[{part}]' if isinstance(part, int) else f'.{part}' if i else part
+        for i, part in enumerate(loc)
+    )
+
+
+def places(name: str, value: Any) -> list[tuple[Loc, str | None, Any]]:
     """
     The places in the value of the parameter ``name`` where a request may
     hold a reference, each with the field of a group it is at, if any, and
     what it holds: the value, or each element of a list, such as
-    ``runs[2]``, and each field of one of these that is an object but not a
-    reference, the inline value of a group, such as ``sample.run`` or
-    ``runs[2].run``; never deeper.
+    ``('runs', 2)``, and each field of one of these that is an object but not
+    a reference, the inline value of a group, such as ``('sample', 'run')``
+    or ``('runs', 2, 'run')``; never deeper.
     """
     if isinstance(value, list):
-        tops = [(f'{name}[{i}]', item) for i, item in enumerate(value)]
+        tops = [((name, i), item) for i, item in enumerate(value)]
     else:
-        tops = [(name, value)]
-    found: list[tuple[str, str | None, Any]] = []
-    for where, item in tops:
-        found.append((where, None, item))
+        tops = [((name,), value)]
+    found: list[tuple[Loc, str | None, Any]] = []
+    for loc, item in tops:
+        found.append((loc, None, item))
         if _is_group(item):
-            found.extend((f'{where}.{f}', f, v) for f, v in item.items())
+            found.extend(((*loc, f), f, v) for f, v in item.items())
     return found
 
 
@@ -185,10 +201,10 @@ def _is_group(value: Any) -> bool:
     return isinstance(value, Mapping) and '@ref' not in value
 
 
-def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
+def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
     """
     Each reference in the params of a request, with its place, such as
-    ``sample``, ``runs[2]``, or ``runs[2].transmission``.
+    ``('sample',)``, ``('runs', 2)``, or ``('runs', 2, 'transmission')``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
     form, and is looked for at the places :func:`places` names. Any other
@@ -196,9 +212,9 @@ def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
     :func:`as_ref`).
     """
     for name, value in params.items():
-        for where, _, item in places(name, value):
-            if (ref := _ref_at(where, item)) is not None:
-                yield where, ref
+        for loc, _, item in places(name, value):
+            if (ref := _ref_at(loc_text(loc), item)) is not None:
+                yield loc, ref
 
 
 def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:

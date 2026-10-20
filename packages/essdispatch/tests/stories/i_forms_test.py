@@ -7,7 +7,7 @@ value, or each row, inline or by reference.
 
 import pytest
 
-from ess.dispatch import Client, Template
+from ess.dispatch import Client, NotReadable, Template
 
 from .conftest import (
     CENTRED_MULTI,
@@ -39,7 +39,7 @@ def test_i1_time_slices_found_by_a_first_reduction(
     assert provenance.records() == [slicer]
 
     slices.push(time_range=[TimeRange(start=0, stop=2)])  # slice 0, typed in
-    with pytest.raises(LookupError, match=r'push 1 failed: time_range\[3\]: repeats'):
+    with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'):
         client.output(slices, 'sliced')
 
 

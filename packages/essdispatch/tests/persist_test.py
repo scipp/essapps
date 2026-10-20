@@ -18,6 +18,8 @@ from ess.dispatch import (
     Backend,
     Client,
     ClientEnded,
+    NotReadable,
+    RecordFailed,
     Status,
     SubmitError,
     Template,
@@ -123,7 +125,8 @@ def _sample(n: int) -> dict[str, Any]:
 class GatedStore(FakeStore):
     """
     A fake store whose writes wait until ``gate`` is set; ``entered`` is set
-    once one waits.
+    once one waits. ``forgotten`` holds the values it no longer holds, as if
+    dropped to free disk space, by record and output.
     """
 
     def __init__(self) -> None:
@@ -131,11 +134,17 @@ class GatedStore(FakeStore):
         self.gate = threading.Event()
         self.gate.set()
         self.entered = threading.Event()
+        self.forgotten: set[tuple[str, str]] = set()
 
     def write(self, record: str, output: str, value: Any) -> None:
         self.entered.set()
         assert self.gate.wait(timeout=5), 'a test left the gate closed'
         super().write(record, output, value)
+
+    def read(self, record: str, output: str) -> Any:
+        if (record, output) in self.forgotten:
+            raise KeyError((record, output))
+        return super().read(record, output)
 
 
 @pytest.fixture
@@ -222,6 +231,16 @@ def client(connect: Callable[[], Client]) -> Client:
     return connect()
 
 
+def test_a_value_the_store_no_longer_holds_cannot_be_read(
+    client: Client, store: GatedStore
+) -> None:
+    load = client.compute(LOAD, params=_sample(1), persist=True)
+    store.forgotten.add((load.id, 'value'))
+
+    with pytest.raises(NotReadable, match='the store no longer holds'):
+        client.output(load, 'value')
+
+
 def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     client: Client, connect: Callable[[], Client], store: GatedStore
 ) -> None:
@@ -231,7 +250,7 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     assert other.output(load, 'value') == 1.0
     assert (load.id, 'value') in store
     assert (load.id, 'extra') not in store
-    with pytest.raises(LookupError, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='not kept by this client'):
         client.output(load, 'extra')  # dropped once the record completed
     with pytest.raises(SubmitError, match='not kept by this client'):
         client.submit(SHIFT, params={'source': load.ref('extra')})
@@ -259,7 +278,7 @@ def test_a_failed_write_fails_a_record_persisted_at_submission(
 
     assert client.wait(load) is Status.FAILED
     assert client.failure(load) == 'the write failed: no space left on device'
-    with pytest.raises(RuntimeError, match='no space left'):
+    with pytest.raises(RecordFailed, match='no space left'):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match='failed'):
         client.submit(SHIFT, params={'source': load.ref('value')})
@@ -301,7 +320,7 @@ def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
     assert other.output(load, 'value') == 1.0
     client.release(load)
     assert client.output(load, 'value') == 1.0  # from the store
-    with pytest.raises(LookupError, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='not kept by this client'):
         client.output(load, 'extra')
 
 
@@ -320,7 +339,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     assert 'the write failed: no space left' in other.failure(shift)
     assert client.status(load) is Status.COMPLETED
     assert client.output(load, 'value') == 1.0  # the client still keeps it
-    with pytest.raises(LookupError, match='the write failed: no space left'):
+    with pytest.raises(NotReadable, match='the write failed: no space left'):
         other.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: no space left'):
         other.submit(SHIFT, params={'source': load.ref('value')})
@@ -366,7 +385,7 @@ def test_an_output_the_workflow_did_not_return_is_persisted_as_not_returned(
 ) -> None:
     load = client.compute(LOAD, params=_sample(1), persist=True)
 
-    with pytest.raises(LookupError, match='did not return it'):
+    with pytest.raises(NotReadable, match='did not return it'):
         connect().output(load, 'note')
     assert connect().output(load) == {'value': 1.0, 'extra': -1.0}
 
@@ -393,7 +412,7 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
 
     assert connect().output(frozen, 'value') == 1.0
     assert client.output(frozen, 'value') == 1.0
-    with pytest.raises(LookupError, match=f'read record {frozen.id} instead'):
+    with pytest.raises(NotReadable, match=f'read record {frozen.id} instead'):
         client.output(total, 'value')
 
 
@@ -463,7 +482,7 @@ def test_reading_every_output_raises_if_a_write_failed(
     store.fill()
     client.persist(load, 'value')
 
-    with pytest.raises(LookupError, match='the write failed: no space left'):
+    with pytest.raises(NotReadable, match='the write failed: no space left'):
         connect().output(load)
     store.free()
     client.persist(load, 'value')
@@ -493,7 +512,7 @@ def test_closing_a_client_whose_failed_write_succeeded_again_raises_nothing(
     load = client.compute(LOAD, params=_sample(1))
     store.fill()
     client.persist(load, 'value')
-    with pytest.raises(LookupError, match='the write failed'):
+    with pytest.raises(NotReadable, match='the write failed'):
         connect().output(load, 'value')  # waits for the write
     store.free()
     client.persist(load, 'value')
@@ -658,7 +677,7 @@ def test_a_write_that_had_not_ended_at_a_restart_has_failed(
 
     again = restart(tmp_path / 'log')
 
-    with pytest.raises(LookupError, match='the write failed: the backend restarted'):
+    with pytest.raises(NotReadable, match='the write failed: the backend restarted'):
         again.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: the backend restarted'):
         again.submit(SHIFT, params={'source': load.ref('value')})

@@ -3,7 +3,7 @@
 import pytest
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef
-from ess.spec.refs import as_ref, iter_refs, map_refs
+from ess.spec.refs import as_ref, iter_refs, loc_text, map_refs
 
 OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
 DATASET_REF = {'@ref': 'dataset', 'dataset': 'pid-1'}
@@ -42,13 +42,18 @@ PARAMS = {
 
 def test_iter_refs_gives_each_reference_of_the_params_with_its_place() -> None:
     assert [(p, str(r)) for p, r in iter_refs(PARAMS)] == [
-        ('sample', 'r1.data'),
-        ('runs[0]', 'pid-1'),
-        ('runs[2]', 'f2.file'),
-        ('sum', 'a1.data'),
-        ('rows[0].file', 'pid-1'),
-        ('group.centre', 'r1.data'),
+        (('sample',), 'r1.data'),
+        (('runs', 0), 'pid-1'),
+        (('runs', 2), 'f2.file'),
+        (('sum',), 'a1.data'),
+        (('rows', 0, 'file'), 'pid-1'),
+        (('group', 'centre'), 'r1.data'),
     ]
+
+
+def test_loc_text_names_a_place_as_a_message_does() -> None:
+    assert loc_text(('sample',)) == 'sample'
+    assert loc_text(('runs', 2, 'transmission')) == 'runs[2].transmission'
 
 
 def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
