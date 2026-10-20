@@ -68,8 +68,7 @@ class Binding[P: BaseModel, O: BaseModel](Protocol):
 
         It may be called from several threads at once, and does not modify
         ``params``. ``params`` is made from values each validated by its own
-        field, so the params model's model validators have not run; the
-        binding may run them.
+        field, and checked by the params model's model validators.
         """
         ...
 
@@ -122,6 +121,8 @@ class Driver[O: BaseModel](Protocol):
     - A driver may refuse a state, such as one whose runs it cannot
       combine yet, by raising in :meth:`outputs`; later pushes may make the
       state valid.
+    - A check across rows is the driver's: the params model's model
+      validators run when the accumulator opens, without the blank tables.
 
     A push that raises stops the accumulator, since the driver may hold part
     of its rows.

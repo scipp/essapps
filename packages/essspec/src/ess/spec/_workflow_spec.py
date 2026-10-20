@@ -88,13 +88,26 @@ framework: what the framework needs, it reads from the field types (see
   a check of one row belongs to the element type. A check of one value
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
+- A model validator of the params model, or of a group given field by field,
+  runs after validation, ``mode='after'``, and takes only ``self``. A
+  ``before`` or ``wrap`` validator would see the raw input, which differs
+  between the phases: JSON and references in the request phase, typed
+  values in the call phase.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - Each table is a list parameter without a default.
 
-A check across parameters is the binding's or the driver's, and fails when
-the request runs. The params model may state one as a model validator, but
-the framework never calls it: a stage and a driver never get a whole params
-instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
+A check across parameters is a model validator of the params model, or the
+binding's or the driver's, and fails when the request runs. A model
+validator checks and never changes values: it returns ``self`` (see
+:func:`ess.spec.field_types.check_model`). The backend runs it on the whole
+params instance wherever every value it reads is known: for a plain request
+in the call phase; at each call through a stage, on the fixed values and
+those of the blanks; and when an accumulator opens, on the template's values,
+with the blank tables left out. An accumulator whose model validator reads a
+blank table fails to open, since a check across rows is the driver's. So the
+record of an accumulator's state may be a plain request that a direct
+submission would refuse by a check across rows. A group given field by field
+is checked by its model validators once it is made from its fields.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs; its rows are distinct. A row with more than
@@ -117,6 +130,7 @@ Two forms exist, related by a one-way projection:
 from __future__ import annotations
 
 import functools
+import inspect
 from collections.abc import Sequence
 from types import NoneType, UnionType
 from typing import Annotated, Any, Self, Union, get_args, get_origin
@@ -343,9 +357,20 @@ def _one_or_list(annotation: Any) -> bool:
 def _model_validators_only(model: type[BaseModel]) -> list[str]:
     """
     Refuse a decorator of the params model itself but a model validator: a
-    field validator, a field or model serializer, or a computed field.
+    field validator, a field or model serializer, or a computed field; and a
+    model validator that does not run after validation, or takes ``info``.
     """
     decorators = model.__pydantic_decorators__
+    problems = []
+    for name, validator in decorators.model_validators.items():
+        where = f'{model.__name__}.{name}'
+        if (mode := validator.info.mode) != 'after':
+            problems.append(
+                f"{where}: a model validator is mode='after', not {mode!r}: it "
+                'would see the raw input, which differs between the phases'
+            )
+        elif len(inspect.signature(validator.func).parameters) != 1:
+            problems.append(f'{where}: a model validator takes only self, no info')
     if found := {
         kind: sorted(getattr(decorators, kind))
         for kind in (
@@ -357,11 +382,11 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
         )
         if getattr(decorators, kind)
     }:
-        return [
+        problems.append(
             f'{model.__name__}: no decorators but model validators, {found}; '
             "the check or the JSON form of one value belongs to the value's type"
-        ]
-    return []
+        )
+    return problems
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
@@ -408,10 +433,10 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     """
     Refuse a group given field by field whose fields a request cannot give
     each inline or by reference, as the params model's: a decorator but a
-    model validator, which the framework never calls, a field with an alias,
-    a file deeper than a field, a list or a dict without a JSON form, which no
-    reference stands for, and a default that is not a value, since a field
-    left out holds its default.
+    model validator that runs after validation and takes only ``self``, a
+    field with an alias, a file deeper than a field, a list or a dict
+    without a JSON form, which no reference stands for, and a default that
+    is not a value, since a field left out holds its default.
     """
     problems = _model_validators_only(group)
     for name, field in group.model_fields.items():

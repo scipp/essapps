@@ -79,14 +79,40 @@ class Made(BaseModel):
     made: PositiveValue
 
 
-class CheckedParams(BaseModel):
-    """Params whose model validator refuses every instance, to show where it runs."""
+class BoundsParams(BaseModel):
+    """Params whose model validator checks two values that are not tables."""
 
-    sample: list[SampleFile] = Field(min_length=1)
+    low: float = 0.0
+    high: float = 1.0
+    sample: list[SampleFile]
 
     @model_validator(mode='after')
-    def _refused(self) -> Self:
-        raise ValueError('the params model refuses')
+    def _ordered(self) -> Self:
+        if self.low >= self.high:
+            raise ValueError('low is not below high')
+        return self
+
+
+class OneRowParams(BaseModel):
+    """Params whose model validator reads a table: a check across rows."""
+
+    sample: list[SampleFile]
+
+    @model_validator(mode='after')
+    def _one_row(self) -> Self:
+        if len(self.sample) > 1:
+            raise ValueError('more than one sample')
+        return self
+
+
+class CopiedParams(BaseModel):
+    """Params whose model validator returns a copy, not the instance it checks."""
+
+    sample: list[SampleFile]
+
+    @model_validator(mode='after')
+    def _copied(self) -> Self:
+        return self.model_copy()
 
 
 def _spec(
@@ -112,7 +138,9 @@ TOTAL = _spec('total', params=TotalParams, tables=('sample', 'scaling'))
 MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
 USE_MANY = _spec('use-many', params=PositivesParams, tables=('positive',))
-CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
+BOUNDS = _spec('bounds', params=BoundsParams, tables=('sample',))
+ONE_ROW = _spec('one-row', params=OneRowParams, tables=('sample',))
+COPIED = _spec('copied', params=CopiedParams, tables=('sample',))
 UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
 """The sample runs of ``TOTAL`` as a blank table, without scaling."""
 
@@ -144,7 +172,7 @@ def use_many(params: PositivesParams) -> Value:
 
 
 class Count:
-    """A driver of CHECKED that counts the rows pushed."""
+    """A driver that counts the rows pushed."""
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
@@ -185,7 +213,9 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             function_binding(MAKE, make),
             StagedFunction(USE, use),
             kept_rows(USE_MANY, use_many),
-            Counting(CHECKED, Count),
+            Counting(BOUNDS, Count),
+            Counting(ONE_ROW, Count),
+            Counting(COPIED, Count),
         ],
     ) as client:
         yield client
@@ -418,13 +448,69 @@ def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
         acc.push(positive=[made])
 
 
-def test_the_params_model_s_model_validator_is_never_called(client: Client) -> None:
-    rows = {'sample': [dataset(run=1)]}
-    plain = client.compute(CHECKED, params=rows)
-    stage = client.stage(Template(CHECKED, blanks=('sample',)))
-    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
-    acc.push(**rows)
+# Model validators
+
+
+def test_a_model_validator_that_raises_fails_a_plain_request(client: Client) -> None:
+    ordered = client.compute(BOUNDS, params={'sample': [dataset(run=1)]})
+    unordered = client.compute(BOUNDS, params={'low': 2.0, 'sample': []})
+
+    assert client.output(ordered, 'value') == 1.0
+    assert client.failure(unordered) == 'BoundsParams._ordered: low is not below high'
+
+
+def test_a_model_validator_checks_each_call_through_a_stage_with_the_fixed_values(
+    client: Client,
+) -> None:
+    stage = client.stage(
+        Template(BOUNDS, params={'low': 2.0, 'sample': []}, blanks=('high',))
+    )
+    above = client.compute(stage, params={'high': 3.0})
+    below = client.compute(stage, params={'high': 1.0})
+    again = client.compute(stage, params={'high': 4.0})
+
+    assert client.output(above, 'value') == 0.0
+    assert client.failure(below) == 'BoundsParams._ordered: low is not below high'
+    assert client.output(again, 'value') == 0.0
+
+
+def test_a_model_validator_checks_an_accumulator_when_it_opens(client: Client) -> None:
+    ordered = client.accumulator(
+        Template(BOUNDS, params={'low': 0.5}, blanks=('sample',))
+    )
+    unordered = client.accumulator(
+        Template(BOUNDS, params={'low': 2.0}, blanks=('sample',))
+    )
+    ordered.push(sample=[dataset(run=1)])
+
+    assert client.output(ordered, 'value') == 1.0
+    with pytest.raises(
+        NotReadable, match=r'opening failed: BoundsParams\._ordered: low is not below'
+    ):
+        client.output(unordered, 'value')
+
+
+def test_an_accumulator_whose_model_validator_reads_a_table_fails_to_open(
+    client: Client,
+) -> None:
+    plain = client.compute(ONE_ROW, params={'sample': [dataset(run=1)]})
+    acc = client.accumulator(Template(ONE_ROW, blanks=('sample',)))
 
     assert client.output(plain, 'value') == 1.0
-    assert client.output(client.compute(stage, params=rows), 'value') == 1.0
-    assert client.output(acc, 'value') == 1.0
+    with pytest.raises(
+        NotReadable,
+        match=r"opening failed: OneRowParams._one_row reads the table sample, "
+        r".*; checks across rows are the driver's",
+    ):
+        client.output(acc, 'value')
+
+
+def test_a_model_validator_that_returns_another_instance_fails_the_request(
+    client: Client,
+) -> None:
+    computed = client.compute(COPIED, params={'sample': []})
+
+    assert client.failure(computed) == (
+        'CopiedParams._copied: a model validator checks and returns self, '
+        'not CopiedParams'
+    )

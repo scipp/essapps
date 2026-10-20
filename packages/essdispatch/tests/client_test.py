@@ -12,12 +12,12 @@ import weakref
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, NewType, Self
+from typing import Any, NewType
 
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.dispatch import (
     Accumulator,
@@ -223,19 +223,6 @@ class WalkParams(StepsParams):
 
 
 WALK = _spec('walk', params=WalkParams, tables=('steps',))
-
-
-class Unchecked(StepsParams):
-    """Its model validator always raises, which the framework never calls."""
-
-    @model_validator(mode='after')
-    def _raises(self) -> Self:
-        raise ValueError('a model validator was called')
-
-
-UNCHECKED_PLAIN = _spec('unchecked-plain', params=Unchecked, tables=('steps',))
-UNCHECKED_STAGED = _spec('unchecked-staged', params=Unchecked, tables=('steps',))
-UNCHECKED_ROWS = _spec('unchecked-rows', params=Unchecked, tables=('steps',))
 
 
 def load_run(params: Sample) -> LoadOutputs:
@@ -718,31 +705,6 @@ def test_a_params_model_makes_the_request_of_its_dict() -> None:
 
     assert by_model == by_dict  # defaults left to the backend's spec
     assert scaled.params['scale'] == {'factor': 2.0}
-
-
-def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
-    def sizes(params: StepsParams) -> Value:
-        return Value(value=params.scale.factor * sum(s.size for s in params.steps))
-
-    bind = [
-        function_binding(UNCHECKED_PLAIN, sizes),
-        StagedFunction(UNCHECKED_STAGED, sizes),
-        kept_rows(UNCHECKED_ROWS, sizes),
-    ]
-    with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        plain = client.compute(UNCHECKED_PLAIN, params={'steps': [Step(size=1.0)]})
-        stage = client.stage(
-            Template(
-                UNCHECKED_STAGED, params={'steps': [Step(size=2.0)]}, blanks=('scale',)
-            )
-        )
-        staged = client.compute(stage, params={'scale': {'factor': 2.0}})
-        rows = client.accumulator(Template(UNCHECKED_ROWS, blanks=('steps',)))
-        rows.push(steps=[Step(size=3.0)])
-
-        assert client.output(plain, 'value') == 1.0
-        assert client.output(staged, 'value') == 4.0
-        assert client.output(rows, 'value') == 3.0
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:

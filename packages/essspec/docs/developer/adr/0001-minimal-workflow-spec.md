@@ -194,19 +194,27 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - A table has no default (see the multi-run spec below).
 - The params model has no field validators, serializers, computed fields, or
   aliases, and no `default_factory` that takes the other values. A list
-  parameter carries only length constraints, such as `Field(min_length=2)`. The
-  params model may have model validators, but the framework never calls them.
+  parameter carries only length constraints, such as `Field(min_length=2)`.
+- A model validator of the params model, or of a group given field by field,
+  runs after validation, `mode='after'`, and takes only `self`. A `before` or
+  `wrap` validator would see the raw input, which differs between the phases.
 
 Each parameter is validated alone, in every phase: a template, a stage call,
-or a push gives some values only, so a check that read several parameters
-would hold for some requests of a spec and not for others. Like the params
-model, a group given field by field is never validated whole. A check of one
-value belongs to the value's type, as `EdgesModel` checks its edges, and so
-does the JSON form of a value, which the framework stores and reads back. A
-check across parameters, such as a transmission mode that requires a
-transmission run, is the binding's or the driver's, and fails when the request
-runs. A binding may run the model validators,
-`IofQParams.model_validate(dict(params))`, where it has the whole instance.
+or a push gives some values only. A check of one value belongs to the value's
+type, as `EdgesModel` checks its edges, and so does the JSON form of a value,
+which the framework stores and reads back. A check across parameters, such as
+a transmission mode that requires a transmission run, is a model validator of
+the params model, or the binding's or the driver's, and fails when the request
+runs. A model validator checks and never changes values: it returns `self`.
+The backend runs it wherever every value it reads is known: for a plain
+request when it runs, on the whole params instance; at each call through a
+stage, on the fixed values and the values of the blanks; and when an
+accumulator opens, on the template's values without the blank tables. An
+accumulator whose model validator reads a blank table fails to open, since a
+check across rows is the driver's. So the record of an accumulator's state may
+be a plain request that a direct submission would refuse by a check across
+rows; that is the one gap. A group given field by field is checked by its
+model validators once it is made from its fields.
 
 A default never changes which quantity an output is. The default of
 `reduction` is a setting, and the transmission `None` of a `Sample` takes the
@@ -481,9 +489,16 @@ output, and dims and units of an output for a UI.
   an example, would be read as one.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
-- **The framework running model validators of the params model.** A stage and a
-  driver never make a whole params instance, so such a check would hold for
-  some requests of a spec and not for others.
+- **Model validators allowed but never run, or refused**, with a check across
+  parameters only in the binding or the driver. Allowed but never run, they
+  give false confidence, since the author's tests construct the params model
+  and so run them. Refused, each binding repeats the check, and a stage's
+  binding has no whole instance to run it on: `make_stage` gets the fixed
+  values and each call the values of the blanks.
+- **A model validator that changes values.** A stage takes its fixed values
+  once, at its first call, so a change that a later call makes could not reach
+  the binding, and the record of a call would no longer rerun as its plain
+  request with the same result.
 - **Annotations on the fields that hold data**, marking what the framework
   resolves, the format of the bytes, and the array structure. The field types
   tell the framework the same, and the author writes no metadata for the

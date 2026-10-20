@@ -179,13 +179,25 @@ A value *round-trips* when its JSON form reads back as the value.
 - A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
-- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
+- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`.
+- A model validator of the params model, or of a group given field by field, runs after validation, `mode='after'`, and takes only `self`. A `before` or `wrap` validator would see the raw input, which differs between the phases: JSON and references when a request is submitted, typed values when it runs.
 
 Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
-Like the params model, a group given field by field is never validated whole.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
-A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
-A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
+A check across parameters, such as a transmission mode that requires a transmission run, is a model validator of the params model, or the binding's or the driver's, and fails when the request runs.
+A model validator checks and never changes values: it returns `self` and changes nothing in place.
+One that returns anything else fails the request.
+The backend runs the model validators wherever every value they read is known:
+
+| Request | Model validators run |
+|---|---|
+| plain request | when it runs, on the whole params instance |
+| call through a stage | at each call, on the fixed values and the values of the blanks |
+| accumulator | when it opens, on the template's values, without the blank tables |
+
+An accumulator whose model validator reads a blank table fails to open, since a check across rows is the driver's.
+So the record of an accumulator's state may be a plain request that a direct submission would refuse by a check across rows.
+A group given field by field is checked by its model validators once it is made from its fields, a row of a table before the driver gets it.
 
 **Defaults.** A default never changes which quantity an output is.
 `reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file: the output is I(Q) either way.
@@ -379,6 +391,7 @@ A value that is gone does not come back.
 The binding is a black box.
 The framework hands it a stage's fixed values at the stage's first call, an accumulator's template when it makes the driver, and a push's rows when the push is added.
 The framework does not track what the binding keeps after that.
+A stage whose params model has a model validator also holds its fixed values, as the binding took them, while it lives, since each call checks them with the values of the blanks.
 
 A submission may reference only
 
@@ -581,9 +594,9 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
-| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
-| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct; the model validators on the fixed values, without the blank tables, when the driver is made |
+| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct; the model validators on the fixed and the given values |
+| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type, a group by its model validators too; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.

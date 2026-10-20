@@ -30,11 +30,14 @@ An output value is kept while the client that made its record keeps it, while
 a stage whose template references it has yet to stage, while a pending
 request or a step of an accumulator that reads it has yet to run, or while a
 persist request waits for its write. Once a stage has staged, or a step is
-done, what the binding holds is its own. A pending record whose outputs
-nothing keeps is cancelled, since they would be dropped the moment they are
-computed; cancelling lets go of what it reads, so this passes along a chain.
-A workflow already running is not interrupted: its record is cancelled at
-once, and its outputs are dropped when it returns.
+done, what the binding holds is its own. So is what a stage whose params
+model has a model validator holds while it lives: its fixed values, as the
+binding took them, since each call checks them with the values of the
+blanks. A pending record whose outputs nothing keeps is cancelled, since
+they would be dropped the moment they are computed; cancelling lets go of
+what it reads, so this passes along a chain. A workflow already running is
+not interrupted: its record is cancelled at once, and its outputs are
+dropped when it returns.
 
 To persist an output is to write it to the backend's store, which then keeps
 it; a write replaces what the store holds under that name. A persist request
@@ -82,9 +85,10 @@ validates each value alone by its field, a row of a list by its element type:
 an inline value from its JSON form, which the log holds, so that both phases
 see the same values, and data read from the object (see
 :func:`ess.spec.field_types.validated`). For a plain request it makes the
-params instance from these values without validating again, so the params
-model's model validators never run; a stage or an accumulator gets the
-values by name. The rows of a table, if its element type has a JSON form,
+params instance from these values without validating them again, and checks
+it by the params model's model validators (see
+:func:`ess.spec.field_types.check_model`); a stage or an accumulator gets
+the values by name. The rows of a table, if its element type has a JSON form,
 are distinct by the JSON forms of the rows read, as the element type dumps
 them, too: an inline value and a reference to equal data are one row. A
 table that a request, a template, or a stage call
@@ -100,14 +104,15 @@ outside the blanks. The first such request to run has the binding make its
 stage with the template's values by name, each read and validated by its own
 field, and every request through the stage runs through the callable the
 binding returned, with the values of the blanks, so a binding that holds
-values computes only what depends on the blanks. The record of a request
-through a stage that has staged still names the template's values, but these
-references are provenance only: they are not checked against what the client
-keeps, waited for, or read, except by a restart, which runs the record as its
-plain request (see :meth:`Backend._restart`). If staging fails, the stage
-stops: the requests through it fail, and later ones are refused. A stage
-lives until its client releases it or ends, and the requests made through it
-have run.
+values computes only what depends on the blanks. Before each call, the
+model validators check the fixed values and those of the blanks together.
+The record of a request through a stage that has staged still names the
+template's values, but these references are provenance only: they are not
+checked against what the client keeps, waited for, or read, except by a
+restart, which runs the record as its plain request (see
+:meth:`Backend._restart`). If staging fails, the stage stops: the requests
+through it fail, and later ones are refused. A stage lives until its client
+releases it or ends, and the requests made through it have run.
 
 An accumulator opens from a template whose blanks are tables, checked as a
 stage's template is. Each push gives one or more rows of one or more blank
@@ -122,7 +127,10 @@ one that has failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order they
 were logged, on the workers: opening has the binding make the driver from the
-template's values by name, each read and validated by its own field, and each
+template's values by name, each read and validated by its own field, once
+the model validators have checked them, with the blank tables left out: a
+validator that reads one fails the opening, since a check across rows is
+the driver's. Each
 push is one push into the driver per table it gives rows of, in the order
 given, which may add the rows in place; each row is first read and
 validated by its table's element type,
@@ -150,8 +158,9 @@ of a state checks the number of rows of each blank table against its length
 constraints, such as a table that needs a row,
 outside the backend's lock, and a read of a state whose request would be
 refused is refused with that request's reason. Every other check was made
-when a value was given, and the params model's model validators run on no
-state.
+when a value was given or when the accumulator opened. So the plain request
+of a state may be one that a direct submission would refuse by a model
+validator that reads a table: a check across rows is the driver's.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
@@ -216,7 +225,7 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, json_form, optional, validated
+from ess.spec.field_types import base, check_model, json_form, optional, validated
 from ess.spec.refs import Loc, iter_refs, map_refs
 
 from .checks import Checks, check_fit, distinct, refs
@@ -339,7 +348,10 @@ class _Stage:
     template references, which the stage keeps as a reader until it has
     staged, has stopped, or is released; it is empty from then on. The first
     call to run stages the binding under ``staging``, so that concurrent calls
-    stage it once. ``call``, the callable the binding returned, and
+    stage it once. ``fixed`` holds the template's values as the binding took
+    them, once staged, if the params model has a model validator, which each
+    call runs on them and the values of the blanks; else it is ``None``.
+    ``call``, the callable the binding returned, and
     ``stopped``, why staging failed, change under the backend's lock. A stage
     that has stopped takes no more calls.
     """
@@ -352,6 +364,7 @@ class _Stage:
         self.template = template
         self.given = given
         self.reads = _output_reads(template.params)
+        self.fixed: dict[str, Any] | None = None
         self.call: StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
@@ -1194,17 +1207,25 @@ class Backend:
             params = spec.params.model_construct(
                 **self._typed(request.spec, request.params)
             )
+            check_model(spec.params, params)
             returned = self._bindings[request.spec].compute(params)
         else:
             fixed = {n: v for n, v in request.params.items() if n not in stage.given}
-            call = self._staged(
-                stage,
-                lambda: stage.binding.make_stage(
-                    self._typed(request.spec, fixed), stage.template.blanks
-                ),
-            )
+
+            def make() -> StageCall:
+                typed = self._typed(request.spec, fixed)
+                if spec.params.__pydantic_decorators__.model_validators:
+                    stage.fixed = typed
+                return stage.binding.make_stage(typed, stage.template.blanks)
+
+            call = self._staged(stage, make)
             given = {n: v for n, v in request.params.items() if n in stage.given}
-            returned = call(self._typed(request.spec, given))
+            typed = self._typed(request.spec, given)
+            if stage.fixed is not None:
+                check_model(
+                    spec.params, spec.params.model_construct(**stage.fixed, **typed)
+                )
+            returned = call(typed)
         return _outputs_of(request.spec, spec.outputs, returned)
 
     def _typed(
@@ -1870,8 +1891,9 @@ class Backend:
         says; on a worker, outside the backend's lock.
 
         The values are given by name, each read and validated by its own
-        field (see :meth:`_typed`). If the step fails, the accumulator stops,
-        since the driver may hold part of the rows.
+        field (see :meth:`_typed`); at the opening, the model validators check
+        them first, without the blank tables. If the step fails, the
+        accumulator stops, since the driver may hold part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
         # _unneeded keeps a busy step, and _stop runs only when no step is
@@ -1880,6 +1902,8 @@ class Backend:
         try:
             typed = self._typed(acc.template.spec, values, acc.rows_read)
             if acc.added is None:  # the opening, which makes the driver
+                params = acc.binding.spec.params
+                check_model(params, params.model_construct(**typed))
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:
                 for table, rows in typed.items():

@@ -22,7 +22,8 @@ the value of a field of another, so that an output of one spec can feed a
 parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone, as
 :func:`validated` does in the call phase and :func:`inline` for a value
-given inline.
+given inline. :func:`check_model` checks an instance made from such values
+by the model validators of its model.
 """
 
 from __future__ import annotations
@@ -255,8 +256,9 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
     A model of one value of the field ``name`` of ``model`` alone, with its
     config and without its validators: it validates one value by its own
     field, as every value of a request is validated, in both phases. The
-    params model has no decorators but model validators, which the framework
-    never calls; a check of one value belongs to the value's type.
+    params model has no decorators but model validators, which check the
+    instance made from such values (see :func:`check_model`); a check of one
+    value belongs to the value's type.
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
@@ -298,8 +300,8 @@ def validated(
     its JSON form, as the request phase validated it (see :func:`inline`), so
     that both phases see the same value: a strict enum takes its string only
     from JSON. A group given field by field (see :func:`by_field`), as a
-    mapping, is made from its fields, each validated so: like the params
-    model, it is never validated whole.
+    mapping, is made from its fields, each validated so, and then checked by
+    its model validators (see :func:`check_model`), as the params model is.
     """
     one = model_of(model, name, whole)
     tp = value_type(model.model_fields[name].annotation)
@@ -308,7 +310,9 @@ def validated(
         if by_field(tp) and isinstance(v, Mapping):
             group = base(tp)
             fields = {f: validated(group, f, x, read, whole=True) for f, x in v.items()}
-            return group.model_construct(**fields)
+            made = group.model_construct(**fields)
+            check_model(group, made)
+            return made
         if read is None:
             made = one.model_validate({name: v})
         elif isinstance(v, Ref):
@@ -320,6 +324,46 @@ def validated(
     if is_list(model, name) and not whole:
         return [check(v) for v in value]
     return check(value)
+
+
+def check_model(model: type[BaseModel], instance: BaseModel) -> None:
+    """
+    Check ``instance``, made by ``model.model_construct`` from values each
+    validated alone, by each model validator of ``model``, in turn.
+
+    A model validator runs after validation, ``mode='after'``, as a spec
+    requires, so it sees typed values. It checks and never changes values: it
+    returns ``self``, and changes nothing in place. Raises ``ValueError``,
+    naming the validator, if a validator raises or returns anything else::
+
+        @model_validator(mode='after')
+        def _sample_is_not_the_can(self) -> Self:
+            if self.sample == self.can:
+                raise ValueError('the sample run is the can run')
+            return self
+
+    A field that ``instance`` lacks is a table that an accumulator's pushes
+    fill, left out when it opens, so a validator that reads one fails with
+    a reason that names the table.
+    """
+    for name, validator in model.__pydantic_decorators__.model_validators.items():
+        where = f'{model.__name__}.{name}'
+        try:
+            returned = validator.func(instance)
+        except AttributeError as error:
+            if error.obj is not instance or error.name not in model.model_fields:
+                raise ValueError(f'{where}: {error}') from error
+            raise ValueError(
+                f'{where} reads the table {error.name}, which an accumulator\'s '
+                "pushes fill; checks across rows are the driver's"
+            ) from error
+        except Exception as error:  # a validator may raise anything
+            raise ValueError(f'{where}: {str(error) or repr(error)}') from error
+        if returned is not instance:
+            raise ValueError(
+                f'{where}: a model validator checks and returns self, not '
+                f'{type(returned).__name__}'
+            )
 
 
 def by_field(tp: Any) -> bool:

@@ -52,9 +52,9 @@ The checks of a request; a template, a push, and a state check part of these:
   key, an inline value by its JSON form, and a group given field by field by
   each of its fields so (see :func:`distinct`).
 
-The params model's model validators never run: a stage and a driver never
-get a whole params instance. A template's fixed values are checked each by
-its own field, and a push by its table's element type. The checks need
+The params model's model validators need typed values, so they run in the
+call phase (see ``backend.py``). A template's fixed values are checked each
+by its own field, and a push by its table's element type. The checks need
 neither the backend's lock nor a client: what depends on history or on what a
 client keeps is the backend's.
 """
@@ -167,9 +167,10 @@ class Checks:
         ``None``.
 
         Each value was checked by its field when it was given, and the params
-        model's model validators never run, so this checks the rest: the
-        number of rows of each table among the ``blanks``, by its length
-        constraints.
+        model's model validators ran when the accumulator opened, so this
+        checks the rest: the number of rows of each table among the
+        ``blanks``, by its length constraints. A check across rows is the
+        driver's.
         """
         try:
             _lengths(self.spec, plain.params, blanks)

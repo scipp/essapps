@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A value, or a row, given inline or by reference, as the request chooses."""
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NewType
@@ -10,7 +11,15 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass
 
-from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
+from ess.dispatch import (
+    Backend,
+    Client,
+    NotReadable,
+    Record,
+    Status,
+    SubmitError,
+    Template,
+)
 from ess.dispatch import dataset as dataset_ref
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import WorkflowSpec, function_binding
@@ -121,6 +130,7 @@ SUM = _spec('sum', SumParams, Value, tables=('part',))
 STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
 SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
 RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
+RUNS_ROWS = _spec('runs-rows', RunsParams, Value, tables=('runs',))
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -174,6 +184,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
                 SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
             ),
             function_binding(RUNS, runs),
+            kept_rows(RUNS_ROWS, runs),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -292,16 +303,19 @@ def test_a_dataset_stands_for_a_group_with_its_one_required_file(
     assert row['shift'] == {'offset': 0.0}
 
 
-def test_the_framework_never_validates_a_group_given_field_by_field_whole(
+def test_a_group_given_field_by_field_is_checked_by_its_model_validator(
     client: Client,
 ) -> None:
-    # Run's model validator refuses a negative offset; like the params model's,
-    # it is the binding's to run.
-    computed = client.compute(
-        RUNS, params={'runs': [{'file': dataset_ref(run=1), 'offset': -1.0}]}
-    )
+    # Run's model validator refuses a negative offset.
+    row = {'file': dataset_ref(run=1), 'offset': -1.0}
+    computed = client.compute(RUNS, params={'runs': [row]})
+    acc = client.accumulator(Template(RUNS_ROWS, blanks=('runs',)))
+    acc.push(runs=[row])
 
-    assert client.output(computed, 'value') == 0.0
+    reason = 'Run._offset_not_negative: a negative offset'
+    assert client.failure(computed) == reason
+    with pytest.raises(NotReadable, match=f'push 0 failed: {re.escape(reason)}'):
+        client.output(acc, 'value')
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:

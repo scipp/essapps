@@ -4,7 +4,7 @@ import dataclasses
 from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, NewType, TypedDict
+from typing import Annotated, Any, NewType, Self, TypedDict
 
 import pydantic
 import pytest
@@ -115,6 +115,43 @@ class SerializedParams(BaseModel):
     @field_serializer('reduction')
     def _bins(self, reduction: Reduction) -> int:
         return reduction.bins
+
+
+class BeforeParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _raw(cls, data: Any) -> Any:
+        return data
+
+
+class WrapParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='wrap')
+    @classmethod
+    def _wrapped(cls, data: Any, handler: pydantic.ModelWrapValidatorHandler) -> Any:
+        return handler(data)
+
+
+class InfoParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='after')
+    def _with_info(self, info: pydantic.ValidationInfo) -> Self:
+        return self
+
+
+class BeforeRun(BaseModel):
+    """A group that holds a file, with a model validator that sees the raw input."""
+
+    file: SampleFile
+
+    @model_validator(mode='before')
+    @classmethod
+    def _raw(cls, data: Any) -> Any:
+        return data
 
 
 class ComputedParams(BaseModel):
@@ -328,7 +365,8 @@ class TestModelRules:
         spec(**fields)
 
     def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
-        # The framework never calls it (see the backend's tests); a binding may.
+        # The backend runs it wherever every value it reads is known (see its
+        # tests).
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate({'sample': 'a.nxs', 'can': 'a.nxs'})
@@ -568,6 +606,22 @@ class TestModelRules:
             (
                 {'outputs': model('O', iofq=(list[list[IofQ]], ...))},
                 'O.iofq: an output is a type, possibly optional',
+            ),
+            (
+                {'params': BeforeParams},
+                "BeforeParams._raw: a model validator is mode='after', not 'before'",
+            ),
+            (
+                {'params': WrapParams},
+                "WrapParams._wrapped: a model validator is mode='after', not 'wrap'",
+            ),
+            (
+                {'params': InfoParams},
+                'InfoParams._with_info: a model validator takes only self, no info',
+            ),
+            (
+                {'params': model('P', run=(BeforeRun, ...))},
+                "P.run: BeforeRun._raw: a model validator is mode='after'",
             ),
         ],
     )
