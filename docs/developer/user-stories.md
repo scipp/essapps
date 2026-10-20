@@ -773,16 +773,17 @@ provenance = client.provenance(slices)
 assert provenance.request.params['time_range'] == found
 assert provenance.records() == [slicer]
 
-slices.push(time_range=[TimeRange(start=0, stop=2)])           # slice 0, typed in
-with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'):
-    client.output(slices, 'sliced')
+typed_in = slices.push(time_range=[TimeRange(start=0, stop=2)])  # slice 0, typed in
+assert client.wait(typed_in) == Status.FAILED
+assert client.failure(typed_in).startswith('push 2 failed: time_range[3]: repeats')
+assert client.output(slices, 'sliced').value == 21.0           # the sum goes on
 ```
 
 The client reads how many slices there are, since a reference names one row, never a whole list.
 The state's request holds the references, so it says where each slice came from.
 The rows of a table are compared as the request holds them and, since `TimeRange` has a JSON form, also by the rows read.
 So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one row.
-The repeat is found when the push is read, so the push fails and stops the accumulator, as any push whose data fail does.
+The repeat is found when the push is read, before the driver gets its rows, so the push fails alone: it adds no rows, and the accumulator takes more pushes.
 
 ### I2. A beam centre typed in or computed
 

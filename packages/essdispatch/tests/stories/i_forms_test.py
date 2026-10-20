@@ -5,9 +5,7 @@ A value typed in by one user and computed by another: the request gives each
 value, or each row, inline or by reference.
 """
 
-import pytest
-
-from ess.dispatch import Client, NotReadable, Template
+from ess.dispatch import Client, Status, Template
 
 from .conftest import (
     CENTRED_MULTI,
@@ -38,9 +36,10 @@ def test_i1_time_slices_found_by_a_first_reduction(
     assert provenance.request.params['time_range'] == found
     assert provenance.records() == [slicer]
 
-    slices.push(time_range=[TimeRange(start=0, stop=2)])  # slice 0, typed in
-    with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'):
-        client.output(slices, 'sliced')
+    typed_in = slices.push(time_range=[TimeRange(start=0, stop=2)])  # slice 0
+    assert client.wait(typed_in) == Status.FAILED
+    assert client.failure(typed_in).startswith('push 2 failed: time_range[3]: repeats')
+    assert client.output(slices, 'sliced').value == 21.0  # the sum goes on
 
 
 def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -> None:

@@ -34,6 +34,7 @@ from ess.dispatch.log import (
     NewStateRecord,
     Opened,
     Pushed,
+    PushFailed,
     Submitted,
 )
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
@@ -269,6 +270,40 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
         },
     )
     assert client.output(read, 'value') == 6.0
+
+
+def test_a_failed_push_is_logged_and_the_records_of_later_states_leave_it_out(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    client = start(tmp_path / 'log')
+    loading.clear()
+    pending = client.submit(LOAD, params=_sample(1))
+    total = _total(client)
+    failing = total.push(part=[pending.ref('value')])
+    across = client.submit(TOTAL, params=_read(total))  # pins state 1 meanwhile
+    client.cancel(pending)
+    loading.set()
+    load = client.compute(LOAD, params=_sample(2))
+    total.push(part=[load.ref('value')])
+    after = client.compute(TOTAL, params=_read(total))
+
+    reason = f'push 1: record {pending.id} cancelled'
+    assert client.status([failing, across]) == [Status.FAILED, Status.FAILED]
+    assert [e for e in Log.read(tmp_path / 'log') if isinstance(e, PushFailed)] == [
+        PushFailed(accumulator=total.id, push=1, failure=reason)
+    ]
+    crossed, state = (
+        _record(client, r.request.params['part'][0].record) for r in (across, after)
+    )
+    assert crossed.request.params['part'] == [pending.ref('value')]  # as pinned
+    assert state.request.params['part'] == [load.ref('value')]  # push 1 left out
+    assert client.output(after, 'value') == 2.0
+    again = restart(tmp_path / 'log')
+    assert _record(again, crossed.id).request == crossed.request
+    assert _record(again, state.id).request == state.request
 
 
 def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(

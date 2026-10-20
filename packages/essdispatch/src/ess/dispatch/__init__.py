@@ -4,7 +4,7 @@
 
 from .backend import Backend
 from .batch import LastBefore, Lookup, apply
-from .client import Accumulator, Client, Datasets, Provenance, Stage, local
+from .client import Accumulator, Client, Datasets, Provenance, Push, Stage, local
 from .datasets import DatasetSource, Selector, dataset
 from .errors import ClientEnded, FieldError, NotReadable, RecordFailed, SubmitError
 from .records import Record, Request, SpecId, Status, Template
@@ -23,6 +23,7 @@ __all__ = [
     'Lookup',
     'NotReadable',
     'Provenance',
+    'Push',
     'Record',
     'RecordFailed',
     'Request',

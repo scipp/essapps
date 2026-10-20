@@ -135,8 +135,11 @@ class Driver[O: BaseModel](Protocol):
       it had not been made. A driver keeps this by computing what every row
       contributes first, and adding it only once all of it is computed.
 
-    A push that raises anything else stops the accumulator, since the driver
-    may hold part of its rows.
+    A push that raises :class:`PushRefused` fails alone: the accumulator
+    takes more pushes. A push that raises anything else stops the
+    accumulator, since the driver may hold part of its rows. A client's push
+    into several tables is one call per table, so a refusal at a later table
+    stops the accumulator too: the driver holds the rows of those before.
     """
 
     def push(self, table: str, rows: Sequence[Any]) -> None:

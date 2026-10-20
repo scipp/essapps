@@ -2,7 +2,6 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """A value, or a row, given inline or by reference, as the request chooses."""
 
-import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NewType
@@ -14,7 +13,6 @@ from pydantic.dataclasses import dataclass
 from ess.dispatch import (
     Backend,
     Client,
-    NotReadable,
     Record,
     Status,
     SubmitError,
@@ -310,12 +308,12 @@ def test_a_group_given_field_by_field_is_checked_by_its_model_validator(
     row = {'file': dataset_ref(run=1), 'offset': -1.0}
     computed = client.compute(RUNS, params={'runs': [row]})
     acc = client.accumulator(Template(RUNS_ROWS, blanks=('runs',)))
-    acc.push(runs=[row])
+    pushed = acc.push(runs=[row])
 
     reason = 'Run._offset_not_negative: a negative offset'
     assert client.failure(computed) == reason
-    with pytest.raises(NotReadable, match=f'push 0 failed: {re.escape(reason)}'):
-        client.output(acc, 'value')
+    assert client.wait(pushed) == Status.FAILED
+    assert client.failure(pushed) == f'push 1 failed: {reason}'
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
@@ -412,11 +410,10 @@ def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
     summed.push(part=[loaded.ref('value')])
     assert client.output(summed, 'value') == 1.0
 
-    summed.push(part=[2.0, 1.0])  # distinct as the record holds them
-    with pytest.raises(
-        LookupError, match=r'push 1 failed: part\[2\]: repeats part\[0\], 1.0$'
-    ):
-        client.output(summed, 'value')
+    pushed = summed.push(part=[2.0, 1.0])  # distinct as the record holds them
+    assert client.wait(pushed) == Status.FAILED
+    assert client.failure(pushed) == 'push 2 failed: part[2]: repeats part[0], 1.0'
+    assert client.output(summed, 'value') == 1.0  # state 2 is state 1
     plain = client.submit(SUM, params={'part': [1.0, loaded.ref('value')]})
     assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
 

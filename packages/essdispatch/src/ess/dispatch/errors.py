@@ -88,7 +88,8 @@ class NotReadable(LookupError):
     write failed, that the store no longer holds, or that the workflow did
     not return; an accumulator it released, that stopped, or that is read
     through the record of its freeze; a state whose plain request would be
-    refused. One that does not exist raises ``KeyError``.
+    refused, or one of whose pushes failed after the read pinned it. One that
+    does not exist raises ``KeyError``.
     """
 
 

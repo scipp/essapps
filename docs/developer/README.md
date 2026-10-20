@@ -570,7 +570,7 @@ iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmissi
 
 A push of no rows is refused.
 A template fixes a whole table or leaves it blank, and a push into a table the template fixes is refused.
-The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order.
+The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order, but those of pushes that failed (see Failed pushes).
 State n has the outputs of its plain request.
 `client.accumulator` and `push` return once logged.
 The backend has the binding make the driver, and pushes each push into it, later.
@@ -599,7 +599,7 @@ Only the client that made an accumulator pins it.
 | a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type, a group by its model validators too; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
-A value that fails its check at a push stops the accumulator, as any failing push does.
+A value that fails its check at a push fails that push (see Failed pushes).
 
 **Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared in two ways.
@@ -621,18 +621,37 @@ acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
 acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the push fails
 ```
 
-A repeat found in the call phase fails the push, which stops the accumulator.
+A repeat found in the call phase fails the push.
 The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
 Only the call phase catches that repeat, and only for a table whose element type has a JSON form.
 
-The accumulator *stops* if
+**Failed pushes.** Where a push fails decides what happens to the accumulator:
 
-- adding a push fails,
-- a record that a push references does not complete, or
-- the binding fails to make the driver.
+| A push fails | Example | The accumulator |
+|---|---|---|
+| in the backend, before `driver.push` | a referenced record failed, a file cannot be read, a row repeats once read, a group's model validator refuses a row | takes more pushes |
+| in `driver.push`, raising `PushRefused` at the push's first table | the driver checks the rows before it adds any | takes more pushes |
+| in `driver.push`, raising anything else, or `PushRefused` at a later table | the driver may hold part of the rows | stops |
 
-Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
+A push that fails keeps its number and adds no rows: if push k fails, state k is state k-1, and the record of state k is the plain request over the rows of the pushes up to k that did not fail.
+The log holds the failure, so the backend computes the same records from it.
+The rows of the failed push leave the table, so they may be pushed again.
+`acc.push` returns a `Push`, which the client asks about as it asks about a record:
+
+```python
+run = acc.push(sample=[dataset(run=611)])
+client.wait(run)          # Status.FAILED
+client.failure(run)       # 'push 3 failed: file signature not found'
+client.status(acc)        # Status.PENDING: it takes more pushes
+```
+
+A read that pinned a state before one of its pushes failed fails with the push's reason, since it was checked with rows that the state lacks: the record of the state and the requests that read it fail, and `client.output` raises `NotReadable`.
+A record never changes, so the record of a state leaves out only the pushes whose failure was logged before it.
+
+The accumulator *stops* if a push fails in the driver other than by `PushRefused`, or the opening fails, such as when the binding fails to make the driver.
+Later pushes and pins are refused with the reason, the records of states it did not reach fail, and the pushes not yet done are cancelled.
+`client.status(acc)` is then `FAILED` and `client.failure(acc)` the reason, and `client.provenance(acc)` gives the rows of the pushes before it that did not fail, to open a new accumulator from.
 
 **Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over its table `runs`, and `CUT`, which takes the value at `position.index` of its parameter `volume` ([user-stories.md](user-stories.md)):
 
@@ -674,6 +693,7 @@ client.freeze(volume, persist=True)      # the store keeps every output, not the
 The client keeps the record, unless `persist=` hands it to the store.
 At the end of a scan, freezing makes the final volume an ordinary record without a copy.
 The client can keep it, persist it, or reference it from another template.
+If the record fails or is cancelled, the accumulator takes pushes and freezes again.
 
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
@@ -791,7 +811,7 @@ The driver promises, and the backend does not check:
 - An output that the spec declares optional may be `None`.
 - A driver may refuse a state, such as one with no sample row yet, by raising in `outputs()`. The read fails, and later pushes may make the state valid.
 - A `push` that raises `PushRefused` changes nothing: the outputs are those before it, and later pushes add as if it had not been made. A driver keeps this by computing what every row of a push contributes before it keeps any of it.
-- A failing `push` stops the accumulator.
+- A `push` that fails other than by `PushRefused` stops the accumulator (see Failed pushes).
 
 The backend calls `push` and `outputs` from one thread at a time, and pushes only once the readers of the state before are done.
 Code that calls a driver itself keeps the same order:

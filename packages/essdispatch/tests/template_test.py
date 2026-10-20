@@ -6,6 +6,7 @@ rows of a table.
 """
 
 import math
+import re
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from ess.dispatch import (
     Client,
     FieldError,
     NotReadable,
+    Status,
     SubmitError,
     Template,
     dataset,
@@ -419,15 +421,19 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
         client.accumulator(Template(TOTAL, blanks=('sample',)))
 
 
-def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
+def test_a_push_whose_file_cannot_be_read_fails_alone(
     client: Client, datasets: FakeDatasets
 ) -> None:
     acc = client.accumulator(UNSCALED)
     datasets.corrupt(datasets.resolve(dataset(run=1)))
-    acc.push(sample=[dataset(run=1)])
+    bad = acc.push(sample=[dataset(run=1)])
 
-    with pytest.raises(NotReadable, match='push 0 failed: file signature not found'):
-        client.output(acc, 'value')
+    assert client.wait(bad) == Status.FAILED
+    assert client.failure(bad) == 'push 1 failed: file signature not found'
+    with pytest.raises(NotReadable, match='sample: the table has no row'):
+        client.output(acc, 'value')  # state 1 is state 0
+    acc.push(sample=[dataset(run=2)])
+    assert client.output(acc, 'value') == 2.0
 
 
 def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
@@ -436,16 +442,15 @@ def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
     made = client.compute(MAKE).ref('made')
     stage = client.stage(Template(USE, params={'positive': made}))
     acc = client.accumulator(Template(USE_MANY, blanks=('positive',)))
-    acc.push(positive=[made])
+    pushed = acc.push(positive=[made])
 
     assert 'not positive' in client.failure(
         client.compute(USE, params={'positive': made})
     )
     assert 'not positive' in client.failure(client.compute(stage))
-    with pytest.raises(NotReadable, match=r'push 0 failed: (?s:.*)not positive'):
-        client.output(acc, 'value')
-    with pytest.raises(SubmitError, match='the accumulator stopped'):
-        acc.push(positive=[made])
+    assert client.wait(pushed) == Status.FAILED
+    assert re.match(r'push 1 failed: (?s:.*)not positive', client.failure(pushed))
+    assert client.wait(acc.push(positive=[made])) == Status.FAILED  # again
 
 
 # Model validators

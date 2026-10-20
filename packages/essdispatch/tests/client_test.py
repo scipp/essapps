@@ -25,6 +25,7 @@ from ess.dispatch import (
     Client,
     ClientEnded,
     NotReadable,
+    Push,
     Record,
     Request,
     Selector,
@@ -39,6 +40,7 @@ from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_d
 from ess.spec import (
     AccumulatorRef,
     DriverBinding,
+    PushRefused,
     WorkflowSpec,
     function_binding,
 )
@@ -1402,23 +1404,73 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     assert client.output(read, 'value') == 1.0
 
 
-def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
+def test_a_record_that_a_push_waits_for_and_that_fails_fails_the_push_alone(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
     pending = client.submit(_load(1))
     total = _total(client)
-    total.push(parts=[pending.ref('value')])
-    read = client.submit(_read(total))
+    first = total.push(parts=[pending.ref('value')])
+    read = client.submit(_read(total))  # pins state 1 while push 1 is pending
     client.cancel(pending)
     loading.set()
 
-    stopped = f'the accumulator stopped: push 0: record {pending.id} cancelled'
+    failed = f'push 1: record {pending.id} cancelled'
     state = _state(client, read)
-    assert client.wait(read) is Status.FAILED
-    assert client.failure([state, read]) == [stopped, f'record {state.id} failed']
-    with pytest.raises(SubmitError, match=f'^{stopped}$'):
-        total.push(parts=[pending.ref('value')])
+    assert client.wait([first, read]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([first, state, read]) == [
+        failed,
+        failed,
+        f'record {state.id} failed',
+    ]
+    assert state.request.params['parts'] == [pending.ref('value')]  # as pinned
+    second = total.push(parts=[client.compute(_load(2)).ref('value')])
+    assert client.output(total, 'value') == 2.0
+    assert client.status([total, second]) == [Status.PENDING, Status.COMPLETED]
+    assert client.provenance(total).request.params['parts'] == [
+        client.records()[-1].ref('value')
+    ]
+
+
+def test_the_rows_of_a_failed_push_leave_the_table(
+    client: Client, loading: threading.Event
+) -> None:
+    first, second = client.compute([_load(1), _load(2)])
+    total = _total(client)
+    total.push(parts=[first.ref('value')])
+    loading.clear()
+    pending = client.submit(_load(1))
+    failing = total.push(parts=[pending.ref('value')])
+    total.push(parts=[second.ref('value')])
+    client.cancel(pending)
+    loading.set()
+
+    assert client.wait(failing) is Status.FAILED
+    with pytest.raises(SubmitError, match=r'^parts\[2\]: repeats parts\[1\]'):
+        total.push(parts=[second.ref('value')])  # the rows after it moved up
+    assert client.output(total, 'value') == 3.0
+
+
+def test_the_status_of_an_accumulator_or_a_push_is_its_client_s_to_ask(
+    backend: Backend, client: Client
+) -> None:
+    total = _total(client)
+    pushed = total.push(parts=[client.compute(_load(1)).ref('value')])
+    client.wait(pushed)
+    assert client.status({'acc': total, 'push': pushed}) == {
+        'acc': Status.PENDING,
+        'push': Status.COMPLETED,
+    }
+    other = Client(backend, proposal='p1', submitter='bob')
+
+    with pytest.raises(KeyError, match='no push 2 into accumulator'):
+        client.status(Push(total.id, 2))
+    for what in (total, pushed):
+        with pytest.raises(NotReadable, match='is not kept by this client'):
+            other.failure(what)
+    client.release(total)
+    with pytest.raises(NotReadable, match='is not kept by this client'):
+        client.wait([pushed])
 
 
 def test_concurrent_pushes_add_in_the_order_they_are_logged(
@@ -1492,13 +1544,15 @@ class Sum:
     pushes they add.
 
     A push is added while ``go`` is set; ``adding`` says a push has started.
-    With ``failing`` set, the next push fails to add.
+    With ``failing`` set, the next push fails to add, and with ``refusing``
+    set, the driver refuses it.
     """
 
     def __init__(self) -> None:
         self.pushed = 0
         self.adding = threading.Event()
         self.failing = False
+        self.refusing = False
         self.go = threading.Event()
         self.go.set()
 
@@ -1517,6 +1571,9 @@ class _Summing:
         if self._owner.failing:
             self._owner.failing = False
             raise ValueError('cannot add')
+        if self._owner.refusing:
+            self._owner.refusing = False
+            raise PushRefused('not a part')
         self._owner.pushed += 1
         self._fold.push(table, rows)
 
@@ -1585,19 +1642,67 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     after = client.submit(_read(total))
     summing.go.set()
 
-    stopped = 'the accumulator stopped: push 1 failed: cannot add'
+    stopped = 'the accumulator stopped: push 2 failed: cannot add'
     state = _state(client, after)
     assert client.wait(after) is Status.FAILED
     assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
     assert len(state.request.params['parts']) == 2  # the push is in the log
+    assert client.status(total) is Status.FAILED
+    assert client.failure(total) == stopped
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[summed_loads[2].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {stopped}$'):
         client.submit(_read(total))  # it may be half added
-    for read in (lambda: client.output(total), lambda: client.provenance(total)):
-        with pytest.raises(NotReadable, match=f'^{stopped}$'):
-            read()
+    with pytest.raises(NotReadable, match=f'^{stopped}$'):
+        client.output(total)
+    # the rows that did not fail can be read back
+    reached = client.provenance(total).request.params['parts']
+    assert reached == [summed_loads[0].ref('value')]
     assert client.output(before, 'value') == 1.0
+
+
+def test_a_push_the_driver_refuses_fails_alone(
+    summed: Client, summed_loads: list[Record], summing: Sum
+) -> None:
+    client = summed
+    total = _total(client)
+    client.wait(total.push(parts=[summed_loads[0].ref('value')]))
+    summing.refusing = True
+    refused = total.push(parts=[summed_loads[1].ref('value')])
+
+    assert client.wait(refused) is Status.FAILED
+    assert client.failure(refused) == 'push 2 failed: not a part'
+    assert client.output(total, 'value') == 1.0  # state 2 is state 1
+    again = total.push(parts=[summed_loads[1].ref('value')])  # not held by the table
+    assert client.wait(again) is Status.COMPLETED
+    assert client.output(total, 'value') == 3.0
+    assert summing.pushed == 2
+    assert client.provenance(total).request.params['parts'] == [
+        summed_loads[0].ref('value'),
+        summed_loads[1].ref('value'),
+    ]
+
+
+def test_a_push_pinned_by_a_read_and_a_freeze_that_then_fails_fails_them(
+    summed: Client, summed_loads: list[Record], summing: Sum
+) -> None:
+    client = summed
+    total = _total(client)
+    client.wait(total.push(parts=[summed_loads[0].ref('value')]))
+    summing.refusing = True
+    summing.go.clear()
+    refused = total.push(parts=[summed_loads[1].ref('value')])
+    read = client.submit(_read(total))
+    frozen = client.freeze(total)
+    summing.go.set()
+
+    failed = 'push 2 failed: not a part'
+    assert client.wait([read, frozen]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([refused, frozen]) == [failed, failed]
+    assert client.status(total) is Status.PENDING  # the freeze failed: open again
+    total.push(parts=[summed_loads[1].ref('value')])
+    assert client.output(client.freeze(total), 'value') == 3.0
+    assert client.status(total) is Status.COMPLETED
 
 
 def _refuse(fixed: Mapping[str, Any]) -> Fold:
@@ -1803,7 +1908,8 @@ class Subtracting:
     ``adding``, and adds while ``go`` is set. An ``outputs`` call sets
     ``computing``, and computes while ``compute`` is set. With ``refusing``
     set, the next push fails, and with ``failing`` set, the next ``outputs``
-    call. ``held`` refers weakly to each driver made, and ``returned`` to the
+    call. A push into the table ``refused`` names, if any, raises
+    ``PushRefused``. ``held`` refers weakly to each driver made, and ``returned`` to the
     difference that each ``outputs`` call returned.
     """
 
@@ -1816,6 +1922,7 @@ class Subtracting:
         self.compute = threading.Event()
         self.compute.set()
         self.refusing = False
+        self.refused: str | None = None
         self.failing = False
         self.held: list[weakref.ref[_Sides]] = []
         self.returned: list[weakref.ref[sc.Variable]] = []
@@ -1837,6 +1944,8 @@ class _Sides:
         if self._owner.refusing:
             self._owner.refusing = False
             raise ValueError('cannot add')
+        if table == self._owner.refused:
+            raise PushRefused(f'no {table}')
         for value in rows:
             self._sums[table] += value  # in place from the second row
 
@@ -2508,7 +2617,7 @@ def test_a_freeze_whose_plain_request_would_be_refused_is_refused(
     assert _listed(client.output(total, 'difference')) == [-1.0]
 
 
-def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
+def test_a_cancelled_freeze_leaves_the_accumulator_open(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -2521,18 +2630,17 @@ def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
     subtracting.compute.set()
 
     assert client.wait(cancelled) == Status.CANCELLED
-    # no push comes to drop the outputs computed for the cancelled freeze
-    assert _eventually(
-        lambda: gc.collect() >= 0 and [r() for r in subtracting.returned] == [None]
-    )
-    with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
-        sides.push(backgrounds=[loads[1].ref('value')])
+    assert client.status(sides) == Status.PENDING
     assert _listed(client.output(sides, 'total')) == [1.0]
+    sides.push(backgrounds=[loads[1].ref('value')])
+    # the push dropped the outputs computed for the cancelled freeze
+    assert _listed(client.output(sides, 'total')) == [3.0]
+    assert _eventually(lambda: gc.collect() >= 0 and subtracting.returned[0]() is None)
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert _listed(client.output(again, 'total')) == [3.0]
 
 
-def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
+def test_a_failed_freeze_leaves_the_accumulator_open(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -2542,11 +2650,10 @@ def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
     failed = client.freeze(sides)
 
     assert client.wait(failed) == Status.FAILED
-    with pytest.raises(SubmitError, match=f'frozen as record {failed.id}'):
-        sides.push(backgrounds=[loads[1].ref('value')])
     assert _listed(client.output(sides, 'total')) == [1.0]
+    sides.push(backgrounds=[loads[1].ref('value')])
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert _listed(client.output(again, 'total')) == [3.0]
 
 
 def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
@@ -2583,10 +2690,44 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     subtracting.refusing = True
     sides.push(samples=[loads[1].ref('value')])  # fails to add
 
-    with pytest.raises(NotReadable, match='push 1 failed: cannot add'):
+    with pytest.raises(NotReadable, match='push 2 failed: cannot add'):
         client.output(sides, 'difference')
     gc.collect()
     assert subtracting.held[0]() is None  # nothing reads it any more
+
+
+def test_a_push_refused_at_its_first_table_fails_alone(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    client.wait(sides.push(samples=[loads[0].ref('value')]))
+    subtracting.refused = 'backgrounds'
+    refused = sides.push(
+        backgrounds=[loads[1].ref('value')], samples=[loads[1].ref('value')]
+    )
+
+    assert client.wait(refused) == Status.FAILED
+    assert client.failure(refused) == 'push 2 failed: no backgrounds'
+    assert _sides(client.output(sides)) == {'difference': [1.0], 'total': [1.0]}
+
+
+def test_a_push_refused_once_the_driver_took_one_of_its_tables_stops_it(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    subtracting.refused = 'backgrounds'
+    refused = sides.push(
+        samples=[loads[0].ref('value')], backgrounds=[loads[1].ref('value')]
+    )
+
+    reason = "push 1 failed: no backgrounds; the driver holds the rows of ['samples']"
+    assert client.wait([refused, sides]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([refused, sides]) == [
+        reason,
+        f'the accumulator stopped: {reason}',
+    ]
 
 
 # Selections
