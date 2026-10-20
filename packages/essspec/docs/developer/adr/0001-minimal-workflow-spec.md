@@ -110,7 +110,7 @@ pydantic makes a JSON schema of it with the params model's config. A value
 
 | A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| a file: `Path`, pydantic's `FilePath` or `DirectoryPath`, or a `NewType` of one | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
@@ -124,6 +124,13 @@ as a parameter is, so its file comes from a dataset. A reference to a dataset
 stands for the whole group: its one required file, and its other fields at
 their defaults. A *data value* is a value of a type without a JSON form: a
 file, or an object such as a scipp array.
+
+A type is a file when pydantic's JSON schema of it is a string with a path
+format: `"format": "path"` for `Path` and a `NewType` of it, `"file-path"` for
+`FilePath`, `"directory-path"` for `DirectoryPath`. The access check on the
+service depends on it, so an author types each file as one of these. A
+`NewType` of `str` used for a file is a string: it is given inline, and no
+dataset source checks it.
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -173,6 +180,10 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - Each parameter's type is a type, possibly optional, or a list of one; not a
   dict or a union of two types.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
+- A parameter holds a file only as a file, possibly optional, a list of files,
+  or a group that holds a file as a field. A file anywhere else, such as in a
+  tuple, a `TypedDict`, a dataclass, or a type alias `type Files = list[Path]`,
+  is refused, since no reference to a dataset stands for it.
 - A group holds a file only as one of its fields, typed as a file, possibly
   optional. Such a group follows the rules on defaults and on the params model
   below. A field of it that is a list or a dict has a JSON form, since no
