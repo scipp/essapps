@@ -270,15 +270,24 @@ class NormalizedParams(BaseModel):
     stops: Stops | None = None
 
 
-class CallableDiscriminated(BaseModel):
+def _tag_of(value: Any) -> str:
+    return value['mode'] if isinstance(value, dict) else value.mode
+
+
+class CallableGroup(BaseModel):
     by: Annotated[
         Annotated[ByMonitor, pydantic.Tag('monitor')]
         | Annotated[ByTime, pydantic.Tag('time')],
-        Discriminator(lambda value: 'monitor'),
+        Discriminator(_tag_of),
     ] = ByMonitor()
 
 
+class CallableParams(BaseModel):
+    group: CallableGroup = Field(default_factory=CallableGroup)
+
+
 NORMALIZED = _spec('normalized', params=NormalizedParams)
+CALLABLE = _spec('callable', params=CallableParams)
 
 
 def load_run(params: Sample) -> LoadOutputs:
@@ -801,9 +810,20 @@ def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
     assert request.params == {'normalization': {'by': {'mode': 'time', 'seconds': 1.0}}}
 
 
-def test_a_callable_discriminator_is_refused() -> None:
-    with pytest.raises(SubmitError, match='callable discriminator'):
-        Request(NORMALIZED, params={'x': CallableDiscriminated(by=ByMonitor())})
+def test_a_callable_discriminator_keyed_on_a_tag_works(datasets: FakeDatasets) -> None:
+    def describe(params: CallableParams) -> Value:
+        return Value(value=params.group.by.seconds)
+
+    with local(
+        proposal='p1',
+        datasets=datasets,
+        bind=[function_binding(CALLABLE, describe)],
+    ) as client:
+        record = client.compute(
+            CALLABLE, params={'group': CallableGroup(by=ByTime(seconds=3.0))}
+        )
+
+        assert client.output(record, 'value') == 3.0
 
 
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:

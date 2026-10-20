@@ -15,16 +15,9 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any, get_args, get_origin
+from typing import Annotated, Any, Literal, get_args, get_origin
 
-from pydantic import (
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Discriminator,
-    Field,
-    with_config,
-)
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 from pydantic.fields import FieldInfo
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
@@ -35,43 +28,34 @@ class SubmitError(ValueError):
     """A request that cannot run, refused before any record exists."""
 
 
-def _discriminators(info: FieldInfo) -> set[str]:
+def _is_tag(info: FieldInfo) -> bool:
+    """Whether the type of a field is a ``Literal`` of one value."""
+    return (
+        get_origin(info.annotation) is Literal and len(get_args(info.annotation)) == 1
+    )
+
+
+def _with_tags(value: Any, dumped: Any) -> Any:
     """
-    The names of the fields that a union in the annotation of ``info``
-    discriminates on, at any depth, such as the element type of a list.
-    Raises ``SubmitError`` for a discriminator that is a callable.
+    ``dumped``, the dump of ``value`` without its unset fields, with each tag
+    field (see :func:`as_values`) added to the dict of each model in it.
     """
-    names: set[str] = set()
-
-    def note(item: Any) -> None:
-        if isinstance(item, FieldInfo):
-            item = item.discriminator
-        if isinstance(item, str):
-            names.add(item)
-        elif isinstance(item, Discriminator):
-            if not isinstance(item.discriminator, str):
-                raise SubmitError(
-                    f'{info.annotation}: a callable discriminator cannot be told '
-                    'from a default; give the value as a dict'
-                )
-            names.add(item.discriminator)
-
-    def walk(annotation: Any) -> None:
-        if get_origin(annotation) is Annotated:
-            annotation, *metadata = get_args(annotation)
-            for item in metadata:
-                note(item)
-        for argument in get_args(annotation):
-            walk(argument)
-
-    note(info)
-    for item in info.metadata:
-        note(item)
-    walk(info.annotation)
-    return names
+    if isinstance(value, BaseModel) and not isinstance(value, Ref):
+        for name, info in type(value).model_fields.items():
+            if name in dumped:
+                dumped[name] = _with_tags(getattr(value, name), dumped[name])
+            elif _is_tag(info):
+                dumped[name] = getattr(value, name)
+    elif isinstance(value, list | tuple):
+        return type(dumped)(
+            _with_tags(v, d) for v, d in zip(value, dumped, strict=True)
+        )
+    elif isinstance(value, dict):
+        return {k: _with_tags(v, dumped[k]) for k, v in value.items()}
+    return dumped
 
 
-def as_values(value: Any, discriminators: Collection[str] = ()) -> Any:
+def as_values(value: Any) -> Any:
     """
     ``value`` with each model in it, but a reference, as a dict of the fields
     that were given.
@@ -81,24 +65,17 @@ def as_values(value: Any, discriminators: Collection[str] = ()) -> Any:
     that the backend fills in those of its own spec; a reference is kept
     whole, since its kind is a default.
 
-    The exception is a field that a union discriminates on, such as ``mode``
-    in ``Field(discriminator='mode')``: the backend cannot pick the member
-    without it, so a model that is a member of a union keeps that field
-    (``discriminators`` names them), at any depth. A discriminator given as a
-    callable is refused with ``SubmitError``, as its field is unknown.
+    A tag is kept, given or not. It is a field whose type is a ``Literal`` of
+    one value, such as ``mode: Literal['time'] = 'time'``, which a union
+    discriminates on. Its value is fixed by its type, and the backend cannot
+    pick the member of the union without it.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        fields = value.__class__.model_fields
-        keep = value.model_fields_set | (set(discriminators) & fields.keys())
-        return {
-            name: as_values(getattr(value, name), _discriminators(info))
-            for name, info in fields.items()
-            if name in keep
-        }
+        return _with_tags(value, value.model_dump(exclude_unset=True))
     if isinstance(value, dict):
-        return {k: as_values(v, discriminators) for k, v in value.items()}
+        return {k: as_values(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return [as_values(v, discriminators) for v in value]
+        return [as_values(v) for v in value]
     return value
 
 
