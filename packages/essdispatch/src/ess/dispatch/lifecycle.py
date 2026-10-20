@@ -26,12 +26,13 @@ A freeze whose record fails or is cancelled leaves the accumulator
 ``Open``. An accumulator that its client released takes nothing more, in any
 phase, but still does the steps that its readers need.
 
-A push *fails* if a record it reads did not complete, or the step raised
-before the driver got rows, or the driver raised ``PushRefused`` (see
-:mod:`.backend`). The push then adds no
-rows: state k is state k-1, and the accumulator goes on. Any other failure
-of a push, and every failure of the opening, stops the accumulator. A failed
-push keeps its number, and its reason is kept in ``failed``.
+A push fails alone if a record it reads did not complete, or if it failed
+while the driver is unchanged, as the backend tells the lifecycle (see
+:meth:`~Lifecycle.step_failed`; docs/developer/README.md, Failed pushes, has
+the rules). It then adds no rows: state k is state k-1, and the accumulator
+goes on. Any other failure of a push, and every failure of the opening,
+stops the accumulator. A failed push keeps its number, and its reason is
+kept in ``failed``.
 
 A :class:`Lifecycle` holds no driver, takes no lock, and starts no thread.
 Each method takes what it needs to know from the backend, changes the

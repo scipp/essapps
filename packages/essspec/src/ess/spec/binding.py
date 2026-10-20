@@ -138,7 +138,8 @@ class Driver[O: BaseModel](Protocol):
 
     A push that raises :class:`PushRefused` fails alone, and the accumulator
     takes more pushes. A push that raises anything else stops the
-    accumulator, since the driver may hold part of its rows. The backend
+    accumulator, since the driver may hold part of its rows; what a client
+    then sees is in docs/developer/README.md, Failed pushes. The backend
     resolves a dataset to a local path, and the driver reads the file, so a
     file that cannot be read is the driver's to refuse::
 

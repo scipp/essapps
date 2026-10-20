@@ -783,7 +783,7 @@ The client reads how many slices there are, since a reference names one row, nev
 The state's request holds the references, so it says where each slice came from.
 The rows of a table are compared as the request holds them and, since `TimeRange` has a JSON form, also by the rows read.
 So `TimeRange(start=0, stop=2)` and `slicer.ref('slices', key='0')` are one row.
-The repeat is found when the push is read, before the driver gets its rows, so the push fails alone: it adds no rows, and the accumulator takes more pushes.
+The repeat is found when the push is read, before the driver gets its rows, so the push fails alone (README, Failed pushes).
 
 ### I2. A beam centre typed in or computed
 

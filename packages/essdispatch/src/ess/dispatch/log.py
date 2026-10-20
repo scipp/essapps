@@ -131,10 +131,13 @@ class Pushed(BaseModel, frozen=True, extra='forbid'):
 
 class PushFailed(BaseModel, frozen=True, extra='forbid'):
     """
-    A push into an accumulator that failed: it added no rows, so the state
-    after it is the state before it. ``push`` numbers it among the pushes
-    into the accumulator, from 1. A push fails after later pushes may have
-    been logged, and pushes fail in the order logged.
+    A push into an accumulator that failed. ``push`` numbers it among the
+    pushes into the accumulator, from 1. A push that fails alone added no
+    rows, so the state after it is the state before it; one that stopped the
+    accumulator may have left rows in the driver, but no later state is
+    reached. The plain request of a state leaves its rows out either way. A
+    push fails after later pushes may have been logged, and pushes fail in
+    the order logged.
     """
 
     kind: Literal['push failed'] = 'push failed'

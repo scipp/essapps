@@ -63,16 +63,14 @@ Allowing such a validator later breaks no code.
 No model validator of the params model runs at a push or a state.
 
 **A failed push is fatal only if the driver may be corrupted.**
-A push fails before the driver gets rows if a record it references did not complete, if a row cannot be read or fails its check, or if a row read repeats one; and in the driver if it raises `PushRefused`, which promises that the driver changed nothing.
-Such a push keeps its number and adds no rows: state k is state k-1, and the record of state k is the plain request over the rows of the pushes up to k that did not fail.
+One bad run file must not end a sum that has grown all beamtime.
+So a push that fails while the driver is unchanged fails alone and adds no rows: one that fails before the driver gets its rows, or that the driver refuses with `PushRefused`, which promises that it changed nothing.
 The log holds the failure, so the record of a state is still computed from the log alone.
-One bad run file thus does not end a sum that has grown all beamtime.
-Any other failure of a push may leave part of its rows in the driver, which cannot go back, so the accumulator stops; the rows that did not fail stay readable as its provenance.
-A read that pinned a state before one of its pushes failed fails too, since it was checked with rows the state lacks, and a record never changes.
+Any other failure may leave part of the rows in the driver, which cannot go back, so the accumulator stops.
+The README (Failed pushes) has the rules, also for a read pinned before the push failed.
 
 **Freeze makes the last state a record without a copy**, so the final volume of a scan needs no second volume.
 The accumulator takes no more pushes; if the record fails or is cancelled, it takes pushes again.
-
 
 **Releasing returns at once.**
 The pushes up to each pinned state are still added, so a controller may release an accumulator right after its last pin.

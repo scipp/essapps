@@ -140,20 +140,15 @@ forms, which a restart need not rebuild, since no accumulator survives it. A
 step starts once the records it references have completed, and a push once the
 readers of the state before it are done.
 
-Push k makes state k. A push *fails* where the driver is unchanged: if a
-record it references has not completed, if a row cannot be read or fails its
-check, if a row read repeats one, or if the driver raises ``PushRefused``,
-which promises that it changed nothing. A failed push
-keeps its number and adds no rows, so state k is state k-1; its failure is
-logged, its rows leave the table, so that they may be pushed again, and the
-accumulator takes more pushes. Any other failure of a push, and every failure
-of the opening, *stops* the accumulator, since the driver may hold part of the
-rows, or was not made: it takes no more pushes or readers, the steps after it
-are dropped, and the requests that wait for a state it will not reach fail.
-Its driver is dropped once no reader holds its current state, without waiting
-for its client to release it. The plain request of the state it reached stays
-readable as its provenance. The client asks the status and the failure of an
-accumulator and of each push, as of a record (see :meth:`Backend.status`).
+Push k makes state k. Where a push fails decides whether it fails alone or
+*stops* the accumulator (docs/developer/README.md, Failed pushes, has the
+rules; :mod:`.lifecycle` the transitions). A push that fails alone is logged,
+and its rows leave the table, so that they may be pushed again. A stopped
+accumulator takes no more pushes or readers, the steps after the failure are
+dropped, and the requests that wait for a state it will not reach fail. Its
+driver is dropped once no reader holds its current state, without waiting
+for its client to release it. The client asks the status and the failure of
+an accumulator and of each push, as of a record (see :meth:`Backend.status`).
 
 A read pins the accumulator's state after the pushes logged so far: a request
 that references the accumulator, when it is submitted; a read of its outputs;
@@ -174,11 +169,9 @@ of a state may be one that a direct submission would refuse by a model
 validator that reads a table: a check across rows is the driver's.
 
 A read pins a state before its pushes are done, so one of them may fail
-after the pin. The pin then holds rows that the state lacks, and was checked
-with them, so it fails with the push's reason: the record of the state fails,
-and with it the requests that read it, and a read of the outputs raises.
-The record's request is the one pinned, with the rows of the pushes that had
-failed when it was logged left out, so it never changes.
+after the pin; the read then fails with the push's reason (see the README,
+Failed pushes). The request of the record of a state leaves out the rows of
+the pushes whose failure was logged before the record, so it never changes.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
@@ -436,10 +429,9 @@ class _Accumulator:
     worker that does a step changes it.
 
     ``checked`` holds the number of pushes of the last state whose plain
-    request was checked, the number of pushes that had failed, and why it
-    would be refused, or ``None``. Two
-    reads that check different states at once may overwrite each other's,
-    which costs only another check.
+    request was checked, the number of these that had failed, and why it
+    would be refused, or ``None``. Two reads that check different states at
+    once may overwrite each other's, which costs only another check.
 
     :meth:`outputs` computes every output of the current state the first time
     a reader reads it, and keeps them until :meth:`drop`, which the backend
@@ -1973,11 +1965,11 @@ class Backend:
         The values are given by name, each read and validated by its own
         field (see :meth:`_typed`); at the opening, the model validators check
         them first, without the blank tables. The rows of every table of a
-        push go to the driver in one call. A push that fails before the
-        driver gets them, or that the driver refuses with ``PushRefused``,
-        fails alone, since the driver is unchanged; the rows read are kept
-        for the distinct check only once the step is done. Any other failure
-        stops the accumulator, since the driver may hold part of the rows.
+        push go to the driver in one call. The driver is unchanged after a
+        failure before that call, and after ``PushRefused``, and may have
+        changed after any other; the lifecycle decides what follows (see
+        :meth:`.Lifecycle.step_failed`). The rows read are kept for the
+        distinct check only once the step is done.
         """
         lifecycle = acc.lifecycle
         try:

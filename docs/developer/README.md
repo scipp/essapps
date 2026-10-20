@@ -570,7 +570,7 @@ iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmissi
 
 A push of no rows is refused.
 A template fixes a whole table or leaves it blank, and a push into a table the template fixes is refused.
-The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order, but those of pushes that failed (see Failed pushes).
+The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order; a push that failed adds none (see Failed pushes).
 State n has the outputs of its plain request.
 `client.accumulator` and `push` return once logged.
 The backend has the binding make the driver, and pushes each push into it, later.
@@ -626,17 +626,18 @@ The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
 Only the call phase catches that repeat, and only for a table whose element type has a JSON form.
 
-**Failed pushes.** Where a push fails decides what happens to the accumulator:
+**Failed pushes.** This section is where the rules about failed pushes live; the code and the other docs point here.
+Where a push fails decides what happens to the accumulator:
 
 | A push fails | Example | The accumulator |
 |---|---|---|
-| in the backend, before `driver.push` | a referenced record failed, a file cannot be read, a row repeats once read, a group's model validator refuses a row | takes more pushes |
-| in `driver.push`, raising `PushRefused` | the driver checks the rows of every table of the push before it adds any | takes more pushes |
+| in the backend, before `driver.push` | a referenced record failed, a dataset has no local path, a row fails its check or repeats once read, a group's model validator refuses a row | takes more pushes |
+| in `driver.push`, raising `PushRefused` | the driver cannot read a run's file, or refuses a row; it checks the rows of every table of the push before it keeps any | takes more pushes |
 | in `driver.push`, raising anything else | the driver may hold part of the rows | stops |
 
-A push that fails keeps its number and adds no rows: if push k fails, state k is state k-1, and the record of state k is the plain request over the rows of the pushes up to k that did not fail.
-The log holds the failure, so the backend computes the same records from it.
-The rows of the failed push leave the table, so they may be pushed again.
+The backend resolves a dataset to a local path, and the driver reads the file, so a file that cannot be read is the driver's to refuse (see the `Driver` docstring in `ess.spec.binding`).
+A push that fails alone keeps its number and adds no rows: if push k fails, state k is state k-1.
+The log holds the failure, and the rows of the failed push leave the table, so they may be pushed again.
 `acc.push` returns a `Push`, which the client asks about as it asks about a record:
 
 ```python
@@ -646,8 +647,12 @@ client.failure(run)       # 'push 3 failed: file signature not found'
 client.status(acc)        # Status.PENDING: it takes more pushes
 ```
 
-A read that pinned a state before one of its pushes failed fails with the push's reason, since it was checked with rows that the state lacks: the record of the state and the requests that read it fail, and `client.output` raises `NotReadable`.
-A record never changes, so the record of a state leaves out only the pushes whose failure was logged before it.
+Which rows a read of state k gets depends on when it pinned the state:
+
+- pinned after push j ≤ k failed: the record of state k is the plain request over the rows of the pushes up to k that did not fail;
+- pinned while push j was pending, and push j then fails: the read held push j's rows and was checked with them, so it fails with the push's reason. The record of the state and the requests that read it fail, and `client.output` raises `NotReadable`.
+
+So a record never changes: the record of a state leaves out only the pushes whose failure was logged before it.
 
 The accumulator *stops* if a push fails in the driver other than by `PushRefused`, or the opening fails, such as when the binding fails to make the driver.
 Later pushes and pins are refused with the reason, the records of states it did not reach fail, and the pushes not yet done are cancelled.
@@ -813,8 +818,7 @@ The driver promises, and the backend does not check:
 - `outputs()` may share memory with the driver's state; the caller reads them before the next push.
 - An output that the spec declares optional may be `None`.
 - A driver may refuse a state, such as one with no sample row yet, by raising in `outputs()`. The read fails, and later pushes may make the state valid.
-- A `push` that raises `PushRefused` changes nothing: the outputs are those before it, and later pushes add as if it had not been made. A driver keeps this by computing what every row of a push contributes before it keeps any of it.
-- A `push` that fails other than by `PushRefused` stops the accumulator (see Failed pushes).
+- A `push` that raises `PushRefused` changes nothing (the `Driver` docstring says how a driver keeps this, and Failed pushes what the backend then does).
 
 The backend calls `push` and `outputs` from one thread at a time, and pushes only once the readers of the state before are done.
 Code that calls a driver itself keeps the same order:
@@ -923,7 +927,7 @@ Arrival, order, and placement hold up to rounding.
 
 It also checks one promise of a driver:
 
-- `check_refused_push(make_driver, fixed, tables, refused)`, with `refused` as `{table: rows}` that the driver refuses: before each push of `tables` and after the last, pushing the rows of `refused` raises `PushRefused`, and the outputs then, and after the next push, are those of a driver that never got them.
+- `check_refused_push(make_driver, fixed, tables, refused)`, with `refused` one push that the driver refuses, as `{table: rows}`: before each push of `tables` and after the last, pushing the rows of `refused` raises `PushRefused`, and the outputs then, and after the next push, are those of a driver that never got them.
 
 ## Left to the system
 

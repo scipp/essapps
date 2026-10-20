@@ -89,9 +89,10 @@ class Provenance(BaseModel, frozen=True):
     Where a record came from: what it ran, what it read, and their datasets.
 
     ``request`` is the record's request, or for the state of an accumulator,
-    the plain request over the rows pushed so far. ``records`` lists every
-    record read through all references, nearest first, the records of the states
-    of accumulators among them; it stops at datasets.
+    the plain request over the rows pushed so far, but those of failed
+    pushes. ``records`` lists every record read through all references,
+    nearest first, the records of the states of accumulators among them; it
+    stops at datasets.
     """
 
     request: Request
@@ -232,25 +233,13 @@ class Accumulator:
         :mod:`ess.dispatch.backend`). It returns the :class:`Push`, whose
         status and failure the client asks.
 
-        A push *fails* while the driver is unchanged: if a record it
-        references has not completed, if a row cannot be read or fails its
-        table's check, if a row read repeats one, or if the driver refuses
-        the push before it adds a row. It adds no rows, so the state after
-        it is the state before it, and the accumulator takes more pushes; its
-        rows leave the table, so they may be pushed again::
+        A push may fail without ending the accumulator, or stop it;
+        docs/developer/README.md, Failed pushes, says when, and which reads
+        it fails::
 
             run = acc.push(sample=[dataset(run=611)])
             if client.wait(run) is Status.FAILED:
                 print(client.failure(run))  # push 3 failed: file signature not found
-
-        A read that pinned a state of the push before it failed fails with
-        that reason, since it holds the push's rows. Any other failure of a
-        push may leave part of its rows in the driver, and stops the
-        accumulator for good: the records of states it did not reach fail,
-        and so do the requests that read them, every later push and pin is
-        refused, a push with ``SubmitError`` and a read with ``NotReadable``,
-        and its status is ``FAILED``. Its provenance, the rows of the pushes
-        before that did not fail, stays readable.
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(
@@ -448,7 +437,8 @@ class Client:
         """
         The status of each once all have finished, as :meth:`status` gives
         it; a failure is not raised. A record finishes once, an accumulator
-        once frozen or stopped, and a push once it is done, added or failed:
+        once frozen or stopped, and a push once it is done, added or failed,
+        or cancelled, since the accumulator stopped before it:
         ``client.wait(acc.push(...))`` returns once the backend has caught up.
         """
         return _reshape(what, self._backend.wait(_asked(what), self._id))
