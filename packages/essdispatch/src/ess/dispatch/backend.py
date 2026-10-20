@@ -202,6 +202,7 @@ accumulator's state still has the state's outputs computed whole.
 from __future__ import annotations
 
 import copy
+import functools
 import threading
 import uuid
 from collections import Counter, deque
@@ -231,6 +232,17 @@ from ess.spec.refs import Loc, iter_refs, map_refs
 from .checks import Checks, check_fit, distinct, refs
 from .datasets import DatasetSource, Selector, readable
 from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
+from .lifecycle import (
+    Action,
+    DropDriver,
+    DropOutputs,
+    FailStates,
+    LetGo,
+    Lifecycle,
+    Reached,
+    StartStep,
+    Step,
+)
 from .log import (
     Event,
     Finished,
@@ -381,26 +393,12 @@ class _Stage:
         return request.model_copy(update={'params': params})
 
 
-_Step = tuple[dict[str, Any], list[tuple[str, str]]]
-"""
-A step of an accumulator: its values by name, the template's fixed values
-for the opening and the rows of each table for a push, and the outputs of
-records it reads.
-"""
-
-
 class _Accumulator:
     """
     An accumulator: its template, its spec's binding, its driver once it has
-    opened, and the steps logged but not yet done.
+    opened, and its lifecycle: its phase and the steps logged but not yet
+    done (see :mod:`.lifecycle`).
 
-    ``added`` is the number of pushes in the driver, ``None`` until the
-    driver is made. ``steps`` holds each step not yet done, in the order
-    logged, as its values by name, as the log holds them: first the
-    template's fixed values, until the driver is made, then the rows of each
-    push by table. Each comes with the
-    outputs of records it reads, which it holds as a reader. ``busy`` says a
-    worker makes the driver or pushes into it, outside the backend's lock.
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
     with their indexes (see :func:`.checks.distinct`). ``rows_read`` holds
     those of the rows read in the steps done so far, for a table whose
@@ -411,12 +409,6 @@ class _Accumulator:
     request was checked, and why it would be refused, or ``None``. Two
     reads that check different states at once may overwrite each other's,
     which costs only another check.
-    ``stopped`` says why the accumulator takes no more pushes or readers, or
-    is ``None``: it failed, or the record of its freeze completed. ``released``
-    says its client released it or ended: it then keeps only the steps that a
-    reader still needs. ``freezing`` says a freeze is being checked; pushes
-    wait until it ends. ``frozen`` names the record of its last freeze, once
-    logged: the accumulator then takes no more pushes.
 
     :meth:`outputs` computes every output of the current state the first time
     a reader reads it, and keeps them until :meth:`drop`, which the backend
@@ -433,23 +425,12 @@ class _Accumulator:
         self.id = accumulator_id
         self.template = template
         self.binding = binding
-        self.added: int | None = None
-        self.steps: deque[_Step] = deque()
+        self.lifecycle = Lifecycle()
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
         self.rows_read: dict[str, dict[bytes, int]] = {}
-        self.busy = False
         self.checked: tuple[int, str | None] | None = None
-        self.stopped: str | None = None
-        self.released = False
-        self.freezing = False
-        self.frozen: str | None = None
         self._computing = threading.Lock()
         self._computed: dict[str, Any] | None = None
-
-    @property
-    def step(self) -> str:
-        """The next step, as a failure names it."""
-        return 'opening' if self.added is None else f'push {self.added}'
 
     def outputs(self) -> dict[str, Any]:
         """
@@ -589,10 +570,8 @@ class Backend:
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
         self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
-        # the record of a state to the state it reads, until it lets go of it:
-        # in _finish if it fails or is cancelled before it runs, in _run if it
-        # does not complete or is the record of a freeze, and in _drop once
-        # its outputs are dropped
+        # the record of a state to the state it reads, which it holds as a
+        # reader until _let_go_of_state lets go of it (see there)
         self._state_of: dict[str, tuple[_Accumulator, int]] = {}
         # values whose last reader let go, for _let_go's loop to work through
         self._unread_values: deque[_Read] = deque()
@@ -871,6 +850,7 @@ class Backend:
         )
         for i, (acc, upto, _) in states.items():
             self._state_of[state_ids[i]] = (acc, upto)
+            self._readers[(acc, upto)] += 1
             self._schedule(state_ids[i])
         for record_id, entry, reads in zip(ids, entries, stored, strict=True):
             if entry.stage is not None:
@@ -926,7 +906,7 @@ class Backend:
         pinned = {}
         for i in ids:
             acc = caller.accumulators.get(i)
-            if acc is not None and acc.stopped is None:
+            if acc is not None and acc.lifecycle.unreadable is None:
                 pinned[i] = (acc, len(self._views.pushes.get(i, ())))
         self._readers.update(pinned.values())
         return pinned
@@ -1127,10 +1107,12 @@ class Backend:
                 for key in from_store
                 if self._views.writes.get(key) == PENDING
             }
-        else:
+        else:  # it holds the state in _state_of
             acc, upto = state
-            self._unread[record_id] = [state]
-            waiting = {_state_key(acc.id, upto)} if acc.added != upto else set()
+            self._unread[record_id] = []
+            waiting = (
+                {_state_key(acc.id, upto)} if acc.lifecycle.added != upto else set()
+            )
         self._readers.update(self._unread[record_id])
         if not waiting:
             self._executor.submit(self._run, record_id)
@@ -1146,9 +1128,8 @@ class Backend:
 
         It holds them even once the record is cancelled, since the workflow
         still reads them, and lets go of them before the write. A record of a
-        state that completes holds the state until its outputs are dropped
-        (see :meth:`_drop`), except the record of a freeze, after which the
-        accumulator takes no readers.
+        state holds the state until it lets go of it (see
+        :meth:`_let_go_of_state`).
         """
         with self._changed:
             if record_id in self._views.finished:
@@ -1163,29 +1144,19 @@ class Backend:
             with self._changed:
                 self._finish(record_id, Status.FAILED, str(error) or repr(error))
                 self._let_go(reads)
+                self._let_go_of_state(record_id)
             return
         with self._changed:
-            if state is None:
-                self._let_go(reads)
+            self._let_go(reads)
             names = self._views.persisted.get(record_id, ())
         failure = self._write(record_id, {n: outputs[n] for n in names if n in outputs})
         with self._changed:
-            # A record of a state that completed lets go of the state in
-            # _drop, once its outputs are dropped. The record of a freeze
-            # holds the outputs of the accumulator's last state, which takes
-            # no more pushes, so it lets go here, and the accumulator takes
-            # no more readers: that record is read.
-            frozen = state[0] if state and state[0].frozen == record_id else None
-            if frozen is not None:
-                self._state_of.pop(record_id, None)
             self._complete(record_id, outputs, failure)
             completed = self._views.status(record_id) is Status.COMPLETED
-            if frozen is not None and completed:
-                frozen.stopped = (
-                    f'the accumulator is frozen: read record {record_id} instead'
-                )
-            if state is not None and (not completed or frozen is not None):
-                self._let_go(reads)
+            if state is not None and (
+                not completed or state[0].lifecycle.is_freeze(record_id)
+            ):
+                self._let_go_of_state(record_id)
 
     def _compute(
         self,
@@ -1336,9 +1307,8 @@ class Backend:
         The values left unread are worked through in one loop, not by
         recursion, so a chain of any length is let go of at once; a call
         within the loop only adds to it. The outputs of an accumulator's state
-        go at the next push. An accumulator that takes no more pushes drops
-        them once the last reader of its state is done, and one that takes no
-        more readers drops its driver too.
+        go at the next push; what else the last reader of a state lets an
+        accumulator do is its lifecycle's (see :meth:`.Lifecycle.unread`).
         """
         for key in keys:
             self._readers[key] -= 1
@@ -1350,20 +1320,12 @@ class Backend:
             try:
                 while self._unread_values:
                     match self._unread_values.popleft():
-                        case (_Accumulator() as acc, upto) if acc.stopped:
-                            # readers of later states hold no outputs
-                            if upto == acc.added:
-                                acc.end()
-                        case (_Accumulator() as acc, upto) if (
-                            acc.frozen and not acc.steps and upto == acc.added
-                        ):
-                            acc.drop()  # no push comes to drop them
-                        case (_Accumulator() as acc, _) if acc.released:
-                            self._unneeded(acc)
-                        case (_Accumulator() as acc, _):
-                            self._advance(acc)
                         case (str() as record_id, _):
                             self._drop(record_id)
+                        case (_Accumulator() as acc, int() as upto):
+                            pinned = functools.partial(self._pinned, acc)
+                            self._act(acc, acc.lifecycle.unread(upto, pinned))
+                            self._advance(acc)
             finally:
                 self._letting_go = False
         self._changed.notify_all()
@@ -1377,7 +1339,8 @@ class Backend:
         A pending record that nothing keeps is cancelled, since its outputs
         would be dropped the moment they are computed; cancelling lets go of
         what it reads, so this passes along a chain. A record of a state that
-        has completed lets go of the state once its outputs are dropped.
+        has completed lets go of the state once its outputs are dropped (see
+        :meth:`_let_go_of_state`).
         """
         if any(record_id in c.kept for c in self._clients.values()):
             return
@@ -1395,11 +1358,27 @@ class Backend:
         for name in names:
             if name not in kept:
                 self._outputs.pop((record_id, name), None)
-        state = self._state_of.get(record_id)
-        if state is not None and not any(
+        if self._views.status(record_id) is Status.COMPLETED and not any(
             (record_id, n) in self._outputs for n in names
         ):
-            del self._state_of[record_id]
+            self._let_go_of_state(record_id)
+
+    def _let_go_of_state(self, record_id: str) -> None:
+        """
+        Let go of the state that the record of a state holds, if it still
+        does; lock held. Letting go again does nothing.
+
+        The record holds its state as a reader from its submission until
+
+        - it finishes without having started (see :meth:`_finish`),
+        - it has run, if it did not complete, or is the record of a freeze,
+          which holds the outputs of the last state (see :meth:`_run`), or
+        - it completed, once its outputs are dropped (see :meth:`_drop`).
+
+        So a record cancelled while it runs holds the state until its
+        workflow has returned.
+        """
+        if (state := self._state_of.pop(record_id, None)) is not None:
             self._let_go([state])
 
     def _complete(
@@ -1506,15 +1485,19 @@ class Backend:
                     omitted=left_out,
                 )
             )
-            self._let_go(self._unread.pop(finished_id, ()))  # if it never started
+            if (state := self._state_of.get(finished_id)) is not None:
+                completed = finished is Status.COMPLETED
+                acc = state[0]
+                self._act(acc, acc.lifecycle.freeze_finished(finished_id, completed))
+            if (reads := self._unread.pop(finished_id, None)) is not None:
+                self._let_go(reads)  # it never started
+                self._let_go_of_state(finished_id)
             for key in self._waiting.pop(finished_id, ()):
                 if (dependents := self._dependents.get(key)) is not None:
                     dependents.discard(finished_id)
                     if not dependents:
                         del self._dependents[key]
             self._stage_of.pop(finished_id, None)
-            if finished is not Status.COMPLETED:  # lets go of the state with its reads
-                self._state_of.pop(finished_id, None)
             for dependent in self._dependents.pop(finished_id, set()):
                 if finished is not Status.COMPLETED:
                     todo.append(
@@ -1605,8 +1588,8 @@ class Backend:
                 if (stage := caller.stages.pop(i, None)) is not None:
                     self._let_go_of_template(stage)
                 if (acc := caller.accumulators.pop(i, None)) is not None:
-                    acc.released = True
-                    self._unneeded(acc)
+                    self._act(acc, acc.lifecycle.release(self._pinned(acc)))
+                    self._advance(acc)
                 if i in caller.kept:
                     caller.kept.remove(i)
                     self._drop(i)
@@ -1654,26 +1637,9 @@ class Backend:
                 if self._views.status(record_id) is Status.COMPLETED:
                     self._start_writes(record_id, new)
 
-    def _unneeded(self, acc: _Accumulator) -> None:
-        """
-        Drop the steps of a released accumulator that no reader needs, and
-        let go of what they read; lock held. Called at release, and again
-        whenever the last reader of one of its states lets go.
-
-        A reader needs the steps up to the state it pinned. The step a worker
-        is doing cannot be stopped, so it stays. The records of states that
-        wait for a dropped step have all been cancelled, since a pending one
-        is a reader.
-        """
-        pinned = [upto for held, upto in self._readers if held is acc]
-        done = -1 if acc.added is None else acc.added  # the opening is step 0
-        needed = max(pinned, default=done) - done
-        dropped = []
-        while len(acc.steps) > max(needed, int(acc.busy)):
-            dropped.append(acc.steps.pop()[1])
-        for reads in dropped:
-            self._let_go(reads)
-        self._advance(acc)
+    def _pinned(self, acc: _Accumulator) -> list[int]:
+        """The states of the accumulator that readers hold; lock held."""
+        return [upto for held, upto in self._readers if held is acc]
 
     def open_stage(self, template: Template, client: str) -> tuple[str, Template]:
         """
@@ -1770,10 +1736,8 @@ class Backend:
         values = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
-            if acc.frozen is not None:
-                raise SubmitError.at(
-                    (), f'the accumulator was frozen as record {acc.frozen}'
-                )
+            if (refused := acc.lifecycle.push_refused()) is not None:
+                raise SubmitError.at((), refused)
             seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
             self._check_reads(spec_id, values, caller, {})
             self._append(Pushed(accumulator=accumulator_id, params=values))
@@ -1808,13 +1772,10 @@ class Backend:
         with self._changed:
             _, acc = self._settled(client, accumulator_id)
             persisted = self._persisted(acc.template.spec, persist)
-            if acc.frozen is not None and self._views.status(acc.frozen) is (
-                Status.PENDING
-            ):
-                raise SubmitError.at(
-                    (), f'the accumulator is frozen as record {acc.frozen}'
-                )
-            acc.freezing = True
+            refused = acc.lifecycle.freeze_refused(self._views.status)
+            if refused is not None:
+                raise SubmitError.at((), refused)
+            acc.lifecycle.start_check()
             upto = len(self._views.pushes.get(accumulator_id, ()))
             self._readers[(acc, upto)] += 1
         try:
@@ -1836,11 +1797,11 @@ class Backend:
                 )
                 if not persisted:
                     caller.kept.add(record_id)
-                acc.frozen = record_id
+                acc.lifecycle.end_check(record_id)
                 return self._views.records[record_id]
         finally:
             with self._changed:
-                acc.freezing = False
+                acc.lifecycle.end_check(None)
                 self._let_go([(acc, upto)])
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
@@ -1853,55 +1814,69 @@ class Backend:
         """
         reads = _output_reads(values)
         self._readers.update(reads)
-        acc.steps.append((values, reads))
-        self._accumulating.add(acc)
+        acc.lifecycle.queue(Step(values, reads))
         self._advance(acc)
 
     def _advance(self, acc: _Accumulator) -> None:
         """
         Start the accumulator's next step on a worker once nothing holds it
-        back, or stop the accumulator if the step cannot be done; lock held.
+        back, or stop the accumulator if the step cannot be done; lock held
+        (see :meth:`.Lifecycle.advance`).
 
         A step waits for the records it references to finish, and a push for
-        the readers of the state before it to be done. The step stops the
-        accumulator if one of these records has not completed.
+        the readers of the state before it to be done.
         """
-        if acc.busy or acc.stopped is not None:
-            return
-        if not acc.steps:
+        lifecycle = acc.lifecycle
+        self._act(acc, lifecycle.advance(self._held(acc), self._views.status))
+        if lifecycle.working:
+            self._accumulating.add(acc)
+        else:
             self._accumulating.discard(acc)
-            return
-        if acc.added is not None and self._readers[(acc, acc.added)]:
-            return
-        *_, reads = acc.steps[0]
-        for record_id, _ in reads:
-            status = self._views.status(record_id)
-            if status is Status.PENDING:
-                return
-            if status is not Status.COMPLETED:
-                self._stop(acc, f'{acc.step}: record {record_id} {status}')
-                return
-        acc.busy = True
-        acc.drop()
-        self._executor.submit(self._do_step, acc)
 
-    def _do_step(self, acc: _Accumulator) -> None:
+    def _held(self, acc: _Accumulator) -> bool:
+        """Whether a reader holds the accumulator's current state; lock held."""
+        added = acc.lifecycle.added
+        return added is not None and bool(self._readers[(acc, added)])
+
+    def _act(self, acc: _Accumulator, actions: Iterable[Action]) -> None:
+        """Take the actions that the accumulator's lifecycle returned; lock held."""
+        for action in actions:
+            match action:
+                case StartStep(step):
+                    acc.drop()
+                    self._executor.submit(self._do_step, acc, step)
+                case LetGo(reads):
+                    self._let_go(reads)
+                case Reached(upto):
+                    key = _state_key(acc.id, upto)
+                    for record_id in self._dependents.pop(key, ()):
+                        self._satisfied(record_id, key)
+                case FailStates(first, reason):
+                    logged = len(self._views.pushes.get(acc.id, ()))
+                    for upto in range(first, logged + 1):
+                        key = _state_key(acc.id, upto)
+                        for record_id in self._dependents.pop(key, ()):
+                            self._finish(record_id, Status.FAILED, reason)
+                case DropOutputs():
+                    acc.drop()
+                case DropDriver():
+                    acc.end()
+        self._changed.notify_all()
+
+    def _do_step(self, acc: _Accumulator, step: Step) -> None:
         """
-        Make the accumulator's driver or push into it, as its next step
-        says; on a worker, outside the backend's lock.
+        Make the accumulator's driver or push into it, as ``step`` says; on a
+        worker, outside the backend's lock.
 
         The values are given by name, each read and validated by its own
         field (see :meth:`_typed`); at the opening, the model validators check
         them first, without the blank tables. If the step fails, the
         accumulator stops, since the driver may hold part of the rows.
         """
-        # Read outside the lock: only this worker removes the step it does,
-        # _unneeded keeps a busy step, and _stop runs only when no step is
-        # busy, or on this worker.
-        values, reads = acc.steps[0]
+        lifecycle = acc.lifecycle
         try:
-            typed = self._typed(acc.template.spec, values, acc.rows_read)
-            if acc.added is None:  # the opening, which makes the driver
+            typed = self._typed(acc.template.spec, step.values, acc.rows_read)
+            if lifecycle.added is None:  # the opening, which makes the driver
                 params = acc.binding.spec.params
                 check_model(params, params.model_construct(**typed))
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
@@ -1910,37 +1885,13 @@ class Backend:
                     acc.driver.push(table, rows)
         except Exception as error:  # the binding refuses the values or rows
             with self._changed:
-                self._stop(acc, f'{acc.step} failed: {str(error) or repr(error)}')
+                reason = str(error) or repr(error)
+                self._act(acc, lifecycle.step_failed(reason, self._held(acc)))
+                self._advance(acc)
             return
         with self._changed:
-            acc.steps.popleft()
-            acc.added = 0 if acc.added is None else acc.added + 1
-            acc.busy = False
-            self._let_go(reads)
-            for record_id in self._dependents.pop(_state_key(acc.id, acc.added), ()):
-                self._satisfied(record_id, _state_key(acc.id, acc.added))
+            self._act(acc, lifecycle.step_done())
             self._advance(acc)
-
-    def _stop(self, acc: _Accumulator, failure: str) -> None:
-        """
-        Stop the accumulator: it takes no more pushes or readers, its steps
-        are dropped, and the records of its states that wait for them fail;
-        lock held. The driver is dropped now if no reader holds its
-        current state, and otherwise once the last one is done.
-        """
-        acc.stopped = f'the accumulator stopped: {failure}'
-        acc.busy = False
-        self._accumulating.discard(acc)
-        steps = list(acc.steps)
-        acc.steps.clear()
-        for *_, reads in steps:
-            self._let_go(reads)
-        for upto in range(len(self._views.pushes.get(acc.id, ())) + 1):
-            for record_id in self._dependents.pop(_state_key(acc.id, upto), ()):
-                self._finish(record_id, Status.FAILED, acc.stopped)
-        if not self._readers[(acc, acc.added)]:
-            acc.end()
-        self._changed.notify_all()
 
     def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
         """
@@ -1979,8 +1930,8 @@ class Backend:
             raise NotReadable(
                 f'accumulator {accumulator_id} is not kept by this client'
             )
-        if acc.stopped is not None:
-            raise NotReadable(acc.stopped)
+        if (unreadable := acc.lifecycle.unreadable) is not None:
+            raise NotReadable(unreadable)
         return acc
 
     def _pushed_into(self, caller: _Client, accumulator_id: str) -> _Accumulator:
@@ -2004,7 +1955,7 @@ class Backend:
         while True:
             caller = self._client(client)
             acc = self._pushed_into(caller, accumulator_id)
-            if not acc.freezing:
+            if not acc.lifecycle.checking:
                 return caller, acc
             self._changed.wait()
 
@@ -2231,9 +2182,12 @@ class Backend:
             if select is not None:
                 self._check_select(acc.template.spec, names)
             with self._changed:
-                self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
-                if acc.added != upto:
-                    raise NotReadable(acc.stopped)
+                lifecycle = acc.lifecycle
+                self._wait_for(
+                    lambda: lifecycle.added == upto or lifecycle.unreadable is not None
+                )
+                if lifecycle.added != upto:
+                    raise NotReadable(lifecycle.unreadable)
             declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
             for name in names or ():
                 if name not in declared:
