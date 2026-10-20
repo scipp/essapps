@@ -350,13 +350,14 @@ class Summing:
         self._fixed = fixed
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
         try:
-            counts = [_counts(path) for path in rows]
+            counts = {t: [_counts(path) for path in paths] for t, paths in rows.items()}
         except Exception as error:  # nothing is added yet
             raise PushRefused(str(error) or repr(error)) from error
-        for value in counts:
-            self._sums[table] += value  # in place from the second row
+        for table, values in counts.items():
+            for value in values:
+                self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)

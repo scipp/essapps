@@ -303,8 +303,8 @@ class IofQDriver:
     single-run binding's pipeline, cut at the binding's key of its table,
     and I(Q) from one cut at the sums. A sum is made with ``a + b``, so that
     no value the driver was given, or a stage returned, is modified. A push
-    computes its sums before the driver keeps them, so a push that fails
-    changes nothing, and raises ``PushRefused``.
+    computes the sums of all its rows before the driver keeps them, so a
+    push that fails changes nothing, and raises ``PushRefused``.
     """
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
@@ -323,20 +323,22 @@ class IofQDriver:
         self._finalize = sciline.Stage(workflow, inputs=sums, outputs=(IofQ,))
         self._sums: dict[str, dict[Any, sc.Variable]] = {}  # per table, by key
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        stage = self._contribute[table]
-        sums = self._sums.get(table)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        sums = dict(self._sums)
         try:
-            for row in rows:
-                parts = stage.compute({single.keys[table]: row})
-                sums = (
-                    parts
-                    if sums is None
-                    else {k: sums[k] + v for k, v in parts.items()}
-                )
-        except Exception as error:  # nothing is added yet
+            for table, values in rows.items():
+                stage = self._contribute[table]
+                for row in values:
+                    parts = stage.compute({single.keys[table]: row})
+                    old = sums.get(table)
+                    sums[table] = (
+                        parts
+                        if old is None
+                        else {k: old[k] + v for k, v in parts.items()}
+                    )
+        except Exception as error:  # nothing is kept yet
             raise PushRefused(str(error) or repr(error)) from error
-        self._sums[table] = sums
+        self._sums = sums
 
     def outputs(self) -> IofQOutputs:
         if empty := sorted(self._contribute.keys() - self._sums.keys()):

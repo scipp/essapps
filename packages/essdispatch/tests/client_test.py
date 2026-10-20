@@ -273,11 +273,12 @@ class Fold:
     def __init__(self, spec: Spec, operation: Callable[[Any, Any], Any]) -> None:
         self._outputs = spec.outputs
         (self._name,) = spec.outputs.model_fields
+        (self._table,) = spec.tables
         self._operation = operation
         self._total: Any = None
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        for value in rows:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        for value in rows[self._table]:
             if self._total is None:
                 self._total = copy.deepcopy(value)
             else:
@@ -302,9 +303,10 @@ class Averaging:
         self._total = 0.0
         self._count = 0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._total += sum(rows)
-        self._count += len(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (values,) = rows.values()
+        self._total += sum(values)
+        self._count += len(values)
 
     def outputs(self) -> MeanAndSpread:
         return MeanAndSpread(mean=self._total / self._count)
@@ -318,10 +320,11 @@ class _ScaledTotal:
         self.total = fixed['offset'] or 0.0
         self.tags: list[Any] = []
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        for run in rows:
-            self.tags.append(run.tag)
-            self.total += self._factor * read_dataset(run.file)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (runs,) = rows.values()
+        added = sum(self._factor * read_dataset(run.file) for run in runs)
+        self.tags.extend(run.tag for run in runs)
+        self.total += added
 
     def outputs(self) -> Value:
         return Value(value=self.total)
@@ -351,8 +354,9 @@ class Walking:
         self._factor = fixed['scale'].factor
         self._total = 0.0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._total += sum(step.size for step in rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (steps,) = rows.values()
+        self._total += sum(step.size for step in steps)
 
     def outputs(self) -> Value:
         return Value(value=self._factor * self._total)
@@ -1565,7 +1569,7 @@ class _Summing:
         self._owner = owner
         self._fold = Fold(TOTAL, operator.add)
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.failing:
@@ -1575,7 +1579,7 @@ class _Summing:
             self._owner.refusing = False
             raise PushRefused('not a part')
         self._owner.pushed += 1
-        self._fold.push(table, rows)
+        self._fold.push(rows)
 
     def outputs(self) -> BaseModel:
         return self._fold.outputs()
@@ -1938,16 +1942,17 @@ class _Sides:
         self._owner = owner
         self._sums: dict[str, Any] = {'samples': 0.0, 'backgrounds': 0.0}
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.refusing:
             self._owner.refusing = False
             raise ValueError('cannot add')
-        if table == self._owner.refused:
-            raise PushRefused(f'no {table}')
-        for value in rows:
-            self._sums[table] += value  # in place from the second row
+        if self._owner.refused in rows:
+            raise PushRefused(f'no {self._owner.refused}')
+        for table, values in rows.items():
+            for value in values:
+                self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> Sides:
         self._owner.computing.set()
@@ -2696,38 +2701,25 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     assert subtracting.held[0]() is None  # nothing reads it any more
 
 
-def test_a_push_refused_at_its_first_table_fails_alone(
+def test_a_push_the_driver_refuses_fails_alone_whatever_the_order_of_its_tables(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
     sides = _sides_of(client)
     client.wait(sides.push(samples=[loads[0].ref('value')]))
     subtracting.refused = 'backgrounds'
-    refused = sides.push(
-        backgrounds=[loads[1].ref('value')], samples=[loads[1].ref('value')]
-    )
+    rows = {'samples': [loads[1].ref('value')], 'backgrounds': [loads[1].ref('value')]}
+    first = sides.push(**rows)
+    client.wait(first)
+    second = sides.push(**dict(reversed(rows.items())))
 
-    assert client.wait(refused) == Status.FAILED
-    assert client.failure(refused) == 'push 2 failed: no backgrounds'
-    assert _sides(client.output(sides)) == {'difference': [1.0], 'total': [1.0]}
-
-
-def test_a_push_refused_once_the_driver_took_one_of_its_tables_stops_it(
-    in_place: Client, loads: list[Record], subtracting: Subtracting
-) -> None:
-    client = in_place
-    sides = _sides_of(client)
-    subtracting.refused = 'backgrounds'
-    refused = sides.push(
-        samples=[loads[0].ref('value')], backgrounds=[loads[1].ref('value')]
-    )
-
-    reason = "push 1 failed: no backgrounds; the driver holds the rows of ['samples']"
-    assert client.wait([refused, sides]) == [Status.FAILED, Status.FAILED]
-    assert client.failure([refused, sides]) == [
-        reason,
-        f'the accumulator stopped: {reason}',
+    assert client.wait([first, second]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([first, second]) == [
+        'push 2 failed: no backgrounds',
+        'push 3 failed: no backgrounds',
     ]
+    assert client.status(sides) == Status.PENDING
+    assert _sides(client.output(sides)) == {'difference': [1.0], 'total': [1.0]}
 
 
 # Selections

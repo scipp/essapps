@@ -179,8 +179,8 @@ class Count:
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self.rows += len(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        self.rows += sum(map(len, rows.values()))
 
     def outputs(self) -> Value:
         return Value(value=self.rows)

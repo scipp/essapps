@@ -90,7 +90,7 @@ class Recorder:
 
     def __init__(self) -> None:
         self.made: list[Mapping[str, Any]] = []
-        self.pushes: list[tuple[str, Sequence[Any]]] = []
+        self.pushes: list[dict[str, Sequence[Any]]] = []
 
     def make_driver(self, fixed: Mapping[str, Any]) -> 'Subtracting':
         self.made.append(fixed)
@@ -103,9 +103,10 @@ class Subtracting:
         self._factor = factor
         self._total = 0.0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._recorder.pushes.append((table, rows))
-        self._total += sum(rows) if table == 'sample' else -sum(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        self._recorder.pushes.append(dict(rows))
+        for table, values in rows.items():
+            self._total += sum(values) if table == 'sample' else -sum(values)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self._factor * self._total)
@@ -175,12 +176,12 @@ def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
     assert recorder.pushes == []
 
 
-def test_each_fixed_table_with_rows_is_one_push_of_its_rows(
+def test_the_fixed_tables_with_rows_are_one_push_of_their_rows(
     binding: DriverBinding, recorder: Recorder
 ) -> None:
     driver = binding.make_accumulator({'sample': SAMPLES}, ('can',))
-    assert recorder.pushes == [('sample', SAMPLES)]
-    driver.push('can', [1.0])
+    assert recorder.pushes == [{'sample': SAMPLES}]
+    driver.push({'can': [1.0]})
     assert driver.outputs() == SubOutputs(diff=2.0 * (5.0 + 7.0 - 1.0))
 
 
@@ -189,7 +190,7 @@ def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
 ) -> None:
     params = SUB_MULTI.params(sample=SAMPLES, can=[1.0])
     assert binding.compute(params) == SubOutputs(diff=22.0)
-    assert recorder.pushes == [('sample', SAMPLES), ('can', [1.0])]
+    assert recorder.pushes == [{'sample': SAMPLES, 'can': [1.0]}]
 
 
 def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:

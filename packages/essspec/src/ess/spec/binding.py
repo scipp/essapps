@@ -133,17 +133,29 @@ class Driver[O: BaseModel](Protocol):
     - A push that raises :class:`PushRefused` changed nothing: the driver
       gives the outputs it gave before the push, and later pushes add as if
       it had not been made. A driver keeps this by computing what every row
-      contributes first, and adding it only once all of it is computed.
+      of every table of the push contributes first, and keeping it only
+      once all of it is computed.
 
-    A push that raises :class:`PushRefused` fails alone: the accumulator
+    A push that raises :class:`PushRefused` fails alone, and the accumulator
     takes more pushes. A push that raises anything else stops the
-    accumulator, since the driver may hold part of its rows. A client's push
-    into several tables is one call per table, so a refusal at a later table
-    stops the accumulator too: the driver holds the rows of those before.
+    accumulator, since the driver may hold part of its rows. The backend
+    resolves a dataset to a local path, and the driver reads the file, so a
+    file that cannot be read is the driver's to refuse::
+
+        def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+            try:
+                parts = {t: [self._contribution(t, r) for r in rows[t]] for t in rows}
+            except Exception as error:  # nothing is kept yet
+                raise PushRefused(str(error)) from error
+            for table, contributions in parts.items():
+                self._sums[table] = sum(contributions, self._sums[table])
     """
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        """Add ``rows``, never none, to the table ``table``, in order."""
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        """
+        Add the rows of each table, by its name, in order: one push of a
+        client, into one or more tables, never with none of a table's rows.
+        """
         ...
 
     def outputs(self) -> O:
@@ -209,8 +221,8 @@ class DriverBinding[P: BaseModel, O: BaseModel]:
 
     ``make_driver`` makes a driver from the fixed values that are not tables,
     by name. It may be called from several threads at once. An accumulator
-    gets a driver of its own, with each table in its fixed values in one
-    push; a table without rows is not pushed. A plain request is an
+    gets a driver of its own, with the tables in its fixed values in one
+    push; a table without rows is left out of it. A plain request is an
     accumulator with no blanks, read once. ``fixed`` and ``blanks`` are
     checked by :func:`fixed_values`, and each blank must be a table.
     """
@@ -232,9 +244,8 @@ class DriverBinding[P: BaseModel, O: BaseModel]:
             )
         values = fixed_values(self.spec, fixed, blanks)
         driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
-        for table in tables:
-            if values.get(table):
-                driver.push(table, values[table])
+        if rows := {t: values[t] for t in tables if values.get(t)}:
+            driver.push(rows)
         return driver
 
 

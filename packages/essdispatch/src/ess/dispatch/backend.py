@@ -131,8 +131,8 @@ template's values by name, each read and validated by its own field, once
 the model validators have checked them, with the blank tables left out: a
 validator that reads one fails the opening, since a check across rows is
 the driver's. Each
-push is one push into the driver per table it gives rows of, in the order
-given, which may add the rows in place; each row is first read and
+push is one call of the driver's ``push`` with the rows of every table it
+gives, which may add the rows in place; each row is first read and
 validated by its table's element type,
 and a row that fails its check fails the push, as does a row read whose JSON
 form repeats one of the table read before; the accumulator keeps these JSON
@@ -142,8 +142,8 @@ readers of the state before it are done.
 
 Push k makes state k. A push *fails* where the driver is unchanged: if a
 record it references has not completed, if a row cannot be read or fails its
-check, if a row read repeats one, or if the driver raises ``PushRefused`` at
-the push's first table, which promises that it changed nothing. A failed push
+check, if a row read repeats one, or if the driver raises ``PushRefused``,
+which promises that it changed nothing. A failed push
 keeps its number and adds no rows, so state k is state k-1; its failure is
 logged, its rows leave the table, so that they may be pushed again, and the
 accumulator takes more pushes. Any other failure of a push, and every failure
@@ -1932,12 +1932,12 @@ class Backend:
 
         The values are given by name, each read and validated by its own
         field (see :meth:`_typed`); at the opening, the model validators check
-        them first, without the blank tables. A push that fails before the
-        driver gets rows, or whose first push into the driver raises
-        ``PushRefused``, fails alone, since the driver is unchanged; the rows
-        read are kept for the distinct check only once the step is done. Any
-        other failure stops the accumulator, since the driver may hold part of
-        the rows: so does ``PushRefused`` from a later table of the push.
+        them first, without the blank tables. The rows of every table of a
+        push go to the driver in one call. A push that fails before the
+        driver gets them, or that the driver refuses with ``PushRefused``,
+        fails alone, since the driver is unchanged; the rows read are kept
+        for the distinct check only once the step is done. Any other failure
+        stops the accumulator, since the driver may hold part of the rows.
         """
         lifecycle = acc.lifecycle
         opening = lifecycle.added is None
@@ -1956,18 +1956,12 @@ class Backend:
                 self._step_failed(acc, _reason(error), fatal=True)
                 return
         else:
-            pushed: list[str] = []
-            for table, rows in typed.items():
-                try:
-                    acc.driver.push(table, rows)
-                except Exception as error:  # the driver refuses the rows
-                    reason = _reason(error)
-                    if pushed:
-                        reason += f'; the driver holds the rows of {pushed}'
-                    refused = isinstance(error, PushRefused) and not pushed
-                    self._step_failed(acc, reason, fatal=not refused)
-                    return
-                pushed.append(table)
+            try:
+                acc.driver.push(typed)
+            except Exception as error:  # the driver refuses the rows
+                fatal = not isinstance(error, PushRefused)
+                self._step_failed(acc, _reason(error), fatal=fatal)
+                return
         with self._changed:
             for table, forms in read.items():
                 acc.rows_read.setdefault(table, {}).update(forms)

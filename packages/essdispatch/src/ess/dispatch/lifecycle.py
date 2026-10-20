@@ -27,8 +27,8 @@ A freeze whose record fails or is cancelled leaves the accumulator
 phase, but still does the steps that its readers need.
 
 A push *fails* if a record it reads did not complete, or the step raised
-before the driver got rows, or the driver raised ``PushRefused`` at the
-first table of the push (see :mod:`.backend`). The push then adds no
+before the driver got rows, or the driver raised ``PushRefused`` (see
+:mod:`.backend`). The push then adds no
 rows: state k is state k-1, and the accumulator goes on. Any other failure
 of a push, and every failure of the opening, stops the accumulator. A failed
 push keeps its number, and its reason is kept in ``failed``.

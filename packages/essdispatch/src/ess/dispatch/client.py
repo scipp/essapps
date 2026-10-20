@@ -216,8 +216,8 @@ class Accumulator:
         field by each field so; for a table whose element type has a JSON
         form, also by the rows read, before the driver gets them.
 
-        A push is one push into the binding's driver per table, in the
-        order given, and one state. A push references
+        A push is one push into the binding's driver, of the rows of every
+        table it gives, and one state. A push references
         datasets or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is

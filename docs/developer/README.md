@@ -631,8 +631,8 @@ Only the call phase catches that repeat, and only for a table whose element type
 | A push fails | Example | The accumulator |
 |---|---|---|
 | in the backend, before `driver.push` | a referenced record failed, a file cannot be read, a row repeats once read, a group's model validator refuses a row | takes more pushes |
-| in `driver.push`, raising `PushRefused` at the push's first table | the driver checks the rows before it adds any | takes more pushes |
-| in `driver.push`, raising anything else, or `PushRefused` at a later table | the driver may hold part of the rows | stops |
+| in `driver.push`, raising `PushRefused` | the driver checks the rows of every table of the push before it adds any | takes more pushes |
+| in `driver.push`, raising anything else | the driver may hold part of the rows | stops |
 
 A push that fails keeps its number and adds no rows: if push k fails, state k is state k-1, and the record of state k is the plain request over the rows of the pushes up to k that did not fail.
 The log holds the failure, so the backend computes the same records from it.
@@ -736,7 +736,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', [Sample(run=path_611)])      # once per table of a push: its rows
+driver.push({'sample': [Sample(run=path_611)]})    # once per push: the rows of each table
 driver.outputs()                                   # once per state that is read
 ```
 
@@ -775,11 +775,11 @@ The author of the pipeline promises that it is pure: it modifies no value it is 
 A driver passes `pipeline` the fixed values it is made with: every value that is not a table, defaults filled in.
 So a parameter that is a table of the multi-run spec cannot shape the graph, as a blank cannot.
 
-**A driver.** A *driver* is an object with `push(table, rows)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
+**A driver.** A *driver* is an object with `push(rows)`, the rows of each table of one push by name, and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
-`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
-A table without rows is not pushed, so a driver never gets a push of no rows.
+`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of the tables in `fixed` in one push.
+A table without rows is left out of a push, so a driver never gets a table of no rows.
 A plain request is an accumulator with no blanks, read once.
 For the toy SANS reduction, a driver sums each run's numerator and denominator per table, and divides once:
 
@@ -789,11 +789,14 @@ class IofQDriver:
         self._bins = fixed['reduction'].bins
         self._sums = {}                           # per table: numerator and denominator
 
-    def push(self, table, rows):
-        for row in rows:                          # a Sample, or a can run's path
-            parts = numerator_and_denominator(row, self._bins)
-            old = self._sums.get(table)
-            self._sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
+    def push(self, rows):                         # {'sample': [Sample, ...], 'can': [path, ...]}
+        sums = dict(self._sums)                   # kept only once every row is added
+        for table, values in rows.items():
+            for row in values:
+                parts = numerator_and_denominator(row, self._bins)
+                old = sums.get(table)
+                sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
+        self._sums = sums
 
     def outputs(self):                            # a state read has a sample row and a can row
         sample_num, sample_den = self._sums['sample']
@@ -819,7 +822,7 @@ Code that calls a driver itself keeps the same order:
 ```python
 driver = binding.make_accumulator(fixed, blanks=('runs',))
 for run in runs:
-    driver.push('runs', [run])
+    driver.push({'runs': [run]})
     counts = driver.outputs().counts      # may be the array the next push adds into
     show(counts['q', 0])                  # done with it before the next push
 ```
