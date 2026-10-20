@@ -147,12 +147,15 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 
 | A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| a file: `Path`, pydantic's `FilePath` or `DirectoryPath`, or a `NewType` of one | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+A type is a file when pydantic's JSON schema of it is a string with a path format: `"format": "path"` for `Path` and a `NewType` of it, `"file-path"` for `FilePath`, `"directory-path"` for `DirectoryPath`.
+The access check on the service depends on it, so an author types each file as one of these.
+A `NewType` of `str` used for a file is a string: it is given inline, and no dataset source checks it.
 A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
 A reference to a dataset stands for the whole group: its one required file, and its other fields at their defaults.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
@@ -172,16 +175,29 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - Each parameter is a type, possibly optional, or a list of one.
 - Each output is a type, possibly optional, or a list or a dict of one.
+- A parameter holds a file only as a file, possibly optional, a list of files, or a group that holds a file as a field. A file anywhere else, such as in a tuple, a `TypedDict`, a dataclass, or a type alias `type Files = list[Path]`, is refused, since no reference to a dataset stands for it.
 - A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
-- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
+- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`.
+- A model validator of the params model, or of a group given field by field, runs after validation, `mode='after'`, and takes only `self`. A `before` or `wrap` validator would see the raw input, which differs between the phases: JSON and references when a request is submitted, typed values when it runs.
 
 Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
-Like the params model, a group given field by field is never validated whole.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
-A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
-A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
+A check across parameters, such as a transmission mode that requires a transmission run, is a model validator of the params model, or the binding's or the driver's, and fails when the request runs.
+A model validator checks and never changes values: it returns `self` and changes nothing in place.
+One that returns anything else fails the request.
+The backend runs the model validators wherever every value they read is known:
+
+| Request | Model validators run |
+|---|---|
+| plain request | when it runs, on the whole params instance |
+| call through a stage | at each call, on the fixed values and the values of the blanks |
+| accumulator | when it opens, on the template's values, without the blank tables |
+
+An accumulator whose model validator reads a blank table fails to open, since a check across rows is the driver's.
+So the record of an accumulator's state may be a plain request that a direct submission would refuse by a check across rows.
+A group given field by field is checked by its model validators once it is made from its fields, a row of a table before the driver gets it.
 
 **Defaults.** A default never changes which quantity an output is.
 `reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file: the output is I(Q) either way.
@@ -220,7 +236,7 @@ A *request* is a spec and its params, given by keyword:
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
                                       'sample': dataset(run=60339),
                                       'can': dataset(run=60338)})      # submit, then wait
-client.output(result, 'iofq')            # raises if the record failed
+client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
@@ -257,7 +273,8 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 **Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each inline value by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
 An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
 In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
-A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
+A request that cannot run is refused at submission with a `SubmitError`.
+Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
 Validation in the request phase never proves that a workflow will succeed.
@@ -374,6 +391,7 @@ A value that is gone does not come back.
 The binding is a black box.
 The framework hands it a stage's fixed values at the stage's first call, an accumulator's template when it makes the driver, and a push's rows when the push is added.
 The framework does not track what the binding keeps after that.
+A stage whose params model has a model validator also holds its fixed values, as the binding took them, while it lives, since each call checks them with the values of the blanks.
 
 A submission may reference only
 
@@ -383,7 +401,7 @@ A submission may reference only
 - the current state of its client's own accumulators.
 
 Any other reference is refused, even to a record that is still pending.
-`client.output` reads only the same values, and raises for any other.
+`client.output` reads only the same values, and raises `NotReadable` for any other.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
@@ -392,7 +410,7 @@ result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': datase
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
-client.output(centre, 'centre')     # raises: this client released it
+client.output(centre, 'centre')     # raises NotReadable: this client released it
 ```
 
 `client.close()`, or the end of a `with client:` block, releases everything the client keeps.
@@ -576,9 +594,9 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
-| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
-| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct; the model validators on the fixed values, without the blank tables, when the driver is made |
+| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct; the model validators on the fixed and the given values |
+| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type, a group by its model validators too; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.

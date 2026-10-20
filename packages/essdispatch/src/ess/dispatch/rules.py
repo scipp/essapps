@@ -26,7 +26,8 @@ from ess.spec import DatasetRef
 from .batch import Lookup, dataset_blank, run_number, try_apply
 from .client import Client
 from .datasets import Selector
-from .records import Record, Request, SubmitError, Template
+from .errors import SubmitError
+from .records import Record, Request, Template
 
 
 @dataclass(frozen=True)

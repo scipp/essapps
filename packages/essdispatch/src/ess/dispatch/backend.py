@@ -30,11 +30,14 @@ An output value is kept while the client that made its record keeps it, while
 a stage whose template references it has yet to stage, while a pending
 request or a step of an accumulator that reads it has yet to run, or while a
 persist request waits for its write. Once a stage has staged, or a step is
-done, what the binding holds is its own. A pending record whose outputs
-nothing keeps is cancelled, since they would be dropped the moment they are
-computed; cancelling lets go of what it reads, so this passes along a chain.
-A workflow already running is not interrupted: its record is cancelled at
-once, and its outputs are dropped when it returns.
+done, what the binding holds is its own. So is what a stage whose params
+model has a model validator holds while it lives: its fixed values, as the
+binding took them, since each call checks them with the values of the
+blanks. A pending record whose outputs nothing keeps is cancelled, since
+they would be dropped the moment they are computed; cancelling lets go of
+what it reads, so this passes along a chain. A workflow already running is
+not interrupted: its record is cancelled at once, and its outputs are
+dropped when it returns.
 
 To persist an output is to write it to the backend's store, which then keeps
 it; a write replaces what the store holds under that name. A persist request
@@ -82,9 +85,10 @@ validates each value alone by its field, a row of a list by its element type:
 an inline value from its JSON form, which the log holds, so that both phases
 see the same values, and data read from the object (see
 :func:`ess.spec.field_types.validated`). For a plain request it makes the
-params instance from these values without validating again, so the params
-model's model validators never run; a stage or an accumulator gets the
-values by name. The rows of a table, if its element type has a JSON form,
+params instance from these values without validating them again, and checks
+it by the params model's model validators (see
+:func:`ess.spec.field_types.check_model`); a stage or an accumulator gets
+the values by name. The rows of a table, if its element type has a JSON form,
 are distinct by the JSON forms of the rows read, as the element type dumps
 them, too: an inline value and a reference to equal data are one row. A
 table that a request, a template, or a stage call
@@ -100,14 +104,15 @@ outside the blanks. The first such request to run has the binding make its
 stage with the template's values by name, each read and validated by its own
 field, and every request through the stage runs through the callable the
 binding returned, with the values of the blanks, so a binding that holds
-values computes only what depends on the blanks. The record of a request
-through a stage that has staged still names the template's values, but these
-references are provenance only: they are not checked against what the client
-keeps, waited for, or read, except by a restart, which runs the record as its
-plain request (see :meth:`Backend._restart`). If staging fails, the stage
-stops: the requests through it fail, and later ones are refused. A stage
-lives until its client releases it or ends, and the requests made through it
-have run.
+values computes only what depends on the blanks. Before each call, the
+model validators check the fixed values and those of the blanks together.
+The record of a request through a stage that has staged still names the
+template's values, but these references are provenance only: they are not
+checked against what the client keeps, waited for, or read, except by a
+restart, which runs the record as its plain request (see
+:meth:`Backend._restart`). If staging fails, the stage stops: the requests
+through it fail, and later ones are refused. A stage lives until its client
+releases it or ends, and the requests made through it have run.
 
 An accumulator opens from a template whose blanks are tables, checked as a
 stage's template is. Each push gives one or more rows of one or more blank
@@ -122,7 +127,10 @@ one that has failed, but do not wait for one that is pending.
 
 Each accumulator then works through its steps one at a time, in the order they
 were logged, on the workers: opening has the binding make the driver from the
-template's values by name, each read and validated by its own field, and each
+template's values by name, each read and validated by its own field, once
+the model validators have checked them, with the blank tables left out: a
+validator that reads one fails the opening, since a check across rows is
+the driver's. Each
 push is one push into the driver per table it gives rows of, in the order
 given, which may add the rows in place; each row is first read and
 validated by its table's element type,
@@ -150,8 +158,9 @@ of a state checks the number of rows of each blank table against its length
 constraints, such as a table that needs a row,
 outside the backend's lock, and a read of a state whose request would be
 refused is refused with that request's reason. Every other check was made
-when a value was given, and the params model's model validators run on no
-state.
+when a value was given or when the accumulator opened. So the plain request
+of a state may be one that a direct submission would refuse by a model
+validator that reads a table: a check across rows is the driver's.
 
 The outputs of a state are computed outside the backend's lock, all at once,
 the first time a record of the state or a read of its outputs reads it, and
@@ -198,7 +207,7 @@ import uuid
 from collections import Counter, deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -216,11 +225,12 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, json_form, optional, validated
-from ess.spec.refs import iter_refs, map_refs
+from ess.spec.field_types import base, check_model, json_form, optional, validated
+from ess.spec.refs import Loc, iter_refs, map_refs
 
 from .checks import Checks, check_fit, distinct, refs
 from .datasets import DatasetSource, Selector, readable
+from .errors import ClientEnded, NotReadable, RecordFailed, SubmitError
 from .log import (
     Event,
     Finished,
@@ -233,15 +243,11 @@ from .log import (
     Submitted,
     Written,
 )
-from .records import Record, Request, SpecId, Status, SubmitError, Template
+from .records import Record, Request, SpecId, Status, Template
 from .store import Store
 from .views import PENDING, Views, WriteFailed
 
 type Spec = WorkflowSpec[Any, Any]
-
-
-class ClientEnded(RuntimeError):
-    """A call of a client that has ended."""
 
 
 def _outputs_of(
@@ -266,8 +272,8 @@ def _outputs_of(
     return outputs
 
 
-def _not_returned(where: str) -> LookupError:
-    return LookupError(f'{where}: the workflow did not return it')
+def _not_returned(where: str) -> NotReadable:
+    return NotReadable(f'{where}: the workflow did not return it')
 
 
 def _element(value: Any, ref: OutputRef) -> Any:
@@ -315,19 +321,20 @@ class Entry:
     """
     A request of a submission, and its label and member.
 
-    ``name`` says where the request came from in the call, a key or an index,
-    and prefixes the reasons it is refused. ``stage`` names the stage the
-    request goes through, if any.
+    ``name`` says where the request came from in the call, its key or its
+    index, and is the entry of each reason it is refused (see
+    :class:`.errors.FieldError`). ``stage`` names the stage the request goes
+    through, if any.
     """
 
     request: Request
     label: str | None = None
     member: str | None = None
-    name: str | None = None
+    name: str | int | None = None
     stage: str | None = None
 
     def refused(self, error: SubmitError) -> SubmitError:
-        return SubmitError(f'{self.name}: {error}' if self.name else str(error))
+        return SubmitError(replace(e, entry=self.name) for e in error.errors)
 
 
 class _Stage:
@@ -341,7 +348,10 @@ class _Stage:
     template references, which the stage keeps as a reader until it has
     staged, has stopped, or is released; it is empty from then on. The first
     call to run stages the binding under ``staging``, so that concurrent calls
-    stage it once. ``call``, the callable the binding returned, and
+    stage it once. ``fixed`` holds the template's values as the binding took
+    them, once staged, if the params model has a model validator, which each
+    call runs on them and the values of the blanks; else it is ``None``.
+    ``call``, the callable the binding returned, and
     ``stopped``, why staging failed, change under the backend's lock. A stage
     that has stopped takes no more calls.
     """
@@ -354,6 +364,7 @@ class _Stage:
         self.template = template
         self.given = given
         self.reads = _output_reads(template.params)
+        self.fixed: dict[str, Any] | None = None
         self.call: StageCall | None = None
         self.stopped: str | None = None
         self.staging = threading.Lock()
@@ -695,7 +706,7 @@ class Backend:
         try:
             return self._bindings[spec_id].spec
         except KeyError:
-            raise SubmitError(f'unknown spec {spec_id}') from None
+            raise SubmitError.at((), f'unknown spec {spec_id}') from None
 
     def _append(self, event: Event) -> None:
         """
@@ -878,13 +889,15 @@ class Backend:
         if not persist:
             return ()
         if self._store is None:
-            raise SubmitError('persisting needs a store, which this backend lacks')
+            raise SubmitError.at(
+                (), 'persisting needs a store, which this backend lacks'
+            )
         declared = tuple(self.spec(spec_id).outputs.model_fields)
         if persist is True:
             return declared
         names = (persist,) if isinstance(persist, str) else tuple(persist)
         if lacking := [n for n in names if n not in declared]:
-            raise SubmitError(f'{spec_id} has no outputs {lacking} to persist')
+            raise SubmitError.at((), f'{spec_id} has no outputs {lacking} to persist')
         return names
 
     def _prepare(self, entry: Entry, proposal: str) -> Request:
@@ -963,17 +976,18 @@ class Backend:
         ``also``, what the stage keeps, which :meth:`_check_stage` has checked
         it for; one through a stage that has staged reads only its blanks.
         """
-        for where, ref, tp in refs(self._bindings[spec_id].spec, params):
+        for loc, ref, tp in refs(self._bindings[spec_id].spec, params):
             if isinstance(ref, DatasetRef):
                 continue  # checked when resolved
-            source = self._readable(ref, where, caller, states, also)
-            check_fit(self._bindings[source].spec, ref, tp, where)
+            source = self._readable(ref, loc, caller, states, also)
+            check_fit(self._bindings[source].spec, ref, tp, loc)
             if isinstance(ref, OutputRef) and self._views.omitted(
                 (ref.record, ref.output)
             ):
-                raise SubmitError(
-                    f'{where}: record {ref.record} output {ref.output}: '
-                    'the workflow did not return it'
+                raise SubmitError.at(
+                    loc,
+                    f'record {ref.record} output {ref.output}: '
+                    'the workflow did not return it',
                 )
 
     def _check_stage(
@@ -989,11 +1003,13 @@ class Backend:
             return None
         stage = caller.stages.get(entry.stage)
         if stage is None:
-            raise SubmitError('the stage was released or is unknown')
+            raise SubmitError.at((), 'the stage was released or is unknown')
         if stage.stopped is not None:
-            raise SubmitError(stage.stopped)
+            raise SubmitError.at((), stage.stopped)
         if stage.spec != request.spec:
-            raise SubmitError(f'the stage holds {stage.spec}, not {request.spec}')
+            raise SubmitError.at(
+                (), f'the stage holds {stage.spec}, not {request.spec}'
+            )
         raw, template = entry.request, stage.template
         given = {k: v for k, v in raw.params.items() if k not in stage.given}
         fixed = template.params
@@ -1001,13 +1017,15 @@ class Backend:
             k for k in given.keys() & fixed.keys() if given[k] != fixed[k]
         }
         if differ:
-            raise SubmitError(f"{sorted(differ)}: differ from the stage's values")
+            raise SubmitError.at(
+                (), f"{sorted(differ)}: differ from the stage's values"
+            )
         return stage
 
     def _readable(
         self,
         ref: OutputRef | AccumulatorRef,
-        field: str,
+        loc: Loc,
         caller: _Client,
         states: Mapping[str, _Pinned],
         also: Collection[tuple[str, str]],
@@ -1027,29 +1045,27 @@ class Backend:
         if isinstance(ref, AccumulatorRef):
             try:
                 acc = self._accumulator(caller, ref.accumulator)
-            except SubmitError as error:
-                raise SubmitError(f'{field}: {error}') from None
+            except LookupError as error:  # unknown, or not readable
+                raise SubmitError.at(loc, error.args[0]) from None
             if ref.accumulator not in states:
-                raise SubmitError(
-                    f'{field}: only a request may reference an accumulator'
-                )
+                raise SubmitError.at(loc, 'only a request may reference an accumulator')
             if (refused := states[ref.accumulator][2]) is not None:
-                raise SubmitError(f'{field}: {refused}')
+                raise SubmitError.at(loc, refused)
             return acc.template.spec
         record = self._views.records.get(ref.record)
         if record is None:
-            raise SubmitError(f'{field}: unknown record {ref.record}')
+            raise SubmitError.at(loc, f'unknown record {ref.record}')
         if record.proposal != caller.proposal:
-            raise SubmitError(
-                f'{field}: record {ref.record} belongs to proposal {record.proposal}'
+            raise SubmitError.at(
+                loc, f'record {ref.record} belongs to proposal {record.proposal}'
             )
         status = self._views.status(ref.record)
         if status in (Status.FAILED, Status.CANCELLED):
-            raise SubmitError(f'{field}: record {ref.record} {status}')
+            raise SubmitError.at(loc, f'record {ref.record} {status}')
         try:
             self._access(caller, (ref.record, ref.output), also)
         except SubmitError as error:
-            raise SubmitError(f'{field}: {error}') from None
+            raise SubmitError.at(loc, str(error)) from None
         return record.spec
 
     def _access(
@@ -1073,11 +1089,12 @@ class Backend:
             return False
         write = self._views.write(key)
         if isinstance(write, WriteFailed):
-            raise SubmitError(
-                f'record {record_id} output {name}: the write failed: {write.reason}'
+            raise SubmitError.at(
+                (),
+                f'record {record_id} output {name}: the write failed: {write.reason}',
             )
         if write is None:
-            raise SubmitError(f'record {record_id} is not kept by this client')
+            raise SubmitError.at((), f'record {record_id} is not kept by this client')
         return True
 
     # Execution
@@ -1190,17 +1207,25 @@ class Backend:
             params = spec.params.model_construct(
                 **self._typed(request.spec, request.params)
             )
+            check_model(spec.params, params)
             returned = self._bindings[request.spec].compute(params)
         else:
             fixed = {n: v for n, v in request.params.items() if n not in stage.given}
-            call = self._staged(
-                stage,
-                lambda: stage.binding.make_stage(
-                    self._typed(request.spec, fixed), stage.template.blanks
-                ),
-            )
+
+            def make() -> StageCall:
+                typed = self._typed(request.spec, fixed)
+                if spec.params.__pydantic_decorators__.model_validators:
+                    stage.fixed = typed
+                return stage.binding.make_stage(typed, stage.template.blanks)
+
+            call = self._staged(stage, make)
             given = {n: v for n, v in request.params.items() if n in stage.given}
-            returned = call(self._typed(request.spec, given))
+            typed = self._typed(request.spec, given)
+            if stage.fixed is not None:
+                check_model(
+                    spec.params, spec.params.model_construct(**stage.fixed, **typed)
+                )
+            returned = call(typed)
         return _outputs_of(request.spec, spec.outputs, returned)
 
     def _typed(
@@ -1602,20 +1627,24 @@ class Backend:
         :meth:`close_client`).
         """
         if self._store is None:
-            raise SubmitError('persisting needs a store, which this backend lacks')
+            raise SubmitError.at(
+                (), 'persisting needs a store, which this backend lacks'
+            )
         with self._changed:
             caller = self._client(client)
             for record_id in ids:
                 record = self._mine(record_id, caller.proposal)
                 if record_id not in caller.kept:
-                    raise SubmitError(f'record {record_id} is not kept by this client')
+                    raise SubmitError.at(
+                        (), f'record {record_id} is not kept by this client'
+                    )
                 if (status := self._views.status(record_id)) in (
                     Status.FAILED,
                     Status.CANCELLED,
                 ):
-                    raise SubmitError(f'record {record_id} {status}')
+                    raise SubmitError.at((), f'record {record_id} {status}')
                 if lacking := [n for n in outputs if n not in record.outputs]:
-                    raise SubmitError(f'{record.spec} has no outputs {lacking}')
+                    raise SubmitError.at((), f'{record.spec} has no outputs {lacking}')
             for record_id in dict.fromkeys(ids):
                 names = outputs or self._views.records.outputs(record_id)
                 caller.persisted.update((record_id, n) for n in names)
@@ -1661,7 +1690,7 @@ class Backend:
         self.spec(spec_id)  # an unknown spec is refused as such
         binding = self._bindings[spec_id]
         if not isinstance(binding, StageBinding):
-            raise SubmitError(f'{spec_id}: its binding makes no stages')
+            raise SubmitError.at((), f'{spec_id}: its binding makes no stages')
         stored, _ = self._checks[spec_id].template(template, proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
@@ -1689,11 +1718,12 @@ class Backend:
         tables = spec.tables
         binding = self._bindings[spec_id]
         if not isinstance(binding, AccumulatorBinding):
-            raise SubmitError(f'{spec_id}: its binding makes no accumulators')
+            raise SubmitError.at((), f'{spec_id}: its binding makes no accumulators')
         if not blanks or not set(blanks) <= set(tables):
-            raise SubmitError(
+            raise SubmitError.at(
+                (),
                 f'{spec_id}: the blanks of an accumulator are tables, '
-                f'{list(tables)}, not {list(blanks)}'
+                f'{list(tables)}, not {list(blanks)}',
             )
         stored, fixed = self._checks[spec_id].template(template, caller.proposal)
         accumulator_id = uuid.uuid4().hex
@@ -1734,14 +1764,16 @@ class Backend:
         """
         with self._changed:
             caller = self._client(client)
-            acc = self._accumulator(caller, accumulator_id)
+            acc = self._pushed_into(caller, accumulator_id)
         spec_id = acc.template.spec
         checks = self._checks[spec_id]
         values = checks.push(acc.template.blanks, rows, caller.proposal)
         with self._changed:
             caller, acc = self._settled(client, accumulator_id)
             if acc.frozen is not None:
-                raise SubmitError(f'the accumulator was frozen as record {acc.frozen}')
+                raise SubmitError.at(
+                    (), f'the accumulator was frozen as record {acc.frozen}'
+                )
             seen = {t: distinct(t, v, acc.seen[t]) for t, v in values.items()}
             self._check_reads(spec_id, values, caller, {})
             self._append(Pushed(accumulator=accumulator_id, params=values))
@@ -1779,16 +1811,18 @@ class Backend:
             if acc.frozen is not None and self._views.status(acc.frozen) is (
                 Status.PENDING
             ):
-                raise SubmitError(f'the accumulator is frozen as record {acc.frozen}')
+                raise SubmitError.at(
+                    (), f'the accumulator is frozen as record {acc.frozen}'
+                )
             acc.freezing = True
             upto = len(self._views.pushes.get(accumulator_id, ()))
             self._readers[(acc, upto)] += 1
         try:
             if (refused := self._check_state(acc, upto)) is not None:
-                raise SubmitError(refused)
+                raise SubmitError.at((), refused)
             with self._changed:
                 caller = self._client(client)
-                self._accumulator(caller, accumulator_id)  # not released or stopped
+                self._pushed_into(caller, accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
                 pinned = {accumulator_id: (acc, upto, None)}
                 self._create(
@@ -1857,8 +1891,9 @@ class Backend:
         says; on a worker, outside the backend's lock.
 
         The values are given by name, each read and validated by its own
-        field (see :meth:`_typed`). If the step fails, the accumulator stops,
-        since the driver may hold part of the rows.
+        field (see :meth:`_typed`); at the opening, the model validators check
+        them first, without the blank tables. If the step fails, the
+        accumulator stops, since the driver may hold part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
         # _unneeded keeps a busy step, and _stop runs only when no step is
@@ -1867,6 +1902,8 @@ class Backend:
         try:
             typed = self._typed(acc.template.spec, values, acc.rows_read)
             if acc.added is None:  # the opening, which makes the driver
+                params = acc.binding.spec.params
+                check_model(params, params.model_construct(**typed))
                 acc.driver = acc.binding.make_accumulator(typed, acc.template.blanks)
             else:
                 for table, rows in typed.items():
@@ -1927,24 +1964,46 @@ class Backend:
         return refused
 
     def _accumulator(self, caller: _Client, accumulator_id: str) -> _Accumulator:
-        """The client's accumulator, if it takes readers; lock held."""
+        """
+        The client's accumulator, if it takes readers; lock held. Raises
+        ``KeyError`` for one the proposal never opened, and ``NotReadable``
+        for one the client does not keep, or that takes no readers.
+        """
         acc = caller.accumulators.get(accumulator_id)
         if acc is None:
-            raise SubmitError('the accumulator was released or is unknown')
+            opened = self._views.accumulators.get(accumulator_id)
+            if opened is None or opened.proposal != caller.proposal:
+                raise KeyError(
+                    f'no accumulator {accumulator_id} in proposal {caller.proposal}'
+                )
+            raise NotReadable(
+                f'accumulator {accumulator_id} is not kept by this client'
+            )
         if acc.stopped is not None:
-            raise SubmitError(acc.stopped)
+            raise NotReadable(acc.stopped)
         return acc
+
+    def _pushed_into(self, caller: _Client, accumulator_id: str) -> _Accumulator:
+        """
+        The client's accumulator for a push or a freeze; lock held. Raises as
+        :meth:`_accumulator` does, but ``SubmitError`` where a read raises
+        ``NotReadable``: a push or a freeze is refused, not read.
+        """
+        try:
+            return self._accumulator(caller, accumulator_id)
+        except NotReadable as error:
+            raise SubmitError.at((), str(error)) from None
 
     def _settled(
         self, client: str, accumulator_id: str
     ) -> tuple[_Client, _Accumulator]:
         """
-        The client and its accumulator once no freeze of it is being checked;
-        lock held, and released while it waits.
+        The client and its accumulator, for a push or a freeze, once no freeze
+        of it is being checked; lock held, and released while it waits.
         """
         while True:
             caller = self._client(client)
-            acc = self._accumulator(caller, accumulator_id)
+            acc = self._pushed_into(caller, accumulator_id)
             if not acc.freezing:
                 return caller, acc
             self._changed.wait()
@@ -1955,20 +2014,17 @@ class Backend:
         """
         The accumulator and its number of pushes logged, its current state
         pinned as a read pins it; held as a reader holds it if ``reader``,
-        until the caller lets go of it. Raises ``LookupError`` if the state
-        may not be read.
+        until the caller lets go of it. Raises ``NotReadable`` if the state
+        may not be read (see :meth:`_accumulator`).
         """
-        try:
-            with self._changed:
-                acc = self._accumulator(self._client(client), accumulator_id)
-                upto = len(self._views.pushes.get(accumulator_id, ()))
-                if reader:
-                    self._readers[(acc, upto)] += 1
-        except SubmitError as error:
-            raise LookupError(str(error)) from None
+        with self._changed:
+            acc = self._accumulator(self._client(client), accumulator_id)
+            upto = len(self._views.pushes.get(accumulator_id, ()))
+            if reader:
+                self._readers[(acc, upto)] += 1
         try:
             if (refused := self._check_state(acc, upto)) is not None:
-                raise LookupError(refused)
+                raise NotReadable(refused)
         except BaseException:  # a validator may raise anything
             if reader:
                 with self._changed:
@@ -2044,7 +2100,7 @@ class Backend:
     def plain_request(self, accumulator_id: str, client: str) -> Request:
         """
         The plain request of the accumulator's current state, pinned as a
-        read pins it. Raises ``LookupError`` if the state may not be read.
+        read pins it. Raises ``NotReadable`` if the state may not be read.
         """
         acc, upto = self._current(accumulator_id, client, reader=False)
         with self._changed:
@@ -2078,11 +2134,12 @@ class Backend:
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
         :meth:`_access`): this waits for the record and for a pending write.
-        Raises ``RuntimeError`` if the record fails or is cancelled, and
-        ``LookupError`` for an output the client may not read, also once it
+        Raises ``RecordFailed`` if the record fails or is cancelled, and
+        ``NotReadable`` for an output the client may not read, also once it
         releases a record whose outputs this waits for, or whose write
-        failed. Every output of a record the client does not keep is every
-        output persisted, and raises if one of their writes failed.
+        failed, or that the store no longer holds. Every output of a record
+        the client does not keep is every output persisted, and raises if one
+        of their writes failed.
         """
         views = self._views
         with self._changed:
@@ -2108,17 +2165,15 @@ class Backend:
                     if kept or views.write((record_id, n)) is not None
                 ]
                 if not names:
-                    raise LookupError(f'record {record_id} is not kept by this client')
+                    raise NotReadable(f'record {record_id} is not kept by this client')
             finished = views.finished.get(record_id)
             if finished is not None and finished.status is not Status.COMPLETED:
-                raise RuntimeError(
-                    f'record {record_id} {finished.status}: {finished.failure}'
-                )
+                raise RecordFailed(record_id, finished.status, finished.failure)
             try:
                 for name in names:
                     self._access(caller, (record_id, name))
             except SubmitError as error:
-                raise LookupError(str(error)) from None
+                raise NotReadable(str(error)) from None
             if every:
                 names = [n for n in names if not views.omitted((record_id, n))]
             for name in names:
@@ -2127,7 +2182,12 @@ class Backend:
             # from memory if kept, else from the store: never another's value
             values = {n: self._outputs[(record_id, n)] for n in names if kept}
         if not kept:
-            values = {n: self._stored(record.ref(n)) for n in names}
+            try:
+                values = {n: self._stored(record.ref(n)) for n in names}
+            except LookupError as error:  # the store no longer holds it
+                raise NotReadable(
+                    f'record {record_id}: the store no longer holds an output'
+                ) from error
         if select is None:
             return values
         return {n: _selected(v, select) for n, v in values.items()}
@@ -2164,7 +2224,7 @@ class Backend:
         while the state's plain request is checked, its outputs are computed
         if no reader has yet, and the outputs or their parts are copied (see
         the module docstring). An accumulator that cannot be read, or stops
-        before it reaches the state, raises ``LookupError``.
+        before it reaches the state, raises ``NotReadable``.
         """
         acc, upto = self._current(accumulator_id, client, reader=True)
         try:
@@ -2173,7 +2233,7 @@ class Backend:
             with self._changed:
                 self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
                 if acc.added != upto:
-                    raise LookupError(acc.stopped)
+                    raise NotReadable(acc.stopped)
             declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
             for name in names or ():
                 if name not in declared:

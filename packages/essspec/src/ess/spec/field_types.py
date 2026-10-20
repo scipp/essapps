@@ -14,12 +14,16 @@ pieces, which these functions take apart::
 
 with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
 ``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
-(see :func:`plain`). :func:`fits` says whether data
-of one type can be the value of a field of another, so that an output of one
-spec can feed a parameter of another. :func:`model_of` makes a model of one
+(see :func:`plain`). Files are recognised not by these shapes but by
+pydantic's JSON schema of a type (see :func:`is_file` and
+:func:`holds_file`), which sees through type aliases, dataclasses, and any
+other type pydantic takes. :func:`fits` says whether data of one type can be
+the value of a field of another, so that an output of one spec can feed a
+parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone, as
 :func:`validated` does in the call phase and :func:`inline` for a value
-given inline.
+given inline. :func:`check_model` checks an instance made from such values
+by the model validators of its model.
 """
 
 from __future__ import annotations
@@ -27,11 +31,10 @@ from __future__ import annotations
 import functools
 import operator
 from collections.abc import Callable, Mapping
-from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import Annotated, Any, NewType, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic_core import from_json, to_json
 
@@ -120,10 +123,51 @@ def is_single(tp: Any) -> bool:
     )
 
 
+_FILE_FORMATS = frozenset({'path', 'file-path', 'directory-path'})
+"""The formats of pydantic's JSON schema of a path (see :func:`is_file`)."""
+
+
+@functools.cache
+def _json_schema(tp: Any) -> dict[str, Any] | None:
+    """Pydantic's JSON schema of ``tp``, or ``None`` if it makes none."""
+    try:
+        return TypeAdapter(tp).json_schema()
+    except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
+        return None
+
+
+def _is_path(schema: Any) -> bool:
+    """Whether ``schema``, a JSON schema, is a string with a path format."""
+    if not isinstance(schema, dict):
+        return False
+    # Under ``properties``, ``format`` may be the name of a field, and its
+    # value the field's schema.
+    return isinstance(found := schema.get('format'), str) and found in _FILE_FORMATS
+
+
+def _names_file(schema: Any) -> bool:
+    """Whether a JSON schema has a path format anywhere, ``$defs`` included."""
+    if _is_path(schema):
+        return True
+    if isinstance(schema, dict):
+        schema = list(schema.values())
+    return isinstance(schema, list) and any(_names_file(s) for s in schema)
+
+
 def is_file(tp: Any) -> bool:
-    """Whether ``tp`` is a file: ``Path``, or a ``NewType`` of it."""
-    tp = base(tp)
-    return isinstance(tp, type) and issubclass(tp, PurePath)
+    """
+    Whether ``tp`` is a file: pydantic's JSON schema of it is a string with a
+    path format::
+
+        Path, NewPath, NewType of Path  -> "format": "path"
+        FilePath                        -> "format": "file-path"
+        DirectoryPath                   -> "format": "directory-path"
+
+    The access check on the service depends on it: a file is given by
+    reference to a dataset only. A ``NewType`` of ``str`` used for a file is
+    a string, not a file.
+    """
+    return _is_path(_json_schema(tp))
 
 
 def is_group(tp: Any) -> bool:
@@ -132,21 +176,24 @@ def is_group(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
-def holds_file(tp: Any, seen: frozenset[type[BaseModel]] = frozenset()) -> bool:
+def holds_file(tp: Any) -> bool:
     """
-    Whether a type, or a field of a model in it, is a file; ``seen`` holds the
-    models looked into already, so that a recursive model ends.
+    Whether a value of type ``tp`` may hold a file: pydantic's JSON schema of
+    it has a path format anywhere, ``$defs`` included, as for
+    ``list[Path]``, ``tuple[Path, Path]``, or a dataclass with a ``Path``
+    field. A group is looked into field by field, each by its own schema,
+    since a group given field by field may have no JSON schema as a whole.
+
+    Any other type without a JSON schema, such as one that holds a scipp
+    array, holds no file: it has no JSON form, so a request gives it by
+    reference to an output only, never as a path that a client typed in.
     """
-    tp = base(tp)
-    if is_file(tp):
-        return True
     if is_group(tp):
-        if tp in seen:
-            return False
         return any(
-            holds_file(f.annotation, seen | {tp}) for f in tp.model_fields.values()
+            _names_file(_json_schema(f.annotation))
+            for f in base(tp).model_fields.values()
         )
-    return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
+    return _names_file(_json_schema(tp))
 
 
 @functools.cache
@@ -155,20 +202,18 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
     Whether the type of the field ``name`` of ``model``, with ``| None``
     removed and for a list its element type taken, has a JSON form: pydantic
     makes a JSON schema of it, with the config of ``model``, and it holds no
-    file.
+    file (see :func:`holds_file`).
     """
     tp = value_type(model.model_fields[name].annotation)
-    if holds_file(tp):
-        return False
     try:
         # A field of a model of its own carries the config, which
         # TypeAdapter refuses for a model type.
-        create_model(
+        schema = create_model(
             'Value', __config__=model.model_config, value=(tp, ...)
         ).model_json_schema()
     except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
         return False
-    return True
+    return not _names_file(schema)
 
 
 def type_name(tp: Any) -> str:
@@ -211,8 +256,9 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
     A model of one value of the field ``name`` of ``model`` alone, with its
     config and without its validators: it validates one value by its own
     field, as every value of a request is validated, in both phases. The
-    params model has no decorators but model validators, which the framework
-    never calls; a check of one value belongs to the value's type.
+    params model has no decorators but model validators, which check the
+    instance made from such values (see :func:`check_model`); a check of one
+    value belongs to the value's type.
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
@@ -254,8 +300,8 @@ def validated(
     its JSON form, as the request phase validated it (see :func:`inline`), so
     that both phases see the same value: a strict enum takes its string only
     from JSON. A group given field by field (see :func:`by_field`), as a
-    mapping, is made from its fields, each validated so: like the params
-    model, it is never validated whole.
+    mapping, is made from its fields, each validated so, and then checked by
+    its model validators (see :func:`check_model`), as the params model is.
     """
     one = model_of(model, name, whole)
     tp = value_type(model.model_fields[name].annotation)
@@ -264,7 +310,9 @@ def validated(
         if by_field(tp) and isinstance(v, Mapping):
             group = base(tp)
             fields = {f: validated(group, f, x, read, whole=True) for f, x in v.items()}
-            return group.model_construct(**fields)
+            made = group.model_construct(**fields)
+            check_model(group, made)
+            return made
         if read is None:
             made = one.model_validate({name: v})
         elif isinstance(v, Ref):
@@ -276,6 +324,46 @@ def validated(
     if is_list(model, name) and not whole:
         return [check(v) for v in value]
     return check(value)
+
+
+def check_model(model: type[BaseModel], instance: BaseModel) -> None:
+    """
+    Check ``instance``, made by ``model.model_construct`` from values each
+    validated alone, by each model validator of ``model``, in turn.
+
+    A model validator runs after validation, ``mode='after'``, as a spec
+    requires, so it sees typed values. It checks and never changes values: it
+    returns ``self``, and changes nothing in place. Raises ``ValueError``,
+    naming the validator, if a validator raises or returns anything else::
+
+        @model_validator(mode='after')
+        def _sample_is_not_the_can(self) -> Self:
+            if self.sample == self.can:
+                raise ValueError('the sample run is the can run')
+            return self
+
+    A field that ``instance`` lacks is a table that an accumulator's pushes
+    fill, left out when it opens, so a validator that reads one fails with
+    a reason that names the table.
+    """
+    for name, validator in model.__pydantic_decorators__.model_validators.items():
+        where = f'{model.__name__}.{name}'
+        try:
+            returned = validator.func(instance)
+        except AttributeError as error:
+            if error.obj is not instance or error.name not in model.model_fields:
+                raise ValueError(f'{where}: {error}') from error
+            raise ValueError(
+                f'{where} reads the table {error.name}, which an accumulator\'s '
+                "pushes fill; checks across rows are the driver's"
+            ) from error
+        except Exception as error:  # a validator may raise anything
+            raise ValueError(f'{where}: {str(error) or repr(error)}') from error
+        if returned is not instance:
+            raise ValueError(
+                f'{where}: a model validator checks and returns self, not '
+                f'{type(returned).__name__}'
+            )
 
 
 def by_field(tp: Any) -> bool:

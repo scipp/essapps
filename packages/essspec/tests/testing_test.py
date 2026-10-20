@@ -10,12 +10,12 @@ The toy spec ``SUB`` takes a sample and a can value and gives
 
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, NewType
+from typing import Any, NewType, Self
 
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ess.spec import DriverBinding, WorkflowSpec
 from ess.spec.binding import fixed_values
@@ -25,6 +25,7 @@ from ess.spec.testing import (
     check_arrival_and_order,
     check_caching,
     check_one_row,
+    instance,
     one_row,
 )
 
@@ -245,6 +246,22 @@ def test_one_row_gives_each_table_a_row_of_the_value() -> None:
     request = one_row(SUB_MULTI, SubParams(sample=5.0, can=1.0))
     assert request.scale == Scale()
     assert (request.sample, request.can) == ([5.0], [1.0])
+
+
+class OrderedParams(SubParams):
+    @model_validator(mode='after')
+    def _sample_above_can(self) -> Self:
+        if self.sample <= self.can:
+            raise ValueError('the sample is not above the can')
+        return self
+
+
+def test_an_instance_is_checked_by_the_model_validators() -> None:
+    spec = _spec('ordered', params=OrderedParams, outputs=SubOutputs)
+
+    assert instance(spec, {'sample': 2.0, 'can': 1.0}).sample == 2.0
+    with pytest.raises(ValueError, match='_sample_above_can: the sample is not above'):
+        instance(spec, {'sample': 1.0, 'can': 2.0})
 
 
 def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs() -> None:

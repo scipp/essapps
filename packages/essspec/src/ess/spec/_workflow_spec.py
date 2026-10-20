@@ -25,8 +25,8 @@ list parameter. A parameter's type decides which of the two it takes, with
 =====================================  ==========  ===========================
 A parameter's type                     Inline      By reference
 =====================================  ==========  ===========================
-a file: ``Path``, or a ``NewType``     no          to a dataset
-of it
+a file: ``Path``, pydantic's           no          to a dataset
+``FilePath``, or a ``NewType`` of one
 has a *JSON form*: pydantic makes a    yes         to an output that fits
 JSON schema of it, with the params
 model's config, and it holds no file
@@ -34,6 +34,14 @@ a group that holds a file              field by    to a dataset, for its one
                                        field       required file
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
+
+Files are recognised by their JSON schema (see
+:func:`ess.spec.field_types.is_file`), and the access check on the service
+depends on it: a file is given by reference to a dataset only, which the
+dataset source checks the proposal may read. So a workflow types its files
+as ``Path``, one of pydantic's path types, or a ``NewType`` of one. A
+``NewType`` of ``str`` used for a file is a string, given inline and never
+checked.
 
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
@@ -62,6 +70,10 @@ framework: what the framework needs, it reads from the field types (see
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
   a dict or a union of two types.
+- A parameter holds a file only as a file, possibly optional, a list of
+  files, or a group that holds a file as a field, since only these take a
+  reference to a dataset. A file anywhere else, such as in a tuple, a
+  ``TypedDict``, or a dataclass, is refused.
 - A group that holds a file holds it as a field, a file, possibly
   optional; it follows the rules of the params model below, and a field
   of it that is a list or a dict has a JSON form, since no reference stands
@@ -76,13 +88,26 @@ framework: what the framework needs, it reads from the field types (see
   a check of one row belongs to the element type. A check of one value
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
+- A model validator of the params model, or of a group given field by field,
+  runs after validation, ``mode='after'``, and takes only ``self``. A
+  ``before`` or ``wrap`` validator would see the raw input, which differs
+  between the phases: JSON and references in the request phase, typed
+  values in the call phase.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - Each table is a list parameter without a default.
 
-A check across parameters is the binding's or the driver's, and fails when
-the request runs. The params model may state one as a model validator, but
-the framework never calls it: a stage and a driver never get a whole params
-instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
+A check across parameters is a model validator of the params model, or the
+binding's or the driver's, and fails when the request runs. A model
+validator checks and never changes values: it returns ``self`` (see
+:func:`ess.spec.field_types.check_model`). The backend runs it on the whole
+params instance wherever every value it reads is known: for a plain request
+in the call phase; at each call through a stage, on the fixed values and
+those of the blanks; and when an accumulator opens, on the template's values,
+with the blank tables left out. An accumulator whose model validator reads a
+blank table fails to open, since a check across rows is the driver's. So the
+record of an accumulator's state may be a plain request that a direct
+submission would refuse by a check across rows. A group given field by field
+is checked by its model validators once it is made from its fields.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs; its rows are distinct. A row with more than
@@ -105,6 +130,7 @@ Two forms exist, related by a one-way projection:
 from __future__ import annotations
 
 import functools
+import inspect
 from collections.abc import Sequence
 from types import NoneType, UnionType
 from typing import Annotated, Any, Self, Union, get_args, get_origin
@@ -331,9 +357,20 @@ def _one_or_list(annotation: Any) -> bool:
 def _model_validators_only(model: type[BaseModel]) -> list[str]:
     """
     Refuse a decorator of the params model itself but a model validator: a
-    field validator, a field or model serializer, or a computed field.
+    field validator, a field or model serializer, or a computed field; and a
+    model validator that does not run after validation, or takes ``info``.
     """
     decorators = model.__pydantic_decorators__
+    problems = []
+    for name, validator in decorators.model_validators.items():
+        where = f'{model.__name__}.{name}'
+        if (mode := validator.info.mode) != 'after':
+            problems.append(
+                f"{where}: a model validator is mode='after', not {mode!r}: it "
+                'would see the raw input, which differs between the phases'
+            )
+        elif len(inspect.signature(validator.func).parameters) != 1:
+            problems.append(f'{where}: a model validator takes only self, no info')
     if found := {
         kind: sorted(getattr(decorators, kind))
         for kind in (
@@ -345,11 +382,11 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
         )
         if getattr(decorators, kind)
     }:
-        return [
+        problems.append(
             f'{model.__name__}: no decorators but model validators, {found}; '
             "the check or the JSON form of one value belongs to the value's type"
-        ]
-    return []
+        )
+    return problems
 
 
 def _params_problems(model: type[BaseModel]) -> list[str]:
@@ -360,6 +397,13 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         if not (_one_or_list(field.annotation) and is_single(tp)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
+            )
+            continue
+        if holds_file(tp) and not (is_file(tp) or is_group(tp)):
+            problems.append(
+                f'{where}: a parameter holds a file only as a file, possibly '
+                'optional, a list of files, or a group that holds a file as a '
+                f'field, not inside {type_name(tp)}'
             )
             continue
         if any(
@@ -389,10 +433,10 @@ def _group_problems(group: type[BaseModel]) -> list[str]:
     """
     Refuse a group given field by field whose fields a request cannot give
     each inline or by reference, as the params model's: a decorator but a
-    model validator, which the framework never calls, a field with an alias,
-    a file deeper than a field, a list or a dict without a JSON form, which no
-    reference stands for, and a default that is not a value, since a field
-    left out holds its default.
+    model validator that runs after validation and takes only ``self``, a
+    field with an alias, a file deeper than a field, a list or a dict
+    without a JSON form, which no reference stands for, and a default that
+    is not a value, since a field left out holds its default.
     """
     problems = _model_validators_only(group)
     for name, field in group.model_fields.items():

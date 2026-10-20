@@ -218,7 +218,7 @@ def test_every_way_gives_the_iofq_of_the_single_run_spec(
 
 
 def test_a_request_that_leaves_out_a_table_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['can'\]: required parameters"):
+    with pytest.raises(SubmitError, match='can: a required parameter'):
         client.compute(IOFQ_MULTI, params={'sample': [SAMPLE]})
 
 

@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
-from .field_types import validated
+from .field_types import check_model, validated
 
 Rows = Sequence[Any]
 """A table's rows, as a push gives them."""
@@ -85,12 +85,15 @@ def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseMod
     stage or a driver takes them, made as the backend makes one from data it
     read: each value, or each row of a list, validated from the object by its
     own field, without the length constraints of a list, which the backend
-    checks when a request is submitted, and without the model validators.
+    checks when a request is submitted, and then checked by the model
+    validators (see :func:`ess.spec.field_types.check_model`).
     """
     model: type[BaseModel] = spec.params
-    return model.model_construct(
+    made = model.model_construct(
         **{n: validated(model, n, v) for n, v in values.items()}
     )
+    check_model(model, made)
+    return made
 
 
 def check_caching(
