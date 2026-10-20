@@ -18,6 +18,15 @@ lists of the types of those parameters of ``IOFQ``, and the function
         {'reduction': params.reduction},
         {'sample': [run_101, run_102], 'can': [run_110]},
     )
+    check_refused_push(
+        make_driver,
+        {'reduction': params.reduction},
+        {'sample': [run_101, run_102], 'can': [run_110]},
+        {'sample': [run_103, broken_run]},
+    )
+
+:func:`check_refused_push` checks a promise rather than a symmetry: a push
+that raises ``PushRefused`` changes nothing.
 
 Values are those the binding receives: data read. Outputs are compared up to
 ``rtol``, since adding in another order rounds differently, with
@@ -37,7 +46,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
-from .binding import Binding, Driver, StageBinding, fixed_values
+from .binding import Binding, Driver, PushRefused, StageBinding, fixed_values
 from .field_types import check_model, validated
 
 Rows = Sequence[Any]
@@ -178,6 +187,69 @@ def check_arrival_and_order(
         assert_close(
             tables, pristine, rtol=0.0, where=f'values after pushing them, {name}'
         )
+
+
+def check_refused_push(
+    make_driver: Callable[[Mapping[str, Any]], Driver[Any]],
+    fixed: Mapping[str, Any],
+    tables: Mapping[str, Rows],
+    refused: Mapping[str, Rows],
+    *,
+    rtol: float = 1e-12,
+) -> None:
+    """
+    Refusal: a push that raises ``PushRefused`` changes nothing.
+
+    ``make_driver``, ``fixed``, and ``tables`` are as for
+    :func:`check_arrival_and_order`. ``refused`` holds, by table, rows that
+    the driver refuses, such as a row it takes followed by one it refuses,
+    so that a driver that adds the first before it refuses the second fails
+    the check. The rows of ``tables`` are pushed into one driver one row per
+    push, table by table. Before each of these pushes, and after the last,
+    the rows of each table of ``refused`` are pushed, and must raise
+    ``PushRefused``. The driver then gives the outputs that one push of each
+    table's rows so far gives, and so it does after the next push too. A
+    state whose expected outputs raise is not read, as in
+    :func:`check_arrival_and_order`; the state with every row is always
+    read. The check fails if a push modifies the values it was given.
+    """
+    pristine = copy.deepcopy(tables)
+    pristine_refused = copy.deepcopy(refused)
+    schedule = [(t, i, i + 1) for t in tables for i in range(len(tables[t]))]
+    driver = make_driver(fixed)
+    pushed: dict[str, int] = dict.fromkeys(tables, 0)
+    for n in range(len(schedule) + 1):
+        for table, rows in refused.items():
+            where = f'refusal, {table} {list(rows)!r} after {n} pushes'
+            try:
+                driver.push(table, list(rows))
+            except PushRefused:
+                pass
+            except Exception as error:
+                raise AssertionError(
+                    f'{where}: raised {error!r}, not PushRefused'
+                ) from error
+            else:
+                raise AssertionError(f'{where}: the push was not refused')
+            try:
+                expected = _one_push_per_table(
+                    make_driver,
+                    fixed,
+                    {t: _rows(pristine[t], 0, upto) for t, upto in pushed.items()},
+                )
+            except Exception:
+                if n == len(schedule):
+                    raise
+                continue
+            assert_close(driver.outputs(), expected, rtol=rtol, where=where)
+        if n < len(schedule):
+            table, start, stop = schedule[n]
+            driver.push(table, _rows(tables[table], start, stop))
+            pushed[table] = stop
+    assert_close(tables, pristine, rtol=0.0, where='values after pushing them')
+    assert_close(
+        refused, pristine_refused, rtol=0.0, where='values after refusing them'
+    )
 
 
 def _rows(rows: Rows, start: int, stop: int) -> list[Any]:

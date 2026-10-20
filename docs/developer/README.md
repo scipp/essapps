@@ -790,6 +790,7 @@ The driver promises, and the backend does not check:
 - `outputs()` may share memory with the driver's state; the caller reads them before the next push.
 - An output that the spec declares optional may be `None`.
 - A driver may refuse a state, such as one with no sample row yet, by raising in `outputs()`. The read fails, and later pushes may make the state valid.
+- A `push` that raises `PushRefused` changes nothing: the outputs are those before it, and later pushes add as if it had not been made. A driver keeps this by computing what every row of a push contributes before it keeps any of it.
 - A failing `push` stops the accumulator.
 
 The backend calls `push` and `outputs` from one thread at a time, and pushes only once the readers of the state before are done.
@@ -896,6 +897,10 @@ Arrival, order, and placement hold up to rounding.
 - `check_one_row(single, multi, params)`: the binding of the multi-run spec, given the one-row request made from `params`, an instance of the single-run spec's params model, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
 - `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{table: rows}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
+
+It also checks one promise of a driver:
+
+- `check_refused_push(make_driver, fixed, tables, refused)`, with `refused` as `{table: rows}` that the driver refuses: before each push of `tables` and after the last, pushing the rows of `refused` raises `PushRefused`, and the outputs then, and after the next push, are those of a driver that never got them.
 
 ## Left to the system
 

@@ -48,6 +48,7 @@ from ess.spec import (
     DriverBinding,
     NoParams,
     OutputRef,
+    PushRefused,
     Ref,
     WorkflowSpec,
     function_binding,
@@ -334,7 +335,9 @@ class Summing:
     """
     A driver over tables of runs, a toy ``StreamProcessor``: the counts of
     each table's runs are summed, and ``finalize`` computes the outputs from
-    the sums, by table name, and the fixed values by name.
+    the sums, by table name, and the fixed values by name. A push reads all
+    its runs before it adds any, and raises ``PushRefused`` if one cannot
+    be read.
     """
 
     def __init__(
@@ -348,8 +351,12 @@ class Summing:
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
-        for path in rows:
-            self._sums[table] += _counts(path)  # in place from the second row
+        try:
+            counts = [_counts(path) for path in rows]
+        except Exception as error:  # nothing is added yet
+            raise PushRefused(str(error) or repr(error)) from error
+        for value in counts:
+            self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)

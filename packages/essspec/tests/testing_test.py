@@ -17,7 +17,7 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, Field, model_validator
 
-from ess.spec import DriverBinding, WorkflowSpec
+from ess.spec import DriverBinding, PushRefused, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import (
     Rows,
@@ -25,6 +25,7 @@ from ess.spec.testing import (
     check_arrival_and_order,
     check_caching,
     check_one_row,
+    check_refused_push,
     instance,
     one_row,
 )
@@ -228,6 +229,94 @@ def test_states_that_a_driver_refuses_are_not_read() -> None:
     check_arrival_and_order(Ratio, FIXED, TABLES)
     with pytest.raises(ZeroDivisionError):
         check_arrival_and_order(Ratio, FIXED, {'sample': [1.0], 'can': []})
+
+
+class RefusesNegative(Sums):
+    """Refuses a push with a negative row, before it adds any row."""
+
+    def push(self, table: str, rows: Rows) -> None:
+        if any(value < 0 for value in rows):
+            raise PushRefused(f'{table}: a negative value')
+        super().push(table, rows)
+
+
+class AddsBeforeRefusing(Sums):
+    """Breaks refusal: adds the rows before the negative one."""
+
+    def push(self, table: str, rows: Rows) -> None:
+        for value in rows:
+            if value < 0:
+                raise PushRefused(f'{table}: a negative value')
+            self.sums[table] += value
+
+
+class SkipsAfterRefusing(RefusesNegative):
+    """Breaks refusal: drops the push after the one it refused."""
+
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        super().__init__(fixed)
+        self.skip = False
+
+    def push(self, table: str, rows: Rows) -> None:
+        if self.skip:
+            self.skip = False
+            return
+        try:
+            super().push(table, rows)
+        except PushRefused:
+            self.skip = True
+            raise
+
+
+class FailsOnNegative(Sums):
+    """Raises on a negative row, but not ``PushRefused``."""
+
+    def push(self, table: str, rows: Rows) -> None:
+        if any(value < 0 for value in rows):
+            raise ValueError('a negative value')
+        super().push(table, rows)
+
+
+REFUSED = {'sample': [3.0, -1.0]}
+
+
+def test_refusal_passes_for_a_driver_that_checks_rows_before_it_adds() -> None:
+    check_refused_push(RefusesNegative, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_that_adds_rows_before_it_refuses() -> None:
+    with pytest.raises(
+        AssertionError, match=r"^refusal, sample \[3.0, -1.0\] after 0 pushes, 'diff'"
+    ):
+        check_refused_push(AddsBeforeRefusing, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_whose_later_pushes_differ() -> None:
+    with pytest.raises(AssertionError, match=r'^refusal, \S+ \S+ \S+ after 1 pushes'):
+        check_refused_push(SkipsAfterRefusing, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_push_that_raises_another_error_or_none() -> None:
+    with pytest.raises(AssertionError, match=r"raised ValueError\('a negative "):
+        check_refused_push(FailsOnNegative, FIXED, TABLES, REFUSED)
+    with pytest.raises(AssertionError, match='0 pushes: the push was not refused'):
+        check_refused_push(Sums, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_that_modifies_the_rows_it_refuses() -> None:
+    class SortsRows(Sums):
+        """A driver over rows that are lists: sorts each row in place."""
+
+        def push(self, table: str, rows: Rows) -> None:
+            for row in rows:
+                row.sort()
+            if any(value < 0 for row in rows for value in row):
+                raise PushRefused('a negative value')
+            super().push(table, [sum(row) for row in rows])
+
+    tables = {'sample': [[5.0]], 'can': [[1.0]]}
+    with pytest.raises(AssertionError, match=r'^values after refusing them'):
+        check_refused_push(SortsRows, FIXED, tables, {'sample': [[3.0, -1.0]]})
 
 
 def test_caching_passes_for_a_stage_that_computes_each_call() -> None:

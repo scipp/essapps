@@ -99,6 +99,13 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
         ...
 
 
+class PushRefused(ValueError):
+    """
+    Raised by :meth:`Driver.push` for rows that the driver refuses before it
+    adds any of them: the driver is as it was before the push.
+    """
+
+
 class Driver[O: BaseModel](Protocol):
     """
     The object behind an accumulator: tables are pushed into it, and it gives
@@ -123,9 +130,13 @@ class Driver[O: BaseModel](Protocol):
       state valid.
     - A check across rows is the driver's: the params model's model
       validators run when the accumulator opens, without the blank tables.
+    - A push that raises :class:`PushRefused` changed nothing: the driver
+      gives the outputs it gave before the push, and later pushes add as if
+      it had not been made. A driver keeps this by computing what every row
+      contributes first, and adding it only once all of it is computed.
 
-    A push that raises stops the accumulator, since the driver may hold part
-    of its rows.
+    A push that raises anything else stops the accumulator, since the driver
+    may hold part of its rows.
     """
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
