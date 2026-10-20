@@ -49,7 +49,6 @@ A push waits for the readers of the state before it, all made before the push wa
 
 **`client.output` copies, and a request reads in place.**
 `client.output(acc, ...)` returns a copy, since the caller may keep it past the next push.
-With `copy=False` it returns the outputs themselves, which the next push may change in place.
 A request reads the outputs of its state's record without a copy, so a cut costs no second volume.
 All outputs of a state are computed at once, the first time a pin needs them, since the driver, not the backend, knows how to share work between outputs.
 Two pins of one state compute once.

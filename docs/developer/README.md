@@ -237,7 +237,6 @@ Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
 
 `client.output` returns a value the caller owns, wherever the backend runs: modifying it changes neither what pending requests read, nor what `persist` writes, nor what a later `client.output` returns.
 The framework never changes a record's output value.
-In the user's process, `copy=False` returns the value the framework holds, without a copy, and the caller must not modify it: `client.output(result, 'iofq', copy=False)` is the same object on each read.
 `select=` copies the part of an array output that it names, by dimension, and makes no record.
 On the service, only that part leaves the backend.
 
