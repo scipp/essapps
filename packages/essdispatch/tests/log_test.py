@@ -306,6 +306,27 @@ def test_a_failed_push_is_logged_and_the_records_of_later_states_leave_it_out(
     assert _record(again, state.id).request == state.request
 
 
+def test_pushes_that_fail_are_logged_in_push_order(
+    tmp_path: Path, start: Callable[[Path], Client], loading: threading.Event
+) -> None:
+    client = start(tmp_path / 'log')
+    loading.clear()
+    r1, r2, r3 = client.submit([Request(LOAD, params=_sample(n)) for n in (1, 2, 1)])
+    total = _total(client)
+    pushes = [
+        total.push(part=[r1.ref('value'), r2.ref('value')]),
+        total.push(part=[r3.ref('value')]),
+    ]
+    client.release(r2)  # push 1 keeps it, until it fails
+    client.cancel(r3)
+    client.cancel(r1)  # push 1 fails, cancels r2, and push 2 may fail
+    loading.set()
+
+    assert client.wait(pushes) == [Status.FAILED, Status.FAILED]
+    failed = [e for e in Log.read(tmp_path / 'log') if isinstance(e, PushFailed)]
+    assert [e.push for e in failed] == [1, 2]
+
+
 def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:

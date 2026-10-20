@@ -1436,6 +1436,28 @@ def test_a_record_that_a_push_waits_for_and_that_fails_fails_the_push_alone(
     ]
 
 
+def test_a_push_failing_while_an_earlier_one_fails_waits_for_its_turn(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    first, second = client.submit([_load(1), _load(2)])
+    total = _total(client)
+    total.push(parts=[first.ref('value')])
+    at_1 = client.submit(_read(total))
+    total.push(parts=[second.ref('value')])
+    at_2 = client.submit(_read(total))  # holds pushes 1 and 2
+    # one call: push 2 cannot be added either while push 1 fails
+    client.cancel([second, first])
+    loading.set()
+
+    client.wait([at_1, at_2])
+    failed = f'push 1: record {first.id} cancelled'
+    assert client.failure([_state(client, at_1), _state(client, at_2)]) == [
+        failed,
+        failed,
+    ]
+
+
 def test_the_rows_of_a_failed_push_leave_the_table(
     client: Client, loading: threading.Event
 ) -> None:

@@ -398,7 +398,7 @@ class Lifecycle:
         if isinstance(self.phase, Checking):
             self.phase = Open() if record is None else Freezing(record)
 
-    def freeze_finished(self, record: str, completed: bool) -> list[Action]:
+    def freeze_finished(self, record: str, completed: bool) -> None:
         """
         A record of a state finished. If it is the record of the freeze, the
         accumulator is read through it if it ``completed``, and takes pushes
@@ -406,7 +406,6 @@ class Lifecycle:
         """
         if self.phase == Freezing(record):
             self.phase = Frozen(record) if completed else Open()
-        return []
 
     def release(self, pinned: Collection[int]) -> list[Action]:
         """

@@ -213,9 +213,9 @@ def test_a_freeze_takes_no_pushes_and_its_record_is_read_once_completed(
     assert opened.push_refused() == 'the accumulator was frozen as record r'
     assert opened.freeze_refused() == 'the accumulator is frozen as record r'
     assert (opened.unreadable, opened.status()) == (None, Status.PENDING)
-    assert opened.freeze_finished('other', completed=True) == []
+    opened.freeze_finished('other', completed=True)
     assert opened.phase == Freezing('r')
-    assert opened.freeze_finished('r', completed=True) == []
+    opened.freeze_finished('r', completed=True)
     assert opened.phase == Frozen('r')
     assert opened.status() is Status.COMPLETED
     assert opened.unreadable == 'the accumulator is frozen: read record r instead'

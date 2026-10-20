@@ -424,7 +424,9 @@ class _Accumulator:
     """
     An accumulator: its template, its spec's binding, its driver once it has
     opened, and its lifecycle: its phase and the steps logged but not yet
-    done (see :mod:`.lifecycle`).
+    done (see :mod:`.lifecycle`). ``actions`` holds the actions its lifecycle
+    returned that the backend has yet to take, and ``acting`` says that it is
+    taking them (see :meth:`Backend._advance`).
 
     ``seen`` holds the rows of each blank table logged so far, by JSON form,
     with their indexes (see :func:`.checks.distinct`). ``rows_read`` holds
@@ -454,6 +456,8 @@ class _Accumulator:
         self.template = template
         self.binding = binding
         self.lifecycle = Lifecycle()
+        self.actions: deque[Action] = deque()
+        self.acting = False
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
         self.rows_read: dict[str, dict[bytes, int]] = {}
         self.checked: tuple[int, int, str | None] | None = None
@@ -1369,8 +1373,7 @@ class Backend:
                             self._drop(record_id)
                         case (_Accumulator() as acc, int() as upto):
                             pinned = functools.partial(self._pinned, acc)
-                            self._act(acc, acc.lifecycle.unread(upto, pinned))
-                            self._advance(acc)
+                            self._advance(acc, acc.lifecycle.unread(upto, pinned))
             finally:
                 self._letting_go = False
         self._changed.notify_all()
@@ -1533,7 +1536,7 @@ class Backend:
             if (state := self._state_of.get(finished_id)) is not None:
                 completed = finished is Status.COMPLETED
                 acc = state[0]
-                self._act(acc, acc.lifecycle.freeze_finished(finished_id, completed))
+                acc.lifecycle.freeze_finished(finished_id, completed)
             if (reads := self._unread.pop(finished_id, None)) is not None:
                 self._let_go(reads)  # it never started
                 self._let_go_of_state(finished_id)
@@ -1633,8 +1636,7 @@ class Backend:
                 if (stage := caller.stages.pop(i, None)) is not None:
                     self._let_go_of_template(stage)
                 if (acc := caller.accumulators.pop(i, None)) is not None:
-                    self._act(acc, acc.lifecycle.release(self._pinned(acc)))
-                    self._advance(acc)
+                    self._advance(acc, acc.lifecycle.release(self._pinned(acc)))
                 if i in caller.kept:
                     caller.kept.remove(i)
                     self._drop(i)
@@ -1864,18 +1866,38 @@ class Backend:
         acc.lifecycle.queue(Step(values, reads))
         self._advance(acc)
 
-    def _advance(self, acc: _Accumulator) -> None:
+    def _advance(self, acc: _Accumulator, actions: Iterable[Action] = ()) -> None:
         """
-        Start the accumulator's next step on a worker once nothing holds it
-        back, or stop the accumulator if the step cannot be done; lock held
-        (see :meth:`.Lifecycle.advance`).
+        Take the ``actions`` that an event of the accumulator's lifecycle
+        returned, then start its next step on a worker once nothing holds it
+        back, fail the next push, or stop the accumulator if the step cannot
+        be done, until nothing more happens; lock held (see
+        :meth:`.Lifecycle.advance`).
 
         A step waits for the records it references to finish, and a push for
-        the readers of the state before it to be done.
+        the readers of the state before it to be done. An action may finish
+        records or let go of values, which advance accumulators again, this
+        one among them. A call for an accumulator whose actions are being
+        taken only queues its own, which the call that takes them takes in
+        turn, and advances once they are done: so one push's failure is
+        logged, and fails the records of its states, before the next push
+        is looked at, and failures are logged in push order.
         """
+        acc.actions.extend(actions)
+        if acc.acting:
+            return
+        acc.acting = True
         lifecycle = acc.lifecycle
-        while actions := lifecycle.advance(self._held(acc), self._views.status):
-            self._act(acc, actions)
+        try:
+            while True:
+                while acc.actions:
+                    self._act(acc, acc.actions.popleft())
+                more = lifecycle.advance(self._held(acc), self._views.status)
+                if not more:
+                    break
+                acc.actions.extend(more)
+        finally:
+            acc.acting = False
         if lifecycle.working:
             self._accumulating.add(acc)
         else:
@@ -1886,32 +1908,29 @@ class Backend:
         added = acc.lifecycle.added
         return added is not None and bool(self._readers[(acc, added)])
 
-    def _act(self, acc: _Accumulator, actions: Iterable[Action]) -> None:
-        """Take the actions that the accumulator's lifecycle returned; lock held."""
-        for action in actions:
-            match action:
-                case StartStep(step):
-                    acc.drop()
-                    self._executor.submit(self._do_step, acc, step)
-                case LetGo(reads):
-                    self._let_go(reads)
-                case Reached(upto):
+    def _act(self, acc: _Accumulator, action: Action) -> None:
+        """Take an action that the accumulator's lifecycle returned; lock held."""
+        match action:
+            case StartStep(step):
+                acc.drop()
+                self._executor.submit(self._do_step, acc, step)
+            case LetGo(reads):
+                self._let_go(reads)
+            case Reached(upto):
+                key = _state_key(acc.id, upto)
+                for record_id in self._dependents.pop(key, ()):
+                    self._satisfied(record_id, key)
+            case LogFailure(push, reason):
+                self._append(PushFailed(accumulator=acc.id, push=push, failure=reason))
+                self._forget(acc, push)
+            case FailStates(first, reason):
+                logged = len(self._views.pushes.get(acc.id, ()))
+                for upto in range(first, logged + 1):
                     key = _state_key(acc.id, upto)
                     for record_id in self._dependents.pop(key, ()):
-                        self._satisfied(record_id, key)
-                case LogFailure(push, reason):
-                    self._append(
-                        PushFailed(accumulator=acc.id, push=push, failure=reason)
-                    )
-                    self._forget(acc, push)
-                case FailStates(first, reason):
-                    logged = len(self._views.pushes.get(acc.id, ()))
-                    for upto in range(first, logged + 1):
-                        key = _state_key(acc.id, upto)
-                        for record_id in self._dependents.pop(key, ()):
-                            self._finish(record_id, Status.FAILED, reason)
-                case DropDriver():
-                    acc.end()
+                        self._finish(record_id, Status.FAILED, reason)
+            case DropDriver():
+                acc.end()
         self._changed.notify_all()
 
     def _forget(self, acc: _Accumulator, push: int) -> None:
@@ -1965,15 +1984,15 @@ class Backend:
         with self._changed:
             for table, forms in read.items():
                 acc.rows_read.setdefault(table, {}).update(forms)
-            self._act(acc, lifecycle.step_done())
-            self._advance(acc)
+            self._advance(acc, lifecycle.step_done())
 
     def _step_failed(self, acc: _Accumulator, reason: str, *, fatal: bool) -> None:
         """The step that a worker did failed, for ``reason`` (see :meth:`_do_step`)."""
         with self._changed:
             held = self._held(acc)
-            self._act(acc, acc.lifecycle.step_failed(reason, fatal=fatal, held=held))
-            self._advance(acc)
+            self._advance(
+                acc, acc.lifecycle.step_failed(reason, fatal=fatal, held=held)
+            )
 
     def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
         """
