@@ -81,8 +81,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         if unset := [n for n in outputs if n in keys and keys[n] is None]:
             raise ValueError(f'{unset}: an output is computed as a key')
         all_keys = {
-            **{n: keys.get(n, optional(f.annotation)[0]) for n, f in declared.items()},
-            **{n: keys.get(n, optional(f.annotation)[0]) for n, f in outputs.items()},
+            n: keys.get(n, optional(f.annotation)[0])
+            for n, f in {**declared, **outputs}.items()
         }
         names: dict[Key, list[str]] = {}
         for name, key in all_keys.items():
