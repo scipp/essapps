@@ -437,3 +437,38 @@ def test_two_parameters_of_one_type_need_a_key_each() -> None:
         ValueError, match='twins: first and second: two fields have one key'
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))
+
+
+Offset = NewType('Offset', float)
+Shifted = NewType('Shifted', float)
+
+
+class OffsetParams(BaseModel):
+    offset: Offset | None = None
+
+
+class ShiftedOutputs(BaseModel):
+    shifted: Shifted
+
+
+SHIFTED = _spec('shifted', params=OffsetParams, outputs=ShiftedOutputs)
+
+
+def shift(offset: Offset) -> Shifted:
+    return Shifted(-1.0 if offset is None else offset + 1.0)
+
+
+def test_an_optional_parameter_sets_the_key_of_its_type_to_its_value() -> None:
+    binding = PipelineBinding(SHIFTED, lambda fixed: sciline.Pipeline([shift]))
+    assert binding.keys['offset'] is Offset
+    assert binding.compute(OffsetParams(offset=2.0)).shifted == 3.0
+    assert binding.compute(OffsetParams()).shifted == -1.0
+
+
+def test_make_pipeline_may_return_a_pipeline_it_holds() -> None:
+    base = sciline.Pipeline([shift])
+    base[Offset] = 10.0
+    binding = PipelineBinding(SHIFTED, lambda fixed: base)
+    assert binding.compute(OffsetParams(offset=2.0)).shifted == 3.0
+    assert binding.compute(OffsetParams(offset=5.0)).shifted == 6.0
+    assert base.compute(Shifted) == 11.0

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import StageCall, fixed_values
-from .field_types import optional, plain
+from .field_types import optional
 
 Key = Any
 
@@ -29,17 +29,18 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     ``make_pipeline`` makes the pipeline from the fixed values, by name, with
     defaults filled in, so that the graph may depend on them; it gets no
-    blank, and each call must return a pipeline of its own, such as a copy.
-    Each parameter sets the sciline key of its type as written, without
-    ``Annotated`` metadata, such as ``Reduction`` or ``BeamCentre | None``; a
-    table sets the key of its type, a list, to its list. Each output is
-    computed as the key of its type without ``| None``, since an optional
-    output means that the graph may lack it, not that a provider returns
-    ``None``; an output that a provider returns as ``X | None`` needs
-    ``keys=``. ``keys`` names another key of a parameter or an output, for a
-    workflow with keys of its own, such as for two parameters of one type; for
-    a parameter, ``None`` sets no key, for a field that ``make_pipeline`` uses
-    itself::
+    blank. The binding copies the pipeline before it sets values in it, so
+    ``make_pipeline`` may return one that it holds, such as a module-level
+    pipeline. Each parameter and each output has the sciline key of its type,
+    without ``Annotated`` metadata and without ``| None``, such as
+    ``BeamCentre`` for ``BeamCentre | None``; a table has the key of its type,
+    a list. A parameter sets its key to its value, which may be ``None``. An
+    output is computed as its key, since an optional output means that the
+    graph may lack it, not that a provider returns ``None``; an output that a
+    provider returns as ``X | None`` needs ``keys=``. ``keys`` names another
+    key of a parameter or an output, for a workflow with keys of its own, such
+    as for two parameters of one type; for a parameter, ``None`` sets no key,
+    for a field that ``make_pipeline`` uses itself::
 
         PipelineBinding(
             IOFQ,
@@ -80,7 +81,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         if unset := [n for n in outputs if n in keys and keys[n] is None]:
             raise ValueError(f'{unset}: an output is computed as a key')
         all_keys = {
-            **{n: keys.get(n, plain(f.annotation)) for n, f in declared.items()},
+            **{n: keys.get(n, optional(f.annotation)[0]) for n, f in declared.items()},
             **{n: keys.get(n, optional(f.annotation)[0]) for n, f in outputs.items()},
         }
         names: dict[Key, list[str]] = {}
@@ -116,7 +117,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
             raise ValueError(f'{unknown}: not parameters of {spec.name}')
-        pipeline = self._make_pipeline(fixed)
+        pipeline = self._make_pipeline(fixed).copy()
         for key, value in self._by_key(fixed).items():
             pipeline[key] = value
         return pipeline

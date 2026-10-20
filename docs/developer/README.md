@@ -717,8 +717,9 @@ The callable may return the same object in several calls, so records made throug
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
 The function does not get the blanks, so a field that changes the graph cannot be a blank.
-Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `Sample`, or `BeamCentre | None`.
-Each output is computed as the key of its type without `| None`, such as `IofQ`.
+Each parameter sets the sciline key of its type, without `Annotated` metadata and without `| None`, such as `Reduction`, `Sample`, or `BeamCentre` for `BeamCentre | None`; the value may be `None`.
+Each output is computed as the key of its type under the same rule, such as `IofQ`.
+The binding copies what the function returns before it sets values in it, so the function may return a pipeline that it holds.
 A table sets the key of its type, a list, to its rows.
 A group is one key, so a provider takes it apart, such as one that reads the file `sample.run`.
 A workflow with keys of its own names them with `keys=`:
