@@ -228,7 +228,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel
 from pydantic_core import to_json
@@ -308,7 +308,7 @@ def _outputs_of(
 
 
 def _reason(error: Exception) -> str:
-    """Why a step or a workflow failed, as a failure names it."""
+    """Why a step, a workflow, staging, or a write failed, as a failure names it."""
     return str(error) or repr(error)
 
 
@@ -507,12 +507,31 @@ def _write_key(record_id: str, output: str) -> str:
     return f'{record_id}.{output} written'
 
 
-_Pinned = tuple[_Accumulator, int, str | None, int]
-"""
-A state a submission pinned: the accumulator, its number of pushes, why
-the plain request of that state would be refused, or ``None``, and the
-number of its pushes that had failed when it was pinned.
-"""
+class _Pin(NamedTuple):
+    """
+    A state pinned: the accumulator, its number of pushes logged, and the
+    number of these that had failed; once checked, why the plain request of
+    that state would be refused, or ``None``.
+    """
+
+    acc: _Accumulator
+    upto: int
+    known: int
+    refused: str | None = None
+
+    @property
+    def state(self) -> tuple[_Accumulator, int]:
+        """The state, as its readers hold it."""
+        return self.acc, self.upto
+
+    def crossed(self) -> str | None:
+        """
+        Why a push of the state failed since the pin, or ``None``: the pin
+        then holds rows that the state lacks (see
+        :meth:`.Lifecycle.failed_since`).
+        """
+        return self.acc.lifecycle.failed_since(self.known, self.upto)
+
 
 Asked = str | tuple[str, int]
 """
@@ -787,8 +806,8 @@ class Backend:
             pinned = self._pin_states(self._client(client), referenced)
         try:
             states = {
-                i: (acc, upto, self._check_state(acc, upto), known)
-                for i, (acc, upto, known) in pinned.items()
+                i: pin._replace(refused=self._check_state(pin.acc, pin.upto))
+                for i, pin in pinned.items()
             }
             with self._changed:
                 caller = self._client(client)
@@ -800,14 +819,14 @@ class Backend:
                 )
         finally:
             with self._changed:
-                self._let_go([(acc, upto) for acc, upto, _ in pinned.values()])
+                self._let_go([pin.state for pin in pinned.values()])
 
     def _create(
         self,
         entries: list[Entry],
         requests: list[Request],
         caller: _Client,
-        states: Mapping[str, _Pinned],
+        states: Mapping[str, _Pin],
         state_ids: Mapping[str, str],
         persisted: Sequence[tuple[str, ...]],
         persist_states: tuple[str, ...] = (),
@@ -865,11 +884,11 @@ class Backend:
                         NewStateRecord(
                             id=state_ids[i],
                             accumulator=i,
-                            pushes=upto,
-                            outputs=outputs(acc.template.spec),
+                            pushes=pin.upto,
+                            outputs=outputs(pin.acc.template.spec),
                             persist=persist_states,
                         )
-                        for i, (acc, upto, _, _) in states.items()
+                        for i, pin in states.items()
                     ),
                     *(
                         NewRecord(
@@ -890,17 +909,16 @@ class Backend:
         caller.kept.update(
             i for i, names in zip(ids, persisted, strict=True) if not names
         )
-        for i, (acc, upto, _, _) in states.items():
-            self._state_of[state_ids[i]] = (acc, upto)
-            self._readers[(acc, upto)] += 1
+        for i, pin in states.items():
+            self._state_of[state_ids[i]] = pin.state
+            self._readers[pin.state] += 1
             self._schedule(state_ids[i])
         for record_id, entry, reads in zip(ids, entries, stored, strict=True):
             if entry.stage is not None:
                 self._stage_of[record_id] = caller.stages[entry.stage]
             self._schedule(record_id, reads)
-        for i, (acc, upto, _, known) in states.items():
-            # a push of the state failed since the pin, which the check missed
-            if (failure := acc.lifecycle.failed_since(known, upto)) is not None:
+        for i, pin in states.items():
+            if (failure := pin.crossed()) is not None:  # which the check missed
                 self._finish(state_ids[i], Status.FAILED, failure)
         return [self._views.records[i] for i in ids]
 
@@ -938,33 +956,39 @@ class Backend:
         except SubmitError as error:
             raise entry.refused(error) from None
 
-    def _pin_states(
-        self, caller: _Client, ids: Iterable[str]
-    ) -> dict[str, tuple[_Accumulator, int, int]]:
+    def _pin(self, acc: _Accumulator, *, reader: bool = True) -> _Pin:
+        """
+        The accumulator's state after the pushes logged so far, held as a
+        reader holds it if ``reader``, until the caller lets go of it; lock
+        held.
+        """
+        upto = len(self._views.pushes.get(acc.id, ()))
+        pin = _Pin(acc, upto, len(acc.lifecycle.failed))
+        if reader:
+            self._readers[pin.state] += 1
+        return pin
+
+    def _pin_states(self, caller: _Client, ids: Iterable[str]) -> dict[str, _Pin]:
         """
         The current state of each of the client's accumulators among ``ids``,
-        by ID, as the accumulator, its number of pushes logged, and the number
-        of these that failed, each held as a reader holds it until the caller
-        lets go of it; lock held.
+        by ID, pinned (see :meth:`_pin`); lock held.
 
         An accumulator that is released, unknown, or takes no readers is left
         out.
         """
-        pinned = {}
-        for i in ids:
-            acc = caller.accumulators.get(i)
-            if acc is not None and acc.lifecycle.unreadable is None:
-                upto = len(self._views.pushes.get(i, ()))
-                pinned[i] = (acc, upto, len(acc.lifecycle.failed))
-        self._readers.update((acc, upto) for acc, upto, _ in pinned.values())
-        return pinned
+        accs = {i: caller.accumulators.get(i) for i in ids}
+        return {
+            i: self._pin(acc)
+            for i, acc in accs.items()
+            if acc is not None and acc.lifecycle.unreadable is None
+        }
 
     def _check_entry(
         self,
         entry: Entry,
         request: Request,
         caller: _Client,
-        states: Mapping[str, _Pinned],
+        states: Mapping[str, _Pin],
     ) -> None:
         """
         Check the stage a request of a submission goes through, if any, and
@@ -985,7 +1009,7 @@ class Backend:
         spec_id: SpecId,
         params: Mapping[str, Any],
         caller: _Client,
-        states: Mapping[str, _Pinned],
+        states: Mapping[str, _Pin],
         also: Collection[tuple[str, str]] = (),
     ) -> None:
         """
@@ -1055,7 +1079,7 @@ class Backend:
         ref: OutputRef | AccumulatorRef,
         loc: Loc,
         caller: _Client,
-        states: Mapping[str, _Pinned],
+        states: Mapping[str, _Pin],
         also: Collection[tuple[str, str]],
     ) -> SpecId:
         """
@@ -1077,7 +1101,7 @@ class Backend:
                 raise SubmitError.at(loc, error.args[0]) from None
             if ref.accumulator not in states:
                 raise SubmitError.at(loc, 'only a request may reference an accumulator')
-            if (refused := states[ref.accumulator][2]) is not None:
+            if (refused := states[ref.accumulator].refused) is not None:
                 raise SubmitError.at(loc, refused)
             return acc.template.spec
         record = self._views.records.get(ref.record)
@@ -1190,7 +1214,7 @@ class Backend:
             outputs = self._compute(record, stage, state)
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
-                self._finish(record_id, Status.FAILED, str(error) or repr(error))
+                self._finish(record_id, Status.FAILED, _reason(error))
                 self._let_go(reads)
                 self._let_go_of_state(record_id)
             return
@@ -1224,7 +1248,7 @@ class Backend:
         spec = self._bindings[request.spec].spec
         if stage is None:
             params = spec.params.model_construct(
-                **self._typed(request.spec, request.params)
+                **self._typed(request.spec, request.params)[0]
             )
             check_model(spec.params, params)
             returned = self._bindings[request.spec].compute(params)
@@ -1232,14 +1256,14 @@ class Backend:
             fixed = {n: v for n, v in request.params.items() if n not in stage.given}
 
             def make() -> StageCall:
-                typed = self._typed(request.spec, fixed)
+                typed, _ = self._typed(request.spec, fixed)
                 if spec.params.__pydantic_decorators__.model_validators:
                     stage.fixed = typed
                 return stage.binding.make_stage(typed, stage.template.blanks)
 
             call = self._staged(stage, make)
             given = {n: v for n, v in request.params.items() if n in stage.given}
-            typed = self._typed(request.spec, given)
+            typed, _ = self._typed(request.spec, given)
             if stage.fixed is not None:
                 check_model(
                     spec.params, spec.params.model_construct(**stage.fixed, **typed)
@@ -1252,10 +1276,10 @@ class Backend:
         spec_id: SpecId,
         values: Mapping[str, Any],
         rows: Mapping[str, Mapping[bytes, int]] | None = None,
-        read: dict[str, dict[bytes, int]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, dict[bytes, int]]]:
         """
-        ``values`` of a request by name as the binding takes them; no lock.
+        ``values`` of a request by name as the binding takes them, and the
+        rows read of each of its tables that has a JSON form; no lock.
         The data each reference names is read, and each value is validated
         alone by its field, a row of a list by its element type (see
         :func:`ess.spec.field_types.validated`). A plain request makes the
@@ -1265,19 +1289,18 @@ class Backend:
         form are distinct by the JSON forms of the rows read, as the element
         type dumps them, so an inline value and a reference to equal data are
         one row. They are compared with those in ``rows``, the rows read
-        before by table, and put in ``read``, by table, if given (see
-        :func:`.checks.distinct`).
+        before by table, and given by their JSON forms with their indexes
+        after these (see :func:`.checks.distinct`).
         """
         spec = self._bindings[spec_id].spec
         reader = self._reader(values)
         typed = {n: validated(spec.params, n, v, reader) for n, v in values.items()}
+        read = {}
         for table in spec.tables:
             if table in typed and spec.has_json_form(table):
                 forms = [json_form(spec.params, table, v) for v in typed[table]]
-                new = distinct(table, forms, (rows or {}).get(table, {}))
-                if read is not None:
-                    read[table] = new
-        return typed
+                read[table] = distinct(table, forms, (rows or {}).get(table, {}))
+        return typed, read
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
@@ -1299,7 +1322,7 @@ class Backend:
                 call = make()
             except Exception as error:
                 with self._changed:
-                    reason = str(error) or repr(error)
+                    reason = _reason(error)
                     stage.stopped = f'the stage stopped: staging failed: {reason}'
                     self._let_go_of_template(stage)
                 raise
@@ -1468,7 +1491,7 @@ class Backend:
                     raise OSError('the backend has no store')
                 store.write(record_id, name, value)
         except Exception as error:  # any failure of a write is logged
-            return str(error) or repr(error)
+            return _reason(error)
         return None
 
     def _start_writes(self, record_id: str, names: Iterable[str]) -> None:
@@ -1824,24 +1847,21 @@ class Backend:
             if (refused := acc.lifecycle.refusal()) is not None:
                 raise SubmitError.at((), refused)
             acc.lifecycle.start_check()
-            upto = len(self._views.pushes.get(accumulator_id, ()))
-            known = len(acc.lifecycle.failed)
-            self._readers[(acc, upto)] += 1
+            pin = self._pin(acc)
         try:
-            if (refused := self._check_state(acc, upto)) is not None:
+            if (refused := self._check_state(acc, pin.upto)) is not None:
                 raise SubmitError.at((), refused)
             with self._changed:
                 caller = self._client(client)
                 self._pushed_into(caller, accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
-                pinned = {accumulator_id: (acc, upto, None, known)}
                 # before the record, which may fail as it is made
                 acc.lifecycle.end_check(record_id)
                 self._create(
                     [],
                     [],
                     caller,
-                    pinned,
+                    {accumulator_id: pin},
                     {accumulator_id: record_id},
                     [],
                     persist_states=persisted,
@@ -1852,7 +1872,7 @@ class Backend:
         finally:
             with self._changed:
                 acc.lifecycle.end_check(None)
-                self._let_go([(acc, upto)])
+                self._let_go([pin.state])
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
@@ -1960,9 +1980,8 @@ class Backend:
         stops the accumulator, since the driver may hold part of the rows.
         """
         lifecycle = acc.lifecycle
-        read: dict[str, dict[bytes, int]] = {}
         try:
-            typed = self._typed(acc.template.spec, step.values, acc.rows_read, read)
+            typed, read = self._typed(acc.template.spec, step.values, acc.rows_read)
         except Exception as error:  # the backend refuses the values or rows
             self._step_failed(acc, _reason(error), driver_changed=False)
             return
@@ -2078,31 +2097,24 @@ class Backend:
                 return caller, acc
             self._changed.wait()
 
-    def _current(
-        self, accumulator_id: str, client: str, *, reader: bool
-    ) -> tuple[_Accumulator, int, int]:
+    def _current(self, accumulator_id: str, client: str, *, reader: bool) -> _Pin:
         """
-        The accumulator, its number of pushes logged, and the number of these
-        that failed, its current state pinned as a read pins it; held as a
-        reader holds it if ``reader``, until the caller lets go of it. Raises
-        ``NotReadable`` if the state may not be read (see
-        :meth:`_accumulator`).
+        The accumulator's current state, pinned as a read pins it (see
+        :meth:`_pin`) and checked. Raises ``NotReadable`` if the state may
+        not be read (see :meth:`_accumulator`).
         """
         with self._changed:
             acc = self._accumulator(self._client(client), accumulator_id)
-            upto = len(self._views.pushes.get(accumulator_id, ()))
-            known = len(acc.lifecycle.failed)
-            if reader:
-                self._readers[(acc, upto)] += 1
+            pin = self._pin(acc, reader=reader)
         try:
-            if (refused := self._check_state(acc, upto)) is not None:
+            if (refused := self._check_state(acc, pin.upto)) is not None:
                 raise NotReadable(refused)
         except BaseException:  # a validator may raise anything
             if reader:
                 with self._changed:
-                    self._let_go([(acc, upto)])
+                    self._let_go([pin.state])
             raise
-        return acc, upto, known
+        return pin
 
     # Queries and control, within the client's proposal
 
@@ -2123,14 +2135,20 @@ class Backend:
             raise KeyError(f'no push {number} into accumulator {accumulator_id}')
         return lifecycle
 
-    def _status(self, what: Asked, caller: _Client) -> Status:
-        """The status of a record, an accumulator, or a push; lock held."""
+    def _about(self, what: Asked, caller: _Client) -> tuple[Status, str | None]:
+        """
+        The status of a record, an accumulator, or a push, and why it failed
+        or was cancelled, or ``None``; lock held.
+        """
         if isinstance(what, tuple):
-            return self._push(caller, *what).push_status(what[1])
+            lifecycle = self._push(caller, *what)
+            return lifecycle.push_status(what[1]), lifecycle.push_failure(what[1])
         if what in self._views.accumulators:
-            return self._kept(caller, what).lifecycle.status()
+            lifecycle = self._kept(caller, what).lifecycle
+            return lifecycle.status(), lifecycle.failure()
         self._mine(what, caller.proposal)
-        return self._views.status(what)
+        finished = self._views.finished.get(what)
+        return self._views.status(what), None if finished is None else finished.failure
 
     def status(self, ids: Iterable[Asked], client: str) -> list[Status]:
         """
@@ -2139,7 +2157,7 @@ class Backend:
         """
         with self._changed:
             caller = self._client(client)
-            return [self._status(i, caller) for i in ids]
+            return [self._about(i, caller)[0] for i in ids]
 
     def wait(self, ids: Iterable[Asked], client: str) -> list[Status]:
         """
@@ -2150,12 +2168,12 @@ class Backend:
         ids = list(ids)
         with self._changed:
             caller = self._client(client)
-            for i in ids:
-                self._status(i, caller)  # raises for one not readable
-            self._wait_for(
-                lambda: all(self._status(i, caller) is not Status.PENDING for i in ids)
-            )
-            return [self._status(i, caller) for i in ids]
+
+            def statuses() -> list[Status]:  # raises for one not readable
+                return [self._about(i, caller)[0] for i in ids]
+
+            self._wait_for(lambda: Status.PENDING not in statuses())
+            return statuses()
 
     def failure(self, what: Asked, client: str) -> str | None:
         """
@@ -2164,14 +2182,7 @@ class Backend:
         ``None`` for anything else, such as a record cancelled by a client.
         """
         with self._changed:
-            caller = self._client(client)
-            if isinstance(what, tuple):
-                return self._push(caller, *what).push_failure(what[1])
-            if what in self._views.accumulators:
-                return self._kept(caller, what).lifecycle.failure()
-            self._mine(what, caller.proposal)
-            finished = self._views.finished.get(what)
-            return None if finished is None else finished.failure
+            return self._about(what, self._client(client))[1]
 
     def cancel(self, ids: Iterable[str], client: str) -> None:
         """
@@ -2204,7 +2215,7 @@ class Backend:
             acc = self._kept(self._client(client), accumulator_id)
             if isinstance(acc.lifecycle.phase, Stopped):
                 return self._views.plain(acc.id, acc.lifecycle.added or 0)
-        acc, upto, _ = self._current(accumulator_id, client, reader=False)
+        acc, upto, *_ = self._current(accumulator_id, client, reader=False)
         with self._changed:
             return self._views.plain(acc.id, upto)
 
@@ -2329,7 +2340,8 @@ class Backend:
         before it reaches the state, or a push of the state that fails after
         the pin, raises ``NotReadable``.
         """
-        acc, upto, known = self._current(accumulator_id, client, reader=True)
+        pin = self._current(accumulator_id, client, reader=True)
+        acc, upto, *_ = pin
         try:
             if select is not None:
                 self._check_select(acc.template.spec, names)
@@ -2340,11 +2352,11 @@ class Backend:
                     return (
                         lifecycle.added == upto
                         or lifecycle.unreadable is not None
-                        or lifecycle.failed_since(known, upto) is not None
+                        or pin.crossed() is not None
                     )
 
                 self._wait_for(ready)
-                if (failure := lifecycle.failed_since(known, upto)) is not None:
+                if (failure := pin.crossed()) is not None:
                     raise NotReadable(failure)
                 if lifecycle.added != upto:
                     raise NotReadable(lifecycle.unreadable)
@@ -2362,7 +2374,7 @@ class Backend:
             return {n: _selected(v, select) for n, v in values.items()}
         finally:
             with self._changed:
-                self._let_go([(acc, upto)])
+                self._let_go([pin.state])
 
     # Datasets, within the client's proposal
 
