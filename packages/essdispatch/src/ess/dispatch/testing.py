@@ -189,8 +189,9 @@ class KeptRows:
         self._fixed = fixed
         self._rows: dict[str, list[Any]] = {table: [] for table in spec.tables}
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._rows[table].extend(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        for table, values in rows.items():
+            self._rows[table].extend(values)
 
     def outputs(self) -> BaseModel:
         rows = {t: list(r) for t, r in self._rows.items()}

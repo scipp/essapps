@@ -18,6 +18,7 @@ from ess.dispatch import (
     Accumulator,
     Backend,
     Client,
+    NotReadable,
     Record,
     Request,
     Status,
@@ -33,6 +34,7 @@ from ess.dispatch.log import (
     NewStateRecord,
     Opened,
     Pushed,
+    PushFailed,
     Submitted,
 )
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
@@ -270,6 +272,61 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
     assert client.output(read, 'value') == 6.0
 
 
+def test_a_failed_push_is_logged_and_the_records_of_later_states_leave_it_out(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    client = start(tmp_path / 'log')
+    loading.clear()
+    pending = client.submit(LOAD, params=_sample(1))
+    total = _total(client)
+    failing = total.push(part=[pending.ref('value')])
+    across = client.submit(TOTAL, params=_read(total))  # pins state 1 meanwhile
+    client.cancel(pending)
+    loading.set()
+    load = client.compute(LOAD, params=_sample(2))
+    total.push(part=[load.ref('value')])
+    after = client.compute(TOTAL, params=_read(total))
+
+    reason = f'push 1: record {pending.id} cancelled'
+    assert client.status([failing, across]) == [Status.FAILED, Status.FAILED]
+    assert [e for e in Log.read(tmp_path / 'log') if isinstance(e, PushFailed)] == [
+        PushFailed(accumulator=total.id, push=1, failure=reason)
+    ]
+    crossed, state = (
+        _record(client, r.request.params['part'][0].record) for r in (across, after)
+    )
+    assert crossed.request.params['part'] == [pending.ref('value')]  # as pinned
+    assert state.request.params['part'] == [load.ref('value')]  # push 1 left out
+    assert client.output(after, 'value') == 2.0
+    again = restart(tmp_path / 'log')
+    assert _record(again, crossed.id).request == crossed.request
+    assert _record(again, state.id).request == state.request
+
+
+def test_pushes_that_fail_are_logged_in_push_order(
+    tmp_path: Path, start: Callable[[Path], Client], loading: threading.Event
+) -> None:
+    client = start(tmp_path / 'log')
+    loading.clear()
+    r1, r2, r3 = client.submit([Request(LOAD, params=_sample(n)) for n in (1, 2, 1)])
+    total = _total(client)
+    pushes = [
+        total.push(part=[r1.ref('value'), r2.ref('value')]),
+        total.push(part=[r3.ref('value')]),
+    ]
+    client.release(r2)  # push 1 keeps it, until it fails
+    client.cancel(r3)
+    client.cancel(r1)  # push 1 fails, cancels r2, and push 2 may fail
+    loading.set()
+
+    assert client.wait(pushes) == [Status.FAILED, Status.FAILED]
+    failed = [e for e in Log.read(tmp_path / 'log') if isinstance(e, PushFailed)]
+    assert [e.push for e in failed] == [1, 2]
+
+
 def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
@@ -329,7 +386,7 @@ def test_records_pending_in_the_log_are_cancelled_at_a_restart(
     assert again.failure(records) == ['the backend restarted'] * 3
     with pytest.raises(SubmitError, match=f'record {pending.id} cancelled'):
         again.submit(TOTAL, params={'part': [pending.ref('value')]})
-    with pytest.raises(SubmitError, match='released or is unknown'):
+    with pytest.raises(SubmitError, match='is not kept by this client'):
         again.submit(TOTAL, params=_read(total))  # the accumulator did not survive
 
 
@@ -343,7 +400,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(LookupError, match='not kept by this client'):
+    with pytest.raises(NotReadable, match='not kept by this client'):
         again.output(load, 'value')
 
 
@@ -385,7 +442,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
     load = client.compute(LOAD, params=_sample(1))
     written = len(Log.read(tmp_path / 'log'))
 
-    with pytest.raises(SubmitError, match='not parameters'):
+    with pytest.raises(SubmitError, match='not a parameter'):
         client.submit(LOAD, params={'bins': 2, **_sample(1)})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))
@@ -397,9 +454,9 @@ def test_a_refused_call_writes_nothing_to_the_log(
     other = AccumulatorRef(accumulator=total.id, output='other')
     with pytest.raises(SubmitError, match='has no output'):
         client.submit(TOTAL, params={'part': [other]})
-    with pytest.raises(SubmitError, match='rows of a blank table'):
+    with pytest.raises(SubmitError, match='not a blank table'):
         total.push(other=[load.ref('value')])
-    with pytest.raises(SubmitError, match='has no rows'):
+    with pytest.raises(SubmitError, match='gives no rows'):
         total.push(part=[])
     with pytest.raises(SubmitError, match=r'part\[1\]: repeats part\[0\]'):
         total.push(part=[load.ref('value')])

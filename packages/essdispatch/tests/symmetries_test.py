@@ -138,11 +138,12 @@ class IofQDriver:
         self._finalize = sciline.Stage(wf, inputs=summed, outputs=(IofQ,))
         self._sums: dict[Any, Any] = {}
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        key, stage = self._contribute[table]
-        for run in rows:
-            for k, part in stage.compute({key: run}).items():
-                self._sums[k] = self._sums.get(k, 0) + part
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        for table, runs in rows.items():
+            key, stage = self._contribute[table]
+            for run in runs:
+                for k, part in stage.compute({key: run}).items():
+                    self._sums[k] = self._sums.get(k, 0) + part
 
     def outputs(self) -> IofQOutputs:
         return IofQOutputs(iofq=self._finalize.compute(self._sums)[IofQ])
@@ -218,7 +219,7 @@ def test_every_way_gives_the_iofq_of_the_single_run_spec(
 
 
 def test_a_request_that_leaves_out_a_table_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['can'\]: required parameters"):
+    with pytest.raises(SubmitError, match='can: a required parameter'):
         client.compute(IOFQ_MULTI, params={'sample': [SAMPLE]})
 
 

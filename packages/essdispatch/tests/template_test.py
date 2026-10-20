@@ -6,6 +6,7 @@ rows of a table.
 """
 
 import math
+import re
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,16 @@ from typing import Annotated, Any, NewType, Self
 import pytest
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from ess.dispatch import Client, SubmitError, Template, dataset, local
+from ess.dispatch import (
+    Client,
+    FieldError,
+    NotReadable,
+    Status,
+    SubmitError,
+    Template,
+    dataset,
+    local,
+)
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import DriverBinding, NoParams, StageCall, WorkflowSpec, function_binding
 
@@ -71,14 +81,40 @@ class Made(BaseModel):
     made: PositiveValue
 
 
-class CheckedParams(BaseModel):
-    """Params whose model validator refuses every instance, to show where it runs."""
+class BoundsParams(BaseModel):
+    """Params whose model validator checks two values that are not tables."""
 
-    sample: list[SampleFile] = Field(min_length=1)
+    low: float = 0.0
+    high: float = 1.0
+    sample: list[SampleFile]
 
     @model_validator(mode='after')
-    def _refused(self) -> Self:
-        raise ValueError('the params model refuses')
+    def _ordered(self) -> Self:
+        if self.low >= self.high:
+            raise ValueError('low is not below high')
+        return self
+
+
+class OneRowParams(BaseModel):
+    """Params whose model validator reads a table: a check across rows."""
+
+    sample: list[SampleFile]
+
+    @model_validator(mode='after')
+    def _one_row(self) -> Self:
+        if len(self.sample) > 1:
+            raise ValueError('more than one sample')
+        return self
+
+
+class CopiedParams(BaseModel):
+    """Params whose model validator returns a copy, not the instance it checks."""
+
+    sample: list[SampleFile]
+
+    @model_validator(mode='after')
+    def _copied(self) -> Self:
+        return self.model_copy()
 
 
 def _spec(
@@ -104,7 +140,9 @@ TOTAL = _spec('total', params=TotalParams, tables=('sample', 'scaling'))
 MAKE = _spec('make', outputs=Made)
 USE = _spec('use', params=PositiveParams)
 USE_MANY = _spec('use-many', params=PositivesParams, tables=('positive',))
-CHECKED = _spec('checked', params=CheckedParams, tables=('sample',))
+BOUNDS = _spec('bounds', params=BoundsParams, tables=('sample',))
+ONE_ROW = _spec('one-row', params=OneRowParams, tables=('sample',))
+COPIED = _spec('copied', params=CopiedParams, tables=('sample',))
 UNSCALED = Template(TOTAL, params={'scaling': []}, blanks=('sample',))
 """The sample runs of ``TOTAL`` as a blank table, without scaling."""
 
@@ -136,13 +174,13 @@ def use_many(params: PositivesParams) -> Value:
 
 
 class Count:
-    """A driver of CHECKED that counts the rows pushed."""
+    """A driver that counts the rows pushed."""
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.rows = 0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self.rows += len(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        self.rows += sum(map(len, rows.values()))
 
     def outputs(self) -> Value:
         return Value(value=self.rows)
@@ -177,7 +215,9 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             function_binding(MAKE, make),
             StagedFunction(USE, use),
             kept_rows(USE_MANY, use_many),
-            Counting(CHECKED, Count),
+            Counting(BOUNDS, Count),
+            Counting(ONE_ROW, Count),
+            Counting(COPIED, Count),
         ],
     ) as client:
         yield client
@@ -222,10 +262,21 @@ def test_a_template_drops_the_values_given_for_its_blanks() -> None:
 def test_a_fill_gives_each_blank_and_no_fixed_value() -> None:
     template = Template(SCALE, params={'scaling': Factor()}, blanks=('sample',))
 
-    with pytest.raises(ValueError, match=r"missing \['sample'\]"):
+    with pytest.raises(SubmitError, match=r'^sample: a blank, not filled$') as raised:
         template.fill()
-    with pytest.raises(ValueError, match='fixed by the template'):
+    assert raised.value.errors == (
+        FieldError(None, ('sample',), 'a blank, not filled'),
+    )
+    with pytest.raises(SubmitError, match='fixed by the template') as raised:
         template.fill(params={'scaling': Factor(), 'sample': dataset(run=1)})
+    assert [e.loc for e in raised.value.errors] == [('scaling',)]
+
+
+def test_a_call_through_a_stage_without_its_blank_is_refused(client: Client) -> None:
+    stage = client.stage(Template(SCALE, blanks=('sample',)))
+
+    with pytest.raises(SubmitError, match=r'^sample: a blank, not filled$'):
+        client.submit(stage)
 
 
 def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
@@ -236,18 +287,16 @@ def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
 
 
 def test_a_misspelt_name_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(
             Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
         )
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(Template(SCALE, blanks=('sampel',)))
 
 
 def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r"\['sample'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match=r'^sample: a required parameter, not given$'):
         client.stage(Template(SCALE, blanks=('scaling',)))
 
 
@@ -308,12 +357,15 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
 def test_a_push_gives_rows_of_blank_tables(client: Client) -> None:
     acc = client.accumulator(UNSCALED)
     row = [dataset(run=1)]
-    fixed = r"blank table of the accumulator, \['sample'\], not 'scaling'"
+    fixed = r"^scaling: not a blank table of the accumulator, \['sample'\]$"
     refused = [
         (fixed, {'scaling': [Factor()]}),
         (fixed, {'sample': row, 'scaling': [Factor()]}),
-        (r"blank table of the accumulator, \['sample'\], not 'other'", {'other': row}),
-        ('a push into sample has no rows', {'sample': []}),
+        (
+            r"^other: not a blank table of the accumulator, \['sample'\]$",
+            {'other': row},
+        ),
+        ('^sample: a push gives no rows$', {'sample': []}),
         ('a push gives rows of a blank table, not none', {}),
     ]
     for reason, rows in refused:
@@ -365,21 +417,23 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 
     assert client.provenance(acc).request == plain.request
     assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
-    with pytest.raises(
-        SubmitError, match=r"\['scaling'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match='scaling: a required parameter, not given'):
         client.accumulator(Template(TOTAL, blanks=('sample',)))
 
 
-def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
+def test_a_push_whose_file_cannot_be_read_fails_alone(
     client: Client, datasets: FakeDatasets
 ) -> None:
     acc = client.accumulator(UNSCALED)
     datasets.corrupt(datasets.resolve(dataset(run=1)))
-    acc.push(sample=[dataset(run=1)])
+    bad = acc.push(sample=[dataset(run=1)])
 
-    with pytest.raises(LookupError, match='push 0 failed: file signature not found'):
-        client.output(acc, 'value')
+    assert client.wait(bad) == Status.FAILED
+    assert client.failure(bad) == 'push 1 failed: file signature not found'
+    with pytest.raises(NotReadable, match='sample: the table has no row'):
+        client.output(acc, 'value')  # state 1 is state 0
+    acc.push(sample=[dataset(run=2)])
+    assert client.output(acc, 'value') == 2.0
 
 
 def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
@@ -388,25 +442,80 @@ def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
     made = client.compute(MAKE).ref('made')
     stage = client.stage(Template(USE, params={'positive': made}))
     acc = client.accumulator(Template(USE_MANY, blanks=('positive',)))
-    acc.push(positive=[made])
+    pushed = acc.push(positive=[made])
 
     assert 'not positive' in client.failure(
         client.compute(USE, params={'positive': made})
     )
     assert 'not positive' in client.failure(client.compute(stage))
-    with pytest.raises(LookupError, match=r'push 0 failed: (?s:.*)not positive'):
-        client.output(acc, 'value')
-    with pytest.raises(SubmitError, match='the accumulator stopped'):
-        acc.push(positive=[made])
+    assert client.wait(pushed) == Status.FAILED
+    assert re.match(r'push 1 failed: (?s:.*)not positive', client.failure(pushed))
+    assert client.wait(acc.push(positive=[made])) == Status.FAILED  # again
 
 
-def test_the_params_model_s_model_validator_is_never_called(client: Client) -> None:
-    rows = {'sample': [dataset(run=1)]}
-    plain = client.compute(CHECKED, params=rows)
-    stage = client.stage(Template(CHECKED, blanks=('sample',)))
-    acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
-    acc.push(**rows)
+# Model validators
+
+
+def test_a_model_validator_that_raises_fails_a_plain_request(client: Client) -> None:
+    ordered = client.compute(BOUNDS, params={'sample': [dataset(run=1)]})
+    unordered = client.compute(BOUNDS, params={'low': 2.0, 'sample': []})
+
+    assert client.output(ordered, 'value') == 1.0
+    assert client.failure(unordered) == 'BoundsParams._ordered: low is not below high'
+
+
+def test_a_model_validator_checks_each_call_through_a_stage_with_the_fixed_values(
+    client: Client,
+) -> None:
+    stage = client.stage(
+        Template(BOUNDS, params={'low': 2.0, 'sample': []}, blanks=('high',))
+    )
+    above = client.compute(stage, params={'high': 3.0})
+    below = client.compute(stage, params={'high': 1.0})
+    again = client.compute(stage, params={'high': 4.0})
+
+    assert client.output(above, 'value') == 0.0
+    assert client.failure(below) == 'BoundsParams._ordered: low is not below high'
+    assert client.output(again, 'value') == 0.0
+
+
+def test_a_model_validator_checks_an_accumulator_when_it_opens(client: Client) -> None:
+    ordered = client.accumulator(
+        Template(BOUNDS, params={'low': 0.5}, blanks=('sample',))
+    )
+    unordered = client.accumulator(
+        Template(BOUNDS, params={'low': 2.0}, blanks=('sample',))
+    )
+    ordered.push(sample=[dataset(run=1)])
+
+    assert client.output(ordered, 'value') == 1.0
+    with pytest.raises(
+        NotReadable, match=r'opening failed: BoundsParams\._ordered: low is not below'
+    ):
+        client.output(unordered, 'value')
+
+
+def test_an_accumulator_whose_model_validator_reads_a_table_fails_to_open(
+    client: Client,
+) -> None:
+    plain = client.compute(ONE_ROW, params={'sample': [dataset(run=1)]})
+    acc = client.accumulator(Template(ONE_ROW, blanks=('sample',)))
 
     assert client.output(plain, 'value') == 1.0
-    assert client.output(client.compute(stage, params=rows), 'value') == 1.0
-    assert client.output(acc, 'value') == 1.0
+    with pytest.raises(
+        NotReadable,
+        match=r"opening failed: OneRowParams._one_row reads the table sample, "
+        r".*; checks across rows are the driver's",
+    ):
+        client.output(acc, 'value')
+
+
+def test_a_model_validator_that_returns_another_instance_fails_the_request(
+    client: Client,
+) -> None:
+    computed = client.compute(COPIED, params={'sample': []})
+
+    assert client.failure(computed) == (
+        'CopiedParams._copied: a model validator checks and returns self, '
+        'not CopiedParams'
+    )

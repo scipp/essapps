@@ -49,6 +49,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
+from .refs import ParamsError
 
 type StageCall[O] = Callable[[Mapping[str, Any]], O]
 """What ``make_stage`` returns: the outputs from the values of the blanks."""
@@ -67,8 +68,7 @@ class Binding[P: BaseModel, O: BaseModel](Protocol):
 
         It may be called from several threads at once, and does not modify
         ``params``. ``params`` is made from values each validated by its own
-        field, so the params model's model validators have not run; the
-        binding may run them.
+        field, and checked by the params model's model validators.
         """
         ...
 
@@ -99,6 +99,13 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
         ...
 
 
+class PushRefused(ValueError):
+    """
+    Raised by :meth:`Driver.push` for rows that the driver refuses before it
+    adds any of them: the driver is as it was before the push.
+    """
+
+
 class Driver[O: BaseModel](Protocol):
     """
     The object behind an accumulator: tables are pushed into it, and it gives
@@ -121,13 +128,35 @@ class Driver[O: BaseModel](Protocol):
     - A driver may refuse a state, such as one whose runs it cannot
       combine yet, by raising in :meth:`outputs`; later pushes may make the
       state valid.
+    - A check across rows is the driver's: the params model's model
+      validators run when the accumulator opens, without the blank tables.
+    - A push that raises :class:`PushRefused` changed nothing: the driver
+      gives the outputs it gave before the push, and later pushes add as if
+      it had not been made. A driver keeps this by computing what every row
+      of every table of the push contributes first, and keeping it only
+      once all of it is computed.
 
-    A push that raises stops the accumulator, since the driver may hold part
-    of its rows.
+    A push that raises :class:`PushRefused` fails alone, and the accumulator
+    takes more pushes. A push that raises anything else stops the
+    accumulator, since the driver may hold part of its rows; what a client
+    then sees is in docs/developer/README.md, Failed pushes. The backend
+    resolves a dataset to a local path, and the driver reads the file, so a
+    file that cannot be read is the driver's to refuse::
+
+        def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+            try:
+                parts = {t: [self._contribution(t, r) for r in rows[t]] for t in rows}
+            except Exception as error:  # nothing is kept yet
+                raise PushRefused(str(error)) from error
+            for table, contributions in parts.items():
+                self._sums[table] = sum(contributions, self._sums[table])
     """
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        """Add ``rows``, never none, to the table ``table``, in order."""
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        """
+        Add the rows of each table, by its name, in order: one push of a
+        client, into one or more tables, never with none of a table's rows.
+        """
         ...
 
     def outputs(self) -> O:
@@ -164,17 +193,21 @@ def fixed_values(
     The values of ``fixed``, by name, with the default of each parameter in
     neither ``fixed`` nor ``blanks``.
 
-    Raises ``ValueError`` if a name is both fixed and blank, if either names
-    no parameter of the spec, or if one without a default is in neither.
+    Raises :class:`~ess.spec.refs.ParamsError`, with a reason for each name,
+    if a name is both fixed and blank, if either names no parameter of the
+    spec, or if one without a default is in neither.
     """
     fields = spec.params.model_fields
-    if unknown := sorted((fixed.keys() | set(blanks)) - fields.keys()):
-        raise ValueError(f'{unknown}: not parameters of {spec.name}')
-    if both := sorted(fixed.keys() & set(blanks)):
-        raise ValueError(f'{both}: both fixed and blank')
+    unknown = sorted((fixed.keys() | set(blanks)) - fields.keys())
+    both = sorted(fixed.keys() & set(blanks))
     left = {n: f for n, f in fields.items() if n not in fixed and n not in blanks}
-    if missing := [n for n, f in left.items() if f.is_required()]:
-        raise ValueError(f'{missing}: required parameters, not given')
+    missing = [n for n, f in left.items() if f.is_required()]
+    if unknown or both or missing:
+        raise ParamsError(
+            [((n,), f'not a parameter of {spec.name}') for n in unknown]
+            + [((n,), 'both fixed and blank') for n in both]
+            + [((n,), 'a required parameter, not given') for n in missing]
+        )
     defaults = {
         name: info.get_default(call_default_factory=True, validated_data={})
         for name, info in left.items()
@@ -189,8 +222,8 @@ class DriverBinding[P: BaseModel, O: BaseModel]:
 
     ``make_driver`` makes a driver from the fixed values that are not tables,
     by name. It may be called from several threads at once. An accumulator
-    gets a driver of its own, with each table in its fixed values in one
-    push; a table without rows is not pushed. A plain request is an
+    gets a driver of its own, with the tables in its fixed values in one
+    push; a table without rows is left out of it. A plain request is an
     accumulator with no blanks, read once. ``fixed`` and ``blanks`` are
     checked by :func:`fixed_values`, and each blank must be a table.
     """
@@ -212,9 +245,8 @@ class DriverBinding[P: BaseModel, O: BaseModel]:
             )
         values = fixed_values(self.spec, fixed, blanks)
         driver = self.make_driver({n: v for n, v in values.items() if n not in tables})
-        for table in tables:
-            if values.get(table):
-                driver.push(table, values[table])
+        if rows := {t: values[t] for t in tables if values.get(t)}:
+            driver.push(rows)
         return driver
 
 

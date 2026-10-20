@@ -25,7 +25,15 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.dispatch import Backend, Client, ClientEnded, Record, SpecId, Status
+from ess.dispatch import (
+    Backend,
+    Client,
+    ClientEnded,
+    NotReadable,
+    Record,
+    SpecId,
+    Status,
+)
 from ess.dispatch.log import Log
 from ess.dispatch.testing import (
     FakeDatasets,
@@ -40,6 +48,7 @@ from ess.spec import (
     DriverBinding,
     NoParams,
     OutputRef,
+    PushRefused,
     Ref,
     WorkflowSpec,
     function_binding,
@@ -326,7 +335,9 @@ class Summing:
     """
     A driver over tables of runs, a toy ``StreamProcessor``: the counts of
     each table's runs are summed, and ``finalize`` computes the outputs from
-    the sums, by table name, and the fixed values by name.
+    the sums, by table name, and the fixed values by name. A push reads all
+    its runs before it adds any, and raises ``PushRefused`` if one cannot
+    be read.
     """
 
     def __init__(
@@ -339,9 +350,14 @@ class Summing:
         self._fixed = fixed
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        for path in rows:
-            self._sums[table] += _counts(path)  # in place from the second row
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        try:
+            counts = {t: [_counts(path) for path in paths] for t, paths in rows.items()}
+        except Exception as error:  # nothing is added yet
+            raise PushRefused(str(error) or repr(error)) from error
+        for table, values in counts.items():
+            for value in values:
+                self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)
@@ -715,7 +731,7 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
     def kept(ref: OutputRef) -> bool:
         try:
             client.output(records[ref.record], ref.output)
-        except LookupError:
+        except NotReadable:
             return False
         return True
 
@@ -736,7 +752,7 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
             continue
         try:
             expected = client.output(record)
-        except LookupError:  # not kept by this client
+        except NotReadable:  # not kept by this client
             continue
         where = f'{record.id} {record.spec} {record.label} {record.member}'
         assert_close(client.output(again(record)), expected, where=where)

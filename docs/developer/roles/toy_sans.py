@@ -30,7 +30,7 @@ import sciline
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.spec import DriverBinding, WorkflowSpec, function_binding
+from ess.spec import DriverBinding, PushRefused, WorkflowSpec, function_binding
 from ess.spec.pipeline import PipelineBinding
 
 # The specs: what apps, clients, and the backend see.
@@ -302,7 +302,9 @@ class IofQDriver:
     Each run's numerator and denominator come from a ``sciline.Stage`` of the
     single-run binding's pipeline, cut at the binding's key of its table,
     and I(Q) from one cut at the sums. A sum is made with ``a + b``, so that
-    no value the driver was given, or a stage returned, is modified.
+    no value the driver was given, or a stage returned, is modified. A push
+    computes the sums of all its rows before the driver keeps them, so a
+    push that fails changes nothing, and raises ``PushRefused``.
     """
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
@@ -321,14 +323,22 @@ class IofQDriver:
         self._finalize = sciline.Stage(workflow, inputs=sums, outputs=(IofQ,))
         self._sums: dict[str, dict[Any, sc.Variable]] = {}  # per table, by key
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        stage = self._contribute[table]
-        for row in rows:
-            parts = stage.compute({single.keys[table]: row})
-            old = self._sums.get(table)
-            self._sums[table] = (
-                parts if old is None else {k: old[k] + v for k, v in parts.items()}
-            )
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        sums = dict(self._sums)
+        try:
+            for table, values in rows.items():
+                stage = self._contribute[table]
+                for row in values:
+                    parts = stage.compute({single.keys[table]: row})
+                    old = sums.get(table)
+                    sums[table] = (
+                        parts
+                        if old is None
+                        else {k: old[k] + v for k, v in parts.items()}
+                    )
+        except Exception as error:  # nothing is kept yet
+            raise PushRefused(str(error) or repr(error)) from error
+        self._sums = sums
 
     def outputs(self) -> IofQOutputs:
         if empty := sorted(self._contribute.keys() - self._sums.keys()):

@@ -15,6 +15,7 @@ from ess.spec import (
     function_binding,
 )
 from ess.spec.binding import fixed_values
+from ess.spec.refs import ParamsError
 
 
 class Scale(BaseModel):
@@ -89,7 +90,7 @@ class Recorder:
 
     def __init__(self) -> None:
         self.made: list[Mapping[str, Any]] = []
-        self.pushes: list[tuple[str, Sequence[Any]]] = []
+        self.pushes: list[dict[str, Sequence[Any]]] = []
 
     def make_driver(self, fixed: Mapping[str, Any]) -> 'Subtracting':
         self.made.append(fixed)
@@ -102,9 +103,10 @@ class Subtracting:
         self._factor = factor
         self._total = 0.0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._recorder.pushes.append((table, rows))
-        self._total += sum(rows) if table == 'sample' else -sum(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        self._recorder.pushes.append(dict(rows))
+        for table, values in rows.items():
+            self._total += sum(values) if table == 'sample' else -sum(values)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self._factor * self._total)
@@ -144,10 +146,10 @@ def test_fixed_values_take_a_table_as_its_rows() -> None:
 @pytest.mark.parametrize(
     ('fixed', 'blanks', 'reason'),
     [
-        ({'sample': SAMPLES}, ('sample',), r"\['sample'\]: both fixed and blank"),
-        ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters of sub-multi"),
-        ({}, ('speed',), r"\['speed'\]: not parameters of sub-multi"),
-        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
+        ({'sample': SAMPLES}, ('sample',), 'sample: both fixed and blank'),
+        ({'speed': 1.0}, ('sample',), 'speed: not a parameter of sub-multi'),
+        ({}, ('speed',), 'speed: not a parameter of sub-multi'),
+        ({}, ('can',), 'sample: a required parameter, not given'),
     ],
 )
 def test_fixed_values_refuse_names_that_do_not_fit(
@@ -155,6 +157,15 @@ def test_fixed_values_refuse_names_that_do_not_fit(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         fixed_values(SUB_MULTI, fixed, blanks)
+
+
+def test_fixed_values_refuse_every_name_at_its_place() -> None:
+    with pytest.raises(ParamsError) as raised:
+        fixed_values(SUB_MULTI, {'speed': 1.0}, ('can',))
+    assert raised.value.errors == (
+        (('speed',), 'not a parameter of sub-multi'),
+        (('sample',), 'a required parameter, not given'),
+    )
 
 
 def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
@@ -165,12 +176,12 @@ def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
     assert recorder.pushes == []
 
 
-def test_each_fixed_table_with_rows_is_one_push_of_its_rows(
+def test_the_fixed_tables_with_rows_are_one_push_of_their_rows(
     binding: DriverBinding, recorder: Recorder
 ) -> None:
     driver = binding.make_accumulator({'sample': SAMPLES}, ('can',))
-    assert recorder.pushes == [('sample', SAMPLES)]
-    driver.push('can', [1.0])
+    assert recorder.pushes == [{'sample': SAMPLES}]
+    driver.push({'can': [1.0]})
     assert driver.outputs() == SubOutputs(diff=2.0 * (5.0 + 7.0 - 1.0))
 
 
@@ -179,7 +190,7 @@ def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
 ) -> None:
     params = SUB_MULTI.params(sample=SAMPLES, can=[1.0])
     assert binding.compute(params) == SubOutputs(diff=22.0)
-    assert recorder.pushes == [('sample', SAMPLES), ('can', [1.0])]
+    assert recorder.pushes == [{'sample': SAMPLES, 'can': [1.0]}]
 
 
 def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:
@@ -193,7 +204,7 @@ def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:
     [
         ({}, ('scale', 'sample'), r"\['scale'\]: the blanks of an accumulator are"),
         ({}, ('runs',), r"\['runs'\]: the blanks of an accumulator are tables"),
-        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
+        ({}, ('can',), 'sample: a required parameter, not given'),
     ],
 )
 def test_an_accumulator_refuses_values_that_do_not_fit(

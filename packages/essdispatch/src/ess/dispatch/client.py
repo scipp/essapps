@@ -7,7 +7,9 @@ A client talks to one backend for one proposal. Calls that take records or
 requests accept one, a list, or a dict, and return the same shape.
 
 A record never changes; its status changes once, from pending to finished,
-and is asked with :meth:`Client.status` or :meth:`Client.wait`.
+and is asked with :meth:`Client.status` or :meth:`Client.wait`, and why it
+failed with :meth:`Client.failure`. The same calls ask about an accumulator
+and each of its pushes (see :class:`Push`).
 
 A call that starts work returns once the backend has checked and logged it:
 :meth:`Client.submit`, :meth:`Client.accumulator`, :meth:`Accumulator.push`,
@@ -65,12 +67,20 @@ def _reshape(what: Any, items: list[Any]) -> Any:
     return items[0]
 
 
-def _names(what: Any) -> list[str | None]:
-    """How each item of ``what`` is named in messages: its key or its index."""
+def _asked(what: Any) -> list[str | tuple[str, int]]:
+    """The records, accumulators, and pushes of ``what``, as the backend asks them."""
+    return [
+        (item.accumulator, item.number) if isinstance(item, Push) else item.id
+        for item in _items(what)
+    ]
+
+
+def _names(what: Any) -> list[str | int | None]:
+    """How each item of ``what`` is named in errors: its key or its index."""
     if isinstance(what, Mapping):
         return [str(key) for key in what]
     if isinstance(what, list | tuple):
-        return [f'[{i}]' for i in range(len(what))]
+        return list(range(len(what)))
     return [None]
 
 
@@ -79,9 +89,10 @@ class Provenance(BaseModel, frozen=True):
     Where a record came from: what it ran, what it read, and their datasets.
 
     ``request`` is the record's request, or for the state of an accumulator,
-    the plain request over the rows pushed so far. ``records`` lists every
-    record read through all references, nearest first, the records of the states
-    of accumulators among them; it stops at datasets.
+    the plain request over the rows pushed so far, but those of failed
+    pushes. ``records`` lists every record read through all references,
+    nearest first, the records of the states of accumulators among them; it
+    stops at datasets.
     """
 
     request: Request
@@ -133,6 +144,19 @@ class Stage:
     id: str
 
 
+@dataclass(frozen=True)
+class Push:
+    """
+    A push into an accumulator, by the accumulator's ID and the push's
+    number, from 1: state ``number`` is the state after it. Its status and
+    failure are asked as a record's are, with ``client.status``,
+    ``client.wait``, and ``client.failure``.
+    """
+
+    accumulator: str
+    number: int
+
+
 class Accumulator:
     """
     A template whose blanks, tables, are filled one push at a time.
@@ -164,14 +188,14 @@ class Accumulator:
         template: Template,
         accumulator_id: str,
         outputs: tuple[str, ...],
-        push: Callable[[dict[str, list[Any]]], None],
+        push: Callable[[dict[str, list[Any]]], int],
     ) -> None:
         self.template = template
         self.id = accumulator_id
         self.outputs = outputs
         self._push = push
 
-    def push(self, **rows: Sequence[Any]) -> None:
+    def push(self, **rows: Sequence[Any]) -> Push:
         """
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
@@ -193,8 +217,8 @@ class Accumulator:
         field by each field so; for a table whose element type has a JSON
         form, also by the rows read, before the driver gets them.
 
-        A push is one push into the binding's driver per table, in the
-        order given, and one state. A push references
+        A push is one push into the binding's driver, of the rows of every
+        table it gives, and one state. A push references
         datasets or outputs of records, never an accumulator. Each row is
         checked by the table's element type; the number of rows of a table,
         such as a row in a table that needs one, is checked when a state is
@@ -206,15 +230,16 @@ class Accumulator:
         push returns once it is logged. The backend adds the pushes one at a
         time, in the order logged, each once the records it references have
         completed and the readers of the state before it are done (see
-        :mod:`ess.dispatch.backend`).
+        :mod:`ess.dispatch.backend`). It returns the :class:`Push`, whose
+        status and failure the client asks.
 
-        If adding fails, such as for data that fail their table's check, or
-        a record has not completed, the accumulator stops for good: the
-        records of states it did not reach fail, and so do the requests that
-        read them, and every later push and pin is refused. The reason names
-        the step, such as ``push 0`` for the first push. A controller that
-        should skip a run whose reduction failed waits for that record before
-        it pushes.
+        A push may fail without ending the accumulator, or stop it;
+        docs/developer/README.md, Failed pushes, says when, and which reads
+        it fails::
+
+            run = acc.push(sample=[dataset(run=611)])
+            if client.wait(run) is Status.FAILED:
+                print(client.failure(run))  # push 3 failed: file signature not found
         """
         for name, given in rows.items():
             if isinstance(given, str | BaseModel | Mapping) or not isinstance(
@@ -224,7 +249,8 @@ class Accumulator:
                     f'{name}: the rows of a table are a list, such as [row], '
                     f'not {given!r}'
                 )
-        self._push({name: as_values(list(r)) for name, r in rows.items()})
+        number = self._push({name: as_values(list(r)) for name, r in rows.items()})
+        return Push(self.id, number)
 
     def ref(self, output: str) -> AccumulatorRef:
         """
@@ -329,12 +355,20 @@ class Client:
 
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
-        raises ``SubmitError`` naming the field at fault, after the request's
-        key or index if several are given: an invalid value, an unknown spec
-        or dataset, an inline value for a type without a JSON form, a reference
-        where none may stand, such as to a whole list, a reference the client
-        may not read, or one whose data do not fit its field. Then no request
-        of the call is submitted; the records of earlier calls stay.
+        raises ``SubmitError``: an invalid value, an unknown spec or dataset,
+        an inline value for a type without a JSON form, a reference where
+        none may stand, such as to a whole list, a reference the client may
+        not read, or one whose data do not fit its field. Each of its
+        ``errors`` names the field at fault by its place, ``loc``, and the
+        request by its key or index, ``entry``, if several are given (see
+        :class:`~ess.dispatch.errors.FieldError`)::
+
+            except SubmitError as error:
+                for e in error.errors:
+                    form.mark(e.entry, e.loc, e.msg)  # 'typo', ('reduction', 'bins')
+
+        Then no request of the call is submitted; the records of earlier
+        calls stay.
 
         With ``persist=True``, or the names of outputs, the client does not
         keep these records: the store keeps the outputs named, and the others
@@ -375,20 +409,47 @@ class Client:
         self.wait(records)
         return records
 
-    def status(self, records: Any) -> Any:
-        """The status of each record now."""
-        ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.status(ids, self._id))
+    def status(self, what: Any) -> Any:
+        """
+        The status of each record, accumulator, or push now: one, a list, or a
+        dict, in the same shape.
 
-    def wait(self, records: Any) -> Any:
-        """The status of each record once all have finished; a failure is not raised."""
-        ids = [r.id for r in _items(records)]
-        return _reshape(records, self._backend.wait(ids, self._id))
+        ========================  ==============================================
+        status                    of an accumulator, and of a push
+        ========================  ==============================================
+        ``PENDING``               it takes pushes, or its freeze is pending;
+                                  the push is not yet done
+        ``COMPLETED``             the record of its freeze completed; the
+                                  push's rows are in its state
+        ``FAILED``                it stopped; the push failed
+        ``CANCELLED``             (an accumulator never is); the push will
+                                  never be done, since the accumulator
+                                  stopped before it
+        ========================  ==============================================
 
-    def failure(self, records: Any) -> Any:
-        """Why each record failed; ``None`` for a record that has not failed."""
-        failures = [self._backend.failure(r.id, self._id) for r in _items(records)]
-        return _reshape(records, failures)
+        An accumulator the client does not keep, and its pushes, raise
+        ``NotReadable``.
+        """
+        statuses = self._backend.status(_asked(what), self._id)
+        return _reshape(what, statuses)
+
+    def wait(self, what: Any) -> Any:
+        """
+        The status of each once all have finished, as :meth:`status` gives
+        it; a failure is not raised. A record finishes once, an accumulator
+        once frozen or stopped, and a push once it is done, added or failed,
+        or cancelled, since the accumulator stopped before it:
+        ``client.wait(acc.push(...))`` returns once the backend has caught up.
+        """
+        return _reshape(what, self._backend.wait(_asked(what), self._id))
+
+    def failure(self, what: Any) -> Any:
+        """
+        Why each record failed, accumulator stopped, or push failed or was
+        cancelled; ``None`` for one that has not.
+        """
+        failures = [self._backend.failure(i, self._id) for i in _asked(what)]
+        return _reshape(what, failures)
 
     def cancel(self, records: Any) -> None:
         """End the unfinished records as cancelled."""
@@ -448,8 +509,9 @@ class Client:
         record, and the driver is dropped once its readers are done. A
         freeze is refused, and the accumulator takes pushes again, if the
         plain request of the state would be refused; a push made meanwhile
-        waits for that answer. If the record fails or is cancelled, the
-        accumulator can be read and frozen again. A template or a push, which
+        waits for that answer. If the record fails or is cancelled, as it
+        does if a push of its state fails, the accumulator takes pushes and
+        freezes again. A template or a push, which
         may not reference an accumulator, references this record instead.
         """
         return self._backend.freeze(accumulator.id, client=self._id, persist=persist)
@@ -500,14 +562,15 @@ class Client:
         is None; an optional output that was not returned is left out.
 
         A record's, once it has completed, if the client keeps it, or once
-        written, if persisted; raises ``LookupError`` for a record it neither
+        written, if persisted; raises ``NotReadable`` for a record it neither
         keeps nor persisted, whose write failed, or whose value the store no
-        longer holds, and ``RuntimeError`` for one that fails or is cancelled.
-        An accumulator's are those of its state after the pushes so far, once
-        they are added, copied, so that like a record's they do not change.
-        The read makes no record. It raises ``LookupError`` if the state's
-        plain request would be refused, with its reason, also for a state
-        with nothing pushed.
+        longer holds, and ``RecordFailed`` for one that fails or is
+        cancelled. An accumulator's are those of its state after the pushes
+        so far, once they are added, copied, so that like a record's they do
+        not change. The read makes no record. It raises ``NotReadable`` for
+        an accumulator released or stopped, if the state's plain request
+        would be refused, with its reason, also for a state with nothing
+        pushed, and if a push of the state fails after the read pinned it.
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
@@ -545,9 +608,10 @@ class Client:
         Where a record, or the current state of an accumulator, came from.
 
         An accumulator's state is the plain request over the rows pushed so
-        far, so its provenance is that of the record of this request. It pins
-        the state, but returns at once, without waiting for the pushes to be
-        added.
+        far, but those of failed pushes, so its provenance is that of the
+        record of this request. It pins the state, but returns at once,
+        without waiting for the pushes to be added. Of a stopped accumulator,
+        it is the state it reached, so that its rows can be read back.
         """
         if isinstance(what, Accumulator):
             request = self._backend.plain_request(what.id, self._id)

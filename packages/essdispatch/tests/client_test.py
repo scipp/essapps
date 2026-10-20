@@ -12,18 +12,20 @@ import weakref
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, NewType, Self
+from typing import Any, NewType
 
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ess.dispatch import (
     Accumulator,
     Backend,
     Client,
     ClientEnded,
+    NotReadable,
+    Push,
     Record,
     Request,
     Selector,
@@ -38,6 +40,7 @@ from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_d
 from ess.spec import (
     AccumulatorRef,
     DriverBinding,
+    PushRefused,
     WorkflowSpec,
     function_binding,
 )
@@ -224,19 +227,6 @@ class WalkParams(StepsParams):
 WALK = _spec('walk', params=WalkParams, tables=('steps',))
 
 
-class Unchecked(StepsParams):
-    """Its model validator always raises, which the framework never calls."""
-
-    @model_validator(mode='after')
-    def _raises(self) -> Self:
-        raise ValueError('a model validator was called')
-
-
-UNCHECKED_PLAIN = _spec('unchecked-plain', params=Unchecked, tables=('steps',))
-UNCHECKED_STAGED = _spec('unchecked-staged', params=Unchecked, tables=('steps',))
-UNCHECKED_ROWS = _spec('unchecked-rows', params=Unchecked, tables=('steps',))
-
-
 def load_run(params: Sample) -> LoadOutputs:
     run = read_dataset(params.sample)
     return LoadOutputs(value=run, extra=-run)
@@ -283,11 +273,12 @@ class Fold:
     def __init__(self, spec: Spec, operation: Callable[[Any, Any], Any]) -> None:
         self._outputs = spec.outputs
         (self._name,) = spec.outputs.model_fields
+        (self._table,) = spec.tables
         self._operation = operation
         self._total: Any = None
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        for value in rows:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        for value in rows[self._table]:
             if self._total is None:
                 self._total = copy.deepcopy(value)
             else:
@@ -312,9 +303,10 @@ class Averaging:
         self._total = 0.0
         self._count = 0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._total += sum(rows)
-        self._count += len(rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (values,) = rows.values()
+        self._total += sum(values)
+        self._count += len(values)
 
     def outputs(self) -> MeanAndSpread:
         return MeanAndSpread(mean=self._total / self._count)
@@ -328,10 +320,11 @@ class _ScaledTotal:
         self.total = fixed['offset'] or 0.0
         self.tags: list[Any] = []
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        for run in rows:
-            self.tags.append(run.tag)
-            self.total += self._factor * read_dataset(run.file)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (runs,) = rows.values()
+        added = sum(self._factor * read_dataset(run.file) for run in runs)
+        self.tags.extend(run.tag for run in runs)
+        self.total += added
 
     def outputs(self) -> Value:
         return Value(value=self.total)
@@ -361,8 +354,9 @@ class Walking:
         self._factor = fixed['scale'].factor
         self._total = 0.0
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._total += sum(step.size for step in rows)
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        (steps,) = rows.values()
+        self._total += sum(step.size for step in steps)
 
     def outputs(self) -> Value:
         return Value(value=self._factor * self._total)
@@ -655,8 +649,10 @@ def test_the_stages_and_accumulators_of_another_client_are_refused(
 
     with pytest.raises(SubmitError, match='the stage was released or is unknown'):
         _shift(theirs, stage, 2.0)
-    with pytest.raises(SubmitError, match='the accumulator was released or is'):
+    with pytest.raises(SubmitError, match='is not kept by this client'):
         theirs.submit(_read(total))
+    with pytest.raises(NotReadable, match='is not kept by this client'):
+        theirs.output(total)
 
 
 def test_a_stage_refuses_a_template_that_a_request_would_refuse(
@@ -717,31 +713,6 @@ def test_a_params_model_makes_the_request_of_its_dict() -> None:
     assert scaled.params['scale'] == {'factor': 2.0}
 
 
-def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
-    def sizes(params: StepsParams) -> Value:
-        return Value(value=params.scale.factor * sum(s.size for s in params.steps))
-
-    bind = [
-        function_binding(UNCHECKED_PLAIN, sizes),
-        StagedFunction(UNCHECKED_STAGED, sizes),
-        kept_rows(UNCHECKED_ROWS, sizes),
-    ]
-    with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        plain = client.compute(UNCHECKED_PLAIN, params={'steps': [Step(size=1.0)]})
-        stage = client.stage(
-            Template(
-                UNCHECKED_STAGED, params={'steps': [Step(size=2.0)]}, blanks=('scale',)
-            )
-        )
-        staged = client.compute(stage, params={'scale': {'factor': 2.0}})
-        rows = client.accumulator(Template(UNCHECKED_ROWS, blanks=('steps',)))
-        rows.push(steps=[Step(size=3.0)])
-
-        assert client.output(plain, 'value') == 1.0
-        assert client.output(staged, 'value') == 4.0
-        assert client.output(rows, 'value') == 3.0
-
-
 def test_a_template_and_its_calls_take_models(client: Client) -> None:
     load = client.submit(_load(1))
     half = Shift(offset=0.5)
@@ -776,7 +747,7 @@ def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> No
     client.release(load)
 
     not_kept = f'record {load.id} is not kept by this client'
-    with pytest.raises(LookupError, match=not_kept):
+    with pytest.raises(NotReadable, match=not_kept):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
         client.submit(_read(load))
@@ -797,7 +768,7 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
     loading.set()
 
     assert client.output(total, 'value') == 3.0
-    with pytest.raises(LookupError, match='not kept'):  # read, then dropped
+    with pytest.raises(NotReadable, match='not kept'):  # read, then dropped
         client.output(first, 'value')
 
 
@@ -872,12 +843,38 @@ def test_a_client_reads_and_references_only_what_it_keeps(
 
     for record in (done, pending):
         not_kept = f'record {record.id} is not kept by this client'
-        with pytest.raises(LookupError, match=not_kept):
+        with pytest.raises(NotReadable, match=not_kept):
             other.output(record, 'value')
         with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
             other.submit(_read(record))
     loading.set()
     assert other.wait(pending) is Status.COMPLETED  # its status is the proposal's
+
+
+def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
+    client: Client,
+) -> None:
+    load = client.compute(_load(1))
+    total = client.accumulator(Template(TOTAL, blanks=('parts',)))
+    client.release([load, total])
+    unknown_load = load.model_copy(update={'id': 'unknown'})
+    unknown_total = copy.copy(total)
+    unknown_total.id = 'unknown'
+
+    for released in (
+        lambda: client.output(load, 'value'),
+        lambda: client.output(total),
+    ):
+        with pytest.raises(NotReadable, match='is not kept by this client'):
+            released()
+    with pytest.raises(SubmitError, match='is not kept by this client'):
+        total.push(parts=[1.0])  # a push is refused, not read
+    for unknown in (
+        lambda: client.output(unknown_load, 'value'),
+        lambda: client.output(unknown_total),
+    ):
+        with pytest.raises(KeyError, match=r"'no .* unknown in proposal p1'"):
+            unknown()
 
 
 def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) -> None:
@@ -910,8 +907,9 @@ def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> No
         lambda: client.datasets.list(Selector()),
     ]
     for call in calls:
-        with pytest.raises(ClientEnded):
+        with pytest.raises(ClientEnded) as raised:
             call()
+        assert not isinstance(raised.value, RuntimeError | LookupError)
 
 
 def test_closing_a_client_cancels_the_work_that_nothing_else_keeps(
@@ -1089,7 +1087,7 @@ def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(
     ) as refused:
         client.submit(WALK, params={**flipped, 'steps': [Step(size=1.0)]})
     reason = f'^{re.escape(str(refused.value))}$'
-    with pytest.raises(LookupError, match=reason):
+    with pytest.raises(NotReadable, match=reason):
         client.output(walk)
     with pytest.raises(SubmitError, match=reason):
         client.freeze(walk)
@@ -1143,7 +1141,7 @@ def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
         lambda: client.output(record, 'spread'),
         lambda: client.output(spread, 'spread'),
     ):
-        with pytest.raises(LookupError, match='the workflow did not return it'):
+        with pytest.raises(NotReadable, match='the workflow did not return it'):
             read()
     left_out = f'record {record.id} output spread: the workflow did not return it'
     with pytest.raises(SubmitError, match=rf'^source: {left_out}$'):
@@ -1165,7 +1163,7 @@ def test_a_state_with_nothing_pushed_is_read_as_the_plain_request_over_no_rows(
 
     assert client.output(summed, 'value') == client.output(plain, 'value') == 0.0
     assert client.provenance(summed).request == plain.request
-    with pytest.raises(LookupError, match=f'^{re.escape(str(refused.value))}$'):
+    with pytest.raises(NotReadable, match=f'^{re.escape(str(refused.value))}$'):
         client.output(total)
 
 
@@ -1247,7 +1245,7 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
     released = client.compute(_load(1))
     client.release(released)
     refused = {
-        r"\['speed'\]: not parameters": {'params': {'speed': {}}},
+        'speed: not a parameter': {'params': {'speed': {}}},
         'scale.factor: Input should be a valid number': {
             'params': {'scale': {'factor': 'x'}}
         },
@@ -1354,8 +1352,12 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         client.submit(SHIFT, params={'source': extra})
     with pytest.raises(SubmitError, match=r'^shift: .* does not fit Shift'):
         client.submit(SHIFT, params={'shift': total.ref('value'), 'source': 1.0})
-    with pytest.raises(SubmitError, match=r'^source: the accumulator was released or'):
+    with pytest.raises(
+        SubmitError, match=r'^source: no accumulator .* in proposal p2$'
+    ):
         elsewhere.submit(_read(total))
+    with pytest.raises(KeyError, match='in proposal p2'):
+        elsewhere.output(total)
 
 
 def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
@@ -1406,23 +1408,95 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
     assert client.output(read, 'value') == 1.0
 
 
-def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
+def test_a_record_that_a_push_waits_for_and_that_fails_fails_the_push_alone(
     client: Client, loading: threading.Event
 ) -> None:
     loading.clear()
     pending = client.submit(_load(1))
     total = _total(client)
-    total.push(parts=[pending.ref('value')])
-    read = client.submit(_read(total))
+    first = total.push(parts=[pending.ref('value')])
+    read = client.submit(_read(total))  # pins state 1 while push 1 is pending
     client.cancel(pending)
     loading.set()
 
-    stopped = f'the accumulator stopped: push 0: record {pending.id} cancelled'
+    failed = f'push 1: record {pending.id} cancelled'
     state = _state(client, read)
-    assert client.wait(read) is Status.FAILED
-    assert client.failure([state, read]) == [stopped, f'record {state.id} failed']
-    with pytest.raises(SubmitError, match=f'^{stopped}$'):
-        total.push(parts=[pending.ref('value')])
+    assert client.wait([first, read]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([first, state, read]) == [
+        failed,
+        failed,
+        f'record {state.id} failed',
+    ]
+    assert state.request.params['parts'] == [pending.ref('value')]  # as pinned
+    second = total.push(parts=[client.compute(_load(2)).ref('value')])
+    assert client.output(total, 'value') == 2.0
+    assert client.status([total, second]) == [Status.PENDING, Status.COMPLETED]
+    assert client.provenance(total).request.params['parts'] == [
+        client.records()[-1].ref('value')
+    ]
+
+
+def test_a_push_failing_while_an_earlier_one_fails_waits_for_its_turn(
+    client: Client, loading: threading.Event
+) -> None:
+    loading.clear()
+    first, second = client.submit([_load(1), _load(2)])
+    total = _total(client)
+    total.push(parts=[first.ref('value')])
+    at_1 = client.submit(_read(total))
+    total.push(parts=[second.ref('value')])
+    at_2 = client.submit(_read(total))  # holds pushes 1 and 2
+    # one call: push 2 cannot be added either while push 1 fails
+    client.cancel([second, first])
+    loading.set()
+
+    client.wait([at_1, at_2])
+    failed = f'push 1: record {first.id} cancelled'
+    assert client.failure([_state(client, at_1), _state(client, at_2)]) == [
+        failed,
+        failed,
+    ]
+
+
+def test_the_rows_of_a_failed_push_leave_the_table(
+    client: Client, loading: threading.Event
+) -> None:
+    first, second = client.compute([_load(1), _load(2)])
+    total = _total(client)
+    total.push(parts=[first.ref('value')])
+    loading.clear()
+    pending = client.submit(_load(1))
+    failing = total.push(parts=[pending.ref('value')])
+    total.push(parts=[second.ref('value')])
+    client.cancel(pending)
+    loading.set()
+
+    assert client.wait(failing) is Status.FAILED
+    with pytest.raises(SubmitError, match=r'^parts\[2\]: repeats parts\[1\]'):
+        total.push(parts=[second.ref('value')])  # the rows after it moved up
+    assert client.output(total, 'value') == 3.0
+
+
+def test_the_status_of_an_accumulator_or_a_push_is_its_client_s_to_ask(
+    backend: Backend, client: Client
+) -> None:
+    total = _total(client)
+    pushed = total.push(parts=[client.compute(_load(1)).ref('value')])
+    client.wait(pushed)
+    assert client.status({'acc': total, 'push': pushed}) == {
+        'acc': Status.PENDING,
+        'push': Status.COMPLETED,
+    }
+    other = Client(backend, proposal='p1', submitter='bob')
+
+    with pytest.raises(KeyError, match='no push 2 into accumulator'):
+        client.status(Push(total.id, 2))
+    for what in (total, pushed):
+        with pytest.raises(NotReadable, match='is not kept by this client'):
+            other.failure(what)
+    client.release(total)
+    with pytest.raises(NotReadable, match='is not kept by this client'):
+        client.wait([pushed])
 
 
 def test_concurrent_pushes_add_in_the_order_they_are_logged(
@@ -1496,13 +1570,15 @@ class Sum:
     pushes they add.
 
     A push is added while ``go`` is set; ``adding`` says a push has started.
-    With ``failing`` set, the next push fails to add.
+    With ``failing`` set, the next push fails to add, and with ``refusing``
+    set, the driver refuses it.
     """
 
     def __init__(self) -> None:
         self.pushed = 0
         self.adding = threading.Event()
         self.failing = False
+        self.refusing = False
         self.go = threading.Event()
         self.go.set()
 
@@ -1515,14 +1591,17 @@ class _Summing:
         self._owner = owner
         self._fold = Fold(TOTAL, operator.add)
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.failing:
             self._owner.failing = False
             raise ValueError('cannot add')
+        if self._owner.refusing:
+            self._owner.refusing = False
+            raise PushRefused('not a part')
         self._owner.pushed += 1
-        self._fold.push(table, rows)
+        self._fold.push(rows)
 
     def outputs(self) -> BaseModel:
         return self._fold.outputs()
@@ -1589,19 +1668,67 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     after = client.submit(_read(total))
     summing.go.set()
 
-    stopped = 'the accumulator stopped: push 1 failed: cannot add'
+    stopped = 'the accumulator stopped: push 2 failed: cannot add'
     state = _state(client, after)
     assert client.wait(after) is Status.FAILED
     assert client.failure([state, after]) == [stopped, f'record {state.id} failed']
     assert len(state.request.params['parts']) == 2  # the push is in the log
+    assert client.status(total) is Status.FAILED
+    assert client.failure(total) == stopped
     with pytest.raises(SubmitError, match=f'^{stopped}$'):
         total.push(parts=[summed_loads[2].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {stopped}$'):
         client.submit(_read(total))  # it may be half added
-    for read in (lambda: client.output(total), lambda: client.provenance(total)):
-        with pytest.raises(LookupError, match=f'^{stopped}$'):
-            read()
+    with pytest.raises(NotReadable, match=f'^{stopped}$'):
+        client.output(total)
+    # the rows that did not fail can be read back
+    reached = client.provenance(total).request.params['parts']
+    assert reached == [summed_loads[0].ref('value')]
     assert client.output(before, 'value') == 1.0
+
+
+def test_a_push_the_driver_refuses_fails_alone(
+    summed: Client, summed_loads: list[Record], summing: Sum
+) -> None:
+    client = summed
+    total = _total(client)
+    client.wait(total.push(parts=[summed_loads[0].ref('value')]))
+    summing.refusing = True
+    refused = total.push(parts=[summed_loads[1].ref('value')])
+
+    assert client.wait(refused) is Status.FAILED
+    assert client.failure(refused) == 'push 2 failed: not a part'
+    assert client.output(total, 'value') == 1.0  # state 2 is state 1
+    again = total.push(parts=[summed_loads[1].ref('value')])  # not held by the table
+    assert client.wait(again) is Status.COMPLETED
+    assert client.output(total, 'value') == 3.0
+    assert summing.pushed == 2
+    assert client.provenance(total).request.params['parts'] == [
+        summed_loads[0].ref('value'),
+        summed_loads[1].ref('value'),
+    ]
+
+
+def test_a_push_pinned_by_a_read_and_a_freeze_that_then_fails_fails_them(
+    summed: Client, summed_loads: list[Record], summing: Sum
+) -> None:
+    client = summed
+    total = _total(client)
+    client.wait(total.push(parts=[summed_loads[0].ref('value')]))
+    summing.refusing = True
+    summing.go.clear()
+    refused = total.push(parts=[summed_loads[1].ref('value')])
+    read = client.submit(_read(total))
+    frozen = client.freeze(total)
+    summing.go.set()
+
+    failed = 'push 2 failed: not a part'
+    assert client.wait([read, frozen]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([refused, frozen]) == [failed, failed]
+    assert client.status(total) is Status.PENDING  # the freeze failed: open again
+    total.push(parts=[summed_loads[1].ref('value')])
+    assert client.output(client.freeze(total), 'value') == 3.0
+    assert client.status(total) is Status.COMPLETED
 
 
 def _refuse(fixed: Mapping[str, Any]) -> Fold:
@@ -1618,7 +1745,7 @@ def test_an_accumulator_returns_at_once_and_stops_if_it_fails_to_open(
         summed = client.accumulator(Template(SUM, blanks=('runs',)))  # returns first
 
         stopped = 'the accumulator stopped: opening failed: cannot open'
-        with pytest.raises(LookupError, match=f'^{stopped}$'):
+        with pytest.raises(NotReadable, match=f'^{stopped}$'):
             client.output(summed)
         with pytest.raises(SubmitError, match=f'^{stopped}$'):
             summed.push(runs=[dataset(run=1)])
@@ -1807,7 +1934,8 @@ class Subtracting:
     ``adding``, and adds while ``go`` is set. An ``outputs`` call sets
     ``computing``, and computes while ``compute`` is set. With ``refusing``
     set, the next push fails, and with ``failing`` set, the next ``outputs``
-    call. ``held`` refers weakly to each driver made, and ``returned`` to the
+    call. A push into the table ``refused`` names, if any, raises
+    ``PushRefused``. ``held`` refers weakly to each driver made, and ``returned`` to the
     difference that each ``outputs`` call returned.
     """
 
@@ -1820,6 +1948,7 @@ class Subtracting:
         self.compute = threading.Event()
         self.compute.set()
         self.refusing = False
+        self.refused: str | None = None
         self.failing = False
         self.held: list[weakref.ref[_Sides]] = []
         self.returned: list[weakref.ref[sc.Variable]] = []
@@ -1835,14 +1964,17 @@ class _Sides:
         self._owner = owner
         self._sums: dict[str, Any] = {'samples': 0.0, 'backgrounds': 0.0}
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
         self._owner.adding.set()
         self._owner.go.wait(timeout=5)
         if self._owner.refusing:
             self._owner.refusing = False
             raise ValueError('cannot add')
-        for value in rows:
-            self._sums[table] += value  # in place from the second row
+        if self._owner.refused in rows:
+            raise PushRefused(f'no {self._owner.refused}')
+        for table, values in rows.items():
+            for value in values:
+                self._sums[table] += value  # in place from the second row
 
     def outputs(self) -> Sides:
         self._owner.computing.set()
@@ -1969,7 +2101,7 @@ def test_no_client_reads_or_references_the_record_of_a_state(
     state = _state(client, copied)
 
     not_kept = f'record {state.id} is not kept by this client'
-    with pytest.raises(LookupError, match=f'^{not_kept}$'):
+    with pytest.raises(NotReadable, match=f'^{not_kept}$'):
         client.output(state, 'value')
     for refuse in (
         lambda: client.submit(COPY, params={'source': state.ref('value')}),
@@ -2154,7 +2286,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
     copied = _copy(client, total)
     client.release(total)  # the copy is still a reader of its state
 
-    released = 'the accumulator was released or is unknown'
+    released = f'accumulator {total.id} is not kept by this client'
     with pytest.raises(SubmitError, match=f'^{released}$'):
         total.push(parts=[loads[1].ref('value')])
     with pytest.raises(SubmitError, match=rf'^source: {released}$'):
@@ -2163,7 +2295,7 @@ def test_a_released_accumulator_takes_no_pushes_or_references_and_is_still_read(
         lambda: client.output(total, 'value'),
         lambda: client.provenance(total),
     ):
-        with pytest.raises(LookupError, match=f'^{released}$'):
+        with pytest.raises(NotReadable, match=f'^{released}$'):
             read()
     copying.go.set()
     assert _listed(client.output(copied, 'value')) == [1.0]  # read after the release
@@ -2305,7 +2437,7 @@ def test_a_state_is_read_once_its_plain_request_would_be_accepted(
     with pytest.raises(SubmitError, match=rf'^source: {reason}$'):
         _copy(client, both, 'difference')
     for read in (lambda: client.output(both), lambda: client.provenance(both)):
-        with pytest.raises(LookupError, match=f'^{reason}$'):
+        with pytest.raises(NotReadable, match=f'^{reason}$'):
             read()
     both.push(backgrounds=[loads[1].ref('value')])
     tables['backgrounds'] = [loads[1].ref('value')]
@@ -2472,11 +2604,11 @@ def test_a_frozen_accumulator_is_read_through_its_record(
     total = client.freeze(sides)
     client.wait(total)
 
-    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+    with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.output(sides)
     with pytest.raises(SubmitError, match=f'read record {total.id} instead'):
         _copy(client, sides, 'difference')
-    with pytest.raises(LookupError, match=f'read record {total.id} instead'):
+    with pytest.raises(NotReadable, match=f'read record {total.id} instead'):
         client.provenance(sides)
     copied = client.compute(COPY, params={'source': total.ref('difference')})
     assert _listed(client.output(copied, 'value')) == [1.0]
@@ -2512,7 +2644,7 @@ def test_a_freeze_whose_plain_request_would_be_refused_is_refused(
     assert _listed(client.output(total, 'difference')) == [-1.0]
 
 
-def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
+def test_a_cancelled_freeze_leaves_the_accumulator_open(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -2525,18 +2657,17 @@ def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
     subtracting.compute.set()
 
     assert client.wait(cancelled) == Status.CANCELLED
-    # no push comes to drop the outputs computed for the cancelled freeze
-    assert _eventually(
-        lambda: gc.collect() >= 0 and [r() for r in subtracting.returned] == [None]
-    )
-    with pytest.raises(SubmitError, match=f'frozen as record {cancelled.id}'):
-        sides.push(backgrounds=[loads[1].ref('value')])
+    assert client.status(sides) == Status.PENDING
     assert _listed(client.output(sides, 'total')) == [1.0]
+    sides.push(backgrounds=[loads[1].ref('value')])
+    # the push dropped the outputs computed for the cancelled freeze
+    assert _listed(client.output(sides, 'total')) == [3.0]
+    assert _eventually(lambda: gc.collect() >= 0 and subtracting.returned[0]() is None)
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert _listed(client.output(again, 'total')) == [3.0]
 
 
-def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
+def test_a_failed_freeze_leaves_the_accumulator_open(
     in_place: Client, loads: list[Record], subtracting: Subtracting
 ) -> None:
     client = in_place
@@ -2546,11 +2677,10 @@ def test_a_failed_freeze_leaves_the_accumulator_readable_and_shut(
     failed = client.freeze(sides)
 
     assert client.wait(failed) == Status.FAILED
-    with pytest.raises(SubmitError, match=f'frozen as record {failed.id}'):
-        sides.push(backgrounds=[loads[1].ref('value')])
     assert _listed(client.output(sides, 'total')) == [1.0]
+    sides.push(backgrounds=[loads[1].ref('value')])
     again = client.freeze(sides)
-    assert _listed(client.output(again, 'total')) == [1.0]
+    assert _listed(client.output(again, 'total')) == [3.0]
 
 
 def test_a_frozen_driver_is_dropped_once_its_readers_are_done(
@@ -2587,10 +2717,31 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
     subtracting.refusing = True
     sides.push(samples=[loads[1].ref('value')])  # fails to add
 
-    with pytest.raises(LookupError, match='push 1 failed: cannot add'):
+    with pytest.raises(NotReadable, match='push 2 failed: cannot add'):
         client.output(sides, 'difference')
     gc.collect()
     assert subtracting.held[0]() is None  # nothing reads it any more
+
+
+def test_a_push_the_driver_refuses_fails_alone_whatever_the_order_of_its_tables(
+    in_place: Client, loads: list[Record], subtracting: Subtracting
+) -> None:
+    client = in_place
+    sides = _sides_of(client)
+    client.wait(sides.push(samples=[loads[0].ref('value')]))
+    subtracting.refused = 'backgrounds'
+    rows = {'samples': [loads[1].ref('value')], 'backgrounds': [loads[1].ref('value')]}
+    first = sides.push(**rows)
+    client.wait(first)
+    second = sides.push(**dict(reversed(rows.items())))
+
+    assert client.wait([first, second]) == [Status.FAILED, Status.FAILED]
+    assert client.failure([first, second]) == [
+        'push 2 failed: no backgrounds',
+        'push 3 failed: no backgrounds',
+    ]
+    assert client.status(sides) == Status.PENDING
+    assert _sides(client.output(sides)) == {'difference': [1.0], 'total': [1.0]}
 
 
 # Selections

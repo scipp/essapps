@@ -147,12 +147,15 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 
 | A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| a file: `Path`, pydantic's `FilePath` or `DirectoryPath`, or a `NewType` of one | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+A type is a file when pydantic's JSON schema of it is a string with a path format: `"format": "path"` for `Path` and a `NewType` of it, `"file-path"` for `FilePath`, `"directory-path"` for `DirectoryPath`.
+The access check on the service depends on it, so an author types each file as one of these.
+A `NewType` of `str` used for a file is a string: it is given inline, and no dataset source checks it.
 A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
 A reference to a dataset stands for the whole group: its one required file, and its other fields at their defaults.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
@@ -172,16 +175,29 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - Each parameter is a type, possibly optional, or a list of one.
 - Each output is a type, possibly optional, or a list or a dict of one.
+- A parameter holds a file only as a file, possibly optional, a list of files, or a group that holds a file as a field. A file anywhere else, such as in a tuple, a `TypedDict`, a dataclass, or a type alias `type Files = list[Path]`, is refused, since no reference to a dataset stands for it.
 - A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
-- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
+- The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`.
+- A model validator of the params model, or of a group given field by field, runs after validation, `mode='after'`, and takes only `self`. A `before` or `wrap` validator would see the raw input, which differs between the phases: JSON and references when a request is submitted, typed values when it runs.
 
 Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
-Like the params model, a group given field by field is never validated whole.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
-A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
-A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
+A check across parameters, such as a transmission mode that requires a transmission run, is a model validator of the params model, or the binding's or the driver's, and fails when the request runs.
+A model validator checks and never changes values: it returns `self` and changes nothing in place.
+One that returns anything else fails the request.
+The backend runs the model validators wherever every value they read is known:
+
+| Request | Model validators run |
+|---|---|
+| plain request | when it runs, on the whole params instance |
+| call through a stage | at each call, on the fixed values and the values of the blanks |
+| accumulator | when it opens, on the template's values, without the blank tables |
+
+An accumulator whose model validator reads a blank table fails to open, since a check across rows is the driver's.
+So the record of an accumulator's state may be a plain request that a direct submission would refuse by a check across rows.
+A group given field by field is checked by its model validators once it is made from its fields, a row of a table before the driver gets it.
 
 **Defaults.** A default never changes which quantity an output is.
 `reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file: the output is I(Q) either way.
@@ -220,7 +236,7 @@ A *request* is a spec and its params, given by keyword:
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
                                       'sample': dataset(run=60339),
                                       'can': dataset(run=60338)})      # submit, then wait
-client.output(result, 'iofq')            # raises if the record failed
+client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
 ```
 
@@ -257,7 +273,8 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 **Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each inline value by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
 An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
 In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
-A request that cannot run is refused at submission with a `SubmitError` naming the field at fault.
+A request that cannot run is refused at submission with a `SubmitError`.
+Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
 A request that fails in the call phase makes a failed record.
 Validation in the request phase never proves that a workflow will succeed.
@@ -374,6 +391,7 @@ A value that is gone does not come back.
 The binding is a black box.
 The framework hands it a stage's fixed values at the stage's first call, an accumulator's template when it makes the driver, and a push's rows when the push is added.
 The framework does not track what the binding keeps after that.
+A stage whose params model has a model validator also holds its fixed values, as the binding took them, while it lives, since each call checks them with the values of the blanks.
 
 A submission may reference only
 
@@ -383,7 +401,7 @@ A submission may reference only
 - the current state of its client's own accumulators.
 
 Any other reference is refused, even to a record that is still pending.
-`client.output` reads only the same values, and raises for any other.
+`client.output` reads only the same values, and raises `NotReadable` for any other.
 So another client, even one in the same process, reads a value only once it is persisted.
 
 ```python
@@ -392,7 +410,7 @@ result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': datase
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
-client.output(centre, 'centre')     # raises: this client released it
+client.output(centre, 'centre')     # raises NotReadable: this client released it
 ```
 
 `client.close()`, or the end of a `with client:` block, releases everything the client keeps.
@@ -552,7 +570,7 @@ iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmissi
 
 A push of no rows is refused.
 A template fixes a whole table or leaves it blank, and a push into a table the template fixes is refused.
-The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order.
+The plain request of state n is the template with each table filled by the rows of the first n pushes, in push order; a push that failed adds none (see Failed pushes).
 State n has the outputs of its plain request.
 `client.accumulator` and `push` return once logged.
 The backend has the binding make the driver, and pushes each push into it, later.
@@ -576,12 +594,12 @@ Only the client that made an accumulator pins it.
 
 | What | Request phase | Call phase |
 |---|---|---|
-| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
-| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
-| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct; the model validators on the fixed values, without the blank tables, when the driver is made |
+| a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct; the model validators on the fixed and the given values |
+| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type, a group by its model validators too; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
-A value that fails its check at a push stops the accumulator, as any failing push does.
+A value that fails its check at a push fails that push (see Failed pushes).
 
 **Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared in two ways.
@@ -603,18 +621,42 @@ acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
 acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the push fails
 ```
 
-A repeat found in the call phase fails the push, which stops the accumulator.
+A repeat found in the call phase fails the push.
 The client reads how many slices there are, since a reference names one row.
 Running again a cell that computes a record and pushes its output pushes a reference to a new record.
 Only the call phase catches that repeat, and only for a table whose element type has a JSON form.
 
-The accumulator *stops* if
+**Failed pushes.** This section is where the rules about failed pushes live; the code and the other docs point here.
+Where a push fails decides what happens to the accumulator:
 
-- adding a push fails,
-- a record that a push references does not complete, or
-- the binding fails to make the driver.
+| A push fails | Example | The accumulator |
+|---|---|---|
+| in the backend, before `driver.push` | a referenced record failed, a dataset has no local path, a row fails its check or repeats once read, a group's model validator refuses a row | takes more pushes |
+| in `driver.push`, raising `PushRefused` | the driver cannot read a run's file, or refuses a row; it checks the rows of every table of the push before it keeps any | takes more pushes |
+| in `driver.push`, raising anything else | the driver may hold part of the rows | stops |
 
-Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
+The backend resolves a dataset to a local path, and the driver reads the file, so a file that cannot be read is the driver's to refuse (see the `Driver` docstring in `ess.spec.binding`).
+A push that fails alone keeps its number and adds no rows: if push k fails, state k is state k-1.
+The log holds the failure, and the rows of the failed push leave the table, so they may be pushed again.
+`acc.push` returns a `Push`, which the client asks about as it asks about a record:
+
+```python
+run = acc.push(sample=[dataset(run=611)])
+client.wait(run)          # Status.FAILED
+client.failure(run)       # 'push 3 failed: file signature not found'
+client.status(acc)        # Status.PENDING: it takes more pushes
+```
+
+Which rows a read of state k gets depends on when it pinned the state:
+
+- pinned after push j ≤ k failed: the record of state k is the plain request over the rows of the pushes up to k that did not fail;
+- pinned while push j was pending, and push j then fails: the read held push j's rows and was checked with them, so it fails with the push's reason. The record of the state and the requests that read it fail, and `client.output` raises `NotReadable`.
+
+So a record never changes: the record of a state leaves out only the pushes whose failure was logged before it.
+
+The accumulator *stops* if a push fails in the driver other than by `PushRefused`, or the opening fails, such as when the binding fails to make the driver.
+Later pushes and pins are refused with the reason, the records of states it did not reach fail, and the pushes not yet done are cancelled.
+`client.status(acc)` is then `FAILED` and `client.failure(acc)` the reason, and `client.provenance(acc)` gives the rows of the pushes before it that did not fail, to open a new accumulator from.
 
 **Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over its table `runs`, and `CUT`, which takes the value at `position.index` of its parameter `volume` ([user-stories.md](user-stories.md)):
 
@@ -656,6 +698,7 @@ client.freeze(volume, persist=True)      # the store keeps every output, not the
 The client keeps the record, unless `persist=` hands it to the store.
 At the end of a scan, freezing makes the final volume an ordinary record without a copy.
 The client can keep it, persist it, or reference it from another template.
+If the record fails or is cancelled, the accumulator takes pushes and freezes again.
 
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
@@ -698,7 +741,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', [Sample(run=path_611)])      # once per table of a push: its rows
+driver.push({'sample': [Sample(run=path_611)]})    # once per push: the rows of each table
 driver.outputs()                                   # once per state that is read
 ```
 
@@ -737,11 +780,11 @@ The author of the pipeline promises that it is pure: it modifies no value it is 
 A driver passes `pipeline` the fixed values it is made with: every value that is not a table, defaults filled in.
 So a parameter that is a table of the multi-run spec cannot shape the graph, as a blank cannot.
 
-**A driver.** A *driver* is an object with `push(table, rows)` and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
+**A driver.** A *driver* is an object with `push(rows)`, the rows of each table of one push by name, and `outputs()`, as in [sciline ADR 0003](https://github.com/scipp/sciline/pull/245).
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
 Only a driver accumulates: the framework never decides how rows combine, not even by keeping them.
-`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of each table in `fixed`, one push per table.
-A table without rows is not pushed, so a driver never gets a push of no rows.
+`DriverBinding` makes a driver from the fixed values that are not tables, and pushes the rows of the tables in `fixed` in one push.
+A table without rows is left out of a push, so a driver never gets a table of no rows.
 A plain request is an accumulator with no blanks, read once.
 For the toy SANS reduction, a driver sums each run's numerator and denominator per table, and divides once:
 
@@ -751,11 +794,14 @@ class IofQDriver:
         self._bins = fixed['reduction'].bins
         self._sums = {}                           # per table: numerator and denominator
 
-    def push(self, table, rows):
-        for row in rows:                          # a Sample, or a can run's path
-            parts = numerator_and_denominator(row, self._bins)
-            old = self._sums.get(table)
-            self._sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
+    def push(self, rows):                         # {'sample': [Sample, ...], 'can': [path, ...]}
+        sums = dict(self._sums)                   # kept only once every row is added
+        for table, values in rows.items():
+            for row in values:
+                parts = numerator_and_denominator(row, self._bins)
+                old = sums.get(table)
+                sums[table] = parts if old is None else [a + b for a, b in zip(old, parts)]
+        self._sums = sums
 
     def outputs(self):                            # a state read has a sample row and a can row
         sample_num, sample_den = self._sums['sample']
@@ -772,7 +818,7 @@ The driver promises, and the backend does not check:
 - `outputs()` may share memory with the driver's state; the caller reads them before the next push.
 - An output that the spec declares optional may be `None`.
 - A driver may refuse a state, such as one with no sample row yet, by raising in `outputs()`. The read fails, and later pushes may make the state valid.
-- A failing `push` stops the accumulator.
+- A `push` that raises `PushRefused` changes nothing (the `Driver` docstring says how a driver keeps this, and Failed pushes what the backend then does).
 
 The backend calls `push` and `outputs` from one thread at a time, and pushes only once the readers of the state before are done.
 Code that calls a driver itself keeps the same order:
@@ -780,7 +826,7 @@ Code that calls a driver itself keeps the same order:
 ```python
 driver = binding.make_accumulator(fixed, blanks=('runs',))
 for run in runs:
-    driver.push('runs', [run])
+    driver.push({'runs': [run]})
     counts = driver.outputs().counts      # may be the array the next push adds into
     show(counts['q', 0])                  # done with it before the next push
 ```
@@ -878,6 +924,10 @@ Arrival, order, and placement hold up to rounding.
 - `check_one_row(single, multi, params)`: the binding of the multi-run spec, given the one-row request made from `params`, an instance of the single-run spec's params model, gives the outputs of the binding of the single-run spec. It is the only check against an independent reference.
 - `check_caching(binding, fixed, calls)`: each call through a stage gives the plain request. For a `PipelineBinding` it mostly tests `ess.spec`.
 - `check_arrival_and_order(make_driver, fixed, tables)`, with `tables` as `{table: rows}`: pushing rows one at a time, in groups, in other orders, and reading between pushes gives what one push per table gives. It takes the function that makes the driver, so a package tests its driver without a spec, and the fixed values: every value that is not a table, defaults included, since the check does not fill them in. Both sides go through the driver, so it does not prove the outputs are right.
+
+It also checks one promise of a driver:
+
+- `check_refused_push(make_driver, fixed, tables, refused)`, with `refused` one push that the driver refuses, as `{table: rows}`: before each push of `tables` and after the last, pushing the rows of `refused` raises `PushRefused`, and the outputs then, and after the next push, are those of a driver that never got them.
 
 ## Left to the system
 

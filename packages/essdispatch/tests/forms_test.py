@@ -10,7 +10,14 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass
 
-from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
+from ess.dispatch import (
+    Backend,
+    Client,
+    Record,
+    Status,
+    SubmitError,
+    Template,
+)
 from ess.dispatch import dataset as dataset_ref
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import WorkflowSpec, function_binding
@@ -121,6 +128,7 @@ SUM = _spec('sum', SumParams, Value, tables=('part',))
 STAGED_SUM = _spec('staged-sum', SumParams, Value, tables=('part',))
 SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
 RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
+RUNS_ROWS = _spec('runs-rows', RunsParams, Value, tables=('runs',))
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -174,6 +182,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
                 SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
             ),
             function_binding(RUNS, runs),
+            kept_rows(RUNS_ROWS, runs),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -254,6 +263,24 @@ def test_a_group_given_field_by_field_is_refused(
         client.submit(RUNS, params={'runs': [row]})
 
 
+def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None:
+    rows = [
+        {'file': dataset_ref(run=1)},
+        {'file': dataset_ref(run=2), 'shift': {'offset': 'x'}},
+    ]
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RUNS, params={'runs': rows})
+    (error,) = raised.value.errors
+    assert (error.entry, error.loc) == (None, ('runs', 1, 'shift', 'offset'))
+    assert str(raised.value) == f'runs[1].shift.offset: {error.msg}'
+
+    rows[1] = {'file': {'@ref': 'run'}}
+    with pytest.raises(SubmitError, match="is not a kind of reference") as raised:
+        client.submit(RUNS, params={'runs': rows})
+    assert [e.loc for e in raised.value.errors] == [('runs', 1, 'file')]
+
+
 def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
     client: Client, loaded: Record
 ) -> None:
@@ -274,16 +301,19 @@ def test_a_dataset_stands_for_a_group_with_its_one_required_file(
     assert row['shift'] == {'offset': 0.0}
 
 
-def test_the_framework_never_validates_a_group_given_field_by_field_whole(
+def test_a_group_given_field_by_field_is_checked_by_its_model_validator(
     client: Client,
 ) -> None:
-    # Run's model validator refuses a negative offset; like the params model's,
-    # it is the binding's to run.
-    computed = client.compute(
-        RUNS, params={'runs': [{'file': dataset_ref(run=1), 'offset': -1.0}]}
-    )
+    # Run's model validator refuses a negative offset.
+    row = {'file': dataset_ref(run=1), 'offset': -1.0}
+    computed = client.compute(RUNS, params={'runs': [row]})
+    acc = client.accumulator(Template(RUNS_ROWS, blanks=('runs',)))
+    pushed = acc.push(runs=[row])
 
-    assert client.output(computed, 'value') == 0.0
+    reason = 'Run._offset_not_negative: a negative offset'
+    assert client.failure(computed) == reason
+    assert client.wait(pushed) == Status.FAILED
+    assert client.failure(pushed) == f'push 1 failed: {reason}'
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
@@ -380,11 +410,10 @@ def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
     summed.push(part=[loaded.ref('value')])
     assert client.output(summed, 'value') == 1.0
 
-    summed.push(part=[2.0, 1.0])  # distinct as the record holds them
-    with pytest.raises(
-        LookupError, match=r'push 1 failed: part\[2\]: repeats part\[0\], 1.0$'
-    ):
-        client.output(summed, 'value')
+    pushed = summed.push(part=[2.0, 1.0])  # distinct as the record holds them
+    assert client.wait(pushed) == Status.FAILED
+    assert client.failure(pushed) == 'push 2 failed: part[2]: repeats part[0], 1.0'
+    assert client.output(summed, 'value') == 1.0  # state 2 is state 1
     plain = client.submit(SUM, params={'part': [1.0, loaded.ref('value')]})
     assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
 

@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import dataclasses
+from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, NewType, TypedDict
+from typing import Annotated, Any, NewType, Self, TypedDict
 
 import pydantic
 import pytest
@@ -10,7 +12,9 @@ import scipp as sc
 from pydantic import (
     AfterValidator,
     BaseModel,
+    DirectoryPath,
     Field,
+    FilePath,
     computed_field,
     field_serializer,
     field_validator,
@@ -54,6 +58,26 @@ CentreArray = NewType('CentreArray', sc.Variable)
 IofQ = NewType('IofQ', sc.DataArray)
 Banks = NewType('Banks', sc.DataArray)
 
+type RunFile = Path
+type Files = list[Path]
+
+
+class FileDict(TypedDict):
+    path: Path
+
+
+@dataclasses.dataclass
+class FileClass:
+    path: Path
+
+
+@dataclasses.dataclass
+class FileAndData:
+    """A type that holds a file, but has no JSON schema."""
+
+    path: Path
+    data: sc.DataArray
+
 
 class Node(BaseModel):
     """A recursive group."""
@@ -91,6 +115,43 @@ class SerializedParams(BaseModel):
     @field_serializer('reduction')
     def _bins(self, reduction: Reduction) -> int:
         return reduction.bins
+
+
+class BeforeParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _raw(cls, data: Any) -> Any:
+        return data
+
+
+class WrapParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='wrap')
+    @classmethod
+    def _wrapped(cls, data: Any, handler: pydantic.ModelWrapValidatorHandler) -> Any:
+        return handler(data)
+
+
+class InfoParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+
+    @model_validator(mode='after')
+    def _with_info(self, info: pydantic.ValidationInfo) -> Self:
+        return self
+
+
+class BeforeRun(BaseModel):
+    """A group that holds a file, with a model validator that sees the raw input."""
+
+    file: SampleFile
+
+    @model_validator(mode='before')
+    @classmethod
+    def _raw(cls, data: Any) -> Any:
+        return data
 
 
 class ComputedParams(BaseModel):
@@ -228,7 +289,18 @@ class TestMetadata:
     def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
         assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
-    @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            CentreArray,
+            SampleFile,
+            list[SampleFile | None],
+            FilePath,
+            DirectoryPath,
+            RunFile,
+            FileAndData,
+        ],
+    )
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
         assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
@@ -278,6 +350,14 @@ class TestModelRules:
             {'params': model('P', reduction=(ReductionOfCan, ...))},
             {'params': model('P', bins=(int, 2), mode=(Mode, Mode.fast))},
             {'params': model('P', tree=(Node, ...))},
+            {
+                'params': model(
+                    'P', data=(FilePath, ...), dirs=(list[DirectoryPath], [])
+                )
+            },
+            {'params': model('P', run=(RunFile | None, None))},
+            {'params': model('P', run=(model('Run', path=(FilePath, ...)), ...))},
+            {'params': model('P', run=(FileAndData | None, None))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
         ],
     )
@@ -285,7 +365,8 @@ class TestModelRules:
         spec(**fields)
 
     def test_a_model_validator_of_the_params_model_is_allowed(self) -> None:
-        # The framework never calls it (see the backend's tests); a binding may.
+        # The backend runs it wherever every value it reads is known (see its
+        # tests).
         assert IofQParams.__pydantic_decorators__.model_validators
         with pytest.raises(pydantic.ValidationError, match='the sample run is not'):
             IofQParams.model_validate({'sample': 'a.nxs', 'can': 'a.nxs'})
@@ -481,6 +562,43 @@ class TestModelRules:
                 {'params': model('P', runs=(list[SampleFile], [Path('run.nxs')]))},
                 'P.runs: the default of a type without a JSON form is None',
             ),
+            *(
+                (
+                    {'params': model('P', files=(tp, ...))},
+                    f'P.files: a parameter holds a file only as a file, possibly '
+                    f'optional, a list of files, or a group that holds a file as '
+                    f'a field, not inside {name}',
+                )
+                for tp, name in [
+                    (Files, 'Files'),
+                    (list[Files], 'Files'),
+                    (Sequence[Path], 'Sequence'),
+                    (tuple[Path, Path], 'tuple'),
+                    (frozenset[SampleFile], 'frozenset'),
+                    (FileDict, 'FileDict'),
+                    (FileClass, 'FileClass'),
+                ]
+            ),
+            (
+                {
+                    'params': model(
+                        'P', run=(model('Run', paths=(tuple[Path, Path], ...)), ...)
+                    )
+                },
+                'P.run: Run.paths: a field of a group holds a file only as a file',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        run=(
+                            model('Run', path=(Path, ...), extra=(FileClass, ...)),
+                            ...,
+                        ),
+                    )
+                },
+                'P.run: Run.extra: a field of a group holds a file only as a file',
+            ),
             (
                 {'outputs': model('O', iofq=(IofQ | Banks, ...))},
                 'O.iofq: an output is a type, possibly optional',
@@ -488,6 +606,22 @@ class TestModelRules:
             (
                 {'outputs': model('O', iofq=(list[list[IofQ]], ...))},
                 'O.iofq: an output is a type, possibly optional',
+            ),
+            (
+                {'params': BeforeParams},
+                "BeforeParams._raw: a model validator is mode='after', not 'before'",
+            ),
+            (
+                {'params': WrapParams},
+                "WrapParams._wrapped: a model validator is mode='after', not 'wrap'",
+            ),
+            (
+                {'params': InfoParams},
+                'InfoParams._with_info: a model validator takes only self, no info',
+            ),
+            (
+                {'params': model('P', run=(BeforeRun, ...))},
+                "P.run: BeforeRun._raw: a model validator is mode='after'",
             ),
         ],
     )
@@ -675,6 +809,11 @@ class TestSerialization:
                 'title': 'Beam Centre',
             },
         }
+
+    @pytest.mark.parametrize('tp', [FilePath, DirectoryPath, RunFile])
+    def test_a_path_type_is_a_reference_to_a_dataset(self, tp: Any) -> None:
+        schema = spec(params=model('P', value=(tp, ...))).serialize().params_schema
+        assert schema['properties']['value']['$ref'] == '#/$defs/DatasetRef'
 
     def test_a_list_parameter_has_the_forms_per_row(self) -> None:
         params = model(

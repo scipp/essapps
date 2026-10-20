@@ -144,11 +144,12 @@ class IofQDriver:
         )
         self._sums: dict[Any, np.ndarray] = {}
 
-    def push(self, table: str, rows: Sequence[Any]) -> None:
-        key, stage = self._contribute[table]
-        for path in rows:
-            for k, part in stage.compute({key: path}).items():
-                self._sums[k] = self._sums[k] + part if k in self._sums else part
+    def push(self, rows: Mapping[str, Sequence[Any]]) -> None:
+        for table, paths in rows.items():
+            key, stage = self._contribute[table]
+            for path in paths:
+                for k, part in stage.compute({key: path}).items():
+                    self._sums[k] = self._sums[k] + part if k in self._sums else part
 
     def outputs(self) -> IofQOutputs:
         results = self._finalize.compute(self._sums)
@@ -237,7 +238,8 @@ def test_a_stage_call_takes_the_blanks_exactly(
 
 def test_a_stage_refuses_values_that_do_not_fit(single: PipelineBinding) -> None:
     with pytest.raises(
-        ValueError, match=r"\['sample', 'can'\]: required parameters, not given"
+        ValueError,
+        match=r'^sample: a required parameter, not given; can: a required parameter',
     ):
         single.make_stage({}, ('reduction',))
 
@@ -275,7 +277,7 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
 ) -> None:
     driver = multi.make_accumulator({'can': cans, **reduction(2)}, ('sample',))
     for sample in samples:
-        driver.push('sample', [sample])
+        driver.push({'sample': [sample]})
         driver.outputs()
     assert loaded == cans + samples
 

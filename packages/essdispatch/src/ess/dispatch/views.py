@@ -31,27 +31,33 @@ from .log import (
     Opened,
     Persist,
     Pushed,
+    PushFailed,
     Submitted,
     Written,
 )
 from .records import Record, Request, Status
+
+_HeldState = tuple[NewStateRecord, Submitted, int]
+"""A record of a state, its submission, and the failed pushes logged before it."""
 
 
 class _Records(Mapping[str, Record]):
     """
     The records by ID, in the order submitted.
 
-    A record of an accumulator's state is held as the accumulator and its
-    number of pushes, and its request is listed from the accumulator's
+    A record of an accumulator's state is held as the accumulator, its
+    number of pushes, and the number of its failed pushes that the log held
+    before the record, and its request is listed from the accumulator's
     template and pushes each time it is read, so the views grow by a
-    constant amount per read of an accumulator.
+    constant amount per read of an accumulator. A push that fails later
+    does not change the record's request: that record fails.
     """
 
     def __init__(self, views: Views) -> None:
         self._views = views
-        self._held: dict[str, Record | tuple[NewStateRecord, Submitted]] = {}
+        self._held: dict[str, Record | _HeldState] = {}
 
-    def add(self, held: Record | tuple[NewStateRecord, Submitted]) -> None:
+    def add(self, held: Record | _HeldState) -> None:
         record_id = held.id if isinstance(held, Record) else held[0].id
         self._held[record_id] = held
 
@@ -64,10 +70,10 @@ class _Records(Mapping[str, Record]):
         held = self._held[record_id]
         if isinstance(held, Record):
             return held
-        new, event = held
+        new, event, failures = held
         return Record(
             id=new.id,
-            request=self._views.plain(new.accumulator, new.pushes),
+            request=self._views.plain(new.accumulator, new.pushes, failures),
             proposal=event.proposal,
             submitter=event.submitter,
             created=event.time,
@@ -109,7 +115,9 @@ class Views:
     ``finished`` holds the event that finished a record; a record without one
     is pending. ``states`` holds the accumulator and number of pushes of each
     record of a state. ``accumulators`` holds the event that opened each
-    accumulator, and ``pushes`` its pushes in order, each rows of its tables.
+    accumulator, ``pushes`` its pushes in order, each rows of its tables, and
+    ``failed`` the reason of each push that failed, by its number from 1, in
+    the order the failures were logged.
 
     ``persisted`` names the outputs each record persists at submission; their
     write is the record's: pending while it is, written once it completes.
@@ -124,6 +132,7 @@ class Views:
         self.states: dict[str, tuple[str, int]] = {}
         self.accumulators: dict[str, Opened] = {}
         self.pushes: dict[str, list[Pushed]] = {}  # by accumulator ID
+        self.failed: dict[str, dict[int, str]] = {}  # by accumulator ID
         self.persisted: dict[str, tuple[str, ...]] = {}
         self.writes: dict[tuple[str, str], Write] = {}  # by (record ID, output)
 
@@ -143,6 +152,9 @@ class Views:
                 self.accumulators[event.accumulator] = event
             case Pushed():
                 self.pushes.setdefault(event.accumulator, []).append(event)
+            case PushFailed():
+                failed = self.failed.setdefault(event.accumulator, {})
+                failed[event.push] = event.failure
             case Persist():
                 for name in event.outputs:
                     omitted = self.omitted((event.record, name))
@@ -162,7 +174,8 @@ class Views:
 
     def _add(self, new: NewRecord | NewStateRecord, event: Submitted) -> None:
         if isinstance(new, NewStateRecord):
-            self.records.add((new, event))
+            failures = len(self.failed.get(new.accumulator, {}))
+            self.records.add((new, event, failures))
             self.states[new.id] = (new.accumulator, new.pushes)
         else:
             self.records.add(
@@ -183,16 +196,24 @@ class Views:
         if new.persist:
             self.persisted[new.id] = new.persist
 
-    def plain(self, accumulator_id: str, pushes: int) -> Request:
+    def plain(
+        self, accumulator_id: str, pushes: int, failures: int | None = None
+    ) -> Request:
         """
         The plain request of the accumulator's state after ``pushes`` pushes:
         its fixed values, with each blank table filled by the rows pushed
-        into it, in push order.
+        into it, in push order. A push that failed adds no rows: of the
+        failures logged, the first ``failures``, or all if ``None``.
         """
         opened = self.accumulators[accumulator_id]
         params = dict(opened.params)
+        failed = set(list(self.failed.get(accumulator_id, {}))[:failures])
         copied: set[str] = set()  # the tables copied from the opening's
-        for push in self.pushes.get(accumulator_id, [])[:pushes]:
+        for number, push in enumerate(
+            self.pushes.get(accumulator_id, [])[:pushes], start=1
+        ):
+            if number in failed:
+                continue
             for name, rows in push.params.items():
                 if name not in copied:
                     params[name] = list(params[name])

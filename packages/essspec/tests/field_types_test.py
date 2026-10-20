@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import dataclasses
+from collections.abc import Sequence
 from pathlib import Path, PosixPath
-from typing import Annotated, Any, NewType
+from typing import Annotated, Any, NewType, TypedDict
 
 import pytest
 import scipp as sc
-from pydantic import BaseModel
+from pydantic import BaseModel, DirectoryPath, FilePath, NewPath
 
 from ess.spec.field_types import (
     base,
     element,
     fits,
+    holds_file,
     is_file,
     is_single,
     optional,
@@ -33,6 +36,39 @@ class Parts(BaseModel, arbitrary_types_allowed=True):
 
 SampleParts = NewType('SampleParts', Parts)
 CanParts = NewType('CanParts', Parts)
+
+type RunFile = Path
+type Files = list[Path]
+
+
+class FileDict(TypedDict):
+    path: Path
+
+
+@dataclasses.dataclass
+class FileClass:
+    path: Path
+
+
+@dataclasses.dataclass
+class FileAndData:
+    """A type that holds a file, but has no JSON schema."""
+
+    path: Path
+    data: sc.DataArray
+
+
+class Format(BaseModel):
+    """A group with a field named ``format``."""
+
+    format: str = 'path'
+
+
+class Run(BaseModel, arbitrary_types_allowed=True):
+    """A group that holds a file, without a JSON schema as a whole."""
+
+    path: SampleFile
+    data: sc.DataArray | None = None
 
 
 def test_optional_removes_none_and_says_whether_it_was_there() -> None:
@@ -107,13 +143,60 @@ def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
     assert not is_single(tp)
 
 
-def test_a_file_is_a_path_or_a_newtype_of_it() -> None:
-    assert is_file(Path)
-    assert is_file(PosixPath)
-    assert is_file(SampleFile)
-    assert not is_file(str)
-    assert not is_file(NewType('Name', str))
-    assert not is_file(list[Path])
+@pytest.mark.parametrize(
+    'tp',
+    [
+        Path,
+        PosixPath,
+        SampleFile,
+        FilePath,
+        DirectoryPath,
+        NewPath,
+        NewType('Data', FilePath),
+        RunFile,
+    ],
+)
+def test_a_file_is_a_type_whose_json_schema_is_a_path(tp: Any) -> None:
+    assert is_file(tp)
+    assert holds_file(tp)
+
+
+@pytest.mark.parametrize(
+    'tp', [str, NewType('Name', str), list[Path], Files, Path | None, sc.DataArray]
+)
+def test_other_types_are_not_files(tp: Any) -> None:
+    assert not is_file(tp)
+
+
+@pytest.mark.parametrize(
+    'tp',
+    [
+        list[Path],
+        Files,
+        list[RunFile],
+        Sequence[Path],
+        tuple[Path, Path],
+        frozenset[Path],
+        dict[str, Path],
+        FileDict,
+        FileClass,
+        Path | None,
+        Run,
+        NewType('SampleRun', Run),
+    ],
+)
+def test_a_type_holds_a_file_where_its_json_schema_has_a_path(tp: Any) -> None:
+    assert holds_file(tp)
+
+
+@pytest.mark.parametrize(
+    'tp',
+    [str, NewType('Name', str), list[str], Parts, Format, FileAndData, sc.DataArray],
+)
+def test_a_type_without_a_path_in_its_json_schema_holds_no_file(tp: Any) -> None:
+    # FileAndData has no JSON schema: given by reference to an output only, it
+    # holds no path that a client typed in.
+    assert not holds_file(tp)
 
 
 def test_type_name_is_the_name_of_the_newtype() -> None:

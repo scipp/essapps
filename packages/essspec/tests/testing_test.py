@@ -10,14 +10,14 @@ The toy spec ``SUB`` takes a sample and a can value and gives
 
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, NewType
+from typing import Any, NewType, Self
 
 import numpy as np
 import pytest
 import scipp as sc
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from ess.spec import DriverBinding, WorkflowSpec
+from ess.spec import DriverBinding, PushRefused, WorkflowSpec
 from ess.spec.binding import fixed_values
 from ess.spec.testing import (
     Rows,
@@ -25,6 +25,8 @@ from ess.spec.testing import (
     check_arrival_and_order,
     check_caching,
     check_one_row,
+    check_refused_push,
+    instance,
     one_row,
 )
 
@@ -109,8 +111,9 @@ class Sums:
         self.factor = fixed['scale'].factor
         self.sums = {'sample': 0.0, 'can': 0.0}
 
-    def push(self, table: str, rows: Rows) -> None:
-        self.sums[table] += sum(rows)
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for table, values in rows.items():
+            self.sums[table] += sum(values)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self.factor * (self.sums['sample'] - self.sums['can']))
@@ -119,16 +122,17 @@ class Sums:
 class IgnoresCans(Sums):
     """Breaks one-row: drops the cans."""
 
-    def push(self, table: str, rows: Rows) -> None:
-        if table == 'sample':
-            super().push(table, rows)
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        if 'sample' in rows:
+            super().push({'sample': rows['sample']})
 
 
 class KeepsLastPush(Sums):
     """Breaks arrival: each push replaces what was pushed before into its table."""
 
-    def push(self, table: str, rows: Rows) -> None:
-        self.sums[table] = sum(rows)
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for table, values in rows.items():
+            self.sums[table] = sum(values)
 
 
 class StartsAtFirstSample(Sums):
@@ -142,12 +146,13 @@ class StartsAtFirstSample(Sums):
         super().__init__(fixed)
         self.total: float | None = None
 
-    def push(self, table: str, rows: Rows) -> None:
-        for value in rows:
-            if table == 'sample':
-                self.total = value + (self.total or 0.0)
-            elif self.total is not None:
-                self.total -= value
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for table, values in rows.items():
+            for value in values:
+                if table == 'sample':
+                    self.total = value + (self.total or 0.0)
+                elif self.total is not None:
+                    self.total -= value
 
     def outputs(self) -> SubOutputs:
         total = self.total
@@ -178,8 +183,8 @@ class JoinsInPlace:
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self.joined: list[float] | None = None
 
-    def push(self, table: str, rows: Rows) -> None:
-        for value in rows:
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for value in rows['parts']:
             if self.joined is None:
                 self.joined = value
             else:
@@ -229,6 +234,120 @@ def test_states_that_a_driver_refuses_are_not_read() -> None:
         check_arrival_and_order(Ratio, FIXED, {'sample': [1.0], 'can': []})
 
 
+class RefusesNegative(Sums):
+    """Refuses a push with a negative row, before it adds any row."""
+
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        if any(value < 0 for values in rows.values() for value in values):
+            raise PushRefused('a negative value')
+        super().push(rows)
+
+
+class AddsBeforeRefusing(Sums):
+    """Breaks refusal: adds the rows before the negative one."""
+
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for table, values in rows.items():
+            for value in values:
+                if value < 0:
+                    raise PushRefused(f'{table}: a negative value')
+                self.sums[table] += value
+
+
+class AddsTableByTable(Sums):
+    """Breaks refusal: adds a table before it checks the next."""
+
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        for table, values in rows.items():
+            if any(value < 0 for value in values):
+                raise PushRefused(f'{table}: a negative value')
+            super().push({table: values})
+
+
+class SkipsAfterRefusing(RefusesNegative):
+    """Breaks refusal: drops the push after the one it refused."""
+
+    def __init__(self, fixed: Mapping[str, Any]) -> None:
+        super().__init__(fixed)
+        self.skip = False
+
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        if self.skip:
+            self.skip = False
+            return
+        try:
+            super().push(rows)
+        except PushRefused:
+            self.skip = True
+            raise
+
+
+class FailsOnNegative(Sums):
+    """Raises on a negative row, but not ``PushRefused``."""
+
+    def push(self, rows: Mapping[str, Rows]) -> None:
+        if any(value < 0 for values in rows.values() for value in values):
+            raise ValueError('a negative value')
+        super().push(rows)
+
+
+REFUSED = {'sample': [3.0, -1.0]}
+
+
+def test_refusal_passes_for_a_driver_that_checks_rows_before_it_adds() -> None:
+    check_refused_push(RefusesNegative, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_that_adds_rows_before_it_refuses() -> None:
+    with pytest.raises(
+        AssertionError,
+        match=r"^refusal, \{'sample': \[3.0, -1.0\]\} after 0 pushes, 'diff'",
+    ):
+        check_refused_push(AddsBeforeRefusing, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_whose_later_pushes_differ() -> None:
+    with pytest.raises(AssertionError, match=r'^refusal, .* after 1 pushes, '):
+        check_refused_push(SkipsAfterRefusing, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_that_adds_a_table_before_refusing() -> None:
+    check_refused_push(RefusesNegative, FIXED, TABLES, {'sample': [3.0], 'can': [-1.0]})
+    with pytest.raises(AssertionError, match=r"^refusal, .* after 0 pushes, 'diff'"):
+        check_refused_push(
+            AddsTableByTable, FIXED, TABLES, {'sample': [3.0], 'can': [-1.0]}
+        )
+
+
+def test_refusal_needs_rows_to_refuse() -> None:
+    with pytest.raises(ValueError, match=r'^refused: give the rows of one push'):
+        check_refused_push(RefusesNegative, FIXED, TABLES, {'sample': []})
+
+
+def test_refusal_fails_for_a_push_that_raises_another_error_or_none() -> None:
+    with pytest.raises(AssertionError, match=r"raised ValueError\('a negative "):
+        check_refused_push(FailsOnNegative, FIXED, TABLES, REFUSED)
+    with pytest.raises(AssertionError, match='0 pushes: the push was not refused'):
+        check_refused_push(Sums, FIXED, TABLES, REFUSED)
+
+
+def test_refusal_fails_for_a_driver_that_modifies_the_rows_it_refuses() -> None:
+    class SortsRows(Sums):
+        """A driver over rows that are lists: sorts each row in place."""
+
+        def push(self, rows: Mapping[str, Rows]) -> None:
+            for values in rows.values():
+                for row in values:
+                    row.sort()
+            if any(v < 0 for values in rows.values() for row in values for v in row):
+                raise PushRefused('a negative value')
+            super().push({t: [sum(row) for row in r] for t, r in rows.items()})
+
+    tables = {'sample': [[5.0]], 'can': [[1.0]]}
+    with pytest.raises(AssertionError, match=r'^values after refusing them'):
+        check_refused_push(SortsRows, FIXED, tables, {'sample': [[3.0, -1.0]]})
+
+
 def test_caching_passes_for_a_stage_that_computes_each_call() -> None:
     calls = [{'scale': Scale(factor=f)} for f in (1.0, 2.0, 1.0)]
     check_caching(Calls(SUB, subtract), {'sample': 5.0, 'can': 1.0}, calls)
@@ -245,6 +364,22 @@ def test_one_row_gives_each_table_a_row_of_the_value() -> None:
     request = one_row(SUB_MULTI, SubParams(sample=5.0, can=1.0))
     assert request.scale == Scale()
     assert (request.sample, request.can) == ([5.0], [1.0])
+
+
+class OrderedParams(SubParams):
+    @model_validator(mode='after')
+    def _sample_above_can(self) -> Self:
+        if self.sample <= self.can:
+            raise ValueError('the sample is not above the can')
+        return self
+
+
+def test_an_instance_is_checked_by_the_model_validators() -> None:
+    spec = _spec('ordered', params=OrderedParams, outputs=SubOutputs)
+
+    assert instance(spec, {'sample': 2.0, 'can': 1.0}).sample == 2.0
+    with pytest.raises(ValueError, match='_sample_above_can: the sample is not above'):
+        instance(spec, {'sample': 1.0, 'can': 2.0})
 
 
 def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs() -> None:

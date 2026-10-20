@@ -20,11 +20,9 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
-from ess.spec.refs import iter_refs, map_refs
+from ess.spec.refs import ParamsError, iter_refs, map_refs
 
-
-class SubmitError(ValueError):
-    """A request that cannot run, refused before any record exists."""
+from .errors import FieldError, SubmitError
 
 
 def as_values(value: Any) -> Any:
@@ -57,8 +55,8 @@ def read_refs(params: Any) -> Any:
         return params
     try:
         return map_refs(params, lambda ref: ref)
-    except ValueError as error:
-        raise SubmitError(str(error)) from None
+    except ParamsError as error:
+        raise SubmitError.of(error) from None
 
 
 Params = Annotated[dict[str, Any], BeforeValidator(read_refs)]
@@ -169,13 +167,17 @@ class Template:
     def fill(self, *, params: Mapping[str, Any] | BaseModel | None = None) -> Request:
         """
         The request with the blanks filled by ``params``, a blank table by
-        its rows.
+        its rows. Raises ``SubmitError`` for each blank not filled, and each
+        value the template fixes.
         """
         params = _given(params)
-        if missing := [b for b in self.blanks if b not in params]:
-            raise ValueError(f'fill the blanks {self.blanks}, missing {missing}')
-        if fixed := sorted(params.keys() & self.params.keys()):
-            raise ValueError(f'{fixed}: fixed by the template, not blanks')
+        missing = [b for b in self.blanks if b not in params]
+        fixed = sorted(params.keys() & self.params.keys())
+        if missing or fixed:
+            raise SubmitError(
+                [FieldError(None, (b,), 'a blank, not filled') for b in missing]
+                + [FieldError(None, (f,), 'fixed by the template') for f in fixed]
+            )
         return Request(self.spec, params={**self.params, **params})
 
 
