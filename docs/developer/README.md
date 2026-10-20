@@ -147,12 +147,15 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 
 | A parameter's type | Example | Inline | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| a file: `Path`, pydantic's `FilePath` or `DirectoryPath`, or a `NewType` of one | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
 | a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
+A type is a file when pydantic's JSON schema of it is a string with a path format: `"format": "path"` for `Path` and a `NewType` of it, `"file-path"` for `FilePath`, `"directory-path"` for `DirectoryPath`.
+The access check on the service depends on it, so an author types each file as one of these.
+A `NewType` of `str` used for a file is a string: it is given inline, and no dataset source checks it.
 A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
 A reference to a dataset stands for the whole group: its one required file, and its other fields at their defaults.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
@@ -172,6 +175,7 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - Each parameter is a type, possibly optional, or a list of one.
 - Each output is a type, possibly optional, or a list or a dict of one.
+- A parameter holds a file only as a file, possibly optional, a list of files, or a group that holds a file as a field. A file anywhere else, such as in a tuple, a `TypedDict`, a dataclass, or a type alias `type Files = list[Path]`, is refused, since no reference to a dataset stands for it.
 - A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
 - A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
