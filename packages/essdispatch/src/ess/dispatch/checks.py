@@ -86,7 +86,7 @@ from ess.spec.field_types import (
     type_name,
     value_type,
 )
-from ess.spec.refs import Loc, as_ref, places
+from ess.spec.refs import Loc, ParamsError, as_ref, places
 
 from .datasets import DatasetSource, readable
 from .errors import FieldError, SubmitError
@@ -448,8 +448,8 @@ def _fixed(
     """
     try:
         return fixed_values(spec, values, blanks)
-    except ValueError as error:
-        raise SubmitError.at((), str(error)) from None
+    except ParamsError as error:
+        raise SubmitError.of(error) from None
 
 
 def _rows(spec: Spec, values: Mapping[str, Any], tables: Collection[str]) -> None:

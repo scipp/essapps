@@ -386,7 +386,7 @@ def test_a_refused_call_writes_nothing_to_the_log(
     load = client.compute(LOAD, params=_sample(1))
     written = len(Log.read(tmp_path / 'log'))
 
-    with pytest.raises(SubmitError, match='not parameters'):
+    with pytest.raises(SubmitError, match='not a parameter'):
         client.submit(LOAD, params={'bins': 2, **_sample(1)})
     with pytest.raises(SubmitError, match='blanks of an accumulator'):
         client.accumulator(Template(TOTAL))

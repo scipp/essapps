@@ -381,8 +381,11 @@ def test_a_reference_to_an_unknown_record_is_refused(client: Client) -> None:
 def test_a_reference_of_an_unknown_kind_is_refused(client: Client) -> None:
     unknown = {'@ref': 'record', 'record': 'r1', 'output': 'value'}
 
-    with pytest.raises(SubmitError, match=r"^a: .*'record' is not a kind of reference"):
+    with pytest.raises(
+        SubmitError, match=r"^a: .*'record' is not a kind of reference"
+    ) as raised:
         client.submit(ADD, params=operands(unknown, unknown))
+    assert [e.loc for e in raised.value.errors] == [('a',)]
 
 
 def test_a_malformed_reference_is_refused(client: Client) -> None:
@@ -475,9 +478,12 @@ def test_a_file_takes_a_reference_to_a_dataset_only(client: Client) -> None:
 
 def test_a_required_parameter_left_out_is_refused(client: Client) -> None:
     with pytest.raises(
-        SubmitError, match=r"\['sample'\]: required parameters, not given"
-    ):
+        SubmitError, match=r'^sample: a required parameter, not given$'
+    ) as raised:
         client.submit(LOAD)
+    assert raised.value.errors == (
+        FieldError(None, ('sample',), 'a required parameter, not given'),
+    )
 
 
 def test_a_client_sees_only_the_datasets_of_its_proposal(
@@ -533,7 +539,7 @@ def test_reading_an_output_of_a_failed_record_raises(
 
 
 def test_an_unknown_parameter_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['scale'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='scale: not a parameter of'):
         client.submit(LOAD, params={'scale': {}, 'sample': dataset(run=1)})
 
 

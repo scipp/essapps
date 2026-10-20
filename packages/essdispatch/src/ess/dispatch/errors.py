@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ess.spec.refs import Loc, loc_text
+from ess.spec.refs import Loc, ParamsError, loc_text
 
 if TYPE_CHECKING:
     from .records import Status
@@ -71,6 +71,11 @@ class SubmitError(ValueError):
     def at(cls, loc: Loc, msg: str) -> SubmitError:
         """One reason, at the place ``loc``, with no entry."""
         return cls([FieldError(None, loc, msg)])
+
+    @classmethod
+    def of(cls, error: ParamsError) -> SubmitError:
+        """The reasons of params that :mod:`ess.spec` refuses, with no entry."""
+        return cls(FieldError(None, loc, msg) for loc, msg in error.errors)
 
     def __str__(self) -> str:
         return '; '.join(map(str, self.errors))

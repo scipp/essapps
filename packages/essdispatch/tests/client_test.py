@@ -1276,7 +1276,7 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
     released = client.compute(_load(1))
     client.release(released)
     refused = {
-        r"\['speed'\]: not parameters": {'params': {'speed': {}}},
+        'speed: not a parameter': {'params': {'speed': {}}},
         'scale.factor: Input should be a valid number': {
             'params': {'scale': {'factor': 'x'}}
         },

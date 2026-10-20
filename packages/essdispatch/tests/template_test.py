@@ -255,18 +255,16 @@ def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
 
 
 def test_a_misspelt_name_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(
             Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
         )
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(Template(SCALE, blanks=('sampel',)))
 
 
 def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r"\['sample'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match=r'^sample: a required parameter, not given$'):
         client.stage(Template(SCALE, blanks=('scaling',)))
 
 
@@ -387,9 +385,7 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 
     assert client.provenance(acc).request == plain.request
     assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
-    with pytest.raises(
-        SubmitError, match=r"\['scaling'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match='scaling: a required parameter, not given'):
         client.accumulator(Template(TOTAL, blanks=('sample',)))
 
 

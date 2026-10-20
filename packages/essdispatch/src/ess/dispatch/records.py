@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
-from ess.spec.refs import iter_refs, map_refs
+from ess.spec.refs import ParamsError, iter_refs, map_refs
 
 from .errors import FieldError, SubmitError
 
@@ -55,8 +55,8 @@ def read_refs(params: Any) -> Any:
         return params
     try:
         return map_refs(params, lambda ref: ref)
-    except ValueError as error:
-        raise SubmitError.at((), str(error)) from None
+    except ParamsError as error:
+        raise SubmitError.of(error) from None
 
 
 Params = Annotated[dict[str, Any], BeforeValidator(read_refs)]

@@ -3,7 +3,7 @@
 import pytest
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef
-from ess.spec.refs import as_ref, iter_refs, loc_text, map_refs
+from ess.spec.refs import ParamsError, as_ref, iter_refs, loc_text, map_refs
 
 OUTPUT_REF = {'@ref': 'output', 'record': 'r1', 'output': 'data'}
 DATASET_REF = {'@ref': 'dataset', 'dataset': 'pid-1'}
@@ -119,5 +119,10 @@ def test_iter_refs_and_map_refs_name_the_place_of_a_malformed_reference() -> Non
     inputs = {'runs': [DATASET_REF, {'@ref': 'run'}]}
     with pytest.raises(ValueError, match=r"^runs\[1\]: .*'run' is not a kind"):
         list(iter_refs(inputs))
-    with pytest.raises(ValueError, match=r"^runs\[1\]: .*'run' is not a kind"):
+    with pytest.raises(
+        ParamsError, match=r"^runs\[1\]: .*'run' is not a kind"
+    ) as raised:
         map_refs(inputs, str)
+    ((loc, msg),) = raised.value.errors
+    assert loc == ('runs', 1)
+    assert "'run' is not a kind" in msg

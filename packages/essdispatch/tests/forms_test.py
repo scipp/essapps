@@ -266,6 +266,11 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     assert (error.entry, error.loc) == (None, ('runs', 1, 'shift', 'offset'))
     assert str(raised.value) == f'runs[1].shift.offset: {error.msg}'
 
+    rows[1] = {'file': {'@ref': 'run'}}
+    with pytest.raises(SubmitError, match="is not a kind of reference") as raised:
+        client.submit(RUNS, params={'runs': rows})
+    assert [e.loc for e in raised.value.errors] == [('runs', 1, 'file')]
+
 
 def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
     client: Client, loaded: Record
