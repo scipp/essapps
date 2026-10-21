@@ -57,7 +57,7 @@ Here one graph serves both alternatives, because `find_centre` leads from one al
 
 This work goes first: #74, #77 and #78 are updated after it. The branch is rebased onto `origin/main`, which has #72 and #75.
 
-From #77 this PR takes the group part, `check_model` run on a group once it is made from its fields (see "Validation"). Every group may now be made from its fields, and without it a model validator of a group would stop running. #77 then rebases to cover the params model, stages and accumulators. #74's file detection by JSON schema replaces `is_file` and `holds_file` later, and this PR only calls them.
+In the call phase, pydantic validates each parameter's value whole (see "Validation"), so the model validators of its groups run without #77's `check_model`. #77 then rebases to cover the params model, stages and accumulators. #74's file detection by JSON schema replaces `is_file` and `holds_file` later, and this PR only calls them.
 
 ## The model
 
@@ -169,31 +169,36 @@ mask: Annotated[GivenMask | NoMask, Field(discriminator='kind')] = NoMask()
 # keys: (GivenMask, NoMask); a provider of the workflow takes NoMask
 ```
 
-In the second way, a workflow that forgets to read `NoMask` is refused, not silently given a default (see "Unread keys" below). A field without a key cannot be a blank, as on `main`.
+In the second way, a workflow without a provider for the mask from `NoMask` fails with `UnsatisfiedRequirement`, since the key of the other alternative is not set either. It is not silently given a default, as long as the pipeline holds none (see "Defaults belong to the spec" below). A field without a key cannot be a blank, as on `main`.
 
 ### Validation
 
+Each parameter's value is validated once per phase, by pydantic:
+
 | Phase | What is validated |
 |---|---|
-| request phase | each inline place alone, from its JSON form |
-| call phase, once the references are read | each group, innermost first: `model_construct` from its fields, then its model validators (`check_model`, from #77) |
+| request phase | each inline place alone, from its JSON form; a group with no reference inside, whole, from its JSON form |
+| call phase, once the references are read | the parameter's value whole: the JSON form the record holds, with each reference replaced by the data read, by `model_validate(..., strict=False)` |
 
-A group is not validated again from its typed fields with `model_validate`. That would run a field's validators twice: `Annotated[float, AfterValidator(lambda v: v * 2)]` turns 3.0 into 6.0 alone and 12.0 whole (probe). A check of one value belongs to the value's type, such as `Annotated[float, AfterValidator(...)]`, which runs when the place is validated alone. A check across fields is a model validator, `mode='after'`.
-
-The rules on every group in the params, which `main` states for groups that hold a file:
-
-- allowed: `mode='after'` model validators that take only `self`, and validators in the `Annotated` metadata of field types;
-- refused: field validators of any mode, `before` and `wrap` model validators, serializers, computed fields, and aliases.
-
-The reason for refusing field validators is that a field validated alone, by `model_of`, runs without its group's field validators. `RangeModel` and `EdgesModel` check `stop > start` in a field validator, `@field_validator('stop')` with `info.data.get('start')`, in `ess.spec` and in esslivedata alike. On `main` and in esslivedata that check runs, because these groups are always validated whole, from JSON. Once a field of such a group may be given by reference, the group is made from its fields, and the check would be skipped silently. So the check moves to a model validator, as `EdgesModel` already does for its log check:
+In the call phase, every validator of every group runs once, with all fields at hand: field validators of any mode, with `info.data`, and model validators. So `RangeModel`'s and `EdgesModel`'s `@field_validator('stop')`, which reads `info.data.get('start')`, needs no change, in `ess.spec` or in esslivedata. Its error names the field (probe):
 
 ```python
-@model_validator(mode='after')
-def _stop_after_start(self) -> Self:
-    if self.stop <= self.start:
-        raise ValueError('stop must be greater than start')
-    return self
+inline = from_json(to_json({'start': 10.0, 'unit': 'mm'}))   # as the record holds them
+Range.model_validate({**inline, 'stop': 5.0}, strict=False)  # stop read from another record
+# ValidationError at ('stop',): stop must be greater than start
 ```
+
+A group without a reference inside is validated whole already in the request phase, so a form shows such an error at its field before anything runs. That covers the ranges and edges of the examples, which are only numbers.
+
+Two points make validating once from the stored JSON form sound:
+
+- **No validator runs twice on one value.** The call phase starts again from the JSON form, not from the typed values of the request phase. A validator that changes a value it has validated already, such as `AfterValidator(lambda v: v * 2)`, is refused in the request phase on `main` already: its JSON form does not read back as the value (`inline`).
+- **`strict=False` accepts no less than the request phase did.** The request phase validates each inline place from JSON, where pydantic's strict mode takes an enum from its string. The call phase validates JSON-decoded values in Python mode, where a strict model would refuse that string (`Input should be an instance of Unit`, probe). The request phase has already applied the strict rules to every inline place, and a reference's data fit the place by type.
+
+The rules on every group in the params:
+
+- refused: serializers, computed fields, and aliases. The record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from that object.
+- allowed: field validators and model validators of any mode. #77's refusal of `before` and `wrap` model validators gave as its reason that their input differs between the phases. Here the call phase's input is the request's JSON form, with data only where the request gave a reference, so #77 can reconsider that refusal when it rebases.
 
 ### `PipelineBinding`
 
@@ -210,7 +215,7 @@ X | None       -> refused, unless keys= gives no key: ()
 - A union cannot be a blank, since its key depends on its value. `make_stage` refuses it.
 - `DriverBinding`, `function_binding`, `fixed_values` and `ess.spec.testing` need no change.
 
-**Unread keys.** The binding sets a key for each parameter. If no provider on the way to the outputs reads that key, the request's value has no effect, and nothing says so:
+**Defaults belong to the spec.** `make_pipeline` holds no value at a key that a parameter sets, or at a key that a parameter's key leads to. A held default can make a request's value have no effect, and nothing says so:
 
 ```python
 base = sciline.Pipeline([find_centre, iofq], params={BeamCentre: BeamCentre()})  # a default centre
@@ -222,7 +227,7 @@ binding.compute(IofQParams(..., beam_centre=FindCentre(run=..., tolerance=0.05))
 # -> I(Q) with the default centre, though the request asked to find it
 ```
 
-The bindings reviewer ran this (`probes-bindings/p1`). The binding refuses such a request: after setting its keys, it checks that each one is read by the graph that computes the outputs, which `_Cut` already knows (`sciline.Stage(...).keys`). The error names the parameter and its key: `beam_centre: FindCentre is set, and no provider reads it`. The check covers every key, not only a union's: a plain parameter that the graph never reads is the same mistake.
+The bindings reviewer ran this (`probes-bindings/p1`). The default belongs in the spec instead, `beam_centre: ... = BeamCentre()`, where a user sees it. The `PipelineBinding` docstring and the workflow-authors notebook state this convention. The binding does not check it.
 
 ### Outputs
 
@@ -237,7 +242,7 @@ pydantic puts the tag into the location of an error inside a union, `('beam_cent
 0. **`PipelineBinding` keys** (rewrites `dd2d382` and `a580d4b` in place):
    - `keys` as tuples;
    - `X | None` with a key refused;
-   - unread keys refused.
+   - the docstring states that defaults belong to the spec.
 
    `.copy()` of the pipeline stays.
 1. **No dataset for a whole group.** The request form `{'sample': dataset(run=101)}` goes.
@@ -251,9 +256,8 @@ pydantic puts the tag into the location of an error inside a union, `('beam_cent
 
    Validation follows the table above:
    - `by_field` goes;
-   - `check_model` comes from #77;
-   - the group rules apply to every group;
-   - the `RangeModel` and `EdgesModel` checks move.
+   - the call phase validates each parameter's value once, from its JSON form with the data of its references;
+   - the group rules apply to every group, and field validators are no longer refused on groups that hold a file.
 
    `_forms` and `_group_forms` give the forms at every place. A union inside a group exists since #72, so the walk by tag is tested through one (`Centre.by.run`).
 3. **Unions as parameters.**
@@ -269,15 +273,15 @@ Each commit updates the README and the workflow-authors notebook where they desc
 
 - **Commit 0:**
   - an `X | None` parameter with a key is refused, and one with `keys={...: ()}` reaches `make_pipeline` as `None`;
-  - an unread key is refused;
   - `keys=` takes tuples;
   - a driver built on `single.pipeline`.
 - **Commit 1:** a dataset for a whole group is refused; `apply(at=('sample', 'run'))` fills `sample.run`; a rule counts only the dataset at that place.
 - **Commit 2:**
   - references at `reduction.mask`, at `runs[2].transmission`, and at `Centre.by.run` through a wrapper group;
   - refusals: `@ref` in an inline value at any depth, a file in a tuple, a reference to an output that holds a file, a reference at a tag;
-  - a model validator of a group runs in the call phase when a reference gives one of its fields, and refuses `stop <= start`;
-  - a field validator on a group is refused.
+  - a range whose `stop` is given by a reference fails in the call phase, at `stop`, when `stop <= start`;
+  - a range given inline fails in the request phase, at `stop`;
+  - a strict model with an enum field passes the call phase.
 - **Commit 3:**
   - the spec: a union parameter is accepted with a discriminator and refused without one;
   - fits and files: an output of type `BeamCentre` fits `BeamCentre | FindCentre`, and `beam_centre.run` takes a dataset reference;
@@ -300,7 +304,7 @@ Each commit updates the README and the workflow-authors notebook where they desc
 | a dataset for a whole group, `file_field` | `checks.py`, `client.py` docstring, `batch.py`, README, `automatic-reduction.md`, workflow-authors notebook |
 | "a parameter is not a union" (#72) | `_params_problems` error hint, notebook, README |
 | `keys[name]` as one key | `toy_sans.py:313,327` (three notebooks), `pipeline_test.IofQDriver`, `test_keys_give_the_key_of_each_field` |
-| field validators on groups | `RangeModel`, `EdgesModel` in `essspec/parameters.py` |
+| `model_construct` of a group from its fields, and the refusal of field validators on such a group | `field_types.validated`, `_group_problems` |
 
 A log that the current code wrote may hold `@ref` deeper than today's places. The new code does not read it back, and the PR says so.
 
@@ -312,8 +316,9 @@ A log that the current code wrote may hold `@ref` deeper than today's places. Th
 - **`X | None` sets no key when `None`.** This leaves whatever `make_pipeline` holds at the key, such as a default value, which the request did not choose.
 - **A `NotSet` type from the framework**, as an alternative in a union. One type for many parameters would be one sciline key for all of them, so it would have to be generic (`NotSet[Mask]`). An empty alternative that the author writes, such as `NoMask`, does the same with no new type, and its tag can say what "not set" means for this parameter.
 - **Keying by `type(value)`.** Wrong for a subclass instance and a `NewType` alternative.
-- **Validating a group whole with `model_validate` in the call phase.** It runs the field validators twice and can change a value that the request phase accepted.
-- **Allowing `after` field validators on groups.** They run when the group is validated from JSON, and are skipped when it is made from its fields. So whether a check runs would depend on whether a request gives one field by reference.
+- **Making a group from its fields, `model_construct` and then its model validators.** A field validated alone runs without its group's field validators, so a check such as `stop > start` would be skipped once a request gives one field by reference. Refusing field validators on every group would avoid that, at the cost of moving such checks into model validators, whose errors name the group instead of the field.
+- **Validating a group again from its typed values.** A `BeforeValidator` that splits a string fails on the tuple it made (probe), and a validator would see its own output.
+- **A framework check that every key the binding sets is read by the graph.** It needs the graph that the cut computes for each request. It would also refuse a parameter that only an optional output reads, when the graph lacks that output. The convention that defaults belong to the spec removes the cause instead.
 - **`apply(value=lambda ref: {'run': ref})`.** It says how the blank is filled, but not where the dataset is. Automatic-reduction rules need the place to count a run as done, so `at=` serves both.
 - **A reference to a whole list.** The model has no rule against it, but this PR refuses it with "not supported yet", for three reasons:
   - `fits(list[IofQ], list[sc.DataArray])` is `False`, while row by row `IofQ` fits `sc.DataArray`;
@@ -323,11 +328,8 @@ A log that the current code wrote may hold `@ref` deeper than today's places. Th
 
 ## Questions
 
-1. **`X | None` in `PipelineBinding`.** The proposal above refuses it with a key, and keeps `X | None` everywhere else as a plain value. That is a smaller step than refusing `| None` in the spec altogether: in a group field, and for the other two bindings, `None` reaches code that must branch on it, and nothing is hidden. `Sample.transmission: TransmissionFraction | None` stays as it is. The refusal can be lifted later, if a story needs a key rule for it. Do you agree, or do you want `| None` refused in the spec as well?
-> Simon: ok
+1. **Field validators.** The proposal above keeps them, by validating each parameter's value once, whole, in the call phase (see "Validation"). Agreed?
+> Simon:
 
-2. **Field validators in esslivedata.** esslivedata's `RangeModel` and `EdgesModel` have the same `@field_validator('stop')` as `ess.spec`'s, which they were copied from. To use them in a spec, esslivedata moves the check into a model validator, as above. That is a separate esslivedata PR, with no change in behaviour there, since esslivedata validates these models whole. Agreed?
-> Simon: I still feel this is odd -- forbidding field-validators entirely, for everything, just because some groups may contain references. The examples we see do not, since it is just numbers (range limites, edge params). But maybe there is little harm (except making it more tricky to highlight offending fields in the generated widgets in the UI?).
-
-3. **Unread keys** (see "`PipelineBinding`"). The check also refuses a parameter that only an optional output reads, when the graph has no provider for that output. The value would have no effect then, either. Agreed that this is refused too?
-> Simon: Do I understand correctly that this check required inspecting the sciline graph? The "default on the graph/binding" problem is real, and imho we should just avoid doing that (and make it the convention when authoring workflows), is checking this in the framework the right approach?
+2. **Defaults belong to the spec**, as a convention, with no framework check (see "`PipelineBinding`"). Agreed?
+> Simon:
