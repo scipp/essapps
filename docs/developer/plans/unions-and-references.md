@@ -326,10 +326,45 @@ A log that the current code wrote may hold `@ref` deeper than today's places. Th
   - a `list[Path]` output must not bring files past the access check.
 - **Keeping the depth limit.** Its stated reason is that the framework finds references without the spec. A walk of every depth does that too, with `@ref` reserved everywhere.
 
-## Questions
+## Decided
 
-1. **Field validators.** The proposal above keeps them, by validating each parameter's value once, whole, in the call phase (see "Validation"). Agreed?
-> Simon:
+All questions are settled. `X | None` with a key is refused in `PipelineBinding` only. Field validators stay allowed, by validating each value once in the call phase. Defaults belong to the spec, by convention.
 
-2. **Defaults belong to the spec**, as a convention, with no framework check (see "`PipelineBinding`"). Agreed?
-> Simon:
+## Implementation notes
+
+For an implementer starting from this file alone.
+
+**Setup.**
+- Start a new branch from `origin/main`, which has #72 and #75. The local `main` may be stale, so `git fetch` first.
+- `dd2d382` and `a580d4b` on `pipeline-copy-and-keys` are superseded by commit 0. Keep only their `.copy()` change and the test `test_make_pipeline_may_return_a_pipeline_it_holds`.
+- Create a `.venv` with `--system-site-packages`, holding editable sciline, essspec and essdispatch. Use that python; the conda base may shadow sciline.
+- Run `pytest -n auto` in `packages/essspec` and `packages/essdispatch` after each commit.
+- Edit the notebooks under `docs/developer/roles/` as `.ipynb` directly. They import `toy_sans.py` next to them. `nbconvert` stalls on notebooks with Output widgets, so run those cells by hand.
+
+**#78 first.** A client turns a model into a dict with `model_dump(exclude_unset=True)` (`as_values` in `records.py`). That drops a union alternative's tag, which is a default, so the backend cannot pick the alternative. #78 fixes this. It is small and merges cleanly into `origin/main`, so merge it before commit 3, or take its commit into the branch.
+
+**Where each commit starts.**
+
+| Commit | Start at |
+|---|---|
+| 0 | `PipelineBinding.__init__` (key table), `keys`, `_by_key`, `make_stage` (blanks) in `essspec/pipeline.py`; `toy_sans.py:313,327` and `pipeline_test.py` read `keys[...]` |
+| 1 | `checks.py` (the `DatasetRef` branch under `by_field`, about line 234), `batch.py` (`apply`, `try_apply`, `dataset_blank`), `rules.py` (`Rules._requests`, `record.request.datasets()`) |
+| 2 | `refs.py` (`places`, `iter_refs`, `map_refs`), `field_types.py` (`validated`, `by_field`, `inline`, `model_of`), `checks.py` (`_one`, `_group`, `_ref`, `_inline`), `_workflow_spec.py` (`_group_problems`, `_forms`, `_group_forms`, `_params_schema`, `takes_inline`) |
+| 3 | `_workflow_spec.py` (`_params_problems`, `_one_or_list`, `is_single` in `field_types.py`, `_forms` for `Annotated` unions), `field_types.fits`, `pipeline.py` (union keys by tag), #75's error locations in `refs.py` (`Loc`) |
+
+**Where the backend holds a request.** The record holds each value in its JSON form, with references as `@ref` objects. The backend reaches references only through `iter_refs` and `map_refs` (`backend.py:305, 820, 1284`), and `records.py` does the same (`Request.datasets()` and its siblings), so a walk of every depth in `refs.py` reaches them unchanged. `places` is called directly only in `checks.py:198,388` and `field_types.inline`. Requests are compared by these JSON forms, so a reference at depth compares as it does at the top.
+
+**Probes to start tests from.**
+- `probes-bindings/p1`: the beam centre with a held default. The resulting test now pins the docstring example, not a refusal.
+- `probes-requests/p1` and `p2`: unions, tags, error locations.
+- `probes-model/p1`: subclass and `NewType` alternatives.
+- The call-phase validation probe is in "Validation" above.
+
+All of these are in `.scratch/unions-and-references/`.
+
+**Docs.**
+- The README sections on requests, references, specs and bindings, and on `PipelineBinding`.
+- `automatic-reduction.md` (the blank a dataset fills).
+- `workflow-authors.ipynb`: section 1, the rules of the spec, including #72's union bullet; section 2, the routes to keys and the `| None` guidance.
+
+Describe the design as it is, with no history. The PR deletes this file, since the docstrings and the README then hold the design.
