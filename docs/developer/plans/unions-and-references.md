@@ -367,4 +367,4 @@ All of these are in `.scratch/unions-and-references/`.
 - `automatic-reduction.md` (the blank a dataset fills).
 - `workflow-authors.ipynb`: section 1, the rules of the spec, including #72's union bullet; section 2, the routes to keys and the `| None` guidance.
 
-Describe the design as it is, with no history. The PR deletes this file, since the docstrings and the README then hold the design.
+Describe the design as it is, with no history. This file stays out of the PR, since the docstrings and the README then hold the design.
