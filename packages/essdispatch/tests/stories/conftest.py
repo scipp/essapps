@@ -25,7 +25,15 @@ import pytest
 import scipp as sc
 from pydantic import BaseModel, ConfigDict, Field
 
-from ess.dispatch import Backend, Client, ClientEnded, Record, SpecId, Status
+from ess.dispatch import (
+    Backend,
+    Client,
+    ClientEnded,
+    NotReadable,
+    Record,
+    SpecId,
+    Status,
+)
 from ess.dispatch.log import Log
 from ess.dispatch.testing import (
     FakeDatasets,
@@ -715,7 +723,7 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
     def kept(ref: OutputRef) -> bool:
         try:
             client.output(records[ref.record], ref.output)
-        except LookupError:
+        except NotReadable:
             return False
         return True
 
@@ -736,7 +744,7 @@ def _replay(client: Client, records: Mapping[str, Record]) -> None:
             continue
         try:
             expected = client.output(record)
-        except LookupError:  # not kept by this client
+        except NotReadable:  # not kept by this client
             continue
         where = f'{record.id} {record.spec} {record.label} {record.member}'
         assert_close(client.output(again(record)), expected, where=where)

@@ -86,10 +86,11 @@ from ess.spec.field_types import (
     type_name,
     value_type,
 )
-from ess.spec.refs import as_ref, places
+from ess.spec.refs import Loc, ParamsError, as_ref, places
 
 from .datasets import DatasetSource, readable
-from .records import Request, SpecId, SubmitError, Template, read_refs
+from .errors import FieldError, SubmitError
+from .records import Request, SpecId, Template, read_refs
 
 type Spec = WorkflowSpec[Any, Any]
 
@@ -150,15 +151,14 @@ class Checks:
         backend's to check, which knows the table (see :func:`distinct`).
         """
         if not rows:
-            raise SubmitError('a push gives rows of a blank table, not none')
+            raise SubmitError.at((), 'a push gives rows of a blank table, not none')
         for table, given in rows.items():
             if table not in blanks:
-                raise SubmitError(
-                    f'a push gives rows of a blank table of the accumulator, '
-                    f'{list(blanks)}, not {table!r}'
+                raise SubmitError.at(
+                    (table,), f'not a blank table of the accumulator, {list(blanks)}'
                 )
             if not given:
-                raise SubmitError(f'a push into {table} has no rows')
+                raise SubmitError.at((table,), 'a push gives no rows')
         return self._values(read_refs(dict(rows)), proposal)
 
     def state(self, plain: Request, blanks: Collection[str]) -> str | None:
@@ -195,34 +195,35 @@ class Checks:
         """
         if not is_list(self.spec.params, name):
             group = by_field(value_type(self.spec.params.model_fields[name].annotation))
-            for where, field, item in places(name, value):
-                at_field = field is not None and where == f'{name}.{field}'
-                if where != name and not (group and at_field) and as_ref(item):
-                    raise SubmitError(
-                        f'{where}: {as_ref(item)} is a reference inside a value; a '
+            for loc, field, item in places(name, value):
+                at_field = field is not None and loc == (name, field)
+                if loc != (name,) and not (group and at_field) and as_ref(item):
+                    raise SubmitError.at(
+                        loc,
+                        f'{as_ref(item)} is a reference inside a value; a '
                         'reference stands for a whole value, a row of a list, or '
-                        'a field of a group'
+                        'a field of a group',
                     )
-            return self._one(name, name, value, proposal)
+            return self._one((name,), name, value, proposal)
         if isinstance(value, Ref):
-            raise SubmitError(
-                f'{name}: {value} is a reference to a whole list; a reference '
-                'stands for one row of a list parameter'
+            raise SubmitError.at(
+                (name,),
+                f'{value} is a reference to a whole list; a reference '
+                'stands for one row of a list parameter',
             )
         if not isinstance(value, list):
-            raise SubmitError(f'{name}: {value!r} is not a list')
+            raise SubmitError.at((name,), f'{value!r} is not a list')
         if name not in self.spec.tables and (
             need := _length_problem(self.spec, name, len(value))
         ):
-            raise SubmitError(f'{name}: {_rows_text(len(value))}; it needs {need}')
+            raise SubmitError.at((name,), f'{_rows_text(len(value))}; it needs {need}')
         return [
-            self._one(f'{name}[{i}]', name, cell, proposal)
-            for i, cell in enumerate(value)
+            self._one((name, i), name, cell, proposal) for i, cell in enumerate(value)
         ]
 
-    def _one(self, where: str, name: str, value: Any, proposal: str) -> Any:
+    def _one(self, loc: Loc, name: str, value: Any, proposal: str) -> Any:
         """
-        The value, or the row, ``value`` at ``where`` of parameter ``name`` as
+        The value, or the row, ``value`` at ``loc`` of parameter ``name`` as
         the record holds it: a reference, a dataset's resolved, an inline
         value if the parameter takes one, a group field by field, or ``None``
         if its type is optional.
@@ -234,34 +235,36 @@ class Checks:
             if isinstance(value, DatasetRef) and (file := file_field(group)):
                 value = {file: value}
             elif isinstance(value, Ref):
-                raise SubmitError(
-                    f'{where}: {value} names the whole of {type_name(tp)}, which '
+                raise SubmitError.at(
+                    loc,
+                    f'{value} names the whole of {type_name(tp)}, which '
                     'holds a file; it is given field by field, its file by '
                     'reference to a dataset, which stands for the whole if the '
-                    'group has one required file'
+                    'group has one required file',
                 )
             if isinstance(value, Mapping):
-                return self._group(where, group, value, proposal)
+                return self._group(loc, group, value, proposal)
         elif isinstance(value, Ref):
-            return self._ref(where, value, tp, proposal)
+            return self._ref(loc, value, tp, proposal)
         elif spec.has_json_form(name):
-            return self._inline(where, spec.params, name, value)
+            return self._inline(loc, spec.params, name, value)
         if value is None and _nullable(spec, name):
             return None
-        raise SubmitError(
-            f'{where}: {value!r} is not a reference; {type_name(tp)} has no JSON '
-            'form, so it is given by reference, a file as dataset(path=...)'
+        raise SubmitError.at(
+            loc,
+            f'{value!r} is not a reference; {type_name(tp)} has no JSON '
+            'form, so it is given by reference, a file as dataset(path=...)',
         )
 
     def _group(
         self,
-        where: str,
+        loc: Loc,
         group: type[BaseModel],
         value: Mapping[str, Any],
         proposal: str,
     ) -> dict[str, Any]:
         """
-        The group ``value`` at ``where``, given field by field, as the record
+        The group ``value`` at ``loc``, given field by field, as the record
         holds it: each field a reference, a dataset's resolved, an inline
         value, if its type has a JSON form, or ``None``, if it is optional; a
         field left out holds its default. Like the params model, the group is
@@ -269,15 +272,15 @@ class Checks:
         """
         fields = group.model_fields
         if unknown := sorted(value.keys() - fields.keys()):
-            raise SubmitError(f'{where}: {unknown}: not fields of {group.__name__}')
+            raise SubmitError.at(loc, f'{unknown}: not fields of {group.__name__}')
         held: dict[str, Any] = {}
         for name, info in fields.items():
-            at = f'{where}.{name}'
+            at = (*loc, name)
             tp, nullable = optional(info.annotation)
             cell = value.get(name, _LEFT_OUT)
             if cell is _LEFT_OUT:
                 if info.is_required():
-                    raise SubmitError(f'{at}: a required field, not given')
+                    raise SubmitError.at(at, 'a required field, not given')
                 default = info.get_default(call_default_factory=True)
                 held[name] = (
                     json_form(group, name, default, whole=True)
@@ -286,9 +289,10 @@ class Checks:
                 )
             elif isinstance(cell, Ref):
                 if element(tp) is not None:
-                    raise SubmitError(
-                        f'{at}: {cell} names a whole list; a field of a group '
-                        'that is a list is given inline'
+                    raise SubmitError.at(
+                        at,
+                        f'{cell} names a whole list; a field of a group '
+                        'that is a list is given inline',
                     )
                 held[name] = self._ref(at, cell, tp, proposal)
             elif has_json_form(group, name):
@@ -296,74 +300,73 @@ class Checks:
             elif cell is None and nullable:
                 held[name] = None
             else:
-                raise SubmitError(
-                    f'{at}: {cell!r} is not a reference; {type_name(tp)} has no '
+                raise SubmitError.at(
+                    at,
+                    f'{cell!r} is not a reference; {type_name(tp)} has no '
                     'JSON form, so it is given by reference, a file as '
-                    'dataset(path=...)'
+                    'dataset(path=...)',
                 )
         return held
 
     def _inline(
         self,
-        where: str,
+        loc: Loc,
         model: type[BaseModel],
         name: str,
         value: Any,
         whole: bool = False,
     ) -> Any:
         """
-        The inline value ``value`` at ``where`` of the field ``name`` of
+        The inline value ``value`` at ``loc`` of the field ``name`` of
         ``model``, a parameter or a field of a group, as the record holds it,
         its JSON form (see :func:`ess.spec.field_types.inline`).
         """
         try:
             return inline(model, name, value, whole)
         except PydanticSerializationError as error:
-            raise SubmitError(f'{self.id}: cannot be stored as JSON: {error}') from None
+            raise SubmitError.at(loc, f'cannot be stored as JSON: {error}') from None
         except ValidationError as error:
-            raise SubmitError(f'{self.id}: {_problems(error, where)}') from None
+            raise SubmitError(_problems(error, loc)) from None
         except ValueError as error:
-            raise SubmitError(f'{where}: {error}') from None
+            raise SubmitError.at(loc, str(error)) from None
 
-    def _ref(self, where: str, ref: Ref, tp: Any, proposal: str) -> Ref:
+    def _ref(self, loc: Loc, ref: Ref, tp: Any, proposal: str) -> Ref:
         """
-        The reference ``ref`` at ``where``, a dataset's resolved. A file is
+        The reference ``ref`` at ``loc``, a dataset's resolved. A file is
         given by reference to a dataset, one the proposal may read, and only a
         file is.
         """
         if not isinstance(ref, DatasetRef):
             if is_file(tp):
-                raise SubmitError(
-                    f'{where}: {ref} is not a dataset; a file, '
-                    f'{type_name(tp)}, is given by reference to a dataset'
+                raise SubmitError.at(
+                    loc,
+                    f'{ref} is not a dataset; a file, '
+                    f'{type_name(tp)}, is given by reference to a dataset',
                 )
             return ref
         if not is_file(tp):
-            raise SubmitError(
-                f'{where}: dataset {ref} does not fit {type_name(tp)}, '
-                'which is not a file'
+            raise SubmitError.at(
+                loc,
+                f'dataset {ref} does not fit {type_name(tp)}, which is not a file',
             )
         try:
             identity = self._datasets.resolve(ref)
         except KeyError:
-            raise SubmitError(f'{where}: unknown dataset {ref}') from None
+            raise SubmitError.at(loc, f'unknown dataset {ref}') from None
         metadata = self._datasets.metadata(identity)
         if not readable(metadata, proposal):
-            raise SubmitError(
-                f'{where}: dataset {ref} belongs to proposal {metadata["proposal"]}'
+            raise SubmitError.at(
+                loc, f'dataset {ref} belongs to proposal {metadata["proposal"]}'
             )
         return identity
 
 
-def _problems(error: ValidationError, where: str) -> str:
+def _problems(error: ValidationError, loc: Loc) -> list[FieldError]:
     """
-    What a validation error finds wrong, each with its place, the first part
-    of which, the parameter's name, is ``where``.
+    What a validation error of the value at ``loc`` finds wrong, each with its
+    place: ``loc``, then the place pydantic gives after the field's name.
     """
-    return '; '.join(
-        '.'.join([where, *map(str, e['loc'][1:])]) + f": {e['msg']}"
-        for e in error.errors()
-    )
+    return [FieldError(None, (*loc, *e['loc'][1:]), e['msg']) for e in error.errors()]
 
 
 def _nullable(spec: Spec, name: str) -> bool:
@@ -373,7 +376,7 @@ def _nullable(spec: Spec, name: str) -> bool:
     return optional(element(tp) if is_list(model, name) else tp)[1]
 
 
-def refs(spec: Spec, params: Mapping[str, Any]) -> list[tuple[str, Ref, Any]]:
+def refs(spec: Spec, params: Mapping[str, Any]) -> list[tuple[Loc, Ref, Any]]:
     """
     Each reference in ``params`` by name, with its place and the type of the
     data it must fit: the parameter's type, its element type for a list
@@ -382,14 +385,14 @@ def refs(spec: Spec, params: Mapping[str, Any]) -> list[tuple[str, Ref, Any]]:
     found = []
     for name, value in params.items():
         tp = value_type(spec.params.model_fields[name].annotation)
-        for where, field, item in places(name, value):
+        for loc, field, item in places(name, value):
             if (ref := as_ref(item)) is not None and (field is None or by_field(tp)):
                 at = tp if field is None else base(tp).model_fields[field].annotation
-                found.append((where, ref, value_type(at)))
+                found.append((loc, ref, value_type(at)))
     return found
 
 
-def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) -> None:
+def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, loc: Loc) -> None:
     """
     Refuse a reference to an output that ``spec`` lacks, or whose data do not
     fit ``tp``. A reference with a key names one element of an output, of the
@@ -398,21 +401,21 @@ def check_fit(spec: Spec, ref: OutputRef | AccumulatorRef, tp: Any, where: str) 
     """
     field = spec.outputs.model_fields.get(ref.output)
     if field is None:
-        raise SubmitError(f'{where}: {SpecId.of(spec)} has no output {ref.output!r}')
+        raise SubmitError.at(loc, f'{SpecId.of(spec)} has no output {ref.output!r}')
     data, _ = optional(field.annotation)
     if isinstance(ref, OutputRef) and ref.key is not None:
         if (item := element(data)) is None:
-            raise SubmitError(
-                f'{where}: {ref} names an element of an output without elements'
+            raise SubmitError.at(
+                loc, f'{ref} names an element of an output without elements'
             )
         if get_origin(data) is list and not re.fullmatch('0|[1-9][0-9]*', ref.key):
-            raise SubmitError(
-                f'{where}: {ref}: the key of an element of a list is an integer'
+            raise SubmitError.at(
+                loc, f'{ref}: the key of an element of a list is an integer'
             )
         data = item
     if not fits(data, tp):
-        raise SubmitError(
-            f'{where}: {ref}, of type {type_name(data)}, does not fit {type_name(tp)}'
+        raise SubmitError.at(
+            loc, f'{ref}, of type {type_name(data)}, does not fit {type_name(tp)}'
         )
 
 
@@ -430,8 +433,8 @@ def distinct(
         shown = to_json(row)
         first = seen[shown] if shown in seen else new.setdefault(shown, i)
         if first != i:
-            raise SubmitError(
-                f'{table}[{i}]: repeats {table}[{first}], {shown.decode()}'
+            raise SubmitError.at(
+                (table, i), f'repeats {table}[{first}], {shown.decode()}'
             )
     return new
 
@@ -445,8 +448,8 @@ def _fixed(
     """
     try:
         return fixed_values(spec, values, blanks)
-    except ValueError as error:
-        raise SubmitError(str(error)) from None
+    except ParamsError as error:
+        raise SubmitError.of(error) from None
 
 
 def _rows(spec: Spec, values: Mapping[str, Any], tables: Collection[str]) -> None:
@@ -468,8 +471,8 @@ def _lengths(spec: Spec, values: Mapping[str, Any], tables: Iterable[str]) -> No
     for table in tables:
         n = len(values.get(table) or [])
         if need := _length_problem(spec, table, n):
-            raise SubmitError(
-                f'{table}: the table has {_rows_text(n)}; it needs {need}'
+            raise SubmitError.at(
+                (table,), f'the table has {_rows_text(n)}; it needs {need}'
             )
 
 

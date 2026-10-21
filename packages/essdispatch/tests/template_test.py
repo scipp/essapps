@@ -14,7 +14,15 @@ from typing import Annotated, Any, NewType, Self
 import pytest
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from ess.dispatch import Client, SubmitError, Template, dataset, local
+from ess.dispatch import (
+    Client,
+    FieldError,
+    NotReadable,
+    SubmitError,
+    Template,
+    dataset,
+    local,
+)
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import DriverBinding, NoParams, StageCall, WorkflowSpec, function_binding
 
@@ -222,10 +230,21 @@ def test_a_template_drops_the_values_given_for_its_blanks() -> None:
 def test_a_fill_gives_each_blank_and_no_fixed_value() -> None:
     template = Template(SCALE, params={'scaling': Factor()}, blanks=('sample',))
 
-    with pytest.raises(ValueError, match=r"missing \['sample'\]"):
+    with pytest.raises(SubmitError, match=r'^sample: a blank, not filled$') as raised:
         template.fill()
-    with pytest.raises(ValueError, match='fixed by the template'):
+    assert raised.value.errors == (
+        FieldError(None, ('sample',), 'a blank, not filled'),
+    )
+    with pytest.raises(SubmitError, match='fixed by the template') as raised:
         template.fill(params={'scaling': Factor(), 'sample': dataset(run=1)})
+    assert [e.loc for e in raised.value.errors] == [('scaling',)]
+
+
+def test_a_call_through_a_stage_without_its_blank_is_refused(client: Client) -> None:
+    stage = client.stage(Template(SCALE, blanks=('sample',)))
+
+    with pytest.raises(SubmitError, match=r'^sample: a blank, not filled$'):
+        client.submit(stage)
 
 
 def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
@@ -236,18 +255,16 @@ def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
 
 
 def test_a_misspelt_name_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(
             Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
         )
-    with pytest.raises(SubmitError, match=r"\['sampel'\]: not parameters of"):
+    with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(Template(SCALE, blanks=('sampel',)))
 
 
 def test_a_required_value_neither_fixed_nor_blank_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r"\['sample'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match=r'^sample: a required parameter, not given$'):
         client.stage(Template(SCALE, blanks=('scaling',)))
 
 
@@ -308,12 +325,15 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
 def test_a_push_gives_rows_of_blank_tables(client: Client) -> None:
     acc = client.accumulator(UNSCALED)
     row = [dataset(run=1)]
-    fixed = r"blank table of the accumulator, \['sample'\], not 'scaling'"
+    fixed = r"^scaling: not a blank table of the accumulator, \['sample'\]$"
     refused = [
         (fixed, {'scaling': [Factor()]}),
         (fixed, {'sample': row, 'scaling': [Factor()]}),
-        (r"blank table of the accumulator, \['sample'\], not 'other'", {'other': row}),
-        ('a push into sample has no rows', {'sample': []}),
+        (
+            r"^other: not a blank table of the accumulator, \['sample'\]$",
+            {'other': row},
+        ),
+        ('^sample: a push gives no rows$', {'sample': []}),
         ('a push gives rows of a blank table, not none', {}),
     ]
     for reason, rows in refused:
@@ -365,9 +385,7 @@ def test_a_table_that_may_be_empty_is_given_without_rows(client: Client) -> None
 
     assert client.provenance(acc).request == plain.request
     assert client.output(acc, 'value') == client.output(plain, 'value') == 1.0
-    with pytest.raises(
-        SubmitError, match=r"\['scaling'\]: required parameters, not given"
-    ):
+    with pytest.raises(SubmitError, match='scaling: a required parameter, not given'):
         client.accumulator(Template(TOTAL, blanks=('sample',)))
 
 
@@ -378,7 +396,7 @@ def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
     datasets.corrupt(datasets.resolve(dataset(run=1)))
     acc.push(sample=[dataset(run=1)])
 
-    with pytest.raises(LookupError, match='push 0 failed: file signature not found'):
+    with pytest.raises(NotReadable, match='push 0 failed: file signature not found'):
         client.output(acc, 'value')
 
 
@@ -394,7 +412,7 @@ def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
         client.compute(USE, params={'positive': made})
     )
     assert 'not positive' in client.failure(client.compute(stage))
-    with pytest.raises(LookupError, match=r'push 0 failed: (?s:.*)not positive'):
+    with pytest.raises(NotReadable, match=r'push 0 failed: (?s:.*)not positive'):
         client.output(acc, 'value')
     with pytest.raises(SubmitError, match='the accumulator stopped'):
         acc.push(positive=[made])

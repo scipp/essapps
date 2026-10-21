@@ -774,7 +774,7 @@ assert provenance.request.params['time_range'] == found
 assert provenance.records() == [slicer]
 
 slices.push(time_range=[TimeRange(start=0, stop=2)])           # slice 0, typed in
-with pytest.raises(LookupError, match=r'push 1 failed: time_range\[3\]: repeats'):
+with pytest.raises(NotReadable, match=r'push 1 failed: time_range\[3\]: repeats'):
     client.output(slices, 'sliced')
 ```
 

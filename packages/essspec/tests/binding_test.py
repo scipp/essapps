@@ -15,6 +15,7 @@ from ess.spec import (
     function_binding,
 )
 from ess.spec.binding import fixed_values
+from ess.spec.refs import ParamsError
 
 
 class Scale(BaseModel):
@@ -144,10 +145,10 @@ def test_fixed_values_take_a_table_as_its_rows() -> None:
 @pytest.mark.parametrize(
     ('fixed', 'blanks', 'reason'),
     [
-        ({'sample': SAMPLES}, ('sample',), r"\['sample'\]: both fixed and blank"),
-        ({'speed': 1.0}, ('sample',), r"\['speed'\]: not parameters of sub-multi"),
-        ({}, ('speed',), r"\['speed'\]: not parameters of sub-multi"),
-        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
+        ({'sample': SAMPLES}, ('sample',), 'sample: both fixed and blank'),
+        ({'speed': 1.0}, ('sample',), 'speed: not a parameter of sub-multi'),
+        ({}, ('speed',), 'speed: not a parameter of sub-multi'),
+        ({}, ('can',), 'sample: a required parameter, not given'),
     ],
 )
 def test_fixed_values_refuse_names_that_do_not_fit(
@@ -155,6 +156,15 @@ def test_fixed_values_refuse_names_that_do_not_fit(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         fixed_values(SUB_MULTI, fixed, blanks)
+
+
+def test_fixed_values_refuse_every_name_at_its_place() -> None:
+    with pytest.raises(ParamsError) as raised:
+        fixed_values(SUB_MULTI, {'speed': 1.0}, ('can',))
+    assert raised.value.errors == (
+        (('speed',), 'not a parameter of sub-multi'),
+        (('sample',), 'a required parameter, not given'),
+    )
 
 
 def test_a_driver_is_made_from_the_fixed_values_that_are_not_tables(
@@ -193,7 +203,7 @@ def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:
     [
         ({}, ('scale', 'sample'), r"\['scale'\]: the blanks of an accumulator are"),
         ({}, ('runs',), r"\['runs'\]: the blanks of an accumulator are tables"),
-        ({}, ('can',), r"\['sample'\]: required parameters, not given"),
+        ({}, ('can',), 'sample: a required parameter, not given'),
     ],
 )
 def test_an_accumulator_refuses_values_that_do_not_fit(

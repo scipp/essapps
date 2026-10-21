@@ -49,6 +49,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
+from .refs import ParamsError
 
 type StageCall[O] = Callable[[Mapping[str, Any]], O]
 """What ``make_stage`` returns: the outputs from the values of the blanks."""
@@ -164,17 +165,21 @@ def fixed_values(
     The values of ``fixed``, by name, with the default of each parameter in
     neither ``fixed`` nor ``blanks``.
 
-    Raises ``ValueError`` if a name is both fixed and blank, if either names
-    no parameter of the spec, or if one without a default is in neither.
+    Raises :class:`~ess.spec.refs.ParamsError`, with a reason for each name,
+    if a name is both fixed and blank, if either names no parameter of the
+    spec, or if one without a default is in neither.
     """
     fields = spec.params.model_fields
-    if unknown := sorted((fixed.keys() | set(blanks)) - fields.keys()):
-        raise ValueError(f'{unknown}: not parameters of {spec.name}')
-    if both := sorted(fixed.keys() & set(blanks)):
-        raise ValueError(f'{both}: both fixed and blank')
+    unknown = sorted((fixed.keys() | set(blanks)) - fields.keys())
+    both = sorted(fixed.keys() & set(blanks))
     left = {n: f for n, f in fields.items() if n not in fixed and n not in blanks}
-    if missing := [n for n, f in left.items() if f.is_required()]:
-        raise ValueError(f'{missing}: required parameters, not given')
+    missing = [n for n, f in left.items() if f.is_required()]
+    if unknown or both or missing:
+        raise ParamsError(
+            [((n,), f'not a parameter of {spec.name}') for n in unknown]
+            + [((n,), 'both fixed and blank') for n in both]
+            + [((n,), 'a required parameter, not given') for n in missing]
+        )
     defaults = {
         name: info.get_default(call_default_factory=True, validated_data={})
         for name, info in left.items()

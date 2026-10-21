@@ -25,7 +25,7 @@ names its kind, so a reference is found in plain data without a spec::
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -151,32 +151,64 @@ def as_ref(value: Any) -> Ref | None:
         raise ValueError(f'{value!r}: not a reference to {kind}: {problems}') from None
 
 
-def _ref_at(where: str, value: Any) -> Ref | None:
-    """:func:`as_ref` of ``value``, whose error names its place ``where``."""
+type Loc = tuple[str | int, ...]
+"""
+A place in the params of a request, as pydantic's errors give one: the
+parameter's name, then the index of a row or the name of a field, such as
+``('runs', 2, 'transmission')``.
+"""
+
+
+def loc_text(loc: Loc) -> str:
+    """A place as a message names it, such as ``runs[2].transmission``."""
+    return ''.join(
+        f'[{part}]' if isinstance(part, int) else f'.{part}' if i else part
+        for i, part in enumerate(loc)
+    )
+
+
+class ParamsError(ValueError):
+    """
+    Params that are refused, with each reason at its place: ``errors`` lists
+    ``(loc, msg)`` pairs, as pydantic's errors give them, and the message
+    joins them, such as ``runs[1]: ...; sample: a required parameter, not
+    given``.
+    """
+
+    def __init__(self, errors: Iterable[tuple[Loc, str]]) -> None:
+        self.errors = tuple(errors)
+        super().__init__(self.errors)
+
+    def __str__(self) -> str:
+        return '; '.join(f'{loc_text(loc)}: {msg}' for loc, msg in self.errors)
+
+
+def _ref_at(loc: Loc, value: Any) -> Ref | None:
+    """:func:`as_ref` of ``value``; its error is a ``ParamsError`` at ``loc``."""
     try:
         return as_ref(value)
     except ValueError as error:
-        raise ValueError(f'{where}: {error}') from None
+        raise ParamsError([(loc, str(error))]) from None
 
 
-def places(name: str, value: Any) -> list[tuple[str, str | None, Any]]:
+def places(name: str, value: Any) -> list[tuple[Loc, str | None, Any]]:
     """
     The places in the value of the parameter ``name`` where a request may
     hold a reference, each with the field of a group it is at, if any, and
     what it holds: the value, or each element of a list, such as
-    ``runs[2]``, and each field of one of these that is an object but not a
-    reference, the inline value of a group, such as ``sample.run`` or
-    ``runs[2].run``; never deeper.
+    ``('runs', 2)``, and each field of one of these that is an object but not
+    a reference, the inline value of a group, such as ``('sample', 'run')``
+    or ``('runs', 2, 'run')``; never deeper.
     """
     if isinstance(value, list):
-        tops = [(f'{name}[{i}]', item) for i, item in enumerate(value)]
+        tops = [((name, i), item) for i, item in enumerate(value)]
     else:
-        tops = [(name, value)]
-    found: list[tuple[str, str | None, Any]] = []
-    for where, item in tops:
-        found.append((where, None, item))
+        tops = [((name,), value)]
+    found: list[tuple[Loc, str | None, Any]] = []
+    for loc, item in tops:
+        found.append((loc, None, item))
         if _is_group(item):
-            found.extend((f'{where}.{f}', f, v) for f, v in item.items())
+            found.extend(((*loc, f), f, v) for f, v in item.items())
     return found
 
 
@@ -185,39 +217,40 @@ def _is_group(value: Any) -> bool:
     return isinstance(value, Mapping) and '@ref' not in value
 
 
-def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[str, Ref]]:
+def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
     """
     Each reference in the params of a request, with its place, such as
-    ``sample``, ``runs[2]``, or ``runs[2].transmission``.
+    ``('sample',)``, ``('runs', 2)``, or ``('runs', 2, 'transmission')``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
     form, and is looked for at the places :func:`places` names. Any other
-    value is skipped; a malformed reference raises ``ValueError`` (see
-    :func:`as_ref`).
+    value is skipped; a malformed reference raises :class:`ParamsError` at
+    its place (see :func:`as_ref`).
     """
     for name, value in params.items():
-        for where, _, item in places(name, value):
-            if (ref := _ref_at(where, item)) is not None:
-                yield where, ref
+        for loc, _, item in places(name, value):
+            if (ref := _ref_at(loc, item)) is not None:
+                yield loc, ref
 
 
 def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
     """
     The params of a request, by name, with each reference replaced by
     ``fn(ref)``; the params are as :func:`iter_refs` takes them, and any other
-    value is kept.
+    value is kept. A malformed reference raises :class:`ParamsError` at its
+    place.
     """
 
-    def at(where: str, item: Any, group: bool) -> Any:
-        if (ref := _ref_at(where, item)) is not None:
+    def at(loc: Loc, item: Any, group: bool) -> Any:
+        if (ref := _ref_at(loc, item)) is not None:
             return fn(ref)
         if group and _is_group(item):
-            return {f: at(f'{where}.{f}', v, False) for f, v in item.items()}
+            return {f: at((*loc, f), v, False) for f, v in item.items()}
         return item
 
     def one(name: str, value: Any) -> Any:
         if isinstance(value, list):
-            return [at(f'{name}[{i}]', item, True) for i, item in enumerate(value)]
-        return at(name, value, True)
+            return [at((name, i), item, True) for i, item in enumerate(value)]
+        return at((name,), value, True)
 
     return {name: one(name, value) for name, value in params.items()}
