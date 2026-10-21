@@ -324,10 +324,10 @@ A log that the current code wrote may hold `@ref` deeper than today's places. Th
 ## Questions
 
 1. **`X | None` in `PipelineBinding`.** The proposal above refuses it with a key, and keeps `X | None` everywhere else as a plain value. That is a smaller step than refusing `| None` in the spec altogether: in a group field, and for the other two bindings, `None` reaches code that must branch on it, and nothing is hidden. `Sample.transmission: TransmissionFraction | None` stays as it is. The refusal can be lifted later, if a story needs a key rule for it. Do you agree, or do you want `| None` refused in the spec as well?
-> Simon:
+> Simon: ok
 
 2. **Field validators in esslivedata.** esslivedata's `RangeModel` and `EdgesModel` have the same `@field_validator('stop')` as `ess.spec`'s, which they were copied from. To use them in a spec, esslivedata moves the check into a model validator, as above. That is a separate esslivedata PR, with no change in behaviour there, since esslivedata validates these models whole. Agreed?
-> Simon:
+> Simon: I still feel this is odd -- forbidding field-validators entirely, for everything, just because some groups may contain references. The examples we see do not, since it is just numbers (range limites, edge params). But maybe there is little harm (except making it more tricky to highlight offending fields in the generated widgets in the UI?).
 
 3. **Unread keys** (see "`PipelineBinding`"). The check also refuses a parameter that only an optional output reads, when the graph has no provider for that output. The value would have no effect then, either. Agreed that this is refused too?
-> Simon:
+> Simon: Do I understand correctly that this check required inspecting the sciline graph? The "default on the graph/binding" problem is real, and imho we should just avoid doing that (and make it the convention when authoring workflows), is checking this in the framework the right approach?
