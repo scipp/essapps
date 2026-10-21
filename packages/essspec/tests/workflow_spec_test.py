@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, NewType, TypedDict
+from typing import Annotated, Any, Literal, NewType, TypedDict
 
 import pydantic
 import pytest
@@ -63,6 +63,27 @@ class Node(BaseModel):
 
 
 ReductionOfCan = NewType('ReductionOfCan', Reduction)
+
+
+class Scale(BaseModel):
+    """A group that holds a union."""
+
+    factor: int | float = 1
+
+
+class ByMonitor(BaseModel):
+    mode: Literal['monitor']
+
+
+class ByTime(BaseModel):
+    mode: Literal['time']
+    seconds: float
+
+
+class Normalization(BaseModel):
+    """A group that holds a discriminated union of groups."""
+
+    by: ByMonitor | ByTime = Field(ByMonitor(mode='monitor'), discriminator='mode')
 
 
 class Mode(Enum):
@@ -278,6 +299,11 @@ class TestModelRules:
             {'params': model('P', reduction=(ReductionOfCan, ...))},
             {'params': model('P', bins=(int, 2), mode=(Mode, Mode.fast))},
             {'params': model('P', tree=(Node, ...))},
+            {
+                'params': model(
+                    'P', scale=(Scale, ...), normalization=(Normalization, ...)
+                )
+            },
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
         ],
     )
@@ -309,6 +335,15 @@ class TestModelRules:
             (
                 {'params': model('P', reduction=(list[Reduction] | None, None))},
                 'P.reduction: a parameter is a type',
+            ),
+            (
+                {'params': model('P', factor=(int | float, 1))},
+                'P.factor: a parameter is a type, possibly optional, or a list of one; '
+                'a group may hold a union as one of its fields',
+            ),
+            (
+                {'params': model('P', by=(list[ByMonitor | ByTime], []))},
+                'P.by: .*; a group may hold a union',
             ),
             (
                 {

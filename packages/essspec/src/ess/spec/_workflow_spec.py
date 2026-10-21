@@ -358,8 +358,10 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
         if not (_one_or_list(field.annotation) and is_single(tp)):
+            union = get_origin(tp) in (Union, UnionType)
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
+                + ('; a group may hold a union as one of its fields' if union else '')
             )
             continue
         if any(
