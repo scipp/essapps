@@ -1,6 +1,6 @@
 # Unions and references at any place
 
-A proposal for PR #73, to review before the work starts. Three reviewers read an earlier draft, one each for the model, for requests and the file access check, and for bindings and the commit stack. Their reports and probes are local, in `.scratch/unions-and-references/`. The open points are under "Questions".
+A proposal that grew out of PR #73, to review before the work starts. Three reviewers read an earlier draft, one each for the model, for requests and the file access check, and for bindings and the commit stack. Their reports and probes are local, in `.scratch/unions-and-references/`. The open points are under "Questions".
 
 ## Summary
 
@@ -335,7 +335,8 @@ All questions are settled. `X | None` with a key is refused in `PipelineBinding`
 For an implementer starting from this file alone.
 
 **Setup.**
-- Start a new branch from `origin/main`, which has #72 and #75. The local `main` may be stale, so `git fetch` first.
+- This plan lives on the branch `pipeline-copy-and-keys` (PR #73, closed), which is its backup.
+- Implement on a new branch `unions-and-references`, from `origin/main` once #78 is merged. `origin/main` already has #72 and #75. The local `main` may be stale, so `git fetch` first. Open a new PR from it, and point to it from #73.
 - `dd2d382` and `a580d4b` on `pipeline-copy-and-keys` are superseded by commit 0. Keep only their `.copy()` change and the test `test_make_pipeline_may_return_a_pipeline_it_holds`.
 - Create a `.venv` with `--system-site-packages`, holding editable sciline, essspec and essdispatch. Use that python; the conda base may shadow sciline.
 - Run `pytest -n auto` in `packages/essspec` and `packages/essdispatch` after each commit.
