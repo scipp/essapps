@@ -167,8 +167,9 @@ A field of a group left out takes its default.
 ```
 
 The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
-A parameter, or a field of a group, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal`.
-The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has:
+A parameter, or a field of a group, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal` of one string, its own, such as `Literal['find']`.
+The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has.
+It writes the tag even where the alternative has a default for it, and the params schema requires it:
 
 ```python
 class GivenCentre(BaseModel):                     # an alternative: the centre, given
@@ -200,7 +201,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each parameter is a type, possibly optional, or a list of one. The type may be a union, such as a union of groups.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
-- A union of groups is discriminated by the name of its tag field, not by a callable, and the tag field has no alias.
+- A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It does not hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`.
 - A table has no default (see Combining runs: tables).

@@ -549,6 +549,17 @@ def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None
     assert error.msg.endswith('a tag is written inline, never as a reference')
 
 
+@pytest.mark.parametrize('tag', [['run'], {'kind': 'run'}, 1, 'other'])
+def test_a_value_that_is_no_tag_is_refused_at_the_tag(client: Client, tag: Any) -> None:
+    centre = {'by': {'kind': tag, 'run': dataset_ref(run=1)}}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': centre})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre', 'by', 'kind')
+    assert error.msg == f"{tag!r} is not a tag, one of ['run', 'given']"
+
+
 def test_a_reference_in_an_alternative_fits_its_field(
     client: Client, loaded: Record
 ) -> None:
@@ -700,6 +711,16 @@ def test_the_schema_of_a_union_offers_a_reference_to_an_alternative() -> None:
 
     assert inline['discriminator']['propertyName'] == 'kind'
     assert ref['dataType'] == 'BeamCentre'
+
+
+def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
+    schema = CENTRED.serialize().params_schema
+    inline, _ = schema['properties']['beam_centre']['anyOf']
+
+    for alternative in inline['oneOf']:
+        form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
+        assert 'kind' in form['required']
+        assert 'default' not in form['properties']['kind']
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:

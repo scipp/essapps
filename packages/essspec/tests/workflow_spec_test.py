@@ -120,6 +120,10 @@ class RunPaths(TypedDict):
     sample: SampleFile
 
 
+SlowTime = NewType('SlowTime', ByTime)
+FastTime = NewType('FastTime', ByTime)
+
+
 class AliasedA(BaseModel):
     mode: Literal['a'] = Field('a', alias='m')
 
@@ -546,6 +550,36 @@ class TestModelRules:
                     )
                 },
                 'P.n: N.by: AliasedA.mode: a tag has no alias',
+            ),
+            *(
+                (
+                    {
+                        'params': model(
+                            'P',
+                            by=(
+                                Annotated[
+                                    model('A', mode=(tag, ...)) | ByTime,
+                                    Field(discriminator='mode'),
+                                ],
+                                ...,
+                            ),
+                        )
+                    },
+                    'P.by: A.mode: the tag of a union is a Literal of one string',
+                )
+                for tag in (Literal['a', 'b'], Literal[Mode.fast], Literal[1])
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            Annotated[SlowTime | FastTime, Field(discriminator='mode')],
+                            ...,
+                        ),
+                    )
+                },
+                "P.by: ByTime.mode: 'time' is the tag of SlowTime and of FastTime",
             ),
             (
                 {

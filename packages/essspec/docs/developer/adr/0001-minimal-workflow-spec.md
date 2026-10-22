@@ -182,8 +182,10 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - Each output's type is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, where no dataset can give it.
-- A union of groups is discriminated by the name of its tag field, a
-  `Literal` without an alias, not by a callable.
+- A union of groups is discriminated by the name of its tag field, not by a
+  callable. The tag field of each alternative is a `Literal` of one string,
+  its own, such as `Literal['find']`, without an alias. A union that holds a
+  group holds groups only: a value of a type that is not a group has no tag.
 - A group has no serializers, computed fields, or aliases: the record holds a
   group as the object of its places, each in the JSON form of its own type,
   and these would make the group's own JSON form differ from it. It may have

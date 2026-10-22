@@ -68,8 +68,11 @@ framework: what the framework needs, it reads from the field types (see
   tuple, a dict, or a dataclass, whose contents are not places, so no
   dataset can give it.
 - A union of groups, a parameter or inside a group, is discriminated by the
-  name of its tag field, a ``Literal`` without an alias, not by a callable,
-  so that the tag of a value tells its alternative. A field of a group that
+  name of its tag field, not by a callable, so that the tag of a value tells
+  its alternative. The tag field of each alternative is a ``Literal`` of one
+  string, its own, such as ``Literal['find']``, without an alias. A union
+  that holds a group holds groups only, not ``GivenCentre | float``: a value
+  of a type that is not a group has no tag. A field of a group that
   is a dict, or a list that may be ``None``, has a JSON form, since its
   contents are not places and no reference stands for a whole one.
 - A group has no serializers, computed fields, or aliases: the record holds
@@ -133,6 +136,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 from .field_types import (
     base,
@@ -615,7 +619,7 @@ def _forms(tp: Any, metadata: Sequence[Any], json: bool, rows: bool) -> Any:
         value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
     elif (union := alternatives(value)) is not None:
         tag, groups = union
-        members = tuple(dict.fromkeys(groups.values()))
+        members = tuple(groups.values())
         forms = tuple(_group_forms(base(m), tag) for m in members)
         # An output fits the union if it fits an alternative without a file.
         if fileless := tuple(m for m in members if not holds_file(m)):
@@ -637,14 +641,17 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
     A model of the fields of a group, each replaced by the forms it takes
     (see :func:`_field_forms`); the tag field ``tag`` of an alternative of a
-    union by itself, since a tag is written inline only.
+    union by itself, since a tag is written inline only, and required, since
+    a request always writes it.
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
         fields[name] = (
             info.annotation if name == tag else _field_forms(group, name),
             Field(
-                default=info.get_default(call_default_factory=True),
+                default=PydanticUndefined
+                if name == tag
+                else info.get_default(call_default_factory=True),
                 title=info.title,
                 description=info.description,
                 examples=info.examples,

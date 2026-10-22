@@ -46,9 +46,10 @@ not a place is refused.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
-alternative is a group with the *tag* field ``kind`` typed as a ``Literal``.
-The tag is written inline, never as a reference: it says which
-alternative's fields the object has, and so what each of them takes.
+alternative is a group with the *tag* field ``kind`` typed as a ``Literal``
+of one string, its own, such as ``Literal['find']``. The tag is written
+inline, never as a reference: it says which alternative's fields the object
+has, and so what each of them takes.
 
 A group with no reference inside, at any depth, is an inline value. In the
 request phase, :func:`held` validates it whole, from its JSON form, so that
@@ -245,10 +246,9 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] |
         raise _refused(
             (*loc, tag), f'{ref}: a tag is written inline, never as a reference'
         )
-    if (group := groups.get(value[tag])) is None:
-        raise _refused(
-            (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
-        )
+    given = value[tag]
+    if not isinstance(given, str) or (group := groups.get(given)) is None:
+        raise _refused((*loc, tag), f'{given!r} is not a tag, one of {list(groups)}')
     return base(group)
 
 
@@ -350,7 +350,7 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
 
 def alternatives(
     annotation: Any, discriminator: Any = None
-) -> tuple[str, dict[Any, Any]] | None:
+) -> tuple[str, dict[str, Any]] | None:
     """
     The tag and the alternatives, by the value of their tag, of the union of
     groups that ``annotation``, possibly optional, is; ``None`` if it is not
@@ -362,8 +362,9 @@ def alternatives(
     Raises ``ValueError`` for a union that the framework cannot take apart
     by the tag of a value: one with a type that is not a group, without a
     discriminator, or with one that is not the name of a field, such as a
-    callable ``Discriminator``; or one whose tag field has an alias or is not
-    a ``Literal``.
+    callable ``Discriminator``; one whose tag field has an alias or is not a
+    ``Literal`` of one string, such as ``Literal['find']``; or one with two
+    alternatives of one tag.
     """
     tp = annotation
     while True:
@@ -394,21 +395,34 @@ def alternatives(
             'a union of groups has a discriminator, the name of its tag field, '
             "such as Field(discriminator='kind')"
         )
-    groups: dict[Any, Any] = {}
+    groups: dict[str, Any] = {}
     for member in members:
-        group = base(member)
-        info = group.model_fields.get(discriminator)
-        if info is None or get_origin(info.annotation) is not Literal:
+        where = f'{base(member).__name__}.{discriminator}'
+        info = base(member).model_fields.get(discriminator)
+        tags = () if info is None else _tags(info.annotation)
+        if len(tags) != 1 or type(tags[0]) is not str:
             raise ValueError(
-                f'{group.__name__}.{discriminator}: the tag of a union is a Literal'
+                f"{where}: the tag of a union is a Literal of one string, such as "
+                "Literal['find']"
             )
         if any(
             getattr(info, a) is not None
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
-            raise ValueError(f'{group.__name__}.{discriminator}: a tag has no alias')
-        groups.update(dict.fromkeys(get_args(info.annotation), member))
+            raise ValueError(f'{where}: a tag has no alias')
+        (tag,) = tags
+        if tag in groups:
+            raise ValueError(
+                f'{where}: {tag!r} is the tag of {type_name(groups[tag])} and of '
+                f'{type_name(member)}; each alternative has a tag of its own'
+            )
+        groups[tag] = member
     return discriminator, groups
+
+
+def _tags(annotation: Any) -> tuple[Any, ...]:
+    """The values of ``annotation`` if it is a ``Literal``, else none."""
+    return get_args(annotation) if get_origin(annotation) is Literal else ()
 
 
 def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
@@ -422,7 +436,7 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
     if is_group(tp):
         return [base(tp)]
     union = alternatives(slot.annotation, slot.discriminator)
-    return [] if union is None else list(dict.fromkeys(map(base, union[1].values())))
+    return [] if union is None else [base(g) for g in union[1].values()]
 
 
 def file_off_place(model: type[BaseModel], name: str) -> bool:

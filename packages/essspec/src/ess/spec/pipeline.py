@@ -151,9 +151,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             if (union := alternatives(f.annotation, f.discriminator)) is not None
         }
         own = {
-            n: tuple(dict.fromkeys(unions[n][1].values()))
-            if n in unions
-            else (plain(f.annotation),)
+            n: tuple(unions[n][1].values()) if n in unions else (plain(f.annotation),)
             for n, f in declared.items()
         }
         if wrong := sorted(
@@ -194,7 +192,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         self.spec = spec
         self._keys = MappingProxyType(all_keys)
         # The tag field of each union with keys, and its key by tag.
-        self._tags: dict[str, tuple[str, dict[Any, Key]]] = {}
+        self._tags: dict[str, tuple[str, dict[str, Key]]] = {}
         for name, (tag, groups) in unions.items():
             if all_keys[name]:
                 key_of = dict(zip(own[name], all_keys[name], strict=True))
