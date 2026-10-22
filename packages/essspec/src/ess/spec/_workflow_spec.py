@@ -46,11 +46,9 @@ written as its root value::
 
     class Sample(BaseModel):
         run: SampleFile
-        transmission: Transmission | None = Field(
-            None, description="None: the one in the run's file"
-        )
+        mask: PixelMask | None = None  # None: no pixels masked
 
-    {'sample': {'run': dataset(run=101), 'transmission': t.ref('transmission')}}
+    {'sample': {'run': dataset(run=101), 'mask': m.ref('mask')}}
     {'sample': {'run': dataset(run=101)}}  # defaults for the rest
 
 A request lives in two phases. In the *request phase*, before any data is

@@ -147,9 +147,16 @@ CanFile = NewType('CanFile', Path)
 Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
+class FromFile(BaseModel):                        # the transmission in the run's file
+    kind: Literal['file'] = 'file'
+
+class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
+    kind: Literal['computed'] = 'computed'
+    value: Transmission
+
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = Field(None, description="None: the one in the run's file")
+    transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
@@ -229,8 +236,9 @@ runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
 A request that leaves out a parameter, or a field of a group, never leaves out
-a correction that a correct reduction needs. The default of `reduction` is a setting, and the
-transmission `None` of a `Sample` takes the one in the run's file. The can run
+a correction that a correct reduction needs. The default of `reduction` is a
+setting, and the default transmission of a `Sample`, `FromFile()`, takes the
+one in the run's file. The can run
 has no default, so a request or a template that leaves it out is refused. A
 correction that a correct reduction needs, but that a request may still leave
 out, is typed `X | None` with no default, such as

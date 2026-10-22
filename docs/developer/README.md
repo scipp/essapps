@@ -124,9 +124,16 @@ CanFile = NewType('CanFile', Path)                # a NeXus file of an empty-can
 Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
+class FromFile(BaseModel):                        # the transmission in the run's file
+    kind: Literal['file'] = 'file'
+
+class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
+    kind: Literal['computed'] = 'computed'
+    value: Transmission
+
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = Field(None, description="None: the one in the run's file")
+    transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
 
 class IofQSettings(BaseModel):                    # the parameters that all runs share
     reduction: Reduction = Field(default_factory=Reduction)
@@ -159,7 +166,7 @@ The type at the place decides which of the two it accepts, with `| None` removed
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
 For the same reason a reference to an output whose type holds a file, such as an output of type `Sample`, is refused.
 A field of a group left out takes its default.
-`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
+`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `ComputedTransmission`, which fits the union `FromFile | ComputedTransmission`:
 
 ```python
 {'sample': {'run': dataset(run=611), 'transmission': t611.ref('transmission')}}
@@ -199,22 +206,15 @@ A UI shows `X | None` as a toggle, and a union as a choice between its alternati
 mask: PixelMask | None = None                     # [ ] Mask
 direct_beam: DirectBeamFile | None               # [x] Direct beam  Run: [60340]
 
-# not `transmission: TransmissionFraction | None  # None: the one in the run's file`,
+transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
+# Transmission: (•) from the run's file  ( ) computed: [from a record ▾]
+# not `transmission: Transmission | None  # None: the one in the run's file`,
 # whose toggle, off, reads as "no transmission correction"
-class FromFile(BaseModel):                        # an alternative without fields
-    kind: Literal['file'] = 'file'
-
-class TransmissionFraction(BaseModel):
-    kind: Literal['given'] = 'given'
-    value: float = Field(gt=0, le=1)
-
-transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='kind')] = FromFile()
-# Transmission: (•) from the sample's file  ( ) given: [0.75]
 ```
 
 `direct_beam` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
-A data value, such as a `Transmission` array, is an alternative only inside a group of its own, `GivenTransmission(kind='given', value: Transmission)`, which adds a level to every request and reference of it.
-Where that level is not worth it, a data value typed `X | None` may mean something other than *without X*, as the `transmission` of `Sample` above does, and its field's `description`, which a UI shows, says what.
+A data value obtained in one of several ways is a field of an alternative, as the `Transmission` array of `ComputedTransmission` above, since a union holds groups only.
+The workflow that computes it outputs the alternative, so that a reference to the output fits the union.
 The reasons are [ADR 0008](../../packages/essspec/docs/developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
@@ -241,7 +241,7 @@ A check across parameters, such as a Q range that the wavelength band and the de
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
 **Defaults.** A request that leaves out a parameter, or a field of a group, never leaves out a correction that a correct reduction needs.
-`reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file.
+`reduction` has a default, a setting, and so has the transmission of a `Sample`, `FromFile()`, which takes the one in the run's file.
 The can run has none, so a request or a template that leaves it out is refused, instead of computing I(Q) without the can subtracted.
 A correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, such as `direct_beam: DirectBeamFile | None`: the request writes `None` to leave it out, and its record says so.
 A mask, which a correct reduction does not need, may default to `None`.
@@ -561,7 +561,7 @@ result = client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611)}
 **A row of several values.** A value that differs per run, such as a motor position, is in the run's file.
 A value that the file lacks or has wrong is a field of the row's group, next to the run, so the request and its record hold it.
 Each field of a row is given in its own form.
-Here the transmission of run 611 is the output of `t611`, and run 612 takes the default, `None`:
+Here the transmission of run 611 is the output of `t611`, and run 612 takes the default, `FromFile()`:
 
 ```python
 client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611), 'transmission': t611.ref('transmission')},
@@ -627,7 +627,7 @@ Values that belong to one run are fields of one row, such as the transmission of
 
 ```python
 iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmission')},
-                  {'run': dataset(run=616)}])              # 616 with the transmission None
+                  {'run': dataset(run=616)}])              # 616 with the transmission in its file
 ```
 
 A push of no rows is refused.
@@ -787,7 +787,7 @@ A stage or an accumulator is made from some values only, so `make_stage` and `ma
 
 ```python
 {'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
- 'sample': [Sample(run=path_611), Sample(run=path_612, transmission=t612)]}      # a table as the list of its rows
+ 'sample': [Sample(run=path_611), Sample(run=path_612, transmission=t612)]}      # a table as the list of its rows; t612 a ComputedTransmission
 ```
 
 `fixed` holds the fixed values, and `blanks` names the others, a table among them.

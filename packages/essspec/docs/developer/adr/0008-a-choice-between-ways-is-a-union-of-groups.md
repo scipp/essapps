@@ -95,8 +95,21 @@ Transmission: (•) from the sample's file  ( ) given: [0.75]  [or from a record
 A toggle that is off reads as "without X", so `None` must mean that.
 A type `U | None`, for a union `U`, is a toggle with a choice inside.
 This is a guideline, not a rule the framework checks.
-A data value is an alternative only inside a group of its own, `GivenTransmission(kind='given', value: Transmission)`, which adds a level to every request and reference of it.
-Where that level is not worth it, a data value typed `X | None` may mean something other than "without X", and its field's `description`, which a UI shows, says what.
+It has no exception for data values.
+A data value obtained in one of several ways is a field of an alternative, since a union holds groups only.
+The workflow that computes it outputs the alternative, so that a reference to the output fits the union without a level in between:
+
+```python
+Transmission = NewType('Transmission', sc.DataArray)
+
+class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
+    kind: Literal['computed'] = 'computed'
+    value: Transmission
+
+transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
+
+{'transmission': t611.ref('transmission')}   # t611's output is a ComputedTransmission
+```
 
 **A default never leaves out a correction that a correct reduction needs.**
 A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently left out.
@@ -165,6 +178,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 
 - **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it: a group that holds a run cannot be disabled without naming a run. An output of one mode's type does not fit.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
+- **An exception for data values**, whose `None` could mean something else when the field's description says what. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach. The alternative that holds the data value costs no level in a request when the workflow that computes it outputs the alternative.
 - **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. An optional data value would need a wrapper group in every request, and so would a field of a group, such as a transmission computed for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.
