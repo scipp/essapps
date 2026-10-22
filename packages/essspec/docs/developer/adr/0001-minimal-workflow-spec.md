@@ -193,7 +193,9 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   validated whole. It does not hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the
   place, which round-trips and holds no `@ref` object at any depth; of a type
-  without a JSON form, `None` or `[]`.
+  without a JSON form, `None` or `[]`. It is the value that validating it
+  gives, since pydantic does not validate a default: a group's default is an
+  instance, not the object of its fields.
 - A table has no default (see the multi-run spec below).
 - The params model has no field validators, serializers, computed fields, or
   aliases, and no `default_factory` that takes the other values. A list

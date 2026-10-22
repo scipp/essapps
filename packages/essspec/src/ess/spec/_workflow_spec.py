@@ -86,7 +86,9 @@ framework: what the framework needs, it reads from the field types (see
 - A default is a value, never a reference: what a request may write at the
   place, in a JSON form that reads back as the value, with no ``@ref``
   object at any depth; of a type without a JSON form, ``None`` or an empty
-  list.
+  list. It is the value that validating it gives, since pydantic does not
+  validate a default: a group's default is an instance, not the object of
+  its fields, and a tuple's a tuple, not a list.
 - No parameter sees another: each is validated alone, in every phase. So
   the params model has no field validators, serializers, computed fields, or
   aliases, and no ``default_factory`` that takes the other values. A list
@@ -151,7 +153,7 @@ from .field_types import (
     type_name,
     value_type,
 )
-from .places import alternatives, file_off_place, groups_at, held
+from .places import alternatives, file_off_place, groups_at, held, validated
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
@@ -484,13 +486,18 @@ def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
     ``None``: what a request may write at the place, with no reference (see
-    :func:`ess.spec.places.held`).
+    :func:`ess.spec.places.held`), and the value that validating it gives,
+    since pydantic does not validate a default, and a binding gets it as it
+    is. So a group's default is an instance, not the object of its fields.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
     try:
         held(model, name, default, _no_ref)
+        made = validated(model, name, default)
     except ParamsError as error:
         return f'the default is not a value a request may write: {error}'
+    if made != default:
+        return f'the default {default!r} is not the value validating it gives, {made!r}'
     return None
 
 

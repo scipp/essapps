@@ -624,6 +624,27 @@ class TestModelRules:
                 'P.reduction: a parameter has no alias',
             ),
             (
+                {'params': model('P', reduction=(Reduction, {'bins': 3}))},
+                r"P.reduction: the default {'bins': 3} is not the value validating "
+                r'it gives, Reduction\(bins=3\)',
+            ),
+            (
+                {'params': model('P', by=(By, {'mode': 'monitor'}))},
+                r"P.by: the default {'mode': 'monitor'} is not the value validating",
+            ),
+            (
+                {'params': model('P', limits=(tuple[float, float], [0.0, 1.0]))},
+                r'P.limits: the default \[0.0, 1.0\] is not the value validating',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', n=(model('N', by=(By, {'mode': 'monitor'})), ...)
+                    )
+                },
+                r"P.n: N.by: the default {'mode': 'monitor'} is not the value",
+            ),
+            (
                 {
                     'params': model(
                         'P',
