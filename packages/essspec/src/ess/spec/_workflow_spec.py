@@ -60,15 +60,15 @@ framework: what the framework needs, it reads from the field types (see
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
-  a dict or a union of two types.
+  a dict. A type may be a union, such as a union of groups.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, whose contents are not places, so no
   dataset can give it.
-- A union of groups inside a group is discriminated by the name of its tag
-  field, a ``Literal`` without an alias, not by a callable, so that the tag
-  of a value tells its alternative. A field of a group that is a dict, or a
-  list that may be ``None``, has a JSON form, since its contents are not
-  places and no reference stands for a whole one.
+- A union of groups, a parameter or inside a group, is discriminated by the
+  name of its tag field, a ``Literal`` without an alias, not by a callable,
+  so that the tag of a value tells its alternative. A field of a group that
+  is a dict, or a list that may be ``None``, has a JSON form, since its
+  contents are not places and no reference stands for a whole one.
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
@@ -258,10 +258,9 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         Whether a request may give the parameter ``name``, or each row of it
         if it is a list parameter, inline: its type, with ``| None`` removed
         and for a list parameter its element type taken, has a JSON form, or
-        is a group, written as an object of its fields.
+        is a group or a union of groups, written as an object of its fields.
         """
-        tp = value_type(self.params.model_fields[name].annotation)
-        return has_json_form(self.params, name) or is_group(tp)
+        return has_json_form(self.params, name) or bool(groups_at(self.params, name))
 
     def has_json_form(self, name: str) -> bool:
         """
@@ -364,11 +363,10 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
-        if not (_one_or_list(field.annotation) and is_single(tp)):
-            union = get_origin(tp) in (Union, UnionType)
+        union = get_origin(tp) in (Union, UnionType)
+        if not (_one_or_list(field.annotation) and (is_single(tp) or union)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
-                + ('; a group may hold a union as one of its fields' if union else '')
             )
             continue
         if _has_alias(field):
@@ -581,11 +579,12 @@ def _forms(tp: Any, metadata: Sequence[Any], json: bool, rows: bool) -> Any:
     reference to a dataset; a group by the forms of its fields (see
     :func:`_group_forms`), a union of groups by those of its alternatives;
     any other type by itself if ``json``, it has a JSON form; and each but a
-    file also by a reference to an output, unless it holds a file. The
-    elements of a list are places if ``rows``; the contents of any other
-    list or dict are not, so it is given inline only. ``metadata``, the
-    constraints of the field, goes to the list if ``tp`` is one, else to the
-    value, so that a constraint of a number, say, is not put on a reference.
+    file also by a reference to an output, unless it holds a file, or for a
+    union of groups, unless each alternative holds one. The elements of a
+    list are places if ``rows``; the contents of any other list or dict are
+    not, so it is given inline only. ``metadata``, the constraints of the
+    field, goes to the list if ``tp`` is one, else to the value, so that a
+    constraint of a number, say, is not put on a reference.
     """
     origin, args = get_origin(tp), get_args(tp)
     if origin is Annotated:
@@ -609,7 +608,11 @@ def _forms(tp: Any, metadata: Sequence[Any], json: bool, rows: bool) -> Any:
         value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
     elif (union := alternatives(value)) is not None:
         tag, groups = union
-        forms = tuple(_group_forms(g, tag) for g in dict.fromkeys(groups.values()))
+        members = tuple(dict.fromkeys(groups.values()))
+        forms = tuple(_group_forms(base(m), tag) for m in members)
+        # An output fits the union if it fits an alternative without a file.
+        if fileless := tuple(m for m in members if not holds_file(m)):
+            ref = _ref_form(Union[fileless])  # noqa: UP007
         # Only an object reads as a reference; JSON Schema's ``required``
         # holds for any other value, so ``not`` would refuse it.
         value = Annotated[

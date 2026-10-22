@@ -2,10 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The value at each place given inline or by reference, as the request chooses."""
 
-import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal, NewType
+from typing import Annotated, Any, Literal, NewType
 
 import pytest
 from pydantic import (
@@ -176,8 +175,38 @@ class RangeParams(BaseModel):
     range: Range
 
 
+class BeamCentre(BaseModel):
+    kind: Literal['given'] = 'given'
+    x: float = 0.0
+
+
+class FindCentre(BaseModel):
+    kind: Literal['find'] = 'find'
+    run: SampleFile | None = None
+    tolerance: float = 0.5
+
+    @field_validator('tolerance')
+    @classmethod
+    def _below_one(cls, tolerance: float) -> float:
+        if not 0 < tolerance < 1:
+            raise ValueError('tolerance must be between 0 and 1')
+        return tolerance
+
+
+class CentredParams(BaseModel):
+    beam_centre: Annotated[BeamCentre | FindCentre, Field(discriminator='kind')] = (
+        BeamCentre()
+    )
+
+
+class CentreOutputs(BaseModel):
+    centre: BeamCentre
+
+
 DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
+CENTRED = _spec('centred', CentredParams, Value)
+FIND = _spec('find', LoadParams, CentreOutputs)
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -228,6 +257,18 @@ def deep(params: DeepParams) -> Value:
     )
 
 
+def centred(params: CentredParams) -> Value:
+    centre = params.beam_centre
+    if isinstance(centre, BeamCentre):
+        return Value(value=centre.x)
+    run = 0.0 if centre.run is None else read_dataset(centre.run)
+    return Value(value=run * centre.tolerance)
+
+
+def find(params: LoadParams) -> CentreOutputs:
+    return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample)))
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1', directory=tmp_path)
@@ -246,6 +287,8 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(RUNS, runs),
             function_binding(DEEP, deep),
             function_binding(RANGE, lambda p: Value(value=p.range.stop)),
+            function_binding(CENTRED, centred),
+            function_binding(FIND, find),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -505,9 +548,66 @@ def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
     )
 
     assert client.output(after, 'value') == 1.0
-    assert re.search(
-        r'range\.stop\n.*stop must be greater than start', _failed(client, before)
+    assert _failed(client, before) == (
+        'range.stop: Value error, stop must be greater than start'
     )
+
+
+def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
+    find = {'kind': 'find', 'run': dataset_ref(run=2), 'tolerance': 0.5}
+    found = client.compute(CENTRED, params={'beam_centre': find})
+    given = client.compute(CENTRED, params={'beam_centre': {'kind': 'given', 'x': 3.0}})
+    default = client.compute(CENTRED, params={})
+
+    assert [client.output(r, 'value') for r in (found, given, default)] == [
+        1.0,
+        3.0,
+        0.0,
+    ]
+    (run,) = found.request.datasets()
+    assert found.request.params['beam_centre'] == {**find, 'run': run}
+
+
+def test_an_output_that_fits_an_alternative_feeds_a_union(
+    client: Client, loaded: Record
+) -> None:
+    centre = client.compute(FIND, params={'sample': dataset_ref(run=2)})
+    computed = client.compute(CENTRED, params={'beam_centre': centre.ref('centre')})
+
+    assert client.output(computed, 'value') == 2.0
+    with pytest.raises(
+        SubmitError,
+        match=r'^beam_centre: .* of type float, does not fit BeamCentre \| FindCentre$',
+    ):
+        client.submit(CENTRED, params={'beam_centre': loaded.ref('value')})
+
+
+def test_an_error_inside_a_union_names_its_place_without_the_tag(
+    client: Client,
+) -> None:
+    # Without a reference inside, the alternative is validated whole when
+    # submitted; with the run given by reference, once the run is read.
+    find = {'kind': 'find', 'tolerance': 2.0}
+    with pytest.raises(SubmitError) as raised:
+        client.submit(CENTRED, params={'beam_centre': find})
+    (error,) = raised.value.errors
+    assert error.loc == ('beam_centre', 'tolerance')
+
+    computed = client.submit(
+        CENTRED, params={'beam_centre': {**find, 'run': dataset_ref(run=1)}}
+    )
+    assert _failed(client, computed) == (
+        'beam_centre.tolerance: Value error, tolerance must be between 0 and 1'
+    )
+
+
+def test_the_schema_of_a_union_offers_a_reference_to_an_alternative() -> None:
+    # FindCentre holds a file, so no output of it may be referenced.
+    centre = CENTRED.serialize().params_schema['properties']['beam_centre']
+    inline, ref = centre['anyOf']
+
+    assert inline['discriminator']['propertyName'] == 'kind'
+    assert ref['dataType'] == 'BeamCentre'
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:

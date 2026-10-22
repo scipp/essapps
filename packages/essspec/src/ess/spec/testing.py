@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
-from .field_types import validated
+from .places import validated
 
 Rows = Sequence[Any]
 """A table's rows, as a push gives them."""

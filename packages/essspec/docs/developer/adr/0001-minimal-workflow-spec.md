@@ -113,6 +113,7 @@ config. A value *round-trips* when its JSON form reads back as the value.
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
 | any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
@@ -125,9 +126,11 @@ file is refused. A *group* is a pydantic model, such as `Reduction` or
 a dataset. A *data value* is a value of a type without a JSON form: a file,
 or an object such as a scipp array. The contents of a tuple, a set, a dict, a
 `TypedDict`, or a dataclass are not places: such a value is written whole,
-inline. A group may hold a discriminated union of groups; the request writes
-the fields of one alternative with its tag, inline, which says what each of
-the other fields takes.
+inline. A parameter, or a field of a group, may be a discriminated union of
+groups, such as a beam centre that is given, `GivenCentre`, or found from a
+run with a tolerance, `FindCentre`; the request writes the fields of one
+alternative with its tag, inline, which says what each of the other fields
+takes: `{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`.
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -175,11 +178,11 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not a
-  dict or a union of two types.
+  dict. The type may be a union, such as a union of groups.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, where no dataset can give it.
-- A union in a group is discriminated by the name of its tag field, a
+- A union of groups is discriminated by the name of its tag field, a
   `Literal` without an alias, not by a callable.
 - A group has no serializers, computed fields, or aliases: the record holds a
   group as the object of its places, each in the JSON form of its own type,
@@ -248,9 +251,10 @@ framework normalizes it before a reference enters a record.
 **Fit.** A reference *fits* a parameter when the type of the data it names can
 be the parameter's value: an `IofQ` output fits a parameter typed
 `sc.DataArray`, and does not fit a `Transmission` parameter, another `NewType`
-of `sc.DataArray`. A dataset reference fits a file only. A framework
-checks fit in the request phase, so that a chain of requests is refused before
-anything runs. `ess.spec.field_types.fits` states the rule.
+of `sc.DataArray`. Data fit a union of groups when they fit one alternative.
+A dataset reference fits a file only. A framework checks fit in the request
+phase, so that a chain of requests is refused before anything runs.
+`ess.spec.field_types.fits` states the rule.
 
 ### One params model per workflow
 

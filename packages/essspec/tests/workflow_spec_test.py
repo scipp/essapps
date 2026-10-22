@@ -99,6 +99,14 @@ class Normalization(BaseModel):
     by: ByMonitor | ByTime = Field(ByMonitor(mode='monitor'), discriminator='mode')
 
 
+By = Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
+
+
+class ByRun(BaseModel):
+    mode: Literal['run'] = 'run'
+    run: SampleFile
+
+
 @pydantic.dataclasses.dataclass
 class RunFiles:
     """A dataclass, whose fields are not places."""
@@ -283,6 +291,12 @@ class TestMetadata:
     def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
         assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
 
+    @pytest.mark.parametrize(
+        'tp', [By, list[By], Annotated[ByRun | ByTime, Field(discriminator='mode')]]
+    )
+    def test_a_union_of_groups_takes_an_inline_value(self, tp: Any) -> None:
+        assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
+
     @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
         assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
@@ -347,6 +361,16 @@ class TestModelRules:
                     'P', scale=(Scale, ...), normalization=(Normalization, ...)
                 )
             },
+            {'params': model('P', by=(By, ByMonitor(mode='monitor')))},
+            {
+                'params': model(
+                    'P',
+                    by=(ByMonitor | ByTime, Field(discriminator='mode')),
+                    run=(Annotated[ByRun | ByTime, Field(discriminator='mode')], ...),
+                )
+            },
+            {'params': model('P', by=(By | None, None), each=(list[By], []))},
+            {'params': model('P', factor=(int | float, 1))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
             {'params': model('P', run=(validated('Run', path=(Path, ...)), ...))},
             {'params': model('P', runs=(model('Runs', paths=(list[Path], [])), ...))},
@@ -405,13 +429,20 @@ class TestModelRules:
                 'P.reduction: a parameter is a type',
             ),
             (
-                {'params': model('P', factor=(int | float, 1))},
-                'P.factor: a parameter is a type, possibly optional, or a list of one; '
-                'a group may hold a union as one of its fields',
+                {'params': model('P', by=(list[ByMonitor | ByTime], []))},
+                'P.by: a union of groups has a discriminator',
             ),
             (
-                {'params': model('P', by=(list[ByMonitor | ByTime], []))},
-                'P.by: .*; a group may hold a union',
+                {'params': model('P', by=(ByMonitor | ByTime, ...))},
+                'P.by: a union of groups has a discriminator',
+            ),
+            (
+                {'params': model('P', by=(ByMonitor | float, ...))},
+                'P.by: a union holds groups only, or no group',
+            ),
+            (
+                {'params': model('P', by=(dict[str, By], {}))},
+                'P.by: a parameter is a type, possibly optional, or a list',
             ),
             (
                 {'params': model('P', tree=(Node, ...))},
@@ -637,7 +668,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleFile | CanFile, ...))},
-                'P.sample: a parameter is a type',
+                'P.sample: a file is at a place only',
             ),
             (
                 {'params': model('P', runs=(list[list[SampleFile]], []))},

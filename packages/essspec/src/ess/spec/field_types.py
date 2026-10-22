@@ -19,7 +19,8 @@ of one type can be the value of a field of another, so that an output of one
 spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone:
 :func:`inline` validates a value given inline at one place, and
-:func:`validated` a parameter's value whole, in the call phase.
+:func:`ess.spec.places.validated` a parameter's value whole, in the call
+phase.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from __future__ import annotations
 import dataclasses
 import functools
 import operator
-from collections.abc import Callable
 from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import (
@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic_core import from_json, to_json
 
-from .refs import Ref, map_refs, positions
+from .refs import positions
 
 
 def plain(tp: Any) -> Any:
@@ -186,7 +186,12 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
 
 
 def type_name(tp: Any) -> str:
-    """The name of a type, as a serialized spec shows it."""
+    """
+    The name of a type, as a serialized spec shows it; of a union, the names
+    of its members, ``BeamCentre | FindCentre``.
+    """
+    if get_origin(tp) in (Union, UnionType):
+        return ' | '.join(map(type_name, get_args(tp)))
     return getattr(tp, '__name__', None) or repr(tp)
 
 
@@ -197,14 +202,17 @@ def fits(data: Any, field: Any) -> bool:
     ``| None`` is removed on both sides. Then the data fit when ``data``, with
     its ``NewType``s removed one by one, reaches ``field`` or a subclass of it;
     or when ``field``, with its ``NewType``s removed, reaches ``data`` or a
-    superclass of it. Generic aliases, such as ``list[int]``, fit only
-    themselves. So with ``IofQ`` and ``Transmission`` ``NewType``s of
-    ``sc.DataArray``, an ``IofQ`` fits ``sc.DataArray``, a plain
-    ``sc.DataArray`` fits ``Transmission`` (a role narrows a general output),
-    and an ``IofQ`` does not fit ``Transmission``.
+    superclass of it. Data of one type fit a union when they fit one of its
+    members: a ``BeamCentre`` fits ``BeamCentre | FindCentre``. Other generic
+    aliases, such as ``list[int]``, fit only themselves. So with ``IofQ`` and
+    ``Transmission`` ``NewType``s of ``sc.DataArray``, an ``IofQ`` fits
+    ``sc.DataArray``, a plain ``sc.DataArray`` fits ``Transmission`` (a role
+    narrows a general output), and an ``IofQ`` does not fit ``Transmission``.
     """
     data, _ = optional(data)
     field, _ = optional(field)
+    if get_origin(data) is None and get_origin(field) in (Union, UnionType):
+        return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
     return any(_reaches(d, field) for d in supertypes(data)) or any(
@@ -248,39 +256,6 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
 def is_list(model: type[BaseModel], name: str) -> bool:
     """Whether the field ``name`` of ``model`` is a list, given as a list of rows."""
     return get_origin(model.model_fields[name].annotation) is list
-
-
-def validated(
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    read: Callable[[Ref], Any] | None = None,
-) -> Any:
-    """
-    ``value`` of the field ``name`` of ``model``, validated once, whole (see
-    :func:`model_of`): each row of a list field by its element type.
-
-    With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
-    is as a record holds it: the JSON form of each place given inline, and a
-    reference at each other place. Each reference, at any depth, is replaced
-    by the data ``read`` gives for it, and the result validated whole, so
-    that every validator of every group in it runs once, with all its fields
-    at hand. It is validated in Python mode with ``strict=False``: a strict
-    model takes an enum from its string only from JSON, and the request phase
-    has already validated each place given inline from its JSON form, with
-    the model's strictness (see :func:`inline`).
-    """
-    one = model_of(model, name)
-    if read is not None:
-        value = map_refs({name: value}, read)[name]
-    strict = False if read is not None else None
-
-    def check(v: Any) -> Any:
-        return getattr(one.model_validate({name: v}, strict=strict), name)
-
-    if is_list(model, name):
-        return [check(v) for v in value]
-    return check(value)
 
 
 def json_form(

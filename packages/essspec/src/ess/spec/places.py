@@ -54,7 +54,9 @@ In the request phase, :func:`held` validates each place given inline alone,
 from its JSON form, and a group with no reference inside whole, from the
 JSON form of its fields (see :func:`ess.spec.field_types.inline`). In the
 call phase, each parameter's value is validated once, whole, with the data
-of its references (see :func:`ess.spec.field_types.validated`).
+of its references (see :func:`validated`). An error inside a union names
+its place without the tag: ``beam_centre.tolerance``, whichever phase finds
+it.
 """
 
 from __future__ import annotations
@@ -82,7 +84,7 @@ from .field_types import (
     plain,
     type_name,
 )
-from .refs import Loc, ParamsError, Ref, iter_refs, positions, ref_at
+from .refs import Loc, ParamsError, Ref, iter_refs, map_refs, positions, ref_at
 
 type OnRef = Callable[[Loc, Ref, Any], Any]
 """
@@ -161,11 +163,10 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
             raise _refused(loc, f'{value!r} is not a list')
         return [_held((*loc, i), slot.one, v, on_ref) for i, v in enumerate(value)]
     fields = dict(value) if isinstance(value, BaseModel) else value
-    if isinstance(fields, Mapping) and (found := _group(loc, slot, fields)):
-        group, tagged = found
+    if isinstance(fields, Mapping) and (group := _group(loc, slot, fields)):
         held_fields = _fields(loc, group, fields, on_ref)
         if not any(isinstance(v, Ref) for _, v in positions(loc, held_fields)):
-            _validate_whole(loc, slot, held_fields, tagged)
+            _validate_whole(loc, slot, held_fields)
         return held_fields
     if not has_json_form(slot.model, slot.name):
         raise _refused(
@@ -205,17 +206,15 @@ def _fields(
     return fields
 
 
-def _group(
-    loc: Loc, slot: _Slot, value: Mapping[str, Any]
-) -> tuple[type[BaseModel], bool] | None:
+def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] | None:
     """
-    The group whose fields ``value`` at ``loc`` gives, and whether it is an
-    alternative of a union, chosen by the tag; ``None`` if the type at the
-    place is neither a group nor a union of groups.
+    The group whose fields ``value`` at ``loc`` gives, of a union the
+    alternative its tag names; ``None`` if the type at the place is neither
+    a group nor a union of groups.
     """
     tp, _ = optional(slot.annotation)
     if is_group(tp):
-        return base(tp), False
+        return base(tp)
     if (union := alternatives(slot.annotation, slot.discriminator)) is None:
         return None
     tag, groups = union
@@ -231,26 +230,94 @@ def _group(
         raise _refused(
             (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
         )
-    return group, True
+    return base(group)
 
 
-def _validate_whole(
-    loc: Loc, slot: _Slot, fields: dict[str, Any], tagged: bool
-) -> None:
-    """
-    Validate the group at ``loc`` whole, from the JSON form of ``fields``.
-    pydantic names the tag of a union in an error's place, which is left
-    out, so that the place is the same whichever way the alternative is
-    chosen.
-    """
+def _validate_whole(loc: Loc, slot: _Slot, fields: dict[str, Any]) -> None:
+    """Validate the group at ``loc`` whole, from the JSON form of ``fields``."""
     one = model_of(slot.model, slot.name, whole=not slot.element)
     try:
         one.model_validate_json(to_json({slot.name: fields}))
     except ValidationError as error:
-        skip = 1 + tagged
-        raise ParamsError(
-            ((*loc, *e['loc'][skip:]), e['msg']) for e in error.errors()
-        ) from None
+        raise _at(loc, slot, error) from None
+
+
+def validated(
+    model: type[BaseModel],
+    name: str,
+    value: Any,
+    read: Callable[[Ref], Any] | None = None,
+) -> Any:
+    """
+    ``value`` of the field ``name`` of ``model``, validated once, whole (see
+    :func:`~ess.spec.field_types.model_of`): each row of a list field by its
+    element type.
+
+    With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
+    is as a record holds it: the JSON form of each place given inline, and a
+    reference at each other place. Each reference, at any depth, is replaced
+    by the data ``read`` gives for it, and the result validated whole, so
+    that every validator of every group in it runs once, with all its fields
+    at hand. It is validated in Python mode with ``strict=False``: a strict
+    model takes an enum from its string only from JSON, and the request phase
+    has already validated each place given inline from its JSON form, with
+    the model's strictness (see :func:`~ess.spec.field_types.inline`).
+    Raises :class:`~ess.spec.refs.ParamsError` at the place of each problem.
+    """
+    one = model_of(model, name)
+    if read is not None:
+        value = map_refs({name: value}, read)[name]
+    strict = False if read is not None else None
+
+    def check(loc: Loc, slot: _Slot, v: Any) -> Any:
+        try:
+            return getattr(one.model_validate({name: v}, strict=strict), name)
+        except ValidationError as error:
+            raise _at(loc, slot, error) from None
+
+    slot = _Slot(model, name)
+    if slot.is_list:
+        return [check((name, i), slot.one, v) for i, v in enumerate(value)]
+    return check((name,), slot, value)
+
+
+def _at(loc: Loc, slot: _Slot, error: ValidationError) -> ParamsError:
+    """
+    ``error`` of a value at ``loc`` of the type ``slot``, validated by a model
+    of its field, at the place of each problem. pydantic puts the tag of a
+    union after the union's place, ``('beam_centre', 'find', 'tolerance')``,
+    which is left out, ``beam_centre.tolerance``, so that the place is the
+    same whichever way the alternative is chosen.
+    """
+    return ParamsError(
+        (_place(loc, slot, e['loc'][1:]), e['msg']) for e in error.errors()
+    )
+
+
+def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
+    """
+    The place ``inner`` inside a value at ``loc`` of the type ``slot``, as
+    pydantic gives it, without the tag after each union place. A position
+    that is not a place, such as an element of a tuple, is kept as it is.
+    """
+    rest = list(inner)
+    while rest:
+        if slot.is_list and isinstance(rest[0], int):
+            slot, loc = slot.one, (*loc, rest.pop(0))
+            continue
+        tp, _ = optional(slot.annotation)
+        if is_group(tp):
+            group = base(tp)
+        elif (
+            union := alternatives(slot.annotation, slot.discriminator)
+        ) is not None and rest[0] in union[1]:
+            group = base(union[1][rest.pop(0)])
+        else:
+            break
+        if not rest or rest[0] not in group.model_fields:
+            break
+        slot, loc = _Slot(group, str(rest[0])), (*loc, rest.pop(0))
+    return (*loc, *rest)
 
 
 def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
@@ -273,12 +340,14 @@ def _refused(loc: Loc, msg: str) -> ParamsError:
 
 def alternatives(
     annotation: Any, discriminator: Any = None
-) -> tuple[str, dict[Any, type[BaseModel]]] | None:
+) -> tuple[str, dict[Any, Any]] | None:
     """
     The tag and the alternatives, by the value of their tag, of the union of
     groups that ``annotation``, possibly optional, is; ``None`` if it is not
     a union with a group in it, such as ``int | str``. ``discriminator`` is
-    that of the field, if the annotation does not carry it.
+    that of the field, if the annotation does not carry it. An alternative
+    is as declared, without ``Annotated`` metadata: a ``NewType`` of a group
+    stays one. The alternatives are in the order of the union.
 
     Raises ``ValueError`` for a union that the framework cannot take apart
     by the tag of a value: one with a type that is not a group, without a
@@ -315,7 +384,7 @@ def alternatives(
             'a union of groups has a discriminator, the name of its tag field, '
             "such as Field(discriminator='kind')"
         )
-    groups: dict[Any, type[BaseModel]] = {}
+    groups: dict[Any, Any] = {}
     for member in members:
         group = base(member)
         info = group.model_fields.get(discriminator)
@@ -328,7 +397,7 @@ def alternatives(
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
             raise ValueError(f'{group.__name__}.{discriminator}: a tag has no alias')
-        groups.update(dict.fromkeys(get_args(info.annotation), group))
+        groups.update(dict.fromkeys(get_args(info.annotation), member))
     return discriminator, groups
 
 
@@ -343,7 +412,7 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
     if is_group(tp):
         return [base(tp)]
     union = alternatives(slot.annotation, slot.discriminator)
-    return [] if union is None else list(dict.fromkeys(union[1].values()))
+    return [] if union is None else list(dict.fromkeys(map(base, union[1].values())))
 
 
 def file_off_place(model: type[BaseModel], name: str) -> bool:
@@ -376,7 +445,7 @@ def ref_types(
             else:
                 if (group := _group(loc[: i + 1], slot, value)) is None:
                     raise _refused(loc, f'{ref} is not at a place')
-                slot = _Slot(group[0], key)
+                slot = _Slot(group, key)
             value = value[key]
         found.append((loc, ref, optional(slot.annotation)[0]))
     return found

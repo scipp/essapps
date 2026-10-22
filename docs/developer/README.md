@@ -150,6 +150,7 @@ The type at the place decides which of the two it accepts, with `| None` removed
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
 | any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
 | anything else | `Transmission` | no | to an output that fits |
@@ -166,8 +167,27 @@ A field of a group left out takes its default.
 ```
 
 The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
-A group may hold a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal`.
-The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has.
+A parameter, or a field of a group, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal`.
+The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has:
+
+```python
+class GivenCentre(BaseModel):                     # an alternative: the centre, given
+    kind: Literal['given'] = 'given'
+    x: float = 0.0
+    y: float = 0.0
+
+class FindCentre(BaseModel):                      # an alternative: settings to find it
+    kind: Literal['find'] = 'find'
+    run: SampleFile
+    tolerance: float = 0.1
+
+beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
+
+{'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
+{'beam_centre': found.ref('centre')}              # an output of type GivenCentre
+```
+
+An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
 A workflow that takes nothing has the params model `NoParams`.
@@ -177,10 +197,10 @@ A request computes every output its spec declares.
 A value *round-trips* when its JSON form reads back as the value.
 `WorkflowSpec` checks these rules when it is made:
 
-- Each parameter is a type, possibly optional, or a list of one.
+- Each parameter is a type, possibly optional, or a list of one. The type may be a union, such as a union of groups.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
-- A union in a group is discriminated by the name of its tag field, not by a callable, and the tag field has no alias.
+- A union of groups is discriminated by the name of its tag field, not by a callable, and the tag field has no alias.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode. It does not hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
@@ -319,11 +339,13 @@ A reference *fits* a parameter when the type of the data it names can be the par
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and a list parameter takes each reference by its element type.
 A reference at a field of a group takes the field's type, and one in an alternative of a union that of the alternative the tag names.
+Data fit a union when they fit one of its alternatives.
 Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the parameter's type or a subclass of it, or when the parameter's type, with its `NewType`s removed, reaches the output's type or a superclass of it:
 
 | Type of the output | Type of the parameter | Fits |
 |---|---|---|
 | `BeamCentre` | `BeamCentre \| None` | yes |
+| `GivenCentre` | `GivenCentre \| FindCentre`, a union of groups | yes |
 | `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
 | `IofQ` | `sc.DataArray`, as an export takes it | yes |
 | `sc.DataArray` | `Transmission`, a `NewType` of `sc.DataArray` | yes: a role narrows a general output |
@@ -751,7 +773,25 @@ PipelineBinding(IOFQ, make_pipeline,
 [roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows the other routes from a spec's values to such keys: adapter providers, and providers that take the spec's models.
 `binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
 Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
-A parameter typed `X | None` sets no key, so `keys=` must give it `()`.
+No two parameters share a key, and no two outputs; an output may share a parameter's key, such as an output `centre: GivenCentre` that reports the centre given or found.
+
+A union of groups has a key for each alternative, the alternative as declared, a `NewType` included: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`, and `keys=` takes one key for each alternative, in the same order.
+The binding sets the key of the alternative that the value's tag names, not that of the value's type, which may be a subclass of an alternative, or the group of a `NewType` alternative.
+Here one graph serves both alternatives, since `find_centre` leads from one alternative's key to the other's:
+
+```python
+def find_centre(settings: FindCentre, data: SampleData) -> GivenCentre: ...
+
+PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
+# tag 'given' -> pipeline[GivenCentre] = value   (replaces find_centre)
+# tag 'find'  -> pipeline[FindCentre] = value    (find_centre computes GivenCentre)
+```
+
+Where the alternatives need different providers for one key, `make_pipeline` branches on the fixed value.
+That always works, since a union cannot be a blank: its key depends on its value.
+A list of unions sets one key, its type, as any list.
+
+A parameter typed `X | None`, a union too, sets no key, so `keys=` must give it `()`.
 For `None`, setting `X` to `None` would replace a provider of `X`, and setting no key would leave whatever the pipeline holds at `X`, which the request did not choose.
 `make_pipeline` branches on the value instead:
 
@@ -769,6 +809,7 @@ PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 
 Defaults belong to the spec: `make_pipeline` holds no value at a key that a parameter sets, or at a key that such a key leads to.
 A value held there can make a request's value have no effect, and nothing says so; the binding does not check this.
+If the pipeline above held a default `GivenCentre`, the tag `'find'` would set `FindCentre`, but `iofq` would read the default, and `find_centre` would never run.
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.

@@ -267,6 +267,7 @@ class Stops(BaseModel):
 class NormalizedParams(BaseModel):
     normalization: Normalization = Field(default_factory=Normalization)
     stops: Stops | None = None
+    stop: Annotated[ByMonitor | ByTime, Field(discriminator='mode')] = ByMonitor()
 
 
 NORMALIZED = _spec('normalized', params=NormalizedParams)
@@ -783,6 +784,16 @@ def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
     assert request.params['stops'] == {
         'by': [{'mode': 'time', 'seconds': 1.0}, {'mode': 'monitor'}]
     }
+
+
+@pytest.mark.parametrize('stop', [ByMonitor(), ByTime(seconds=1.0)])
+def test_a_discriminator_of_a_union_parameter_is_kept(
+    stop: ByMonitor | ByTime,
+) -> None:
+    by_model = Request(NORMALIZED, params=NormalizedParams(stop=stop))
+    by_dict = Request(NORMALIZED, params={'stop': stop})
+
+    assert by_model.params == by_dict.params == {'stop': stop.model_dump()}
 
 
 def test_other_defaults_are_left_out_beside_a_discriminator() -> None:

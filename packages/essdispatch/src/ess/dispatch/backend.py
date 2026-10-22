@@ -81,7 +81,7 @@ backend reads the data each reference names, a local path for a dataset, and
 validates each value once, whole, by its field, a row of a list by its element
 type: the JSON form the log holds, with the data read in place of each
 reference, so that every validator of every group runs once, with all its
-fields at hand (see :func:`ess.spec.field_types.validated`). For a plain
+fields at hand (see :func:`ess.spec.places.validated`). For a plain
 request it makes the params instance from these values without validating
 again, so the params model's model validators never run; a stage or an
 accumulator gets the values by name. The rows of a table, if its element type
@@ -216,8 +216,8 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, json_form, optional, validated
-from ess.spec.places import ref_types
+from ess.spec.field_types import base, json_form, optional
+from ess.spec.places import ref_types, validated
 from ess.spec.refs import Loc, iter_refs, map_refs
 
 from .checks import Checks, check_fit, distinct
@@ -1218,7 +1218,7 @@ class Backend:
         ``values`` of a request by name as the binding takes them; no lock.
         The data each reference names is read, and each value is validated
         once, whole, by its field, a row of a list by its element type (see
-        :func:`ess.spec.field_types.validated`). A plain request makes the
+        :func:`ess.spec.places.validated`). A plain request makes the
         params instance from them, and a stage or a driver takes them by name.
 
         The rows of each table in ``values`` whose element type has a JSON
