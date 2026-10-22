@@ -22,8 +22,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ess.spec import DatasetRef
+from ess.spec.refs import Loc, iter_refs
 
-from .batch import Lookup, dataset_blank, run_number, try_apply
+from .batch import Lookup, dataset_place, run_number, try_apply
 from .client import Client
 from .datasets import Selector
 from .errors import SubmitError
@@ -35,11 +36,17 @@ class Rule:
     """
     Apply a template to each new dataset the selector matches.
 
-    A dataset fills the blank, a file parameter, or a group that holds one
-    required file, itself. With ``series``, a request instead takes every
-    dataset with the same value of that metadata field so far, in run order,
-    and that value is its member. The blank is then a table of these, and
-    each dataset is a row of it.
+    A dataset fills the place ``at`` in the blank the lookup leaves, as
+    :func:`apply` fills it: by default the blank itself, a file parameter,
+    or for a blank that is a group its file field, such as
+    ``('sample', 'run')``. A dataset is new until a record under the label
+    holds it at that place: a dataset that a request holds elsewhere, such
+    as a can that the lookup fills, is not handled by it.
+
+    With ``series``, a request instead takes every dataset with the same
+    value of that metadata field so far, in run order, and that value is its
+    member. The blank is then a table of these, each dataset a row of it, so
+    a series takes no ``at``.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
@@ -50,10 +57,15 @@ class Rule:
     template: Template
     selector: Selector
     label: str
+    at: tuple[str, ...] | None = None
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
     persist: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.series is not None and self.at is not None:
+            raise ValueError('a dataset is a row of a series, so a series takes no at')
 
 
 @dataclass
@@ -119,10 +131,13 @@ class TriggerLoop:
         self, rule: Rule
     ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
         """The requests for the new datasets, and the datasets skipped, with why."""
+        lookup = rule.lookup if rule.series is None else None
+        place = dataset_place(rule.template, lookup, rule.at)
         handled = {
             ref
             for record in self._client.records(label=rule.label)
-            for ref in record.request.datasets()
+            for loc, ref in iter_refs(record.request.params)
+            if isinstance(ref, DatasetRef) and _fills(loc, place, rule.series)
         }
         matching = self._source.list(rule.selector)
         new = [ref for ref in matching if ref not in handled]
@@ -131,20 +146,35 @@ class TriggerLoop:
                 rule.template,
                 new,
                 self._source,
+                at=place,
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
-        return self._series_requests(rule, matching, new), {}
+        return self._series_requests(rule, place[0], matching, new), {}
 
     def _series_requests(
-        self, rule: Rule, matching: list[DatasetRef], new: list[DatasetRef]
+        self,
+        rule: Rule,
+        blank: str,
+        matching: list[DatasetRef],
+        new: list[DatasetRef],
     ) -> dict[str, Request]:
         series: dict[str, list[DatasetRef]] = defaultdict(list)
         for ref in sorted(matching, key=lambda r: run_number(r, self._source)):
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
-        blank = dataset_blank(rule.template, None)
         return {
             value: rule.template.fill(params={blank: refs})
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }
+
+
+def _fills(loc: Loc, place: tuple[str, ...], series: str | None) -> bool:
+    """
+    Whether a dataset at ``loc`` in a request of a rule fills the rule's
+    ``place``: is at it, or for a series, is a row of the blank table it
+    names, such as ``('runs', 2)``.
+    """
+    if series is None:
+        return loc == place
+    return len(loc) == 2 and loc[:1] == place

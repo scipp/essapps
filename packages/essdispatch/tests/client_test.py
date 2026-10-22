@@ -1172,7 +1172,8 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     threading.Timer(0.05, loading.set).start()
     fixed = {'offset': offset.ref('value')}  # and the default scale and labels
     total = client.accumulator(Template(SUM, params=fixed, blanks=('runs',)))
-    runs = [dataset(run=n) for n in (1, 2)]
+    files = [dataset(run=n) for n in (1, 2)]
+    runs = [{'file': file} for file in files]
     for run in runs:
         total.push(runs=[run])
     read = client.compute(_read(total))
@@ -1185,7 +1186,7 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     state = _state(client, read)
     assert state.request == plain.request
     assert client.provenance(read).records() == [state, offset]
-    resolved = {datasets.resolve(run) for run in runs}
+    resolved = {datasets.resolve(file) for file in files}
     assert set(client.provenance(read).datasets()) == resolved  # offset's run too
     provenance = client.provenance(total)  # of the state after the pushes so far
     assert provenance == client.provenance(plain)

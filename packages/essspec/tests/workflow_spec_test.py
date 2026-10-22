@@ -813,18 +813,20 @@ class TestSerialization:
                 to_jsonable_python({**CAN, **params}), IOFQ.serialize().params_schema
             )
 
-    def test_the_schema_of_tables_takes_rows_of_both_forms(self) -> None:
+    def test_the_schema_of_tables_takes_rows_field_by_field(self) -> None:
         jsonschema = pytest.importorskip('jsonschema')
         schema = RUNS.serialize().params_schema
         file = DatasetRef(dataset='run:loki/1')
         rows = [
-            file,
+            {'file': file},
             {'file': file, 'geometry': SampleGeometry(thickness=0.1)},
             {'file': file, 'geometry': OutputRef(record='r1', output='geometry')},
         ]
         jsonschema.validate(to_jsonable_python({'sample': rows}), schema)
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({'sample': []}, schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(to_jsonable_python({'sample': [file]}), schema)
 
     def test_metadata_is_kept(self) -> None:
         serialized = spec(version=2, code_revision='abc123').serialize()

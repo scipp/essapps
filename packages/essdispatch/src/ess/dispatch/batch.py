@@ -4,15 +4,17 @@
 A batch: one template filled for each of many datasets.
 
 A lookup fills further blanks per dataset, such as the can measured most
-recently before a sample. A blank a dataset fills is a file parameter, or a
-group that holds one required file, which takes the dataset itself. Datasets
-are ordered by their run number.
+recently before a sample. A dataset fills a place in the one blank the
+lookup leaves: the blank itself, a file parameter, or a file field of the
+blank, a group, such as ``('sample', 'run')``. Datasets are ordered by their
+run number.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from ess.spec import DatasetRef
 
@@ -50,12 +52,29 @@ class Lookup:
         return {blank: rule.find(ref, source) for blank, rule in self.rules.items()}
 
 
-def dataset_blank(template: Template, lookup: Lookup | None) -> str:
-    """The one blank a dataset fills: the one the lookup leaves."""
+def dataset_place(
+    template: Template, lookup: Lookup | None, at: tuple[str, ...] | None
+) -> tuple[str, ...]:
+    """
+    The place a dataset fills: ``at``, in the one blank the lookup leaves, or
+    by default that blank itself.
+    """
     left = [b for b in template.blanks if lookup is None or b not in lookup.rules]
     if len(left) != 1:
         raise ValueError(f'a dataset fills one blank; {template.blanks} leave {left}')
-    return left[0]
+    if at is None:
+        return (left[0],)
+    if not at or at[0] != left[0]:
+        raise ValueError(f'a dataset fills a place in the blank {left[0]}, not {at}')
+    return at
+
+
+def _holding(at: tuple[str, ...], ref: DatasetRef) -> Any:
+    """The value of the blank ``at[0]`` that holds ``ref`` at the place ``at``."""
+    value: Any = ref
+    for field in reversed(at[1:]):
+        value = {field: value}
+    return value
 
 
 def apply(
@@ -63,6 +82,7 @@ def apply(
     datasets: Iterable[DatasetRef],
     source: Datasets,
     *,
+    at: tuple[str, ...] | None = None,
     member_field: str = 'run',
     lookup: Lookup | None = None,
 ) -> dict[str, Request]:
@@ -70,9 +90,20 @@ def apply(
     Fill the template for each dataset.
 
     ``source`` answers metadata queries, such as ``client.datasets``. Each
-    dataset fills the one blank the lookup leaves, a file parameter or a group
-    that holds one required file. The
-    requests are keyed by member: the value of the metadata field
+    dataset fills the place ``at`` in the one blank the lookup leaves, by
+    default the blank itself, a file parameter. In a blank that is a group,
+    ``at`` names its file field, and the group's other fields take their
+    defaults::
+
+        template = Template(IOFQ, blanks=('sample',))
+        apply(template, runs, client.datasets, at=('sample', 'run'))
+        # {'101': Request(IOFQ, params={'sample': {'run': dataset(run=101)}}),
+        #  ...}
+
+    A dataset is never the value of a group: without ``at``, the backend
+    refuses the requests of a blank that is a group when they are submitted.
+
+    The requests are keyed by member: the value of the metadata field
     ``member_field`` of each dataset. Submitting them under a label makes the
     keys the members of their records. Raises ``LookupError`` if the request
     of a dataset cannot be made.
@@ -81,6 +112,7 @@ def apply(
         template,
         datasets,
         source,
+        at=at,
         member_field=member_field,
         lookup=lookup,
     )
@@ -94,6 +126,7 @@ def try_apply(
     datasets: Iterable[DatasetRef],
     source: Datasets,
     *,
+    at: tuple[str, ...] | None = None,
     member_field: str = 'run',
     lookup: Lookup | None = None,
 ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
@@ -104,7 +137,7 @@ def try_apply(
     its metadata lacks ``member_field``. Returns the requests, and the error of
     each dataset left out.
     """
-    blank = dataset_blank(template, lookup)
+    place = dataset_place(template, lookup, at)
     requests: dict[str, Request] = {}
     failed: dict[DatasetRef, LookupError] = {}
     for ref in datasets:
@@ -116,5 +149,7 @@ def try_apply(
             continue
         if member in requests:
             raise ValueError(f'two datasets have {member_field} {member}')
-        requests[member] = template.fill(params={blank: ref, **found})
+        requests[member] = template.fill(
+            params={place[0]: _holding(place, ref), **found}
+        )
     return requests, failed

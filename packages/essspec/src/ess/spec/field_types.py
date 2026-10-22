@@ -287,19 +287,6 @@ def by_field(tp: Any) -> bool:
     return is_group(tp) and holds_file(tp)
 
 
-def file_field(group: type[BaseModel]) -> str | None:
-    """
-    The one required file field of a group given field by field, which a
-    reference to a dataset stands for, or ``None`` if it has none or several.
-    """
-    files = [
-        name
-        for name, info in group.model_fields.items()
-        if info.is_required() and is_file(optional(info.annotation)[0])
-    ]
-    return files[0] if len(files) == 1 else None
-
-
 def json_form(
     model: type[BaseModel], name: str, value: Any, whole: bool = False
 ) -> Any:

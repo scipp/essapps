@@ -112,7 +112,7 @@ pydantic makes a JSON schema of it with the params model's config. A value
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
-| a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
+| a group that holds a file | `Sample` | field by field | no |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source
@@ -120,10 +120,9 @@ checks access and the record holds the dataset's identity; the binding gets a
 local path. A *group* is a pydantic model, such as `Reduction`: the usual
 type of a parameter given inline. A group that holds a file, such as `Sample`
 below, is given *field by field*: each of its fields inline or by reference,
-as a parameter is, so its file comes from a dataset. A reference to a dataset
-stands for the whole group: its one required file, and its other fields at
-their defaults. A *data value* is a value of a type without a JSON form: a
-file, or an object such as a scipp array.
+as a parameter is, so its file comes from a dataset. A *data value* is a
+value of a type without a JSON form: a file, or an object such as a scipp
+array.
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -159,9 +158,9 @@ Two requests, written with essdispatch: `client` connects to a backend,
 finds the beam centre, so `finder.ref('centre')` names its output `centre`:
 
 ```python
-client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                             'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
-client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                             'beam_centre': finder.ref('centre')})            # a reference
 ```
 

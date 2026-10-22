@@ -798,7 +798,7 @@ computed = client.accumulator(Template(CENTRED_MULTI, params={'centre': finder.r
 typed = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=1.0)},
                                     blanks=('sample', 'can')))
 for accumulator in (computed, typed):
-    accumulator.push(sample=samples)
+    accumulator.push(sample=[{'file': sample} for sample in samples])
     accumulator.push(can=[can])
 
 assert client.output(finder, 'centre') == Centre(x=1.0)        # the mean of [0.5, 1.5]
@@ -822,7 +822,7 @@ can = measure(620, [1.0, 1.0])
 t611 = client.compute(CONTRIBUTE, params={'sample': r611})     # transmission 1 / 4
 total = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=0.0)},
                                     blanks=('sample', 'can')))
-total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
+total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, {'file': r612}])
 total.push(can=[can])
 
 assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]   # [1, 3] / 4 + [2, 2] - [1, 1]

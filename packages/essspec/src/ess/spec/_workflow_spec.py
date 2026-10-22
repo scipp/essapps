@@ -30,8 +30,8 @@ of it
 has a *JSON form*: pydantic makes a    yes         to an output that fits
 JSON schema of it, with the params
 model's config, and it holds no file
-a group that holds a file              field by    to a dataset, for its one
-                                       field       required file
+a group that holds a file              field by    no
+                                       field
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
 
@@ -46,7 +46,7 @@ reference, as a parameter is, so the file comes from a dataset::
         transmission: TransmissionFraction | None = None
 
     {'sample': {'run': dataset(run=101), 'transmission': t.ref('transmission')}}
-    {'sample': dataset(run=101)}  # the one required file; defaults for the rest
+    {'sample': {'run': dataset(run=101)}}  # defaults for the rest
 
 Like the params model, such a group is never validated whole. A request
 lives in two phases. In the
@@ -125,7 +125,6 @@ from .field_types import (
     base,
     by_field,
     element,
-    file_field,
     has_json_form,
     holds_file,
     inline,
@@ -487,12 +486,7 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
         tp = value_type(info.annotation)
-        if not by_field(tp):
-            ref = _ref_form(tp)
-        elif file := file_field(base(tp)):
-            ref = _ref_form(base(tp).model_fields[file].annotation)
-        else:
-            ref = None
+        ref = None if by_field(tp) else _ref_form(tp)
         fields[name] = (
             _forms(info.annotation, info.metadata, ref, spec.takes_inline(name)),
             Field(

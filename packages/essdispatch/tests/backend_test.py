@@ -674,19 +674,13 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
 # Tables in a plain request
 
 
-def test_a_dataset_as_a_row_is_the_group_with_its_file(client: Client) -> None:
-    summed = client.compute(SUM, params={'sample': [dataset(run=1), dataset(run=2)]})
-
-    assert client.output(summed, 'value') == 3.0
-
-
 def test_a_row_is_a_group_given_field_by_field(client: Client) -> None:
     summed = client.compute(
         SUM,
         params={
             'sample': [
                 {'file': dataset(run=1), 'scale': Scale(factor=10.0)},
-                dataset(run=2),
+                {'file': dataset(run=2)},
             ]
         },
     )
@@ -703,12 +697,15 @@ def test_a_row_given_twice_is_refused(client: Client, datasets: FakeDatasets) ->
     path = datasets.path(datasets.resolve(dataset(run=1)))
 
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
-        client.submit(SUM, params={'sample': [dataset(run=1), dataset(path=path)]})
+        client.submit(
+            SUM,
+            params={'sample': [{'file': dataset(run=1)}, {'file': dataset(path=path)}]},
+        )
 
 
 def test_rows_are_distinct_as_a_whole(client: Client) -> None:
     scaled = {'file': dataset(run=1), 'scale': Scale(factor=2.0)}
-    summed = client.compute(SUM, params={'sample': [dataset(run=1), scaled]})
+    summed = client.compute(SUM, params={'sample': [{'file': dataset(run=1)}, scaled]})
 
     assert client.output(summed, 'value') == 3.0
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):

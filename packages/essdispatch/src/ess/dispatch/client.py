@@ -176,18 +176,17 @@ class Accumulator:
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
 
-            acc.push(sample=[dataset(run=611), dataset(run=612)])
+            acc.push(sample=[{'run': dataset(run=611)}, {'run': dataset(run=612)}])
             acc.push(sample=[{'run': dataset(run=613), 'transmission': t.ref('t')}])
-            acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
+            acc.push(sample=[{'run': dataset(run=615)}], can=[dataset(run=614)])
 
         Each row is given inline, such as a group as a model or a dict, or
         by reference, as its type allows; a group that holds a file field by
-        field, or as a reference to a dataset for its one required file. A
-        push gives rows of one or more tables, side by side as in a request,
-        never paired: rows of different tables have nothing to do with each
-        other. A table the template fixes is refused, and so are a row the
-        table holds already or that the push repeats, and a push of no rows
-        into a table. Rows are compared as the record holds them: a
+        field. A push gives rows of one or more tables, side by side as in a
+        request, never paired: rows of different tables have nothing to do
+        with each other. A table the template fixes is refused, and so are a
+        row the table holds already or that the push repeats, and a push of
+        no rows into a table. Rows are compared as the record holds them: a
         dataset by its identity, a reference to an output by record, output,
         and key, an inline value by its JSON form, and a group given field by
         field by each field so; for a table whose element type has a JSON

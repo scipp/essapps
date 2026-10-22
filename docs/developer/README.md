@@ -26,7 +26,7 @@ The same with the framework:
 records = {}
 for run in (60339, 60340, 60341):
     records[run] = client.submit(IOFQ, params={'reduction': Reduction(bins=100),
-                                               'sample': dataset(run=run),
+                                               'sample': {'run': dataset(run=run)},
                                                'can': dataset(run=60338)})
 client.wait(records)
 client.output(records[60339], 'iofq')
@@ -149,17 +149,17 @@ The parameter's type decides which of the two it accepts, with `| None` removed 
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
 | has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
-| a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
+| a group that holds a file | `Sample` | field by field | no |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
 A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
-A reference to a dataset stands for the whole group: its one required file, and its other fields at their defaults.
+A field left out takes its default, and a dataset is never the value of the whole group.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
 
 ```python
 {'sample': {'run': dataset(run=611), 'transmission': t611.ref('transmission')}}
-{'sample': dataset(run=611)}                      # the run, and the transmission None
+{'sample': {'run': dataset(run=611)}}             # the run, and the transmission None
 ```
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
@@ -218,7 +218,7 @@ A *request* is a spec and its params, given by keyword:
 
 ```python
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
-                                      'sample': dataset(run=60339),
+                                      'sample': {'run': dataset(run=60339)},
                                       'can': dataset(run=60338)})      # submit, then wait
 client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
@@ -271,10 +271,10 @@ A reference to a pending record is allowed, so a chain is submitted without wait
 The same beam centre is typed in by one user and computed by another:
 
 ```python
-result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+result = client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                                      'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})       # pending
-result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+result = client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                                      'beam_centre': centre.ref('centre')})            # a reference
 ```
 
@@ -321,7 +321,7 @@ A *member* names one part of a label, such as one sample or one temperature.
 Both are optional and given at submission, not in the request.
 
 ```python
-client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': run, 'can': can},
+client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': {'run': run}, 'can': can},
                label='iofq', member='250K')
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # dict keys become the members
 client.latest('iofq', member='250K')                  # the newest record of this member
@@ -389,7 +389,7 @@ So another client, even one in the same process, reads a value only once it is p
 
 ```python
 centre = client.compute(BEAM_CENTRE, params={'direct_beam': dataset(run=60330)})
-result = client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+result = client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                                      'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
@@ -410,7 +410,7 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, params={'sample': dataset(run=60341), 'can': dataset(run=60338)},
+client.submit(IOFQ, params={'sample': {'run': dataset(run=60341)}, 'can': dataset(run=60338)},
               label='night', persist=('iofq',))             # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
 morning.output(morning.records(label='night')[0], 'iofq')   # read from the store
@@ -475,7 +475,7 @@ The validators and constraints of the element type check each row.
 A request that gives every row is a plain request:
 
 ```python
-result = client.compute(IOFQ_MULTI, params={'sample': [dataset(run=611), dataset(run=612)],
+result = client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611)}, {'run': dataset(run=612)}],
                                              'can': [dataset(run=614)]})
 ```
 
@@ -486,7 +486,7 @@ Here the transmission of run 611 is the output of `t611`, and run 612 takes the 
 
 ```python
 client.compute(IOFQ_MULTI, params={'sample': [{'run': dataset(run=611), 'transmission': t611.ref('transmission')},
-                                              dataset(run=612)],
+                                              {'run': dataset(run=612)}],
                                    'can': [dataset(run=614)]})
 ```
 
@@ -514,7 +514,7 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338)},
+tune = client.stage(Template(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338)},
                              blanks=('reduction',)))
 for bins in (50, 100, 200):
     client.compute(tune, params={'reduction': Reduction(bins=bins)}, label='iofq')   # the first call loads the run
@@ -535,10 +535,10 @@ The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulati
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100)},
                                    blanks=('sample', 'can')))
-iofq.push(sample=[dataset(run=611)])                       # one row
-iofq.push(sample=[dataset(run=612), dataset(run=613)])     # two rows of one table
-iofq.push(sample=[dataset(run=617)], can=[dataset(run=614)])   # rows of two tables
-client.output(iofq, 'iofq')                                # the output of state 3
+iofq.push(sample=[{'run': dataset(run=611)}])                              # one row
+iofq.push(sample=[{'run': dataset(run=612)}, {'run': dataset(run=613)}])    # two rows of one table
+iofq.push(sample=[{'run': dataset(run=617)}], can=[dataset(run=614)])       # rows of two tables
+client.output(iofq, 'iofq')                                                 # the output of state 3
 ```
 
 A push gives rows of one or more tables, by the name of each, as a list.
@@ -548,7 +548,7 @@ Values that belong to one run are fields of one row, such as the transmission of
 
 ```python
 iofq.push(sample=[{'run': dataset(run=615), 'transmission': t615.ref('transmission')},
-                  dataset(run=616)])                       # 616 with the transmission None
+                  {'run': dataset(run=616)}])              # 616 with the transmission None
 ```
 
 A push of no rows is refused.
@@ -599,7 +599,7 @@ So an inline value and a reference to an output whose value is equal are one row
 ```python
 slicer = client.compute(FIND_SLICES, params={'log': dataset(run=611)})   # outputs slices: list[TimeRange]
 n = len(client.output(slicer, 'slices'))
-acc = client.accumulator(Template(SLICES, params={'sample': dataset(run=611)}, blanks=('time_range',)))
+acc = client.accumulator(Template(SLICES, params={'sample': {'run': dataset(run=611)}}, blanks=('time_range',)))
 acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
 acc.push(time_range=[TimeRange(start=0, stop=60)])    # equal to slice 0: the push fails
 ```
@@ -661,7 +661,7 @@ The client can keep it, persist it, or reference it from another template.
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
 ```python
-iofq.push(sample=[dataset(run=615)])
+iofq.push(sample=[{'run': dataset(run=615)}])
 exported = client.submit(EXPORT, params={'result': iofq.ref('iofq')})   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
@@ -836,26 +836,28 @@ The binding of `VOLUME` is a driver that sums, so the loop holds one volume and 
 
 ```python
 for run in client.datasets.watch(Selector(role='sample')):
-    record = client.submit(IOFQ, params={'sample': run, 'can': dataset(run=60338)})
+    record = client.submit(IOFQ, params={'sample': {'run': run}, 'can': dataset(run=60338)})
     show(client.output(record, 'iofq'))
 ```
 
 ## Batch and automatic reduction
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
-`apply` fills a template once per dataset: the dataset itself is the value of the template's blank file parameter, or of its blank group that holds one required file, such as `sample`.
+`apply` fills a template once per dataset: the dataset is the value at the place `at` of the template's blank, such as `('sample', 'run')`.
+`at` is by default the blank itself, for a blank file parameter.
 A *lookup* fills further blank file parameters, such as the latest can run before each sample run.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
 cans = Lookup(can=LastBefore(Selector(role='can')))
 requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets,
-                 member_field='temperature', lookup=cans)
+                 at=('sample', 'run'), member_field='temperature', lookup=cans)
 client.submit(requests, label='iofq', persist=True)
 ```
 
-A *rule* is plain data: a name, a template, a selector, a label, and optionally a lookup, a series, and the outputs it persists.
+A *rule* is plain data: a name, a template, a selector, a label, and optionally the place `at`, a lookup, a series, and the outputs it persists.
 The *trigger loop* is a controller that fills the template for each new dataset the selector matches, and submits it under the label, persisted.
+A dataset is new to a rule until a record under its label holds it at the place `at`.
 With a *series*, one request takes all matching datasets so far with the same value of a metadata field, as the rows of the template's blank table.
 An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`:
 

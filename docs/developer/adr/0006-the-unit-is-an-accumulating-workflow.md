@@ -85,9 +85,9 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[dataset(run=611)])           # the run alone: the transmission None
+iofq.push(sample=[{'run': dataset(run=611)}])          # the run alone: the transmission None
 iofq.push(can=[dataset(run=614)])
-iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
+iofq.push(sample=[{'run': dataset(run=613)}, {'run': dataset(run=615)}])   # one push, one state
 ```
 
 ## Alternatives considered

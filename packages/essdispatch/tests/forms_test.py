@@ -279,17 +279,40 @@ def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
         client.submit(RUNS, params={'runs': [loaded.ref('shift')]})
 
 
-def test_a_dataset_stands_for_a_group_with_its_one_required_file(
+def test_a_group_given_its_file_alone_holds_defaults_for_the_rest(
     client: Client,
 ) -> None:
     computed = client.compute(
-        RUNS, params={'runs': [dataset_ref(run=1)], 'extra': dataset_ref(run=2)}
+        RUNS,
+        params={
+            'runs': [{'file': dataset_ref(run=1)}],
+            'extra': {'file': dataset_ref(run=2)},
+        },
     )
 
     assert client.output(computed, 'value') == 3.0
     (row,) = computed.request.params['runs']
     assert row['file'] != computed.request.params['extra']['file']
     assert row['shift'] == {'offset': 0.0}
+
+
+@pytest.mark.parametrize(
+    ('params', 'place'),
+    [
+        ({'runs': [dataset_ref(run=1)]}, r'runs\[0\]'),
+        (
+            {'runs': [{'file': dataset_ref(run=1)}], 'extra': dataset_ref(run=2)},
+            'extra',
+        ),
+    ],
+)
+def test_a_dataset_for_a_whole_group_is_refused(
+    client: Client, params: dict[str, Any], place: str
+) -> None:
+    with pytest.raises(
+        SubmitError, match=rf'^{place}: run:\d names the whole of Run\w*, which holds'
+    ):
+        client.submit(RUNS, params=params)
 
 
 def test_the_framework_never_validates_a_group_given_field_by_field_whole(
@@ -308,12 +331,7 @@ def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
     schema = RUNS.serialize().params_schema
     row, run = schema['properties']['runs']['items'], schema['$defs']['Run']
 
-    assert row == {
-        'anyOf': [
-            {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}},
-            {'$ref': '#/$defs/DatasetRef', 'dataType': 'SampleFile'},
-        ]
-    }
+    assert row == {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}}
     assert run['properties']['file'] == {
         '$ref': '#/$defs/DatasetRef',
         'dataType': 'SampleFile',

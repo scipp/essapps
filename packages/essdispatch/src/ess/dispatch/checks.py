@@ -25,10 +25,7 @@ The checks of a request; a template, a push, and a state check part of these:
   fields, each a reference or an inline value; a list parameter is given as
   a list of rows. A reference stands for a value, a row, or a field of a
   group given field by field, so a reference to a whole list, or one
-  anywhere else inside a value, is refused (see :mod:`ess.spec.refs`). A
-  reference to a dataset where a group that holds a file is expected stands
-  for the group with its one required file, and its other fields at their
-  defaults; the record holds the group field by field.
+  anywhere else inside a value, is refused (see :mod:`ess.spec.refs`).
 - *Inline values.* An inline value is allowed where the parameter's type has
   a JSON form (see :meth:`ess.spec.WorkflowSpec.takes_inline`), and ``None``
   where it is optional; so a file given as a string is refused: a file is
@@ -75,7 +72,6 @@ from ess.spec.field_types import (
     base,
     by_field,
     element,
-    file_field,
     fits,
     has_json_form,
     inline,
@@ -231,19 +227,15 @@ class Checks:
         spec = self.spec
         tp = value_type(spec.params.model_fields[name].annotation)
         if by_field(tp):
-            group = base(tp)
-            if isinstance(value, DatasetRef) and (file := file_field(group)):
-                value = {file: value}
-            elif isinstance(value, Ref):
+            if isinstance(value, Ref):
                 raise SubmitError.at(
                     loc,
                     f'{value} names the whole of {type_name(tp)}, which '
                     'holds a file; it is given field by field, its file by '
-                    'reference to a dataset, which stands for the whole if the '
-                    'group has one required file',
+                    'reference to a dataset',
                 )
             if isinstance(value, Mapping):
-                return self._group(loc, group, value, proposal)
+                return self._group(loc, base(tp), value, proposal)
         elif isinstance(value, Ref):
             return self._ref(loc, value, tp, proposal)
         elif spec.has_json_form(name):

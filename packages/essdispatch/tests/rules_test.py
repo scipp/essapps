@@ -16,6 +16,7 @@ from ess.dispatch import (
     Lookup,
     Rule,
     Selector,
+    SubmitError,
     Template,
     TriggerLoop,
     apply,
@@ -25,6 +26,7 @@ from ess.spec import WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
 CanFile = NewType('CanFile', Path)
+ReferenceFile = NewType('ReferenceFile', Path)
 
 
 class LoadParams(BaseModel):
@@ -45,6 +47,18 @@ class ScaleParams(BaseModel):
     sample: SampleFile
 
 
+class Run(BaseModel):
+    """A run and its factor: a group that holds a file."""
+
+    run: SampleFile
+    factor: float = 1.0
+
+
+class NormalizeParams(BaseModel):
+    sample: Run
+    reference: ReferenceFile
+
+
 class ValueOutputs(BaseModel):
     value: float
 
@@ -63,6 +77,7 @@ def _spec(name: str, params: type[BaseModel]) -> WorkflowSpec:
 LOAD = _spec('load', LoadParams)
 SUBTRACT = _spec('subtract', SubtractParams)
 SCALE = _spec('scale', ScaleParams)
+NORMALIZE = _spec('normalize', NormalizeParams)
 
 
 def load(params: LoadParams) -> ValueOutputs:
@@ -75,6 +90,11 @@ def subtract(params: SubtractParams) -> ValueOutputs:
 
 def scale(params: ScaleParams) -> ValueOutputs:
     return ValueOutputs(value=params.scale.factor * read_dataset(params.sample))
+
+
+def normalize(params: NormalizeParams) -> ValueOutputs:
+    sample = params.sample.factor * read_dataset(params.sample.run)
+    return ValueOutputs(value=sample / read_dataset(params.reference))
 
 
 @pytest.fixture
@@ -90,6 +110,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
             function_binding(LOAD, load),
             function_binding(SUBTRACT, subtract),
             function_binding(SCALE, scale),
+            function_binding(NORMALIZE, normalize),
         ],
         store=FakeStore(),
     )
@@ -187,3 +208,57 @@ def test_a_dataset_fills_a_blank_file_never_a_group(
     assert loop.status(rule).reason == (
         '1: scale: dataset uuid:run-1 does not fit Scale, which is not a file'
     )
+
+
+def test_a_dataset_fills_the_place_at_in_a_blank_group(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    sample = datasets.measure(1, 6.0, role='sample')
+    reference = datasets.measure(2, 2.0, role='reference')
+    template = Template(NORMALIZE, params={'reference': reference}, blanks=('sample',))
+
+    normalized = apply(template, [sample], client.datasets, at=('sample', 'run'))
+    whole = apply(template, [sample], client.datasets)
+
+    assert normalized['1'].params['sample'] == {'run': sample}
+    assert client.output(client.compute(normalized['1']), 'value') == 3.0
+    with pytest.raises(
+        SubmitError, match=r'^1: sample: uuid:run-1 names the whole of Run'
+    ):
+        client.submit(whole)
+    with pytest.raises(ValueError, match='a dataset fills a place in the blank sample'):
+        apply(template, [sample], client.datasets, at=('reference',))
+
+
+def test_a_rule_has_handled_a_dataset_only_at_the_place_it_fills(
+    client: Client, datasets: FakeDatasets
+) -> None:
+    first = datasets.measure(1, 6.0, role='sample')
+    second = datasets.measure(2, 2.0, role='sample')
+    template = Template(NORMALIZE, params={'reference': second}, blanks=('sample',))
+    rule = Rule(
+        'normalize',
+        template,
+        selector=Selector(role='sample'),
+        label='normalized',
+        at=('sample', 'run'),
+    )
+    # holds the first at the place, and the second elsewhere
+    client.submit(template.fill(params={'sample': {'run': first}}), label='normalized')
+
+    (submitted,) = TriggerLoop(client, rules=[rule]).step()
+
+    assert submitted.member == '2'
+    assert submitted.request.params['sample'] == {'run': second, 'factor': 1.0}
+
+
+def test_a_series_takes_no_place_at() -> None:
+    with pytest.raises(ValueError, match='a series takes no at'):
+        Rule(
+            'series',
+            Template(LOAD, blanks=('sample',)),
+            selector=Selector(role='sample'),
+            label='series',
+            series='sample',
+            at=('sample',),
+        )

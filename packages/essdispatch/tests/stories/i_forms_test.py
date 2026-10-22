@@ -61,7 +61,7 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
         )
     )
     for accumulator in (computed, typed):
-        accumulator.push(sample=samples)
+        accumulator.push(sample=[{'file': sample} for sample in samples])
         accumulator.push(can=[can])
 
     assert client.output(finder, 'centre') == Centre(x=1.0)
@@ -84,7 +84,12 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
             CENTRED_MULTI, params={'centre': Centre(x=0.0)}, blanks=('sample', 'can')
         )
     )
-    total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, r612])
+    total.push(
+        sample=[
+            {'file': r611, 'transmission': t611.ref('transmission')},
+            {'file': r612},
+        ]
+    )
     total.push(can=[can])
 
     assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]
