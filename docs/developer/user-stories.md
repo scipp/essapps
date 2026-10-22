@@ -829,7 +829,7 @@ assert client.provenance(total).records() == [t611]
 ```
 
 A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
-Run 612 is given as a dataset reference, which stands for a `SampleRun` with the transmission `None`.
+Run 612 gives its file only, so its transmission takes the default, `None`: no transmission factor.
 `TransmissionArray` has no JSON form, so a transmission takes a reference, or `None` since the field is optional.
 
 ## Open

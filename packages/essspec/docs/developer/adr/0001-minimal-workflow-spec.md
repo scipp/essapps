@@ -131,14 +131,16 @@ groups, such as a beam centre that is given, `GivenCentre`, or found from a
 run with a tolerance, `FindCentre`; the request writes the fields of one
 alternative with its tag, inline, which says what each of the other fields
 takes: `{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`.
+Why a choice is a union, and what `X | None` means, is
+[ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 ```python
 class Reduction(BaseModel):                       # a group
     bins: int = 2
 
 class BeamCentre(BaseModel):                      # a group: inline, or a finder's output
-    x: float
-    y: float
+    x: float = 0.0
+    y: float = 0.0
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)
@@ -147,13 +149,13 @@ IofQ = NewType('IofQ', sc.DataArray)
 
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = None
+    transmission: Transmission | None = None      # None: the one in the run's file
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
     can: CanFile
-    beam_centre: BeamCentre | None = None
+    beam_centre: BeamCentre = BeamCentre()        # the nominal centre
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
@@ -226,12 +228,17 @@ transmission run, is the binding's or the driver's, and fails when the request
 runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
-A default never changes which quantity an output is. The default of
-`reduction` is a setting, and the transmission `None` of a `Sample` takes the
-one in the run's file: the output is I(Q) either way. The can run has no
-default. I(Q) without the can subtracted is another quantity, so it is another
-spec, not `IOFQ` with `can=None`, and a request or a template that leaves out
-the can is refused instead of computing the other quantity.
+A request that leaves out a parameter never leaves out a correction that a
+correct reduction needs. The default of `reduction` is a setting, and the
+transmission `None` of a `Sample` takes the one in the run's file. The can run
+has no default, so a request or a template that leaves it out is refused. A
+needed correction that a request may still leave out is optional without a
+default, such as `background: BackgroundRun | None`: the request writes
+`None`, and its record says so. The output is I(Q) either way, and the params
+of its record say which corrections were applied. A step whose omission
+changes what a reader of the output must do with it, such as its unit, makes
+another output type, and so another spec. What `None` means, and when a union
+names the ways instead, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 **References.** A reference names an output of an earlier record (`OutputRef`:
 record, output name, and optionally the key of one element of a list or dict

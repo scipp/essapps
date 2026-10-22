@@ -116,7 +116,8 @@ class Reduction(BaseModel):                       # a group
     bins: int = 100
 
 class BeamCentre(BaseModel):                      # a group: inline, or an output of a first reduction
-    x: float
+    x: float = 0.0
+    y: float = 0.0
     y: float
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
@@ -126,11 +127,11 @@ IofQ = NewType('IofQ', sc.DataArray)
 
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = None
+    transmission: Transmission | None = None      # None: the one in the run's file
 
 class IofQSettings(BaseModel):                    # the parameters that all runs share
     reduction: Reduction = Field(default_factory=Reduction)
-    beam_centre: BeamCentre | None = None
+    beam_centre: BeamCentre = BeamCentre()        # the nominal centre
 
 class IofQParams(IofQSettings):
     sample: Sample
@@ -163,7 +164,7 @@ A field of a group left out takes its default.
 
 ```python
 {'sample': {'run': dataset(run=611), 'transmission': t611.ref('transmission')}}
-{'sample': {'run': dataset(run=611)}}             # the run, and the transmission None
+{'sample': {'run': dataset(run=611)}}             # the run, and the transmission in its file
 {'reduction': {'bins': 50}}                       # every field inline: the group's JSON form
 ```
 
@@ -191,6 +192,30 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
 
+`X | None` means *without X*: apply no mask, subtract no background.
+A value obtained in one of several ways is a union that names each way.
+A UI shows `X | None` as a toggle, and a union as a choice between its alternatives, so a toggle that is off must read as what `None` does:
+
+```python
+mask: PixelMask | None = None                     # [ ] Mask
+background: BackgroundRun | None                  # [x] Background  Run: [60338]
+
+# not `transmission: TransmissionFraction | None  # None: the one in the run's file`,
+# whose toggle, off, reads as "no transmission correction"
+class FromFile(BaseModel):                        # an alternative without fields
+    kind: Literal['file'] = 'file'
+
+class TransmissionFraction(BaseModel):
+    kind: Literal['given'] = 'given'
+    value: float = Field(gt=0, le=1)
+
+transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='kind')] = FromFile()
+# Transmission: (•) from the sample's file  ( ) given: [0.75]
+```
+
+`background` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
+A data value, such as a `Transmission` array, cannot be an alternative, since a union holds groups only; where `None` does not mean *without X*, as for the `transmission` of `Sample` above, its description says what it means.
+
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
 A workflow that takes nothing has the params model `NoParams`.
 A request computes every output its spec declares.
@@ -214,11 +239,13 @@ The validators of a group run on the whole group, with all its fields at hand, e
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
-**Defaults.** A default never changes which quantity an output is.
-`reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file: the output is I(Q) either way.
-The can run has none.
-I(Q) without the can subtracted is another quantity, so it is another spec, not `IOFQ` with `can=None`.
-A request or a template that leaves out the can is then refused, instead of computing the other quantity.
+**Defaults.** A request that leaves out a parameter never leaves out a correction that a correct reduction needs.
+`reduction` has a default, a setting, and so has the transmission of a `Sample`, `None`, which takes the one in the run's file.
+The can run has none, so a request or a template that leaves it out is refused, instead of computing I(Q) without the can subtracted.
+A needed correction that a request may still leave out is optional with no default, such as `background: BackgroundRun | None`: the request writes `None` to leave it out, and its record says so.
+A mask, which a correct reduction does not need, may default to `None`.
+The output is I(Q) either way, and the params of its record say which corrections were applied.
+A step whose omission changes what a reader of the output must do with it, such as its unit or its dimensions, makes another output type, and so another spec.
 
 **Binding.** A binding is what the backend calls to compute a spec's requests.
 The workflow author makes it from a pipeline, a driver, or a function, each for one spec.
@@ -805,8 +832,8 @@ That always works, since a union cannot be a blank: its key depends on its value
 A list of unions sets one key, its type, as any list.
 
 A parameter typed `X | None`, a union too, sets no key, so `keys=` must give it `()`.
-For `None`, setting `X` to `None` would replace a provider of `X`, and setting no key would leave whatever the pipeline holds at `X`, which the request did not choose.
-`make_pipeline` branches on the value instead:
+Each value of a union sets one key, but `None` has no key to set: setting `X` to `None` would replace a provider of `X`, and setting nothing would leave the meaning of `None` to whatever the pipeline holds or computes at `X`.
+`make_pipeline` says what `None` means instead, here no direct-beam correction:
 
 ```python
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
@@ -820,9 +847,11 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
 PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 ```
 
-Defaults belong to the spec: `make_pipeline` holds no value at a key that a parameter sets, or at a key that such a key leads to.
-A value held there can make a request's value have no effect, and nothing says so; the binding does not check this.
-If the pipeline above held a default `GivenCentre`, the tag `'find'` would set `FindCentre`, but `iofq` would read the default, and `find_centre` would never run.
+Defaults belong to the spec: `make_pipeline` holds no value at a key that a parameter's key leads to.
+Such a value replaces the provider that would read the parameter, so the request's value has no effect, and the binding cannot tell, since the provider is gone from the graph.
+A value held at a parameter's own key is harmless, since the binding sets the request's value over it, except at a key of a union, which only one alternative sets.
+The binding refuses a value held there: if the pipeline above held a default `GivenCentre`, the tag `'find'` would set `FindCentre`, but `iofq` would read the default, and `find_centre` would never run.
+`make_pipeline` sets no value in a pipeline it holds: the binding copies the pipeline only after `make_pipeline` returns it, so a value set for one request would stay for the next.
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.
