@@ -718,7 +718,8 @@ The callable may return the same object in several calls, so records made throug
 
 **A pipeline.** `PipelineBinding` takes a function that makes the sciline pipeline from the fixed values, by name, so that the graph may depend on them.
 The function does not get the blanks, so a field that changes the graph cannot be a blank.
-Each parameter sets the sciline key of its type as written, without `Annotated` metadata, such as `Reduction`, `Sample`, or `BeamCentre | None`.
+The binding copies what the function returns before it sets values in it, so the function may return a pipeline that it holds.
+Each parameter sets the sciline key of its type, without `Annotated` metadata, such as `Reduction` or `Sample`.
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
 A table sets the key of its type, a list, to its rows.
 A group is one key, so a provider takes it apart, such as one that reads the file `sample.run`.
@@ -726,12 +727,30 @@ A workflow with keys of its own names them with `keys=`:
 
 ```python
 PipelineBinding(IOFQ, make_pipeline,
-                keys={'can': Filename[BackgroundRun], 'iofq': BackgroundSubtractedIofQ})
+                keys={'can': (Filename[BackgroundRun],), 'iofq': (BackgroundSubtractedIofQ,)})
 ```
 
 [roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows the other routes from a spec's values to such keys: adapter providers, and providers that take the spec's models.
+`binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
 Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
-For a parameter, `None` in `keys=` sets no key, for a field that `make_pipeline` uses itself.
+A parameter typed `X | None` sets no key, so `keys=` must give it `()`.
+For `None`, setting `X` to `None` would replace a provider of `X`, and setting no key would leave whatever the pipeline holds at `X`, which the request did not choose.
+`make_pipeline` branches on the value instead:
+
+```python
+def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+    pipeline = sciline.Pipeline(providers)
+    if fixed['direct_beam'] is None:
+        pipeline[DirectBeam] = None
+    else:
+        pipeline[DirectBeamFilename] = fixed['direct_beam']
+    return pipeline
+
+PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
+```
+
+Defaults belong to the spec: `make_pipeline` holds no value at a key that a parameter sets, or at a key that such a key leads to.
+A value held there can make a request's value have no effect, and nothing says so; the binding does not check this.
 A stage computes what does not depend on the blanks once, through `sciline.Stage`, and each call computes the rest.
 A plain request is a stage with no blanks, called once.
 The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.

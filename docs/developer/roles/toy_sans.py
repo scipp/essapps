@@ -310,7 +310,7 @@ class IofQDriver:
         self._contribute = {
             table: sciline.Stage(
                 workflow,
-                inputs=[single.keys[table]],
+                inputs=single.keys[table],
                 outputs=(Numerator[run], Denominator[run]),
             )
             for table, run in (('sample', SampleRun), ('can', CanRun))
@@ -323,8 +323,9 @@ class IofQDriver:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         stage = self._contribute[table]
+        (key,) = single.keys[table]
         for row in rows:
-            parts = stage.compute({single.keys[table]: row})
+            parts = stage.compute({key: row})
             old = self._sums.get(table)
             self._sums[table] = (
                 parts if old is None else {k: old[k] + v for k, v in parts.items()}

@@ -133,12 +133,12 @@ class IofQDriver:
         pipeline = single.pipeline({'reduction': fixed['reduction']})
         self._contribute = {
             table: (
-                keys[table],
-                sciline.Stage(pipeline, inputs=(keys[table],), outputs=parts),
+                keys[table][0],
+                sciline.Stage(pipeline, inputs=keys[table], outputs=parts),
             )
             for table, parts in (('sample', SAMPLE_PARTS), ('can', CAN_PARTS))
         }
-        self._outputs = (keys['iofq'], keys['can_iofq'])
+        self._outputs = keys['iofq'] + keys['can_iofq']
         self._finalize = sciline.Stage(
             pipeline, inputs=SAMPLE_PARTS + CAN_PARTS, outputs=self._outputs
         )
@@ -283,14 +283,14 @@ def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
 
 def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
     assert dict(single.keys) == {
-        'reduction': Reduction,
-        'sample': SampleFile,
-        'can': CanFile,
-        'iofq': IofQ,
-        'can_iofq': CanIofQ,
+        'reduction': (Reduction,),
+        'sample': (SampleFile,),
+        'can': (CanFile,),
+        'iofq': (IofQ,),
+        'can_iofq': (CanIofQ,),
     }
     with pytest.raises(TypeError):
-        single.keys['iofq'] = SampleIofQ  # type: ignore[index]
+        single.keys['iofq'] = (SampleIofQ,)  # type: ignore[index]
 
 
 def test_pipeline_sets_each_fixed_value_at_its_key(
@@ -343,7 +343,7 @@ def test_keys_name_keys_of_the_workflows_own(
     binding = PipelineBinding(
         TOTAL,
         lambda _: sciline.Pipeline([load, total]),
-        keys={'sample': Filename, 'total': Total},
+        keys={'sample': (Filename,), 'total': (Total,)},
     )
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
@@ -371,7 +371,7 @@ def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
     binding = PipelineBinding(
         spec,
         lambda _: sciline.Pipeline(providers),
-        keys={'sample': Filename, 'total': Total},
+        keys={'sample': (Filename,), 'total': (Total,)},
     )
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalAndMeanOutputs(total=2 * 12.0, mean=expected_mean)
@@ -384,7 +384,7 @@ def test_a_table_sets_the_key_of_its_type_to_its_list(samples: list[Path]) -> No
     binding = PipelineBinding(
         TOTAL_MULTI,
         lambda _: sciline.Pipeline([load_all, total]),
-        keys={'total': Total},
+        keys={'total': (Total,)},
     )
     expected = TotalOutputs(total=2 * np.sum(SAMPLES))
     params = TOTAL_MULTI.params(sample=samples)
@@ -400,7 +400,7 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
         return sciline.Pipeline([total], params={Counts: counts})
 
     binding = PipelineBinding(
-        TOTAL_MULTI, make_pipeline, keys={'sample': None, 'total': Total}
+        TOTAL_MULTI, make_pipeline, keys={'sample': (), 'total': (Total,)}
     )
     params = TOTAL_MULTI.params(sample=samples)
     assert binding.compute(params) == TotalOutputs(total=2 * np.sum(SAMPLES))
@@ -411,11 +411,13 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
 @pytest.mark.parametrize(
     ('keys', 'reason'),
     [
-        ({'speed': Total}, r"\['speed'\]: not fields of total"),
-        ({'total': None}, r"\['total'\]: an output is computed as a key"),
-        ({'sample': CanFile}, 'total: sample and can: two fields have one key'),
+        ({'speed': (Total,)}, r"\['speed'\]: not fields of total"),
+        ({'total': ()}, r"\['total'\]: an output is computed as one key"),
+        ({'total': (Total, Counts)}, r"\['total'\]: an output is computed as one key"),
+        ({'sample': (Filename, Counts)}, r"\['sample'\]: a parameter sets at most one"),
+        ({'sample': (CanFile,)}, 'total: sample and can: two fields have one key'),
         (
-            {'sample': Filename, 'total': Filename},
+            {'sample': (Filename,), 'total': (Filename,)},
             'total: sample and total: two fields have one key',
         ),
     ],
@@ -438,3 +440,68 @@ def test_two_parameters_of_one_type_need_a_key_each() -> None:
         ValueError, match='twins: first and second: two fields have one key'
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))
+
+
+def test_keys_are_given_as_tuples() -> None:
+    with pytest.raises(TypeError, match=r"\['total'\]: keys= gives a tuple of keys"):
+        PipelineBinding(
+            TOTAL, lambda _: sciline.Pipeline([load, total]), keys={'total': Total}
+        )
+
+
+Offset = NewType('Offset', float)
+Shifted = NewType('Shifted', float)
+
+
+class OffsetParams(BaseModel):
+    offset: Offset | None = None
+
+
+class ShiftedOutputs(BaseModel):
+    shifted: Shifted
+
+
+SHIFTED = _spec('shifted', params=OffsetParams, outputs=ShiftedOutputs)
+
+
+def shift(offset: Offset) -> Shifted:
+    return Shifted(offset + 1.0)
+
+
+@pytest.mark.parametrize('keys', [None, {'offset': (Offset,)}])
+def test_an_optional_parameter_with_a_key_is_refused(
+    keys: dict[str, Any] | None,
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"shifted: \['offset'\]: a parameter typed X \| None"
+    ):
+        PipelineBinding(SHIFTED, lambda _: sciline.Pipeline([shift]), keys=keys)
+
+
+def test_an_optional_parameter_without_a_key_reaches_make_pipeline() -> None:
+    def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+        pipeline = sciline.Pipeline([shift])
+        if fixed['offset'] is None:
+            pipeline[Shifted] = Shifted(-1.0)
+        else:
+            pipeline[Offset] = fixed['offset']
+        return pipeline
+
+    binding = PipelineBinding(SHIFTED, make_pipeline, keys={'offset': ()})
+    assert binding.keys['offset'] == ()
+    assert binding.compute(OffsetParams(offset=2.0)).shifted == 3.0
+    assert binding.compute(OffsetParams()).shifted == -1.0
+
+
+class RequiredOffsetParams(BaseModel):
+    offset: Offset
+
+
+def test_make_pipeline_may_return_a_pipeline_it_holds() -> None:
+    spec = _spec('shifted', params=RequiredOffsetParams, outputs=ShiftedOutputs)
+    base = sciline.Pipeline([shift])
+    binding = PipelineBinding(spec, lambda _: base)
+    assert binding.compute(RequiredOffsetParams(offset=2.0)).shifted == 3.0
+    assert binding.compute(RequiredOffsetParams(offset=5.0)).shifted == 6.0
+    with pytest.raises(sciline.UnsatisfiedRequirement):
+        base.compute(Shifted)

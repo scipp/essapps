@@ -29,23 +29,48 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     ``make_pipeline`` makes the pipeline from the fixed values, by name, with
     defaults filled in, so that the graph may depend on them; it gets no
-    blank, and each call must return a pipeline of its own, such as a copy.
-    Each parameter sets the sciline key of its type as written, without
-    ``Annotated`` metadata, such as ``Reduction`` or ``BeamCentre | None``; a
-    table sets the key of its type, a list, to its list. Each output is
-    computed as the key of its type without ``| None``, since an optional
-    output means that the graph may lack it, not that a provider returns
-    ``None``; an output that a provider returns as ``X | None`` needs
-    ``keys=``. ``keys`` names another key of a parameter or an output, for a
-    workflow with keys of its own, such as for two parameters of one type; for
-    a parameter, ``None`` sets no key, for a field that ``make_pipeline`` uses
-    itself::
+    blank. The binding copies what it returns before it sets values in it, so
+    ``make_pipeline`` may return a pipeline that it holds. Each parameter
+    sets the sciline key of its type, without ``Annotated`` metadata, such as
+    ``Reduction``; a table sets the key of its type, a list, to its list. Each
+    output is computed as the key of its type without ``| None``, since an
+    optional output means that the graph may lack it, not that a provider
+    returns ``None``; an output that a provider returns as ``X | None`` needs
+    ``keys=``.
+
+    A parameter typed ``X | None`` sets no key. For ``None``, setting ``X`` to
+    ``None`` would replace a provider of ``X``, and setting no key would leave
+    whatever the pipeline holds at ``X``, which the request did not choose.
+    So ``keys=`` must give such a parameter no key, ``()``, and
+    ``make_pipeline`` uses the field itself::
+
+        def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+            pipeline = sciline.Pipeline(providers)
+            if fixed['direct_beam'] is None:
+                pipeline[DirectBeam] = None
+            else:
+                pipeline[DirectBeamFilename] = fixed['direct_beam']
+            return pipeline
+
+        PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
+
+    ``keys`` gives a tuple of keys for a parameter or an output: ``(K,)``, or
+    ``()`` for a parameter that sets none. It names keys of a workflow's own,
+    such as for two parameters of one type::
 
         PipelineBinding(
             IOFQ,
             make_pipeline,
-            keys={'sample': Filename[SampleRun], 'iofq': BackgroundSubtractedIofQ},
+            keys={
+                'sample': (Filename[SampleRun],),
+                'iofq': (BackgroundSubtractedIofQ,),
+            },
         )
+
+    Defaults belong to the spec: ``make_pipeline`` holds no value at a key
+    that a parameter sets, or at a key that such a key leads to. A value held
+    there can make a request's value have no effect, and nothing says so. The
+    binding does not check this.
 
     :attr:`keys` and :meth:`pipeline` give these keys and the graph, so that
     the driver of a multi-run spec can reuse them.
@@ -70,22 +95,37 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         spec: WorkflowSpec[P, O],
         make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
         *,
-        keys: Mapping[str, Key | None] | None = None,
+        keys: Mapping[str, tuple[Key, ...]] | None = None,
     ) -> None:
         keys = dict(keys or {})
         declared = spec.params.model_fields
         outputs = spec.outputs.model_fields
         if unknown := keys.keys() - declared.keys() - outputs.keys():
             raise ValueError(f'{sorted(unknown)}: not fields of {spec.name}')
-        if unset := [n for n in outputs if n in keys and keys[n] is None]:
-            raise ValueError(f'{unset}: an output is computed as a key')
+        if not_tuples := sorted(n for n, k in keys.items() if type(k) is not tuple):
+            raise TypeError(f'{not_tuples}: keys= gives a tuple of keys')
+        if wrong := sorted(n for n in outputs if n in keys and len(keys[n]) != 1):
+            raise ValueError(f'{wrong}: an output is computed as one key')
+        if wrong := sorted(n for n in declared if len(keys.get(n, ())) > 1):
+            raise ValueError(f'{wrong}: a parameter sets at most one key')
+        if optional_params := sorted(
+            n
+            for n, f in declared.items()
+            if optional(f.annotation)[1] and keys.get(n) != ()
+        ):
+            raise ValueError(
+                f'{spec.name}: {optional_params}: a parameter typed X | None sets no '
+                'key; give it keys=() and use it in make_pipeline'
+            )
         all_keys = {
-            **{n: keys.get(n, plain(f.annotation)) for n, f in declared.items()},
-            **{n: keys.get(n, optional(f.annotation)[0]) for n, f in outputs.items()},
+            **{n: keys.get(n, (plain(f.annotation),)) for n, f in declared.items()},
+            **{
+                n: keys.get(n, (optional(f.annotation)[0],)) for n, f in outputs.items()
+            },
         }
         names: dict[Key, list[str]] = {}
-        for name, key in all_keys.items():
-            if key is not None:
+        for name, field_keys in all_keys.items():
+            for key in field_keys:
                 names.setdefault(key, []).append(name)
         if shared := [' and '.join(n) for n in names.values() if len(n) > 1]:
             raise ValueError(
@@ -96,10 +136,10 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         self._make_pipeline = make_pipeline
 
     @property
-    def keys(self) -> Mapping[str, Key | None]:
+    def keys(self) -> Mapping[str, tuple[Key, ...]]:
         """
-        The sciline key of each parameter and output, by name; ``None`` for a
-        parameter that sets none.
+        The sciline keys of each parameter and output, by name: ``(K,)``, or
+        ``()`` for a parameter that sets none.
         """
         return self._keys
 
@@ -116,7 +156,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
             raise ValueError(f'{unknown}: not parameters of {spec.name}')
-        pipeline = self._make_pipeline(fixed)
+        pipeline = self._make_pipeline(fixed).copy()
         for key, value in self._by_key(fixed).items():
             pipeline[key] = value
         return pipeline
@@ -129,16 +169,17 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     ) -> StageCall[O]:
         values = fixed_values(self.spec, fixed, blanks)
         left_open = frozenset(blanks)
-        if keyless := sorted(n for n in left_open if self._keys[n] is None):
+        if keyless := sorted(n for n in left_open if not self._keys[n]):
             raise ValueError(f'{keyless}: without a key, cannot be blanks')
         pipeline = self.pipeline(values)
         output_fields = self.spec.outputs.model_fields
+        output_keys = {name: self._keys[name][0] for name in output_fields}
         outputs = [
-            self._keys[name]
-            for name, field in output_fields.items()
-            if field.is_required() or _computable(pipeline, self._keys[name])
+            key
+            for name, key in output_keys.items()
+            if output_fields[name].is_required() or _computable(pipeline, key)
         ]
-        cut = _Cut(pipeline, outputs, [self._keys[n] for n in left_open])
+        cut = _Cut(pipeline, outputs, [k for n in left_open for k in self._keys[n]])
         output_model = self.spec.outputs
 
         def call(blank_values: Mapping[str, Any]) -> O:
@@ -146,16 +187,14 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
                 raise ValueError(f'give the blanks {sorted(left_open)}')
             results = cut(self._by_key(blank_values))
             return output_model(
-                **{n: results.get(self._keys[n]) for n in output_fields}
+                **{n: results.get(key) for n, key in output_keys.items()}
             )
 
         return call
 
     def _by_key(self, values: Mapping[str, Any]) -> dict[Key, Any]:
         """``values`` by the key each sets; a field without a key is left out."""
-        return {
-            self._keys[n]: v for n, v in values.items() if self._keys[n] is not None
-        }
+        return {key: v for n, v in values.items() for key in self._keys[n]}
 
 
 def _computable(pipeline: sciline.Pipeline, key: Key) -> bool:
