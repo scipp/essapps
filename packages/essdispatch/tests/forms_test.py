@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal, NewType
 
 import pytest
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -175,6 +176,48 @@ class RangeParams(BaseModel):
     range: Range
 
 
+class Edges(BaseModel):
+    """Edges given as a list or as a string of numbers, held sorted."""
+
+    values: list[float]
+
+    @field_validator('values', mode='before')
+    @classmethod
+    def _parse(cls, values: Any) -> Any:
+        return (
+            [float(v) for v in values.split(',')] if isinstance(values, str) else values
+        )
+
+    @field_validator('values')
+    @classmethod
+    def _sorted(cls, values: list[float]) -> list[float]:
+        return sorted(values)
+
+
+class EdgesParams(BaseModel):
+    edges: list[Edges] = Field(min_length=1)
+
+
+class Millimetres(BaseModel):
+    """A length given in millimetres, held in metres."""
+
+    value: float
+
+    @field_validator('value')
+    @classmethod
+    def _to_metres(cls, value: float) -> float:
+        return value / 1000
+
+
+class AnnotatedMillimetres(BaseModel):
+    value: Annotated[float, AfterValidator(lambda value: value / 1000)]
+
+
+class LengthParams(BaseModel):
+    by_decorator: Millimetres | None = None
+    by_type: AnnotatedMillimetres | None = None
+
+
 class BeamCentre(BaseModel):
     kind: Literal['given'] = 'given'
     x: float = 0.0
@@ -205,6 +248,8 @@ class CentreOutputs(BaseModel):
 
 DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
+EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
+LENGTH = _spec('length', LengthParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 
@@ -287,6 +332,8 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(RUNS, runs),
             function_binding(DEEP, deep),
             function_binding(RANGE, lambda p: Value(value=p.range.stop)),
+            function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
+            function_binding(LENGTH, lambda p: Value(value=0.0)),
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
         ],
@@ -350,8 +397,11 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
 @pytest.mark.parametrize(
     ('row', 'reason'),
     [
-        ({'offset': 1.0}, r'runs\[0\]\.file: a required field, not given'),
-        ({'file': 'a.nxs'}, r"runs\[0\]\.file: 'a.nxs' is not a reference"),
+        ({'offset': 1.0}, r'runs\[0\]\.file: Field required'),
+        (
+            {'file': 'a.nxs'},
+            r'runs\[0\]\.file: a file is given by reference to a dataset',
+        ),
         (
             {'file': dataset_ref(run=1), 'label': 'x'},
             r'runs\[0\]\.label: Extra inputs are not permitted',
@@ -535,6 +585,48 @@ def test_a_group_without_a_reference_is_validated_whole_when_submitted(
     (error,) = raised.value.errors
     assert error.loc == ('range', 'stop')
     assert 'stop must be greater than start' in error.msg
+
+
+def test_a_group_without_a_reference_is_held_as_validated(client: Client) -> None:
+    by_fields = client.compute(EDGES, params={'edges': [{'values': [3.0, 1.0]}]})
+    by_instance = client.compute(EDGES, params={'edges': [Edges(values=[3.0, 1.0])]})
+    by_string = client.compute(EDGES, params={'edges': [{'values': '3, 1'}]})
+
+    assert by_fields.request == by_instance.request == by_string.request
+    assert by_fields.request.params == {'edges': [{'values': [1.0, 3.0]}]}
+    assert client.output(by_fields, 'value') == 1.0
+
+
+def test_rows_without_a_reference_are_compared_as_validated(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^edges\[1\]: repeats edges\[0\]'):
+        client.submit(EDGES, params={'edges': [{'values': [1, 3]}, {'values': '3,1'}]})
+
+
+@pytest.mark.parametrize(
+    ('name', 'group'),
+    [('by_decorator', Millimetres), ('by_type', AnnotatedMillimetres)],
+)
+@pytest.mark.parametrize('as_instance', [False, True])
+def test_a_group_whose_validator_changes_a_validated_value_is_refused(
+    client: Client, name: str, group: type[BaseModel], as_instance: bool
+) -> None:
+    value = group(value=5000.0) if as_instance else {'value': 5000.0}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(LENGTH, params={name: value})
+    (error,) = raised.value.errors
+    assert error.loc == (name, 'value')
+    assert error.msg == 'has no JSON form that reads back as the value'
+
+
+def test_a_file_in_a_group_given_inline_is_refused(client: Client) -> None:
+    centre = {'by': {'kind': 'run', 'run': '/data/run1.nxs'}}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': centre})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre', 'by', 'run')
+    assert error.msg.startswith('a file is given by reference to a dataset')
 
 
 def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(

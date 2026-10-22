@@ -32,10 +32,13 @@ The checks of a request; a template, a push, and a state check part of these:
   value is validated alone, by its field, or for an element of a list by its
   element type, from its JSON form, and a field that a model lacks is
   refused at any depth, since validating would drop it silently. A group
-  with no reference inside is validated whole, from the JSON form of its
-  fields, so that its validators run. The log holds the JSON form of each
-  validated value, and the call phase validates that, so it must read back
-  as the value: a number that is not finite has none (see
+  with no reference inside is an inline value, validated whole, so that its
+  validators run, an instance by its dump; of a group with a reference
+  inside, each field given inline is validated alone, and the group whole
+  in the call phase. The log holds the JSON form of each validated value,
+  and the call phase validates that, so it must read back as the value: a
+  number that is not finite has none, nor has a group whose validators
+  change a value they validated already (see
   :func:`ess.spec.field_types.inline`). A list parameter that is not a table
   meets its length constraints.
 - *References.* A file is given by reference to a dataset, and only a file

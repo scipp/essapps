@@ -201,14 +201,14 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A union of groups is discriminated by the name of its tag field, not by a callable, and the tag field has no alias.
-- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode. It does not hold itself, at any depth.
+- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It does not hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
 Each parameter is validated alone, since a template, a stage call, or a push gives some values only.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
-The validators of a group run on the whole group, once, with all its fields at hand, even where the request gives some fields by reference (see Requests and records, Validation).
+The validators of a group run on the whole group, with all its fields at hand, even where the request gives some fields by reference (see Requests and records, Validation).
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
@@ -287,13 +287,22 @@ A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)
 
 | Phase | What is validated |
 |---|---|
-| request phase | each inline value alone, by the type at its place, from its JSON form; a group with no reference inside whole, from the JSON form of its fields |
+| request phase | each inline value alone, by the type at its place, from its JSON form: a group with no reference inside whole, an instance by its dump; of a group with a reference inside, each field given inline |
 | call phase, once the references are read | the parameter's value whole: the JSON form the record holds, with the data read in place of each reference |
 
 In the request phase, at submission, the backend also checks the names and the required parameters, each reference readable and fitting its place (see References), and the table rules (see Combining runs: tables).
 An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
-So a `Range` with `start` and `stop` and a field validator `stop > start` is refused at submission at `stop` when both are given inline, and fails in the call phase at `stop` when `stop` is given by reference.
-The call phase validates from the JSON form, not from the values the request phase made, so no validator runs twice on one value; it does so with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
+A group with no reference inside is an inline value: the record holds the JSON form of the validated group, so `Reduction(bins=100)` and `{'bins': 100}` give one record, and a group whose validator changes a value it has validated already, such as one that converts millimetres to metres, does not round-trip and is refused.
+A group with a reference inside is checked field by field at submission, each field given inline by its own type and constraints, and its validators run in the call phase:
+
+```python
+{'range': {'start': 10.0, 'stop': 5.0}}             # refused at submission, at range.stop
+{'range': {'start': 10.0, 'stop': r.ref('value')}}  # with value 5.0, fails in the call phase, at range.stop
+```
+
+So a validator that widens what a field accepts, such as a `mode='before'` validator that parses a string, works only for a group written without references.
+A value that only a validator of a group with a reference inside refuses, such as a negative thickness in a `Sample`, whose run is a dataset, fails the record, or the push, in the call phase.
+The call phase validates from the JSON form the record holds, which reads back as the value; it does so with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
 It makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError`.
 Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.

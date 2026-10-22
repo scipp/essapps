@@ -187,8 +187,8 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 - A group has no serializers, computed fields, or aliases: the record holds a
   group as the object of its places, each in the JSON form of its own type,
   and these would make the group's own JSON form differ from it. It may have
-  field and model validators of any mode. It does not hold itself, at any
-  depth.
+  field and model validators of any mode, which run when the group is
+  validated whole. It does not hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the
   place, which round-trips and holds no `@ref` object at any depth; of a type
   without a JSON form, `None` or `[]`.
@@ -203,11 +203,18 @@ some values only, so a check that read several parameters would hold for some
 requests of a spec and not for others. A check of one value belongs to the
 value's type, as `EdgesModel` checks its edges, and so does the JSON form of a
 value, which the framework stores and reads back. In the request phase, each
-place given inline is validated alone, from its JSON form, and a group with no
-reference inside whole. In the call phase, each parameter's value is validated
-once, whole, from the JSON form the record holds with the data read in place
-of each reference, so that every validator of every group runs once, with all
-its fields at hand, as `EdgesModel`'s check of `stop` against `start` needs. A
+place given inline is validated alone, from its JSON form. A group with no
+reference inside is a value given inline: it is validated whole, and the record
+holds the JSON form of the validated group, which must read back as it. Of a
+group with a reference inside, each field given inline is validated alone, by
+its own type and constraints. In the call phase, each parameter's value is
+validated once, whole, from the JSON form the record holds with the data read
+in place of each reference, so that every validator of every group runs with
+all its fields at hand, as `EdgesModel`'s check of `stop` against `start`
+needs. So a validator that widens what a field accepts, such as a `before`
+validator that parses a string, works only for a group written without
+references, and a value that only a validator of a group with a reference
+inside refuses fails the record, or the push, in the call phase. A
 check across parameters, such as a transmission mode that requires a
 transmission run, is the binding's or the driver's, and fails when the request
 runs. A binding may run the model validators,

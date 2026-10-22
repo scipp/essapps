@@ -1191,8 +1191,7 @@ def test_a_field_validator_gives_the_driver_the_plain_request_s_values(
     plain = client.compute(WALK, params={**flipped, 'steps': steps})
 
     assert client.output(walk, 'value') == client.output(plain, 'value') == 6.0
-    # The record holds the value as given; the call phase makes it positive.
-    assert plain.request.params['scale'] == {'factor': -2.0}
+    assert plain.request.params['scale'] == {'factor': 2.0}  # made positive
 
 
 def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(

@@ -28,6 +28,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import operator
+from collections.abc import Iterable, Iterator
 from pathlib import PurePath
 from types import NoneType, UnionType
 from typing import (
@@ -43,9 +44,9 @@ from typing import (
 
 from pydantic import BaseModel, Field, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
-from pydantic_core import from_json, to_json
+from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .refs import positions
+from .refs import Loc, ParamsError, positions
 
 
 def plain(tp: Any) -> Any:
@@ -234,9 +235,10 @@ def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[Bas
     config and without the decorators of ``model``: it validates one value by
     its own field. The params model has no decorators but model validators,
     which the framework never calls; a check of one value belongs to the
-    value's type. A field of a group is validated so only at a place given
-    inline in the request phase; the group's validators run when the group
-    is validated whole (see :mod:`ess.spec.places`).
+    value's type. A field of a group is validated so only in the request
+    phase, at a place given inline in a group with a reference inside; the
+    group's validators run when the group is validated whole (see
+    :mod:`ess.spec.places`).
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
@@ -276,27 +278,83 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     """
     The JSON form of ``value``, given inline for the field ``name`` of
     ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
-    framework holds it.
+    framework holds it: of a group, the JSON form of the group validated.
 
-    ``value`` is validated from its JSON form, with a field that a model lacks
-    refused at any depth, since validating would drop it silently. Raises
-    ``PydanticSerializationError`` if it has no JSON form, ``ValidationError``
-    if it is not valid, and ``ValueError`` if its JSON form does not read back
-    as the value, such as a number that is not finite, which JSON holds as
-    ``null``, or holds an object with the key ``"@ref"`` at any depth, which
-    reads as a reference (see :func:`ess.spec.refs.positions`).
+    ``value``, an instance of a group by its dump, is validated from its JSON
+    form, with a field that a model lacks refused at any depth, since
+    validating would drop it silently. Its JSON form must read back as the
+    value. Raises:
+
+    - ``PydanticSerializationError`` if it has no JSON form;
+    - ``ValidationError`` if it is not valid, or if its JSON form is not,
+      such as of a number that is not finite, which JSON holds as ``null``;
+    - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
+      without ``name``, that holds a file, which is given by reference to a
+      dataset, or whose JSON form reads back as another value, such as a
+      field of a group whose validator changes a value it has validated
+      already;
+    - ``ValueError`` if its JSON form holds an object with the key
+      ``"@ref"`` at any depth, which reads as a reference (see
+      :func:`ess.spec.refs.positions`).
     """
     one = model_of(model, name, whole)
+    if isinstance(value, BaseModel):
+        # Its own serializer would write a number that is not finite as null.
+        value = value.model_dump()
     given = to_json({name: value}, inf_nan_mode='constants')
     made = getattr(one.model_validate_json(given, extra='forbid'), name)
+    if files := list(_files((), made)):
+        raise ParamsError((loc, _FILE_INLINE) for loc in files)
     stored = json_form(model, name, made, whole)
     try:
-        again = one.model_validate_json(to_json({name: stored}))
-        reads_back = getattr(again, name) == made
-    except ValidationError:
-        reads_back = False
-    if not reads_back:
-        raise ValueError('has no JSON form that reads back as the value')
+        again = getattr(one.model_validate_json(to_json({name: stored})), name)
+    except ValidationError as error:
+        (first, *_) = error.errors()
+        raise ValidationError.from_exception_data(
+            one.__name__,
+            [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
+        ) from None
+    if again != made:
+        raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
     if any(isinstance(v, dict) and '@ref' in v for _, v in positions((), stored)):
         raise ValueError('has a JSON form that reads as a reference')
     return stored
+
+
+_FILE_INLINE = 'a file is given by reference to a dataset, dataset(path=...)'
+_NO_JSON_FORM = 'has no JSON form that reads back as the value'
+_NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
+
+
+def _differs(loc: Loc, a: Any, b: Any) -> Loc:
+    """
+    The first position at which ``a`` and ``b``, two values at ``loc``,
+    differ: a field of a group or an element of a list, at any depth.
+    """
+    if isinstance(a, BaseModel) and type(a) is type(b):
+        pairs: Iterable[tuple[str | int, Any, Any]] = (
+            (n, getattr(a, n), getattr(b, n)) for n in type(a).model_fields
+        )
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
+    else:
+        return loc
+    for at, x, y in pairs:
+        if x != y:
+            return _differs((*loc, at), x, y)
+    return loc
+
+
+def _files(loc: Loc, value: Any) -> Iterator[Loc]:
+    """
+    The position of each file in ``value``, a validated value at ``loc``:
+    the value, a field of a group, or an element of a list, at any depth.
+    """
+    if isinstance(value, PurePath):
+        yield loc
+    elif isinstance(value, BaseModel):
+        for name in type(value).model_fields:
+            yield from _files((*loc, name), getattr(value, name))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            yield from _files((*loc, i), item)

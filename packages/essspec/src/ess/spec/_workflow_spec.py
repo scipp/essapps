@@ -49,10 +49,13 @@ file in it comes from a dataset::
 
 A request lives in two phases. In the *request phase*, before any data is
 read, a value given by reference is a reference, and each place given
-inline is validated alone, a group without a reference inside whole. In the
-*call phase*, the backend reads the data each reference names and validates
-each parameter's value once, whole, so every validator of every group runs
-with all its fields at hand, and every field holds the type it declares.
+inline is validated alone. A group without a reference inside is a value
+given inline: it is validated whole, and the record holds it as validated.
+Of a group with a reference inside, each field given inline is validated
+alone. In the *call phase*, the backend reads the data each reference names
+and validates each parameter's value once, whole, so every validator of
+every group runs with all its fields at hand, and every field holds the
+type it declares.
 
 The models are ordinary pydantic models and carry no annotations for the
 framework: what the framework needs, it reads from the field types (see
@@ -72,8 +75,11 @@ framework: what the framework needs, it reads from the field types (see
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
-  may have field and model validators of any mode. It does not hold itself,
-  at any depth.
+  may have field and model validators of any mode, which run when the group
+  is validated whole: in the request phase if it has no reference inside,
+  else in the call phase only. So a validator that widens what a field
+  accepts works only for a group written without references. It does not
+  hold itself, at any depth.
 - A default is a value, never a reference: what a request may write at the
   place, in a JSON form that reads back as the value, with no ``@ref``
   object at any depth; of a type without a JSON form, ``None`` or an empty
@@ -442,8 +448,9 @@ def _group_problems(
     list that may be ``None`` without a JSON form, whose contents are not
     places, the problems of the places of its fields, and a default that is
     not a value, since a field left out holds its default. Field and model
-    validators of any mode are allowed: the call phase validates the group
-    whole, once. ``path`` holds the groups that hold ``group`` and itself.
+    validators of any mode are allowed: they run whenever the group is
+    validated whole (see :mod:`ess.spec.places`). ``path`` holds the groups
+    that hold ``group`` and itself.
     """
     problems = []
     if found := _decorators(group, _SERIALIZERS):

@@ -50,13 +50,26 @@ alternative is a group with the *tag* field ``kind`` typed as a ``Literal``.
 The tag is written inline, never as a reference: it says which
 alternative's fields the object has, and so what each of them takes.
 
-In the request phase, :func:`held` validates each place given inline alone,
-from its JSON form, and a group with no reference inside whole, from the
-JSON form of its fields (see :func:`ess.spec.field_types.inline`). In the
-call phase, each parameter's value is validated once, whole, with the data
-of its references (see :func:`validated`). An error inside a union names
-its place without the tag: ``beam_centre.tolerance``, whichever phase finds
-it.
+A group with no reference inside, at any depth, is an inline value. In the
+request phase, :func:`held` validates it whole, from its JSON form, so that
+its validators run, and the record holds the JSON form of the validated
+group, which must read back as it (see :func:`ess.spec.field_types.inline`).
+An instance of the group and the object of its fields give one record. A
+group with a reference inside is checked field by field: each field given
+inline alone, by its own type and constraints, and each group in it as a
+place of its own. Its validators run in the call phase, when each
+parameter's value is validated once, whole, with the data of its references
+(see :func:`validated`). So a validator that widens what a field of a group
+accepts, such as a ``mode='before'`` validator that parses a string, works
+only for a group written without references, and a value that only a
+validator of a group refuses fails the record, or the push, in the call
+phase if the group has a reference inside::
+
+    {'range': {'start': 10.0, 'stop': 5.0}}         # refused at range.stop
+    {'range': {'start': 10.0, 'stop': r.ref('x')}}  # with x 5.0, fails at range.stop
+
+An error inside a union names its place without the tag:
+``beam_centre.tolerance``, whichever phase finds it.
 """
 
 from __future__ import annotations
@@ -68,7 +81,7 @@ from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Discriminator, ValidationError
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError, to_json
+from pydantic_core import PydanticSerializationError
 
 from .field_types import (
     base,
@@ -136,11 +149,11 @@ def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
     ``value`` is as a request gives it, a group as a mapping of its fields or
     an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON form.
 
-    Each place given inline is validated alone, by its field (see
-    :func:`ess.spec.field_types.inline`), and each group with no reference
-    inside is validated whole, from the JSON form of its fields, so that its
-    validators run. Raises :class:`~ess.spec.refs.ParamsError` at the place
-    of the first problem.
+    A group with no reference inside is given inline: validated whole, and
+    held as the JSON form of the validated group. A group with a reference
+    inside holds each of its fields so, each place given inline validated
+    alone, by its field (see :func:`ess.spec.field_types.inline`). Raises
+    :class:`~ess.spec.refs.ParamsError` at the place of the first problem.
     """
     return _held((name,), _Slot(model, name), value, on_ref)
 
@@ -162,12 +175,18 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         if not isinstance(value, list):
             raise _refused(loc, f'{value!r} is not a list')
         return [_held((*loc, i), slot.one, v, on_ref) for i, v in enumerate(value)]
-    fields = dict(value) if isinstance(value, BaseModel) else value
-    if isinstance(fields, Mapping) and (group := _group(loc, slot, fields)):
-        held_fields = _fields(loc, group, fields, on_ref)
-        if not any(isinstance(v, Ref) for _, v in positions(loc, held_fields)):
-            _validate_whole(loc, slot, held_fields)
-        return held_fields
+    if is_group(tp) or alternatives(slot.annotation, slot.discriminator):
+        fields = dict(value) if isinstance(value, BaseModel) else value
+        if not isinstance(fields, Mapping):
+            raise _refused(
+                loc,
+                f'{value!r} is not an object; a group is written as an object '
+                'of its fields',
+            )
+        group = _group(loc, slot, fields)
+        if any(ref_at(at, v) is not None for at, v in positions(loc, fields)):
+            return _fields(loc, group, fields, on_ref)
+        return _inline(loc, slot, value)
     if not has_json_form(slot.model, slot.name):
         raise _refused(
             loc,
@@ -199,7 +218,7 @@ def _fields(
         if name in value:
             given = value[name]
         elif info.is_required():
-            raise _refused(at, 'a required field, not given')
+            raise _refused(at, 'Field required')
         else:
             given = info.get_default(call_default_factory=True)
         fields[name] = _held(at, _Slot(group, name), given, on_ref)
@@ -231,15 +250,6 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] |
             (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
         )
     return base(group)
-
-
-def _validate_whole(loc: Loc, slot: _Slot, fields: dict[str, Any]) -> None:
-    """Validate the group at ``loc`` whole, from the JSON form of ``fields``."""
-    one = model_of(slot.model, slot.name, whole=not slot.element)
-    try:
-        one.model_validate_json(to_json({slot.name: fields}))
-    except ValidationError as error:
-        raise _at(loc, slot, error) from None
 
 
 def validated(
@@ -327,9 +337,9 @@ def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
     except PydanticSerializationError as error:
         raise _refused(loc, f'cannot be stored as JSON: {error}') from None
     except ValidationError as error:
-        raise ParamsError(
-            ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
-        ) from None
+        raise _at(loc, slot, error) from None
+    except ParamsError as error:
+        raise ParamsError(((*loc, *at), msg) for at, msg in error.errors) from None
     except ValueError as error:
         raise _refused(loc, str(error)) from None
 

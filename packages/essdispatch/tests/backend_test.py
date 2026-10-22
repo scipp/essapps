@@ -325,9 +325,7 @@ def _boxed(value: Any) -> Request:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(
-        SubmitError, match=r'^second: box\.item\.value: cannot be stored as JSON'
-    ):
+    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored as JSON'):
         client.submit({'first': _boxed(1), 'second': _boxed(len)})
     assert client.records() == []
 
@@ -345,7 +343,7 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
 
 def test_a_number_that_is_not_finite_is_refused_in_a_set(client: Client) -> None:
     with pytest.raises(
-        SubmitError, match=r'^values\.values: has no JSON form that reads'
+        SubmitError, match=r'^values\.values\[1\]: has no JSON form that reads'
     ):
         client.submit(
             MODES,
