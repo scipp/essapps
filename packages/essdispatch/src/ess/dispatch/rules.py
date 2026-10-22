@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from ess.spec import DatasetRef
 from ess.spec.refs import Loc, iter_refs
 
-from .batch import Lookup, dataset_place, run_number, try_apply
+from .batch import Lookup, dataset_place, holding, run_number, try_apply
 from .client import Client
 from .datasets import Selector
 from .errors import SubmitError
@@ -45,12 +45,19 @@ class Rule:
 
     With ``series``, a request instead takes every dataset with the same
     value of that metadata field so far, in run order, and that value is its
-    member. The blank is then a table of these, each dataset a row of it, so
-    a series takes no ``at``.
+    member. The blank is then a table with a row for each dataset, and the
+    lookup is not used. ``at`` names the place in each row, the blank and
+    the fields within a row down to the file: ``at=('runs', 'run')`` makes
+    the rows ``[{'run': dataset}, ...]``. Without ``at``, each dataset is a
+    row, of a table of files. A dataset is new until a record under the
+    label holds it at that place in a row, ``runs[i].run``.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
     template references must be persisted for the same reason.
+
+    Raises ``ValueError`` when made if no single blank is left for a dataset,
+    or ``at`` is not in it (see :func:`dataset_place`).
     """
 
     name: str
@@ -64,8 +71,13 @@ class Rule:
     persist: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        if self.series is not None and self.at is not None:
-            raise ValueError('a dataset is a row of a series, so a series takes no at')
+        _ = self.place  # refuses a template or an ``at`` that no dataset fills
+
+    @property
+    def place(self) -> tuple[str, ...]:
+        """The place a dataset fills, in a row of the blank for a series."""
+        lookup = self.lookup if self.series is None else None
+        return dataset_place(self.template, lookup, self.at)
 
 
 @dataclass
@@ -131,8 +143,7 @@ class TriggerLoop:
         self, rule: Rule
     ) -> tuple[dict[str, Request], dict[DatasetRef, LookupError]]:
         """The requests for the new datasets, and the datasets skipped, with why."""
-        lookup = rule.lookup if rule.series is None else None
-        place = dataset_place(rule.template, lookup, rule.at)
+        place = rule.place
         handled = {
             ref
             for record in self._client.records(label=rule.label)
@@ -150,12 +161,12 @@ class TriggerLoop:
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
-        return self._series_requests(rule, place[0], matching, new), {}
+        return self._series_requests(rule, place, matching, new), {}
 
     def _series_requests(
         self,
         rule: Rule,
-        blank: str,
+        place: tuple[str, ...],
         matching: list[DatasetRef],
         new: list[DatasetRef],
     ) -> dict[str, Request]:
@@ -163,7 +174,9 @@ class TriggerLoop:
         for ref in sorted(matching, key=lambda r: run_number(r, self._source)):
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         return {
-            value: rule.template.fill(params={blank: refs})
+            value: rule.template.fill(
+                params={place[0]: [holding(place, ref) for ref in refs]}
+            )
             for value, refs in series.items()
             if any(ref in new for ref in refs)
         }
@@ -172,9 +185,15 @@ class TriggerLoop:
 def _fills(loc: Loc, place: tuple[str, ...], series: str | None) -> bool:
     """
     Whether a dataset at ``loc`` in a request of a rule fills the rule's
-    ``place``: is at it, or for a series, is a row of the blank table it
-    names, such as ``('runs', 2)``.
+    ``place``: is at it, or for a series, at it in a row of the blank table,
+    such as ``('runs', 2, 'run')`` for the place ``('runs', 'run')``.
     """
     if series is None:
         return loc == place
-    return len(loc) == 2 and loc[:1] == place
+    blank, *row = place
+    return (
+        len(loc) == len(place) + 1
+        and loc[0] == blank
+        and isinstance(loc[1], int)
+        and list(loc[2:]) == row
+    )

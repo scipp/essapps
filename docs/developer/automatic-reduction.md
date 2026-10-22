@@ -42,13 +42,17 @@ rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(r
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
-Each dataset is a row of the template's blank table `runs`: the dataset reference is the row, so a series takes no `at`.
+The template's blank `runs` is a table with a row for each dataset, and the lookup is not used.
+Without `at`, the dataset reference is the row, of a table of files.
+For a table of groups, `at` names the blank and the fields within a row down to the file: `at=('runs', 'run')` makes the rows `[{'run': dataset}, ...]`, and the other fields of each row take their defaults.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', label='reflectivity')
 ```
+
+A rule whose template leaves no single blank for a dataset, or whose `at` is not in that blank, is refused when it is made.
 
 Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.
 The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
@@ -65,7 +69,7 @@ loop.status(rule).reason     # why the rule submitted nothing or skipped a datas
 loop.run()                   # steps forever
 ```
 
-The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the place `at`, or for a series in a row of the blank table, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
+The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the place `at`, or for a series at that place in a row of the blank table, `runs[i].run`, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
 A dataset that the record holds at another place, such as a can that a lookup fills, does not count.
 This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 

@@ -929,7 +929,7 @@ client.submit(requests, label='iofq', persist=True)
 A *rule* is plain data: a name, a template, a selector, a label, and optionally the place `at`, a lookup, a series, and the outputs it persists.
 The *trigger loop* is a controller that fills the template for each new dataset the selector matches, and submits it under the label, persisted.
 A dataset is new to a rule until a record under its label holds it at the place `at`.
-With a *series*, one request takes all matching datasets so far with the same value of a metadata field, as the rows of the template's blank table.
+With a *series*, one request takes all matching datasets so far with the same value of a metadata field, as the rows of the template's blank table, each at the place `at` in its row, by default the row itself.
 An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`:
 
 ```python

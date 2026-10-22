@@ -69,8 +69,11 @@ def dataset_place(
     return at
 
 
-def _holding(at: tuple[str, ...], ref: DatasetRef) -> Any:
-    """The value of the blank ``at[0]`` that holds ``ref`` at the place ``at``."""
+def holding(at: tuple[str, ...], ref: DatasetRef) -> Any:
+    """
+    The value that holds ``ref`` at the place ``at`` below the blank
+    ``at[0]``: of the blank, or of a row of it for a series.
+    """
     value: Any = ref
     for field in reversed(at[1:]):
         value = {field: value}
@@ -150,6 +153,6 @@ def try_apply(
         if member in requests:
             raise ValueError(f'two datasets have {member_field} {member}')
         requests[member] = template.fill(
-            params={place[0]: _holding(place, ref), **found}
+            params={place[0]: holding(place, ref), **found}
         )
     return requests, failed
