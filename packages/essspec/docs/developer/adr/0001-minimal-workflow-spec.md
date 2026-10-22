@@ -149,7 +149,7 @@ IofQ = NewType('IofQ', sc.DataArray)
 
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = None      # None: the one in the run's file
+    transmission: Transmission | None = Field(None, description="None: the one in the run's file")
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
@@ -223,21 +223,22 @@ needs. So a validator that widens what a field accepts, such as a `before`
 validator that parses a string, works only for a group written without
 references, and a value that only a validator of a group with a reference
 inside refuses fails the record, or the push, in the call phase. A
-check across parameters, such as a transmission mode that requires a
-transmission run, is the binding's or the driver's, and fails when the request
+check across parameters, such as a Q range that the wavelength band and the
+detector can reach, is the binding's or the driver's, and fails when the request
 runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
-A request that leaves out a parameter never leaves out a correction that a
-correct reduction needs. The default of `reduction` is a setting, and the
+A request that leaves out a parameter, or a field of a group, never leaves out
+a correction that a correct reduction needs. The default of `reduction` is a setting, and the
 transmission `None` of a `Sample` takes the one in the run's file. The can run
 has no default, so a request or a template that leaves it out is refused. A
-needed correction that a request may still leave out is optional without a
-default, such as `background: BackgroundRun | None`: the request writes
-`None`, and its record says so. The output is I(Q) either way, and the params
-of its record say which corrections were applied. A step whose omission
-changes what a reader of the output must do with it, such as its unit, makes
-another output type, and so another spec. What `None` means, and when a union
+correction that a correct reduction needs, but that a request may still leave
+out, is typed `X | None` with no default, such as
+`direct_beam: DirectBeamFile | None`: the request writes `None`, and its
+record says so. The output is I(Q) either way, and the params of its record
+say which corrections were applied. A step whose omission changes what a
+reader of the output must do with it, such as a normalization without which
+I(Q) is in counts, makes another output type, and so another spec. What `None` means, and when a union
 names the ways instead, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 **References.** A reference names an output of an earlier record (`OutputRef`:

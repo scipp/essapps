@@ -521,10 +521,10 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
 
 
 class SampleRun(Data):
-    """A sample run and its transmission, if given: a group that holds a file."""
+    """A sample run and its transmission, or None: a group that holds a file."""
 
     file: SampleFile
-    transmission: TransmissionArray | None = None
+    transmission: TransmissionArray | None
 
 
 class CentredParams(Data):

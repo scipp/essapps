@@ -46,7 +46,9 @@ written as its root value::
 
     class Sample(BaseModel):
         run: SampleFile
-        transmission: Transmission | None = None  # None: the one in the run's file
+        transmission: Transmission | None = Field(
+            None, description="None: the one in the run's file"
+        )
 
     {'sample': {'run': dataset(run=101), 'transmission': t.ref('transmission')}}
     {'sample': {'run': dataset(run=101)}}  # defaults for the rest

@@ -14,7 +14,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, or a diffraction reduction, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: CanFile` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
 | `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: CentreArray` | the mean of the counts | beam-centre finding |
 | `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | the sum of the counts times `scale` | vanadium processing |
@@ -46,7 +46,7 @@ Every field has a type of its own within its spec.
 Each `...File` is a `NewType` of `Path`, such as `SampleFile = NewType('SampleFile', Path)`, and a dataset reference fits each of them.
 An output without a type in the list of toy specs has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
 `Parts` is a model of two `sc.Variable`s.
-`SampleRun` is a group of `file: SampleFile` and `transmission: TransmissionArray | None`, `None` by default.
+`SampleRun` is a group of `file: SampleFile` and `transmission: TransmissionArray | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
 A reference to an output fits a parameter when the output's type fits the parameter's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, and every curve fits `EXPORT`'s `result: sc.Variable`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
@@ -797,7 +797,7 @@ computed = client.accumulator(Template(CENTRED_MULTI, params={'centre': finder.r
 typed = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=1.0)},
                                     blanks=('sample', 'can')))
 for accumulator in (computed, typed):
-    accumulator.push(sample=[{'file': sample} for sample in samples])
+    accumulator.push(sample=[{'file': sample, 'transmission': None} for sample in samples])
     accumulator.push(can=[can])
 
 assert client.output(finder, 'centre') == Centre(x=1.0)        # the mean of [0.5, 1.5]
@@ -821,7 +821,8 @@ can = measure(620, [1.0, 1.0])
 t611 = client.compute(CONTRIBUTE, params={'sample': r611})     # transmission 1 / 4
 total = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=0.0)},
                                     blanks=('sample', 'can')))
-total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')}, {'file': r612}])
+total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')},
+                   {'file': r612, 'transmission': None}])
 total.push(can=[can])
 
 assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]   # [1, 3] / 4 + [2, 2] - [1, 1]
@@ -829,7 +830,7 @@ assert client.provenance(total).records() == [t611]
 ```
 
 A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
-Run 612 gives its file only, so its transmission takes the default, `None`: no transmission factor.
+Run 612 gives `None`: no transmission factor, and its record says so.
 `TransmissionArray` has no JSON form, so a transmission takes a reference, or `None` since the field is optional.
 
 ## Open
