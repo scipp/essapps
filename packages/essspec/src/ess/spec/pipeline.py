@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NewType
 
 import sciline
 from pydantic import BaseModel
@@ -100,9 +100,11 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             },
         )
 
-    No two parameters share a key, over all alternatives, and no two
-    outputs. An output may share a parameter's key: an output
-    ``centre: BeamCentre`` reports the centre given or found.
+    No two fields, parameters or outputs, share a key, over all
+    alternatives: an output computed at a parameter's key would be the value
+    the binding was given, which an output must not share memory with. A
+    union's own ``keys=`` may give its alternatives one key, ``(K, K)``: the
+    value of either alternative is then set at ``K``.
 
     Defaults belong to the spec: ``make_pipeline`` holds no value at a key
     that a parameter sets, or at a key that such a key leads to. A value held
@@ -176,18 +178,17 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
                 n: keys.get(n, (optional(f.annotation)[0],)) for n, f in outputs.items()
             },
         }
-        shared: dict[str, None] = {}  # a union's fields once, not once per key
-        for fields in (declared, outputs):
-            names: dict[Key, list[str]] = {}
-            for name in fields:
-                for key in dict.fromkeys(all_keys[name]):
-                    names.setdefault(key, []).append(name)
-            shared |= dict.fromkeys(
-                ' and '.join(n) for n in names.values() if len(n) > 1
-            )
-        if shared:
+        names: dict[Key, list[str]] = {}
+        for name, field_keys in all_keys.items():
+            for key in dict.fromkeys(field_keys):  # a union may give one key twice
+                names.setdefault(key, []).append(name)
+        if shared := [
+            f'{" and ".join(n)} have the key {_key_text(key)}'
+            for key, n in names.items()
+            if len(n) > 1
+        ]:
             raise ValueError(
-                f'{spec.name}: {"; ".join(shared)}: two fields have one key'
+                f'{spec.name}: {"; ".join(shared)}; no two fields share a key'
             )
         self.spec = spec
         self._keys = MappingProxyType(all_keys)
@@ -275,6 +276,11 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             return self._keys[name]
         tag, by_tag = self._tags[name]
         return (by_tag[getattr(value, tag)],)
+
+
+def _key_text(key: Key) -> str:
+    """A key as a message names it: ``BeamCentre``, ``list[Run]``."""
+    return key.__name__ if isinstance(key, type | NewType) else repr(key)
 
 
 def _computable(pipeline: sciline.Pipeline, key: Key) -> bool:

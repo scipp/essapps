@@ -415,7 +415,11 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
         ({'total': ()}, r"\['total'\]: an output is computed as one key"),
         ({'total': (Total, Counts)}, r"\['total'\]: an output is computed as one key"),
         ({'sample': (Filename, Counts)}, r"\['sample'\]: a parameter sets one key, or"),
-        ({'sample': (CanFile,)}, 'total: sample and can: two fields have one key'),
+        ({'sample': (CanFile,)}, 'total: sample and can have the key CanFile; no two'),
+        (
+            {'sample': (Filename,), 'total': (Filename,)},
+            'total: sample and total have the key Filename; no two fields share',
+        ),
     ],
 )
 def test_keys_that_do_not_fit_the_spec_are_refused(
@@ -433,7 +437,8 @@ class TwoFiles(BaseModel):
 def test_two_parameters_of_one_type_need_a_key_each() -> None:
     spec = _spec('twins', params=TwoFiles, outputs=TotalOutputs)
     with pytest.raises(
-        ValueError, match='twins: first and second: two fields have one key'
+        ValueError,
+        match='twins: first and second have the key SampleFile; no two fields share',
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))
 
@@ -506,7 +511,7 @@ def test_make_pipeline_may_return_a_pipeline_it_holds() -> None:
 # A beam centre, given or found from the sample run. ``find_centre`` leads from
 # the key of one alternative, ``FindCentre``, to that of the other,
 # ``BeamCentre``, so one graph serves both. The output ``centre`` reports the
-# centre given or found.
+# centre given or found, at a key of its own.
 
 
 class BeamCentre(BaseModel):
@@ -527,6 +532,7 @@ class RefinedCentre(BeamCentre):
 
 Centre = Annotated[BeamCentre | FindCentre, Field(discriminator='kind')]
 Centred = NewType('Centred', float)
+UsedCentre = NewType('UsedCentre', BeamCentre)
 
 
 class CentredParams(BaseModel):
@@ -536,7 +542,7 @@ class CentredParams(BaseModel):
 
 class CentredOutputs(BaseModel):
     centred: Centred
-    centre: BeamCentre
+    centre: UsedCentre
 
 
 CENTRED = _spec('centred', params=CentredParams, outputs=CentredOutputs)
@@ -548,6 +554,10 @@ def load_counts(path: SampleFile) -> SampleCounts:
 
 def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:
     return Centred(counts.sum() - centre.x)
+
+
+def used_centre(centre: BeamCentre) -> UsedCentre:
+    return UsedCentre(centre.model_copy())
 
 
 @pytest.fixture
@@ -567,7 +577,8 @@ def find_centre(found: list[FindCentre]) -> Callable[..., BeamCentre]:
 @pytest.fixture
 def centring(find_centre: Callable[..., BeamCentre]) -> PipelineBinding:
     return PipelineBinding(
-        CENTRED, lambda _: sciline.Pipeline([load_counts, find_centre, centred])
+        CENTRED,
+        lambda _: sciline.Pipeline([load_counts, find_centre, centred, used_centre]),
     )
 
 
@@ -635,7 +646,8 @@ def test_a_default_that_the_pipeline_holds_wins_over_the_request(
     # Defaults belong to the spec: the binding sets FindCentre, but centred
     # reads the BeamCentre the pipeline holds, and find_centre never runs.
     base = sciline.Pipeline(
-        [load_counts, find_centre, centred], params={BeamCentre: BeamCentre()}
+        [load_counts, find_centre, centred, used_centre],
+        params={BeamCentre: BeamCentre()},
     )
     binding = PipelineBinding(CENTRED, lambda _: base)
     outputs = binding.compute(
@@ -653,7 +665,10 @@ def test_a_default_that_the_pipeline_holds_wins_over_the_request(
             r"\['beam_centre'\]: a parameter sets one key, or none; a union one "
             'for each alternative',
         ),
-        ({'centred': (BeamCentre,)}, 'centred: centred and centre: two fields have'),
+        (
+            {'centred': (BeamCentre,)},
+            'centred: beam_centre and centred have the key BeamCentre; no two',
+        ),
     ],
 )
 def test_keys_of_a_union_that_do_not_fit_are_refused(
@@ -661,6 +676,32 @@ def test_keys_of_a_union_that_do_not_fit_are_refused(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         PipelineBinding(CENTRED, lambda _: sciline.Pipeline([centred]), keys=keys)
+
+
+CentreSetting = NewType('CentreSetting', BaseModel)
+
+
+def centred_by_setting(counts: SampleCounts, setting: CentreSetting) -> Centred:
+    if isinstance(setting, BeamCentre):
+        return Centred(counts.sum() - setting.x)
+    return Centred(counts.sum() - counts.mean() * setting.tolerance)
+
+
+def test_a_union_may_set_one_key_for_both_alternatives(samples: list[Path]) -> None:
+    class CentredOnly(BaseModel):
+        centred: Centred
+
+    binding = PipelineBinding(
+        _spec('centred', params=CentredParams, outputs=CentredOnly),
+        lambda _: sciline.Pipeline([load_counts, centred_by_setting]),
+        keys={'beam_centre': (CentreSetting, CentreSetting)},
+    )
+    total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
+
+    given = CentredParams(sample=samples[0], beam_centre=BeamCentre(x=1.0))
+    find = CentredParams(sample=samples[0], beam_centre=FindCentre(tolerance=0.5))
+    assert binding.compute(given).centred == total - 1.0
+    assert binding.compute(find).centred == total - 0.5 * mean
 
 
 def test_an_optional_union_with_a_key_is_refused() -> None:
@@ -760,6 +801,7 @@ def test_union_parameters_are_told_apart_by_newtype_alternatives(
 def test_two_union_parameters_of_one_type_need_keys() -> None:
     spec = _spec('shift', params=SameCentresParams, outputs=ShiftOutputs)
     with pytest.raises(
-        ValueError, match='shift: sample_centre and can_centre: two fields have one'
+        ValueError,
+        match='shift: sample_centre and can_centre have the key BeamCentre; ',
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([shift_between]))

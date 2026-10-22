@@ -783,9 +783,11 @@ PipelineBinding(IOFQ, make_pipeline,
 [roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows the other routes from a spec's values to such keys: adapter providers, and providers that take the spec's models.
 `binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
 Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
-No two parameters share a key, and no two outputs; an output may share a parameter's key, such as an output `centre: GivenCentre` that reports the centre given or found.
+No two fields, parameters or outputs, share a key, over all alternatives of a union: an output computed at a parameter's key would be the value the binding was given, which an output must not share memory with.
+An output that reports the centre given or found has a key of its own, such as `UsedCentre`, computed by a provider from `GivenCentre`.
 
 A union of groups has a key for each alternative, the alternative as declared, a `NewType` included: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`, and `keys=` takes one key for each alternative, in the same order.
+`keys=` may give the alternatives one key, `(K, K)`, which then holds the value of either alternative.
 The binding sets the key of the alternative that the value's tag names, not that of the value's type, which may be a subclass of an alternative, or the group of a `NewType` alternative.
 Here one graph serves both alternatives, since `find_centre` leads from one alternative's key to the other's:
 
