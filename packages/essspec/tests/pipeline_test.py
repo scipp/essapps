@@ -638,23 +638,29 @@ def test_a_stage_with_a_union_fixed_keeps_the_symmetries(
     check_caching(centring, {'beam_centre': centre}, calls)
 
 
+@pytest.mark.parametrize('centre', [BeamCentre(x=1.0), FindCentre(tolerance=0.5)])
+@pytest.mark.parametrize('held', [BeamCentre, FindCentre])
 def test_a_value_held_at_a_key_of_a_union_is_refused(
-    find_centre: Callable[..., BeamCentre], samples: list[Path]
+    find_centre: Callable[..., BeamCentre],
+    samples: list[Path],
+    centre: BeamCentre | FindCentre,
+    held: type[BaseModel],
 ) -> None:
-    # The held default would replace find_centre, so the tag 'find' would set
-    # FindCentre without effect.
+    # A held BeamCentre would replace find_centre, so the tag 'find' would set
+    # FindCentre without effect. A held FindCentre is harmless, but the
+    # binding cannot tell the two apart, so it refuses either, for any tag.
     binding = PipelineBinding(
         CENTRED,
         lambda _: sciline.Pipeline(
             [load_counts, find_centre, centred, used_centre],
-            params={BeamCentre: BeamCentre()},
+            params={held: held()},
         ),
     )
-    params = CentredParams(sample=samples[0], beam_centre=FindCentre())
+    params = CentredParams(sample=samples[0], beam_centre=centre)
     with pytest.raises(
         ValueError,
-        match=r'centred: make_pipeline holds a value of the union beam_centre '
-        r'at BeamCentre',
+        match=rf'centred: make_pipeline holds a value at {held.__name__}, a key '
+        'of the union beam_centre',
     ):
         binding.compute(params)
 
@@ -719,10 +725,11 @@ def test_a_value_held_at_the_one_key_of_a_union_is_set_over(
         ),
         keys={'beam_centre': (CentreSetting, CentreSetting)},
     )
+    total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
+    given = CentredParams(sample=samples[0], beam_centre=BeamCentre(x=1.0))
     find = CentredParams(sample=samples[0], beam_centre=FindCentre(tolerance=0.5))
-    assert binding.compute(find).centred == np.sum(SAMPLES[0]) - 0.5 * np.mean(
-        SAMPLES[0]
-    )
+    assert binding.compute(given).centred == total - 1.0
+    assert binding.compute(find).centred == total - 0.5 * mean
 
 
 def test_an_optional_union_with_a_key_is_refused() -> None:

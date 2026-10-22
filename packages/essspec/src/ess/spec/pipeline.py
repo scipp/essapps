@@ -51,7 +51,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
             pipeline = sciline.Pipeline(providers)
             if fixed['direct_beam'] is None:
-                pipeline[DirectBeam] = None
+                pipeline[DirectBeam] = None  # its providers take None
             else:
                 pipeline[DirectBeamFilename] = fixed['direct_beam']
             return pipeline
@@ -84,8 +84,11 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     Where the alternatives need different providers for one key,
     ``make_pipeline`` branches on the fixed value. That always works, since a
-    union cannot be a blank: its key depends on its value. A union typed
-    ``U | None`` sets no key, as ``X | None`` does.
+    union is never a blank, even with one key for all alternatives: its key
+    may depend on its value. A union typed ``U | None`` sets no key, as
+    ``X | None`` does. A union inside a group or a list sets no key of its
+    own: the group's or the list's key holds it, and a provider reads its
+    tag.
 
     ``keys`` gives a tuple of keys for a parameter or an output: ``(K,)``,
     for a union a key for each alternative in the order of the union, or
@@ -112,11 +115,16 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     that would read the parameter, and the request's value has no effect.
     The binding cannot check this: the provider is gone from the graph. A
     value held at the key of a parameter is harmless, since the binding sets
-    the request's value over it, except at a key of a union, which only one
-    alternative sets. The binding refuses a value held there: if the
-    pipeline above held a default ``BeamCentre``, the tag 'find' would set
-    ``FindCentre``, but ``iofq`` would read the default, and ``find_centre``
-    would never run. ``make_pipeline`` sets no value in a pipeline it holds,
+    the request's value over it, except at a key of a union whose
+    alternatives have keys of their own, which one alternative sets and the
+    others do not. If the pipeline of the beam-centre example held a default
+    ``BeamCentre``, the tag 'find' would set ``FindCentre``, but ``iofq``
+    would read the default, and ``find_centre`` would never run. The binding
+    refuses a value held at any key of such a union, since it cannot tell
+    which key leads to which: the held value has replaced the provider that
+    would show it. ``make_pipeline`` replaces such a value with a provider,
+    ``pipeline.insert(...)``, such as an adapter from the spec's group to the
+    workflow's key. ``make_pipeline`` sets no value in a pipeline it holds,
     since the binding copies the pipeline only after ``make_pipeline``
     returns it, and a value set for one request would stay for the next.
 
@@ -231,16 +239,15 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             raise ValueError(f'{unknown}: not parameters of {spec.name}')
         made = self._make_pipeline(fixed)
         if held := [
-            f'{name} at {_key_text(key)}'
+            f'{_key_text(key)}, a key of the union {name}'
             for name, (_, by_tag) in self._tags.items()
             if len(set(by_tag.values())) > 1
             for key in dict.fromkeys(by_tag.values())
-            if 'value' in made.underlying_graph.nodes.get(key, {})
+            if _holds_value(made, key)
         ]:
             raise ValueError(
-                f'{spec.name}: make_pipeline holds a value of the union '
-                f'{", ".join(held)}; a value of another alternative would have '
-                'no effect'
+                f'{spec.name}: make_pipeline holds a value at {"; ".join(held)}: '
+                'an alternative whose key leads there would have no effect'
             )
         pipeline = made.copy()
         for key, value in self._by_key(fixed).items():
@@ -259,8 +266,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
             raise ValueError(f'{keyless}: without a key, cannot be blanks')
         if unions := sorted(left_open & self._tags.keys()):
             raise ValueError(
-                f'{unions}: a union cannot be a blank, since its key depends on '
-                'its value'
+                f'{unions}: a union cannot be a blank, since its key may depend '
+                'on its value, and make_pipeline may branch on it'
             )
         pipeline = self.pipeline(values)
         output_fields = self.spec.outputs.model_fields
@@ -303,12 +310,19 @@ def _key_text(key: Key) -> str:
     return key.__name__ if isinstance(key, type | NewType) else repr(key)
 
 
+# sciline keeps a node's value or provider as an attribute of the node in its
+# graph, under the names 'value' and 'provider'.
+
+
 def _computable(pipeline: sciline.Pipeline, key: Key) -> bool:
     """Whether the pipeline has a value or a provider for ``key``."""
-    # sciline keeps a node's value or provider as an attribute of the node in
-    # its graph, under the names 'value' and 'provider'.
     node = pipeline.underlying_graph.nodes.get(key, {})
     return 'value' in node or 'provider' in node
+
+
+def _holds_value(pipeline: sciline.Pipeline, key: Key) -> bool:
+    """Whether the pipeline holds a value at ``key``, rather than a provider."""
+    return 'value' in pipeline.underlying_graph.nodes.get(key, {})
 
 
 class _Cut:
