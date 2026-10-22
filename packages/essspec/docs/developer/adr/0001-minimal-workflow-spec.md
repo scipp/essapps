@@ -123,7 +123,7 @@ checks access and the record holds the dataset's identity; the binding gets a
 local path. For the same reason, a reference to an output whose type holds a
 file is refused. A *group* is a pydantic model, such as `Reduction` or
 `Sample` below, written as an object of its fields, so a file in it comes from
-a dataset. A *data value* is a value of a type without a JSON form: a file,
+a dataset. A `RootModel` is not a group: it is written as its root value. A *data value* is a value of a type without a JSON form: a file,
 or an object such as a scipp array. The contents of a tuple, a set, a dict, a
 `TypedDict`, or a dataclass are not places: such a value is written whole,
 inline. A parameter, or a field of a group, may be a discriminated union of

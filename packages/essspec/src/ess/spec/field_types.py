@@ -42,7 +42,7 @@ from typing import (
     is_typeddict,
 )
 
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, Field, RootModel, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
 from pydantic_core import PydanticCustomError, from_json, to_json
 
@@ -138,8 +138,16 @@ def is_file(tp: Any) -> bool:
 
 
 def is_group(tp: Any) -> bool:
-    """Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one."""
+    """
+    Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one, but
+    not a ``RootModel``, which is written as its root value, not as an object
+    of its fields.
+    """
     tp = base(tp)
+    return _is_model(tp) and not issubclass(tp, RootModel)
+
+
+def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
@@ -152,12 +160,12 @@ def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     tp = base(tp)
     if is_file(tp):
         return True
-    if is_group(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
+    if _is_model(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
         if tp in seen:
             return False
         fields = (
             [f.annotation for f in tp.model_fields.values()]
-            if is_group(tp)
+            if _is_model(tp)
             else get_type_hints(tp).values()
         )
         return any(holds_file(f, seen | {tp}) for f in fields)

@@ -12,6 +12,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -213,6 +214,14 @@ class AnnotatedMillimetres(BaseModel):
     value: Annotated[float, AfterValidator(lambda value: value / 1000)]
 
 
+class Steps(RootModel[list[float]]):
+    """Not a group: written as its root value."""
+
+
+class StepsParams(BaseModel):
+    steps: Steps
+
+
 class LengthParams(BaseModel):
     by_decorator: Millimetres | None = None
     by_type: AnnotatedMillimetres | None = None
@@ -250,6 +259,7 @@ DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
 LENGTH = _spec('length', LengthParams, Value)
+STEPS = _spec('steps', StepsParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 
@@ -334,6 +344,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(RANGE, lambda p: Value(value=p.range.stop)),
             function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
             function_binding(LENGTH, lambda p: Value(value=0.0)),
+            function_binding(STEPS, lambda p: Value(value=sum(p.steps.root))),
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
         ],
@@ -721,6 +732,18 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
         form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
         assert 'kind' in form['required']
         assert 'default' not in form['properties']['kind']
+
+
+def test_a_root_model_is_written_as_its_root_value(client: Client) -> None:
+    schema = STEPS.serialize().params_schema
+    inline, _ = schema['properties']['steps']['anyOf']
+    assert schema['$defs'][inline['$ref'].rsplit('/', 1)[1]]['type'] == 'array'
+
+    computed = client.compute(STEPS, params={'steps': [1.0, 2.0]})
+    assert computed.request.params == {'steps': [1.0, 2.0]}
+    assert client.output(computed, 'value') == 3.0
+    with pytest.raises(SubmitError, match=r'^steps: Input should be a valid array'):
+        client.submit(STEPS, params={'steps': {'root': [1.0, 2.0]}})
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:

@@ -11,6 +11,7 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     Field,
+    RootModel,
     computed_field,
     field_serializer,
     field_validator,
@@ -462,6 +463,10 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', runs=(RunFiles, ...))},
+                'P.runs: a file is at a place only',
+            ),
+            (
+                {'params': model('P', runs=(RootModel[list[SampleFile]], ...))},
                 'P.runs: a file is at a place only',
             ),
             (

@@ -59,7 +59,7 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | parameter | a field of the params model |
 | inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
-| group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. |
+| group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. A `RootModel` is not a group: a request writes it as its root value. |
 | place | a position in a request where it writes a value or a reference: the value of a parameter, an element of a list, or a field of a group, at any depth, such as `sample.run` (see Specs and bindings) |
 | data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
 | fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |

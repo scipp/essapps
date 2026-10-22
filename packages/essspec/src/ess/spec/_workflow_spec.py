@@ -38,7 +38,8 @@ anything else, such as a scipp array   no          to an output that fits
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
 as ``Reduction``, written as an object of its fields, each a place, so a
-file in it comes from a dataset::
+file in it comes from a dataset; a ``RootModel`` is not a group, but a type
+written as its root value::
 
     class Sample(BaseModel):
         run: SampleFile
