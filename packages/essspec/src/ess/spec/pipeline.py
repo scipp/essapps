@@ -41,11 +41,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     not that a provider returns ``None``; an output that a provider returns
     as ``X | None`` needs ``keys=``.
 
-    A parameter typed ``X | None`` sets no key. For ``None``, setting ``X`` to
-    ``None`` would replace a provider of ``X``, and setting no key would leave
-    whatever the pipeline holds at ``X``, which the request did not choose.
-    So ``keys=`` must give such a parameter no key, ``()``, and
-    ``make_pipeline`` uses the field itself::
+    A parameter typed ``X | None`` sets no key. Each value of a union sets
+    one key, but ``None`` has no key to set: setting ``X`` to ``None`` would
+    replace a provider of ``X``, and setting nothing would leave the meaning
+    of ``None`` to whatever the pipeline holds or computes at ``X``. So
+    ``keys=`` must give such a parameter no key, ``()``, and
+    ``make_pipeline`` says what ``None`` means::
 
         def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
             pipeline = sciline.Pipeline(providers)
@@ -107,11 +108,17 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     value of either alternative is then set at ``K``.
 
     Defaults belong to the spec: ``make_pipeline`` holds no value at a key
-    that a parameter sets, or at a key that such a key leads to. A value held
-    there can make a request's value have no effect, and nothing says so. If
-    the pipeline above held a default ``BeamCentre``, the tag 'find' would
-    set ``FindCentre``, but ``iofq`` would read the default, and
-    ``find_centre`` would never run. The binding does not check this.
+    that a parameter's key leads to, since the value replaces the provider
+    that would read the parameter, and the request's value has no effect.
+    The binding cannot check this: the provider is gone from the graph. A
+    value held at the key of a parameter is harmless, since the binding sets
+    the request's value over it, except at a key of a union, which only one
+    alternative sets. The binding refuses a value held there: if the
+    pipeline above held a default ``BeamCentre``, the tag 'find' would set
+    ``FindCentre``, but ``iofq`` would read the default, and ``find_centre``
+    would never run. ``make_pipeline`` sets no value in a pipeline it holds,
+    since the binding copies the pipeline only after ``make_pipeline``
+    returns it, and a value set for one request would stay for the next.
 
     :attr:`keys` and :meth:`pipeline` give these keys and the graph, so that
     the driver of a multi-run spec can reuse them.
@@ -222,7 +229,20 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         spec = self.spec
         if unknown := sorted(fixed.keys() - spec.params.model_fields.keys()):
             raise ValueError(f'{unknown}: not parameters of {spec.name}')
-        pipeline = self._make_pipeline(fixed).copy()
+        made = self._make_pipeline(fixed)
+        if held := [
+            f'{name} at {_key_text(key)}'
+            for name, (_, by_tag) in self._tags.items()
+            if len(set(by_tag.values())) > 1
+            for key in dict.fromkeys(by_tag.values())
+            if 'value' in made.underlying_graph.nodes.get(key, {})
+        ]:
+            raise ValueError(
+                f'{spec.name}: make_pipeline holds a value of the union '
+                f'{", ".join(held)}; a value of another alternative would have '
+                'no effect'
+            )
+        pipeline = made.copy()
         for key, value in self._by_key(fixed).items():
             pipeline[key] = value
         return pipeline

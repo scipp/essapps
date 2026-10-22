@@ -638,23 +638,25 @@ def test_a_stage_with_a_union_fixed_keeps_the_symmetries(
     check_caching(centring, {'beam_centre': centre}, calls)
 
 
-def test_a_default_that_the_pipeline_holds_wins_over_the_request(
-    find_centre: Callable[..., BeamCentre],
-    samples: list[Path],
-    found: list[FindCentre],
+def test_a_value_held_at_a_key_of_a_union_is_refused(
+    find_centre: Callable[..., BeamCentre], samples: list[Path]
 ) -> None:
-    # Defaults belong to the spec: the binding sets FindCentre, but centred
-    # reads the BeamCentre the pipeline holds, and find_centre never runs.
-    base = sciline.Pipeline(
-        [load_counts, find_centre, centred, used_centre],
-        params={BeamCentre: BeamCentre()},
+    # The held default would replace find_centre, so the tag 'find' would set
+    # FindCentre without effect.
+    binding = PipelineBinding(
+        CENTRED,
+        lambda _: sciline.Pipeline(
+            [load_counts, find_centre, centred, used_centre],
+            params={BeamCentre: BeamCentre()},
+        ),
     )
-    binding = PipelineBinding(CENTRED, lambda _: base)
-    outputs = binding.compute(
-        CentredParams(sample=samples[0], beam_centre=FindCentre(tolerance=0.5))
-    )
-    assert outputs.centre == BeamCentre()
-    assert found == []
+    params = CentredParams(sample=samples[0], beam_centre=FindCentre())
+    with pytest.raises(
+        ValueError,
+        match=r'centred: make_pipeline holds a value of the union beam_centre '
+        r'at BeamCentre',
+    ):
+        binding.compute(params)
 
 
 @pytest.mark.parametrize(
@@ -702,6 +704,25 @@ def test_a_union_may_set_one_key_for_both_alternatives(samples: list[Path]) -> N
     find = CentredParams(sample=samples[0], beam_centre=FindCentre(tolerance=0.5))
     assert binding.compute(given).centred == total - 1.0
     assert binding.compute(find).centred == total - 0.5 * mean
+
+
+def test_a_value_held_at_the_one_key_of_a_union_is_set_over(
+    samples: list[Path],
+) -> None:
+    class CentredOnly(BaseModel):
+        centred: Centred
+
+    binding = PipelineBinding(
+        _spec('centred', params=CentredParams, outputs=CentredOnly),
+        lambda _: sciline.Pipeline(
+            [load_counts, centred_by_setting], params={CentreSetting: BeamCentre()}
+        ),
+        keys={'beam_centre': (CentreSetting, CentreSetting)},
+    )
+    find = CentredParams(sample=samples[0], beam_centre=FindCentre(tolerance=0.5))
+    assert binding.compute(find).centred == np.sum(SAMPLES[0]) - 0.5 * np.mean(
+        SAMPLES[0]
+    )
 
 
 def test_an_optional_union_with_a_key_is_refused() -> None:
