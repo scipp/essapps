@@ -50,7 +50,7 @@ So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-som
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
-A row is what the reduction repeats per run: a run, or a group given field by field that holds a run and the values given next to it, such as that run's own transmission run.
+A row is what the reduction repeats per run: a run, or a group that holds a run and the values given next to it, such as that run's own transmission run.
 Structure below a row, such as detector banks, belongs to the driver, so that the per-run work runs once per row, not once per bank.
 The framework cannot tell a bank index from a per-run value, so nothing checks this rule for workflow authors.
 Records, checks, pushes, and the forms of apps stay the same for every technique.

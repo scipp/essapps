@@ -1,0 +1,382 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+Places: where a request writes either a value or a reference, by type.
+
+A request is a JSON object of parameter values. A *place* is a position in
+it where the request may write either a value or a reference to data that
+exist elsewhere (see :mod:`ess.spec.refs`). The places are the value of each
+parameter, each element of a list, and each field of a group, at any depth::
+
+    {
+        'sample': {                                    # sample
+            'run': dataset(run=101),                   # sample.run
+            'transmission': t_record.ref('fraction'),  # sample.transmission
+        },
+        'reduction': {'bins': 50, 'mask': m.ref('mask')},  # reduction, .bins, .mask
+        'runs': [{'run': dataset(run=102)}],           # runs, runs[0], runs[0].run
+    }
+
+The type at a place decides what the request writes there, with ``| None``
+removed (a place of type ``X | None`` also takes ``None``):
+
+========================================  =====================================
+Type at the place                         The request writes
+========================================  =====================================
+a file: ``Path``, or a ``NewType`` of it  a reference to a dataset
+a group                                   an object of its fields, each a
+                                          place; or a reference to an output
+a union of groups                         an object of the fields of one
+                                          alternative, with its tag; or a
+                                          reference to an output
+a list, ``list[X]``                       a list, each element a place of
+                                          type ``X``
+any other type with a JSON form           the value as JSON (*inline*); or a
+                                          reference to an output
+any other type                            a reference to an output
+========================================  =====================================
+
+A reference to an output fits the place's type, and the output's type holds
+no file, so that a file comes only from a dataset, which the dataset source
+checks. The contents of a tuple, a set, a dict, a ``TypedDict``, or a
+dataclass are not places: such a value is written whole, inline. ``"@ref"``
+is reserved at every depth, so that a reference is found without the spec
+(see :func:`ess.spec.refs.positions`), and a reference at a position that is
+not a place is refused.
+
+A *union of groups* is a pydantic discriminated union,
+``Annotated[A | B, Field(discriminator='kind')]``, in which each
+alternative is a group with the *tag* field ``kind`` typed as a ``Literal``.
+The tag is written inline, never as a reference: it says which
+alternative's fields the object has, and so what each of them takes.
+
+In the request phase, :func:`held` validates each place given inline alone,
+from its JSON form, and a group with no reference inside whole, from the
+JSON form of its fields (see :func:`ess.spec.field_types.inline`). In the
+call phase, each parameter's value is validated once, whole, with the data
+of its references (see :func:`ess.spec.field_types.validated`).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from types import NoneType, UnionType
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
+
+from pydantic import BaseModel, Discriminator, ValidationError
+from pydantic.fields import FieldInfo
+from pydantic_core import PydanticSerializationError, to_json
+
+from .field_types import (
+    base,
+    element,
+    has_json_form,
+    holds_file,
+    inline,
+    is_file,
+    is_group,
+    is_list,
+    model_of,
+    optional,
+    plain,
+    type_name,
+)
+from .refs import Loc, ParamsError, Ref, iter_refs, positions, ref_at
+
+type OnRef = Callable[[Loc, Ref, Any], Any]
+"""
+What :func:`held` does with a reference at a place: given the place, the
+reference, and the type at the place, it returns what the record holds, or
+raises.
+"""
+
+
+@dataclass(frozen=True)
+class _Slot:
+    """
+    The type at a place: that of the field ``name`` of ``model``, or of an
+    element of it, a list, if ``element``.
+    """
+
+    model: type[BaseModel]
+    name: str
+    element: bool = False
+
+    @property
+    def annotation(self) -> Any:
+        tp = self.model.model_fields[self.name].annotation
+        return get_args(tp)[0] if self.element else tp
+
+    @property
+    def is_list(self) -> bool:
+        """Whether the place holds a list whose elements are places."""
+        return not self.element and is_list(self.model, self.name)
+
+    @property
+    def discriminator(self) -> Any:
+        """The discriminator of the field, if it is not in the annotation."""
+        info = self.model.model_fields[self.name]
+        return None if self.element else info.discriminator
+
+    @property
+    def one(self) -> _Slot:
+        """The type at one place of the field: an element, if it is a list."""
+        return _Slot(self.model, self.name, element=self.is_list or self.element)
+
+
+def held(model: type[BaseModel], name: str, value: Any, on_ref: OnRef) -> Any:
+    """
+    ``value`` of the field ``name`` of ``model``, a parameter or a field of
+    a group, as a record holds it: the JSON form of each place given inline,
+    and at each other place what ``on_ref`` returns for its reference, or
+    ``None``. A group holds each of its fields, a field left out its default.
+    ``value`` is as a request gives it, a group as a mapping of its fields or
+    an instance, a reference as a :data:`~ess.spec.refs.Ref` or its JSON form.
+
+    Each place given inline is validated alone, by its field (see
+    :func:`ess.spec.field_types.inline`), and each group with no reference
+    inside is validated whole, from the JSON form of its fields, so that its
+    validators run. Raises :class:`~ess.spec.refs.ParamsError` at the place
+    of the first problem.
+    """
+    return _held((name,), _Slot(model, name), value, on_ref)
+
+
+def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
+    tp, nullable = optional(slot.annotation)
+    if (ref := ref_at(loc, value)) is not None:
+        if element(tp) is not None:
+            whole = 'list' if get_origin(tp) is list else 'dict'
+            raise _refused(
+                loc,
+                f'{ref} is a reference to a whole {whole}; a reference stands '
+                'for one element of a list',
+            )
+        return on_ref(loc, ref, tp)
+    if value is None and nullable:
+        return None
+    if slot.is_list:
+        if not isinstance(value, list):
+            raise _refused(loc, f'{value!r} is not a list')
+        return [_held((*loc, i), slot.one, v, on_ref) for i, v in enumerate(value)]
+    fields = dict(value) if isinstance(value, BaseModel) else value
+    if isinstance(fields, Mapping) and (found := _group(loc, slot, fields)):
+        group, tagged = found
+        held_fields = _fields(loc, group, fields, on_ref)
+        if not any(isinstance(v, Ref) for _, v in positions(loc, held_fields)):
+            _validate_whole(loc, slot, held_fields, tagged)
+        return held_fields
+    if not has_json_form(slot.model, slot.name):
+        raise _refused(
+            loc,
+            f'{value!r} is not a reference; {type_name(tp)} has no JSON form, '
+            'so it is given by reference, a file as dataset(path=...)',
+        )
+    for at, item in positions(loc, value):
+        if (inner := ref_at(at, item)) is not None:
+            raise _refused(
+                at,
+                f'{inner} is inside a value of {type_name(tp)}, given inline; a '
+                'reference stands for a value, an element of a list, or a '
+                'field of a group',
+            )
+    return _inline(loc, slot, value)
+
+
+def _fields(
+    loc: Loc, group: type[BaseModel], value: Mapping[str, Any], on_ref: OnRef
+) -> dict[str, Any]:
+    """The fields of ``group`` at ``loc`` as a record holds them (see :func:`held`)."""
+    if unknown := [f for f in value if f not in group.model_fields]:
+        raise ParamsError(
+            ((*loc, f), 'Extra inputs are not permitted') for f in unknown
+        )
+    fields: dict[str, Any] = {}
+    for name, info in group.model_fields.items():
+        at = (*loc, name)
+        if name in value:
+            given = value[name]
+        elif info.is_required():
+            raise _refused(at, 'a required field, not given')
+        else:
+            given = info.get_default(call_default_factory=True)
+        fields[name] = _held(at, _Slot(group, name), given, on_ref)
+    return fields
+
+
+def _group(
+    loc: Loc, slot: _Slot, value: Mapping[str, Any]
+) -> tuple[type[BaseModel], bool] | None:
+    """
+    The group whose fields ``value`` at ``loc`` gives, and whether it is an
+    alternative of a union, chosen by the tag; ``None`` if the type at the
+    place is neither a group nor a union of groups.
+    """
+    tp, _ = optional(slot.annotation)
+    if is_group(tp):
+        return base(tp), False
+    if (union := alternatives(slot.annotation, slot.discriminator)) is None:
+        return None
+    tag, groups = union
+    if tag not in value:
+        raise _refused(
+            loc, f'the tag {tag!r} is not given; it is one of {list(groups)}'
+        )
+    if (ref := ref_at((*loc, tag), value[tag])) is not None:
+        raise _refused(
+            (*loc, tag), f'{ref}: a tag is written inline, never as a reference'
+        )
+    if (group := groups.get(value[tag])) is None:
+        raise _refused(
+            (*loc, tag), f'{value[tag]!r} is not a tag, one of {list(groups)}'
+        )
+    return group, True
+
+
+def _validate_whole(
+    loc: Loc, slot: _Slot, fields: dict[str, Any], tagged: bool
+) -> None:
+    """
+    Validate the group at ``loc`` whole, from the JSON form of ``fields``.
+    pydantic names the tag of a union in an error's place, which is left
+    out, so that the place is the same whichever way the alternative is
+    chosen.
+    """
+    one = model_of(slot.model, slot.name, whole=not slot.element)
+    try:
+        one.model_validate_json(to_json({slot.name: fields}))
+    except ValidationError as error:
+        skip = 1 + tagged
+        raise ParamsError(
+            ((*loc, *e['loc'][skip:]), e['msg']) for e in error.errors()
+        ) from None
+
+
+def _inline(loc: Loc, slot: _Slot, value: Any) -> Any:
+    """The JSON form of ``value`` given inline at ``loc`` (see :func:`inline`)."""
+    try:
+        return inline(slot.model, slot.name, value, whole=not slot.element)
+    except PydanticSerializationError as error:
+        raise _refused(loc, f'cannot be stored as JSON: {error}') from None
+    except ValidationError as error:
+        raise ParamsError(
+            ((*loc, *e['loc'][1:]), e['msg']) for e in error.errors()
+        ) from None
+    except ValueError as error:
+        raise _refused(loc, str(error)) from None
+
+
+def _refused(loc: Loc, msg: str) -> ParamsError:
+    return ParamsError([(loc, msg)])
+
+
+def alternatives(
+    annotation: Any, discriminator: Any = None
+) -> tuple[str, dict[Any, type[BaseModel]]] | None:
+    """
+    The tag and the alternatives, by the value of their tag, of the union of
+    groups that ``annotation``, possibly optional, is; ``None`` if it is not
+    a union with a group in it, such as ``int | str``. ``discriminator`` is
+    that of the field, if the annotation does not carry it.
+
+    Raises ``ValueError`` for a union that the framework cannot take apart
+    by the tag of a value: one with a type that is not a group, without a
+    discriminator, or with one that is not the name of a field, such as a
+    callable ``Discriminator``; or one whose tag field has an alias or is not
+    a ``Literal``.
+    """
+    tp = annotation
+    while True:
+        origin, args = get_origin(tp), get_args(tp)
+        if origin is Annotated:
+            for meta in tp.__metadata__:
+                if isinstance(meta, FieldInfo) and meta.discriminator is not None:
+                    discriminator = meta.discriminator
+                elif isinstance(meta, Discriminator):
+                    discriminator = meta
+            tp = args[0]
+        elif origin in (Union, UnionType) and NoneType in args:
+            rest = tuple(a for a in args if a is not NoneType)
+            tp = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+        else:
+            break
+    if get_origin(tp) not in (Union, UnionType):
+        return None
+    members = [plain(arg) for arg in get_args(tp)]
+    if not any(is_group(m) for m in members):
+        return None
+    if not all(is_group(m) for m in members):
+        raise ValueError('a union holds groups only, or no group')
+    if isinstance(discriminator, Discriminator):
+        discriminator = discriminator.discriminator
+    if not isinstance(discriminator, str):
+        raise ValueError(
+            'a union of groups has a discriminator, the name of its tag field, '
+            "such as Field(discriminator='kind')"
+        )
+    groups: dict[Any, type[BaseModel]] = {}
+    for member in members:
+        group = base(member)
+        info = group.model_fields.get(discriminator)
+        if info is None or get_origin(info.annotation) is not Literal:
+            raise ValueError(
+                f'{group.__name__}.{discriminator}: the tag of a union is a Literal'
+            )
+        if any(
+            getattr(info, a) is not None
+            for a in ('alias', 'validation_alias', 'serialization_alias')
+        ):
+            raise ValueError(f'{group.__name__}.{discriminator}: a tag has no alias')
+        groups.update(dict.fromkeys(get_args(info.annotation), group))
+    return discriminator, groups
+
+
+def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
+    """
+    The groups at the places of the field ``name`` of ``model``: the group,
+    or the alternatives of the union, that it or each element of it is, if
+    any. Raises ``ValueError`` as :func:`alternatives` does.
+    """
+    slot = _Slot(model, name).one
+    tp, _ = optional(slot.annotation)
+    if is_group(tp):
+        return [base(tp)]
+    union = alternatives(slot.annotation, slot.discriminator)
+    return [] if union is None else list(dict.fromkeys(union[1].values()))
+
+
+def file_off_place(model: type[BaseModel], name: str) -> bool:
+    """
+    Whether the field ``name`` of ``model`` holds a file at a position that
+    is not a place, such as in a tuple or a dict, where no dataset can give
+    it. The fields of a group at a place are checked as the group's own.
+    """
+    tp, _ = optional(_Slot(model, name).one.annotation)
+    if is_file(tp) or groups_at(model, name):
+        return False
+    return holds_file(tp)
+
+
+def ref_types(
+    model: type[BaseModel], params: Mapping[str, Any]
+) -> list[tuple[Loc, Ref, Any]]:
+    """
+    Each reference in ``params``, by name, as a record holds them, with its
+    place and the type at the place, with ``| None`` removed: the type of the
+    data it must fit.
+    """
+    found = []
+    for loc, ref in iter_refs(params):
+        name, *keys = loc
+        slot, value = _Slot(model, str(name)), params[str(name)]
+        for i, key in enumerate(keys):
+            if isinstance(key, int):
+                slot = slot.one
+            else:
+                if (group := _group(loc[: i + 1], slot, value)) is None:
+                    raise _refused(loc, f'{ref} is not at a place')
+                slot = _Slot(group[0], key)
+            value = value[key]
+        found.append((loc, ref, optional(slot.annotation)[0]))
+    return found

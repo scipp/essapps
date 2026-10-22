@@ -223,7 +223,7 @@ def test_a_dataset_fills_the_place_at_in_a_blank_group(
     assert normalized['1'].params['sample'] == {'run': sample}
     assert client.output(client.compute(normalized['1']), 'value') == 3.0
     with pytest.raises(
-        SubmitError, match=r'^1: sample: uuid:run-1 names the whole of Run'
+        SubmitError, match=r'^1: sample: dataset uuid:run-1 does not fit Run, which'
     ):
         client.submit(whole)
     with pytest.raises(ValueError, match='a dataset fills a place in the blank sample'):

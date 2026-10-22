@@ -3,19 +3,19 @@
 """
 References: how a request names data that exist elsewhere.
 
-A request gives a value, a row of a list parameter, or a field of either
-that is a group, by reference to data that exist elsewhere: an output of an
-earlier record, a dataset the framework did not compute, or, in a request
-not yet accepted, an output of an accumulator that the framework holds. A
-reference stands for a whole value, a row, or a field of a group given
-inline, such as the run of a row; never for a whole list, and never for
-anything deeper.
+A request gives the value at each of its places by reference to data that
+exist elsewhere, or inline: an output of an earlier record, a dataset the
+framework did not compute, or, in a request not yet accepted, an output of an
+accumulator that the framework holds. A *place* is the value of a parameter,
+an element of a list, or a field of a group, at any depth (see
+:mod:`ess.spec.places`). A reference never stands for a whole list.
 A reference is what a request names and what a record keeps; turning it into
 the data a workflow takes, a local path or an object, is the business of
 whatever runs the workflow.
 
 The JSON form of a reference is an object with the key ``"@ref"``, which
-names its kind, so a reference is found in plain data without a spec::
+names its kind. The key is reserved: an object with it is a reference, at any
+depth, so a reference is found in plain data without a spec::
 
     {"@ref": "dataset", "dataset": "run:loki/60339"}
     {"@ref": "output", "record": "r17", "output": "centre"}
@@ -111,8 +111,7 @@ class AccumulatorRef(_Ref, frozen=True):
 
 Ref = OutputRef | DatasetRef | AccumulatorRef
 """
-A reference: a value, a row of a list parameter, or a field of a group, in
-a request.
+A reference: the value at a place of a request.
 
 An ``AccumulatorRef`` is only a placeholder in a request before it is
 submitted; no record holds one.
@@ -154,8 +153,8 @@ def as_ref(value: Any) -> Ref | None:
 type Loc = tuple[str | int, ...]
 """
 A place in the params of a request, as pydantic's errors give one: the
-parameter's name, then the index of a row or the name of a field, such as
-``('runs', 2, 'transmission')``.
+parameter's name, then the index of an element of a list or the name of a
+field of a group, at any depth, such as ``('runs', 2, 'transmission')``.
 """
 
 
@@ -183,7 +182,7 @@ class ParamsError(ValueError):
         return '; '.join(f'{loc_text(loc)}: {msg}' for loc, msg in self.errors)
 
 
-def _ref_at(loc: Loc, value: Any) -> Ref | None:
+def ref_at(loc: Loc, value: Any) -> Ref | None:
     """:func:`as_ref` of ``value``; its error is a ``ParamsError`` at ``loc``."""
     try:
         return as_ref(value)
@@ -191,45 +190,44 @@ def _ref_at(loc: Loc, value: Any) -> Ref | None:
         raise ParamsError([(loc, str(error))]) from None
 
 
-def places(name: str, value: Any) -> list[tuple[Loc, str | None, Any]]:
+def positions(loc: Loc, value: Any) -> Iterator[tuple[Loc, Any]]:
     """
-    The places in the value of the parameter ``name`` where a request may
-    hold a reference, each with the field of a group it is at, if any, and
-    what it holds: the value, or each element of a list, such as
-    ``('runs', 2)``, and each field of one of these that is an object but not
-    a reference, the inline value of a group, such as ``('sample', 'run')``
-    or ``('runs', 2, 'run')``; never deeper.
+    Each position in ``value``, at ``loc``, with what it holds: the value,
+    and each element of a list and each field of an object that is not a
+    reference, at any depth, such as ``('runs', 2, 'transmission')``.
+
+    These are the places where a request may hold a reference, and the
+    positions inside an inline value, such as the elements of a tuple, where
+    it may not. Only the spec tells them apart; ``"@ref"`` is reserved at
+    each of them, so the references are found without it.
     """
+    yield loc, value
     if isinstance(value, list):
-        tops = [((name, i), item) for i, item in enumerate(value)]
-    else:
-        tops = [((name,), value)]
-    found: list[tuple[Loc, str | None, Any]] = []
-    for loc, item in tops:
-        found.append((loc, None, item))
-        if _is_group(item):
-            found.extend(((*loc, f), f, v) for f, v in item.items())
-    return found
+        for i, item in enumerate(value):
+            yield from positions((*loc, i), item)
+    elif _is_object(value):
+        for field, item in value.items():
+            yield from positions((*loc, field), item)
 
 
-def _is_group(value: Any) -> bool:
-    """Whether ``value`` may be the inline value of a group: an object, no reference."""
+def _is_object(value: Any) -> bool:
+    """Whether ``value`` is an object in its JSON form, but not a reference."""
     return isinstance(value, Mapping) and '@ref' not in value
 
 
 def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
     """
     Each reference in the params of a request, with its place, such as
-    ``('sample',)``, ``('runs', 2)``, or ``('runs', 2, 'transmission')``.
+    ``('sample', 'run')``, ``('runs', 2)``, or ``('runs', 2, 'transmission')``.
 
     The params are by name. A reference is a :data:`Ref` or its plain (JSON)
-    form, and is looked for at the places :func:`places` names. Any other
-    value is skipped; a malformed reference raises :class:`ParamsError` at
-    its place (see :func:`as_ref`).
+    form, and is looked for at every position (see :func:`positions`). Any
+    other value is skipped; a malformed reference raises
+    :class:`ParamsError` at its place (see :func:`as_ref`).
     """
     for name, value in params.items():
-        for loc, _, item in places(name, value):
-            if (ref := _ref_at(loc, item)) is not None:
+        for loc, item in positions((name,), value):
+            if (ref := ref_at(loc, item)) is not None:
                 yield loc, ref
 
 
@@ -240,17 +238,19 @@ def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, A
     value is kept. A malformed reference raises :class:`ParamsError` at its
     place.
     """
+    return {name: _mapped((name,), value, fn) for name, value in params.items()}
 
-    def at(loc: Loc, item: Any, group: bool) -> Any:
-        if (ref := _ref_at(loc, item)) is not None:
-            return fn(ref)
-        if group and _is_group(item):
-            return {f: at((*loc, f), v, False) for f, v in item.items()}
-        return item
 
-    def one(name: str, value: Any) -> Any:
-        if isinstance(value, list):
-            return [at((name, i), item, True) for i, item in enumerate(value)]
-        return at((name,), value, True)
-
-    return {name: one(name, value) for name, value in params.items()}
+def _mapped(loc: Loc, value: Any, fn: Callable[[Ref], Any]) -> Any:
+    """
+    ``value`` at ``loc`` with each reference replaced by ``fn(ref)``; a
+    function of the module, since a nested one that calls itself would hold
+    ``fn``, and the data it reads, in a reference cycle.
+    """
+    if (ref := ref_at(loc, value)) is not None:
+        return fn(ref)
+    if isinstance(value, list):
+        return [_mapped((*loc, i), v, fn) for i, v in enumerate(value)]
+    if _is_object(value):
+        return {f: _mapped((*loc, f), v, fn) for f, v in value.items()}
+    return value

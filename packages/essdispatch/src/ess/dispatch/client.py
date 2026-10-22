@@ -180,17 +180,17 @@ class Accumulator:
             acc.push(sample=[{'run': dataset(run=613), 'transmission': t.ref('t')}])
             acc.push(sample=[{'run': dataset(run=615)}], can=[dataset(run=614)])
 
-        Each row is given inline, such as a group as a model or a dict, or
-        by reference, as its type allows; a group that holds a file field by
-        field. A push gives rows of one or more tables, side by side as in a
-        request, never paired: rows of different tables have nothing to do
-        with each other. A table the template fixes is refused, and so are a
-        row the table holds already or that the push repeats, and a push of
-        no rows into a table. Rows are compared as the record holds them: a
+        Each row is given inline, such as a group as a model or a dict, or by
+        reference, as its type allows, and so is each place in it, such as a
+        field of a group. A push gives rows of one or more tables, side by side
+        as in a request, never paired: rows of different tables have nothing to
+        do with each other. A table the template fixes is refused, and so are a
+        row the table holds already or that the push repeats, and a push of no
+        rows into a table. Rows are compared as the record holds them: a
         dataset by its identity, a reference to an output by record, output,
-        and key, an inline value by its JSON form, and a group given field by
-        field by each field so; for a table whose element type has a JSON
-        form, also by the rows read, before the driver gets them.
+        and key, and an inline value by its JSON form, each at its place; for a
+        table whose element type has a JSON form, also by the rows read, before
+        the driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references

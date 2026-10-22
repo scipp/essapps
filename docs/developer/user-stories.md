@@ -33,13 +33,12 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FIND_CENTRE` | `direct_beam: DirectBeamFile` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
 | `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRun]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
-A parameter's type decides how a request gives its value (README.md):
+The type at a place, a parameter or a field of a group at any depth, decides how a request gives its value (README.md):
 
-| A parameter's type | In the toy specs | Given as |
+| The type at a place | In the toy specs | Given as |
 |---|---|---|
 | a file: a `NewType` of `Path` | each `...File` | a dataset reference |
-| a group that holds a file | `SampleRun` | field by field, or a dataset reference for its file |
-| has a JSON form: a group | `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an inline value, or a reference to an output that fits |
+| a group | `SampleRun`, `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
 | any other type | `CentreArray`, `Normalization`, `TransmissionArray`, `Parts`, `sc.Variable` | a reference to an output that fits |
 
 A list parameter takes its element type's forms, row by row.

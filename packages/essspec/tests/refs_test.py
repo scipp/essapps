@@ -37,17 +37,20 @@ PARAMS = {
     'centre': 'not a reference',
     'rows': [{'file': DATASET_REF, 'shift': {'offset': OUTPUT_REF}}],
     'group': {'centre': OUTPUT_REF, 'x': 1.0},
+    'deep': {'mask': {'by': [{'kind': 'given', 'data': ACCUMULATOR_REF}]}},
 }
 
 
-def test_iter_refs_gives_each_reference_of_the_params_with_its_place() -> None:
+def test_iter_refs_gives_each_reference_of_the_params_at_any_depth() -> None:
     assert [(p, str(r)) for p, r in iter_refs(PARAMS)] == [
         (('sample',), 'r1.data'),
         (('runs', 0), 'pid-1'),
         (('runs', 2), 'f2.file'),
         (('sum',), 'a1.data'),
         (('rows', 0, 'file'), 'pid-1'),
+        (('rows', 0, 'shift', 'offset'), 'r1.data'),
         (('group', 'centre'), 'r1.data'),
+        (('deep', 'mask', 'by', 0, 'data'), 'a1.data'),
     ]
 
 
@@ -63,9 +66,9 @@ def test_map_refs_replaces_each_reference_and_keeps_other_values() -> None:
         'can': None,
         'sum': 'a1.data',
         'centre': 'not a reference',
-        # A field of a group holds a reference; deeper, @ref is plain data.
-        'rows': [{'file': 'pid-1', 'shift': {'offset': OUTPUT_REF}}],
+        'rows': [{'file': 'pid-1', 'shift': {'offset': 'r1.data'}}],
         'group': {'centre': 'r1.data', 'x': 1.0},
+        'deep': {'mask': {'by': [{'kind': 'given', 'data': 'a1.data'}]}},
     }
 
 

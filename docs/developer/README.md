@@ -59,7 +59,8 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | parameter | a field of the params model |
 | inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
-| group | a pydantic model, such as `Reduction`, the settings of one reduction step: the usual type of a parameter given inline. A group that holds a file, such as `Sample`, a run and the values given next to it, is given *field by field* (see Specs and bindings). |
+| group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. |
+| place | a position in a request where it writes a value or a reference: the value of a parameter, an element of a list, or a field of a group, at any depth, such as `sample.run` (see Specs and bindings) |
 | data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
 | fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
@@ -142,25 +143,31 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...'
                     params=IofQParams, outputs=IofQOutputs)
 ```
 
-Whether a value is given inline or by reference is the request's choice, per value.
-The parameter's type decides which of the two it accepts, with `| None` removed and, for a list parameter, its element type taken:
+Whether a value is given inline or by reference is the request's choice, at each *place*: the value of a parameter, an element of a list, or a field of a group, at any depth.
+The type at the place decides which of the two it accepts, with `| None` removed:
 
-| A parameter's type | Example | Inline | By reference |
+| The type at a place | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
-| has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
-| a group that holds a file | `Sample` | field by field | no |
+| a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
+| a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
+| any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
 | anything else | `Transmission` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
-A group that holds a file, such as `Sample`, is given *field by field*: each of its fields inline or by reference, as a parameter is, so its file comes from a dataset.
-A field left out takes its default, and a dataset is never the value of the whole group.
+For the same reason a reference to an output whose type holds a file, such as an output of type `Sample`, is refused.
+A field of a group left out takes its default.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `Transmission`:
 
 ```python
 {'sample': {'run': dataset(run=611), 'transmission': t611.ref('transmission')}}
 {'sample': {'run': dataset(run=611)}}             # the run, and the transmission None
+{'reduction': {'bins': 50}}                       # every field inline: the group's JSON form
 ```
+
+The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
+A group may hold a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal`.
+The request writes the fields of one alternative with its tag, inline, never by reference, since the tag says which alternative's fields the object has.
 
 The module that defines a spec imports pydantic, `ess.spec`, and scipp for the types of data values, but no workflow package.
 A workflow that takes nothing has the params model `NoParams`.
@@ -172,14 +179,16 @@ A value *round-trips* when its JSON form reads back as the value.
 
 - Each parameter is a type, possibly optional, or a list of one.
 - Each output is a type, possibly optional, or a list or a dict of one.
-- A group holds a file only as one of its fields, typed as a file, possibly optional. Such a group follows the rules on defaults and on the params model below. A field of it that is a list or a dict has a JSON form, since no reference stands for a list.
-- A default is a value, never a reference: of a type with a JSON form, a value that round-trips and whose JSON form is neither an `@ref` object nor a list holding one; of any other type, `None` or `[]`.
+- A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
+- A union in a group is discriminated by the name of its tag field, not by a callable, and the tag field has no alias.
+- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode. It does not hold itself, at any depth.
+- A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
-Each parameter is validated alone, in every phase, since a template, a stage call, or a push gives some values only.
-Like the params model, a group given field by field is never validated whole.
+Each parameter is validated alone, since a template, a stage call, or a push gives some values only.
 A check of one value belongs to the value's type, such as a field validator of a group, and so does the JSON form of a value, which the framework stores and reads back.
+The validators of a group run on the whole group, once, with all its fields at hand, even where the request gives some fields by reference (see Requests and records, Validation).
 A check across parameters, such as a transmission mode that requires a transmission run, is the binding's or the driver's, and fails when the request runs.
 A binding may run the model validators, `IofQParams.model_validate(dict(params))`.
 
@@ -254,9 +263,18 @@ Each takes one request or record, a list, or a dict, and returns the same shape.
 `Request(IOFQ, params=...)` makes a request without submitting it, and `request.upstream()` lists the outputs of other records that it reads.
 A caller without the workflow package gives `SpecId(name='sans-iofq', version=1)` in place of `IOFQ`.
 
-**Validation.** In the request phase, at submission, the backend checks the names and the required parameters, each inline value by its field from its JSON form, each reference readable and fitting its field (see References), and the table rules (see Combining runs: tables).
+**Validation.** Each parameter's value is validated once in each phase, by pydantic:
+
+| Phase | What is validated |
+|---|---|
+| request phase | each inline value alone, by the type at its place, from its JSON form; a group with no reference inside whole, from the JSON form of its fields |
+| call phase, once the references are read | the parameter's value whole: the JSON form the record holds, with the data read in place of each reference |
+
+In the request phase, at submission, the backend also checks the names and the required parameters, each reference readable and fitting its place (see References), and the table rules (see Combining runs: tables).
 An inline value must round-trip, since the log holds its JSON form: a number that is not finite does not.
-In the call phase, it checks each value it reads by its field, once, and makes the params instance from the validated values.
+So a `Range` with `start` and `stop` and a field validator `stop > start` is refused at submission at `stop` when both are given inline, and fails in the call phase at `stop` when `stop` is given by reference.
+The call phase validates from the JSON form, not from the values the request phase made, so no validator runs twice on one value; it does so with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
+It makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError`.
 Its `errors` list each reason as a `FieldError`, as pydantic's `ValidationError.errors()` does: the place of the field at fault, `loc`, such as `('sample', 2, 'transmission')`, the reason, `msg`, and for a call with several requests the request's key or index, `entry`.
 If one request of a call is refused, none is submitted.
@@ -284,7 +302,7 @@ A file is always given by reference: `dataset(path=...)` names a file by its pat
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for a value, for one row of a list parameter, or for one field of a group given field by field, such as `sample.run`: never for a whole list, and never for part of any other group.
+A reference stands for the value at a place, such as `reduction.mask`, `sample.run`, or `runs[2].transmission`: never for a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -293,14 +311,14 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 {"@ref": "output", "record": "r18", "output": "slices", "key": "2"}
 ```
 
-The framework looks for references at three places only: the top of each value, the top of each element of a value that is a JSON array, and each field of an object at one of these two places, such as `sample.run` or `sample[2].transmission`.
-At these places it refuses an `@ref` object that the spec does not allow as a reference: an element of a parameter that is not a list, such as a `tuple` of groups, whose JSON is an array; a field of a group given inline whole, such as `reduction.bins`; or the JSON form of an inline value, such as a group with extra fields that holds the key `@ref`.
-Deeper inside a value, `@ref` is plain data.
-So the framework finds the references of a request without the spec.
+The key `@ref` is reserved at every depth: an object with it is a reference.
+So the framework finds the references of a request without the spec, in every array and every object.
+With the spec, it refuses an `@ref` object that is not at a place, such as an element of a `tuple`, and an inline value or a default whose JSON form holds the key `@ref`.
 
 A reference *fits* a parameter when the type of the data it names can be the parameter's value.
 `| None` is removed on both sides.
 A reference with a key names one element, of the output's element type, and a list parameter takes each reference by its element type.
+A reference at a field of a group takes the field's type, and one in an alternative of a union that of the alternative the tag names.
 Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the parameter's type or a subclass of it, or when the parameter's type, with its `NewType`s removed, reaches the output's type or a superclass of it:
 
 | Type of the output | Type of the parameter | Fits |
@@ -341,7 +359,7 @@ template = Template(IOFQ, params={'reduction': Reduction(bins=100), 'can': datas
                     blanks=('sample',))
 ```
 
-`Template` validates each fixed inline value by its own field, and checks that each fixed reference is readable and fits its field.
+`Template` validates each fixed inline value by the type at its place, and checks that each fixed reference is readable and fits its place.
 A required parameter may be a blank.
 
 A template can also be made from any request's values.
@@ -579,14 +597,14 @@ Only the client that made an accumulator pins it.
 |---|---|---|
 | a template | each fixed inline value by its field; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value read, once, when the stage or the driver is made; the rows of fixed tables read distinct |
 | a stage call | the same, for the values given; the table rules on given tables | each given value read; the rows of given tables read distinct |
-| a push | each inline value by the table's element type, or by its field in a row's group; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
+| a push | each inline value by the type at its place in a row; each reference readable and fitting; the table rules on the table with the push | each row read and checked by the table's element type; the rows read distinct from those read before, before the driver gets them |
 | a state, at a pin | the number of rows of each table, by its length constraints | (none) |
 
 A value that fails its check at a push stops the accumulator, as any failing push does.
 
 **Distinct rows.** A push refuses a row that the table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared in two ways.
-In the request phase, they are compared whole, as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, a reference to an output by record, output, and key, and a group given field by field by each of its fields so.
+In the request phase, they are compared whole, as the record holds them: an inline value by its JSON form, a dataset by the identity the dataset source gives it, and a reference to an output by record, output, and key, each at its place.
 So `dataset(run=611)` and `dataset(path=...)` of the same file are one row, and the same run with another transmission is another row.
 A push checks this against the pushes logged, since a pin that refused the repeat would refuse every later state.
 A plain request with a repeated row is refused too, including one in a template.

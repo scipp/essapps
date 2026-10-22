@@ -15,13 +15,11 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NewType, Self
 
 import numpy as np
-import pydantic
 import pytest
 import scipp as sc
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Discriminator,
     Field,
     field_validator,
     model_validator,
@@ -271,24 +269,7 @@ class NormalizedParams(BaseModel):
     stops: Stops | None = None
 
 
-def _tag_of(value: Any) -> str:
-    return value['mode'] if isinstance(value, dict) else value.mode
-
-
-class CallableGroup(BaseModel):
-    by: Annotated[
-        Annotated[ByMonitor, pydantic.Tag('monitor')]
-        | Annotated[ByTime, pydantic.Tag('time')],
-        Discriminator(_tag_of),
-    ] = ByMonitor()
-
-
-class CallableParams(BaseModel):
-    group: CallableGroup = Field(default_factory=CallableGroup)
-
-
 NORMALIZED = _spec('normalized', params=NormalizedParams)
-CALLABLE = _spec('callable', params=CallableParams)
 
 
 def load_run(params: Sample) -> LoadOutputs:
@@ -813,22 +794,6 @@ def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
     assert request.params == {'normalization': {'by': {'mode': 'time', 'seconds': 1.0}}}
 
 
-def test_a_callable_discriminator_keyed_on_a_tag_works(datasets: FakeDatasets) -> None:
-    def describe(params: CallableParams) -> Value:
-        return Value(value=params.group.by.seconds)
-
-    with local(
-        proposal='p1',
-        datasets=datasets,
-        bind=[function_binding(CALLABLE, describe)],
-    ) as client:
-        record = client.compute(
-            CALLABLE, params={'group': CallableGroup(by=ByTime(seconds=3.0))}
-        )
-
-        assert client.output(record, 'value') == 3.0
-
-
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
     def sizes(params: StepsParams) -> Value:
         return Value(value=params.scale.factor * sum(s.size for s in params.steps))
@@ -1215,7 +1180,8 @@ def test_a_field_validator_gives_the_driver_the_plain_request_s_values(
     plain = client.compute(WALK, params={**flipped, 'steps': steps})
 
     assert client.output(walk, 'value') == client.output(plain, 'value') == 6.0
-    assert plain.request.params['scale'] == {'factor': 2.0}  # made positive
+    # The record holds the value as given; the call phase makes it positive.
+    assert plain.request.params['scale'] == {'factor': -2.0}
 
 
 def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(

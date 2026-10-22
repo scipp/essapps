@@ -126,6 +126,7 @@ class Mode(Enum):
 
 class Strict(BaseModel, strict=True):
     mode: Mode = Mode.fast
+    factor: float = 1.0
 
 
 class ModeParams(BaseModel):
@@ -135,7 +136,8 @@ class ModeParams(BaseModel):
 
 
 def slow(params: ModeParams) -> ValueOutputs:
-    return ValueOutputs(value=float(params.strict.mode is Mode.slow))
+    strict = params.strict
+    return ValueOutputs(value=float(strict.mode is Mode.slow) * strict.factor)
 
 
 SPLIT = _spec('split', outputs=PartsOutputs)
@@ -323,7 +325,9 @@ def _boxed(value: Any) -> Request:
 
 
 def test_a_value_that_cannot_be_stored_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^second: box: cannot be stored as JSON'):
+    with pytest.raises(
+        SubmitError, match=r'^second: box\.item\.value: cannot be stored as JSON'
+    ):
         client.submit({'first': _boxed(1), 'second': _boxed(len)})
     assert client.records() == []
 
@@ -333,13 +337,16 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
     client: Client, value: float
 ) -> None:
     with pytest.raises(
-        SubmitError, match=r'^box: has no JSON form that reads back as the value$'
+        SubmitError,
+        match=r'^box\.item\.value: has no JSON form that reads back as the value$',
     ):
         client.submit(_boxed(value))
 
 
 def test_a_number_that_is_not_finite_is_refused_in_a_set(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'^values: has no JSON form that reads'):
+    with pytest.raises(
+        SubmitError, match=r'^values\.values: has no JSON form that reads'
+    ):
         client.submit(
             MODES,
             params={
@@ -355,8 +362,25 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
     staged = client.compute(stage, params={'sample': dataset(run=1)})
 
-    assert plain.request.params['strict'] == {'mode': 'slow'}
+    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
     assert client.output(plain, 'value') == client.output(staged, 'value') == 1.0
+
+
+def test_a_strict_group_with_a_reference_passes_the_call_phase(
+    client: Client, gate: Gate
+) -> None:
+    # The call phase validates the group from JSON values and data, in Python
+    # mode, where only strict=False takes the enum from its string.
+    gate.open.set()
+    loaded = client.compute(load(2))
+    strict = {'strict': {'mode': Mode.slow, 'factor': loaded.ref('value')}}
+    plain = client.compute(MODES, params={**strict, 'sample': dataset(run=1)})
+
+    assert plain.request.params['strict'] == {
+        'mode': 'slow',
+        'factor': loaded.ref('value'),
+    }
+    assert client.output(plain, 'value') == 2.0
 
 
 def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
@@ -674,7 +698,7 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
 # Tables in a plain request
 
 
-def test_a_row_is_a_group_given_field_by_field(client: Client) -> None:
+def test_a_row_is_a_group_of_a_run_and_its_scale(client: Client) -> None:
     summed = client.compute(
         SUM,
         params={
