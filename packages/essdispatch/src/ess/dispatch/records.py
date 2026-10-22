@@ -15,14 +15,42 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args, get_origin
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, with_config
+from pydantic.fields import FieldInfo
 
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, Ref, WorkflowSpec
 from ess.spec.refs import ParamsError, iter_refs, map_refs
 
 from .errors import FieldError, SubmitError
+
+
+def _is_tag(info: FieldInfo) -> bool:
+    """Whether the type of a field is a ``Literal`` of one value."""
+    return (
+        get_origin(info.annotation) is Literal and len(get_args(info.annotation)) == 1
+    )
+
+
+def _with_tags(value: Any, dumped: Any) -> Any:
+    """
+    ``dumped``, the dump of ``value`` without its unset fields, with each tag
+    field (see :func:`as_values`) added to the dict of each model in it.
+    """
+    if isinstance(value, BaseModel) and not isinstance(value, Ref):
+        for name, info in type(value).model_fields.items():
+            if name in dumped:
+                dumped[name] = _with_tags(getattr(value, name), dumped[name])
+            elif _is_tag(info):
+                dumped[name] = getattr(value, name)
+    elif isinstance(value, list | tuple):
+        return type(dumped)(
+            _with_tags(v, d) for v, d in zip(value, dumped, strict=True)
+        )
+    elif isinstance(value, dict):
+        return {k: _with_tags(v, dumped[k]) for k, v in value.items()}
+    return dumped
 
 
 def as_values(value: Any) -> Any:
@@ -34,9 +62,14 @@ def as_values(value: Any) -> Any:
     model or as a dict alike. Defaults are left out, as they are of a dict, so
     that the backend fills in those of its own spec; a reference is kept
     whole, since its kind is a default.
+
+    A tag is kept, given or not. It is a field whose type is a ``Literal`` of
+    one value, such as ``mode: Literal['time'] = 'time'``, which a union
+    discriminates on. Its value is fixed by its type, and the backend cannot
+    pick the member of the union without it.
     """
     if isinstance(value, BaseModel) and not isinstance(value, Ref):
-        return value.model_dump(exclude_unset=True)
+        return _with_tags(value, value.model_dump(exclude_unset=True))
     if isinstance(value, dict):
         return {k: as_values(v) for k, v in value.items()}
     if isinstance(value, list | tuple):

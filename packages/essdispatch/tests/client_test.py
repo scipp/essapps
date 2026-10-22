@@ -12,12 +12,20 @@ import weakref
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, NewType, Self
+from typing import Annotated, Any, Literal, NewType, Self
 
 import numpy as np
+import pydantic
 import pytest
 import scipp as sc
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from ess.dispatch import (
     Accumulator,
@@ -236,6 +244,51 @@ class Unchecked(StepsParams):
 UNCHECKED_PLAIN = _spec('unchecked-plain', params=Unchecked, tables=('steps',))
 UNCHECKED_STAGED = _spec('unchecked-staged', params=Unchecked, tables=('steps',))
 UNCHECKED_ROWS = _spec('unchecked-rows', params=Unchecked, tables=('steps',))
+
+
+class ByMonitor(BaseModel):
+    mode: Literal['monitor'] = 'monitor'
+
+
+class ByTime(BaseModel):
+    mode: Literal['time'] = 'time'
+    seconds: float = Field(gt=0)
+
+
+class Normalization(BaseModel):
+    by: ByMonitor | ByTime = Field(ByMonitor(), discriminator='mode')
+    scale: float = 1.0
+
+
+class Stops(BaseModel):
+    """A list of unions that are discriminated through ``Annotated``."""
+
+    by: list[Annotated[ByMonitor | ByTime, Field(discriminator='mode')]]
+
+
+class NormalizedParams(BaseModel):
+    normalization: Normalization = Field(default_factory=Normalization)
+    stops: Stops | None = None
+
+
+def _tag_of(value: Any) -> str:
+    return value['mode'] if isinstance(value, dict) else value.mode
+
+
+class CallableGroup(BaseModel):
+    by: Annotated[
+        Annotated[ByMonitor, pydantic.Tag('monitor')]
+        | Annotated[ByTime, pydantic.Tag('time')],
+        Discriminator(_tag_of),
+    ] = ByMonitor()
+
+
+class CallableParams(BaseModel):
+    group: CallableGroup = Field(default_factory=CallableGroup)
+
+
+NORMALIZED = _spec('normalized', params=NormalizedParams)
+CALLABLE = _spec('callable', params=CallableParams)
 
 
 def load_run(params: Sample) -> LoadOutputs:
@@ -718,6 +771,62 @@ def test_a_params_model_makes_the_request_of_its_dict() -> None:
 
     assert by_model == by_dict  # defaults left to the backend's spec
     assert scaled.params['scale'] == {'factor': 2.0}
+
+
+def test_a_discriminator_is_kept_though_it_is_a_default(
+    datasets: FakeDatasets,
+) -> None:
+    def describe(params: NormalizedParams) -> Value:
+        by = params.normalization.by
+        return Value(value=by.seconds if isinstance(by, ByTime) else -1.0)
+
+    with local(
+        proposal='p1', datasets=datasets, bind=[function_binding(NORMALIZED, describe)]
+    ) as client:
+        timed = client.compute(
+            NORMALIZED,
+            params={'normalization': Normalization(by=ByTime(seconds=2.0))},
+        )
+        as_dict = client.compute(
+            NORMALIZED, params={'normalization': {'by': {'mode': 'time', 'seconds': 2}}}
+        )
+
+        assert client.output(timed, 'value') == 2.0
+        assert client.output(as_dict, 'value') == 2.0
+
+
+def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
+    stops = Stops(by=[ByTime(seconds=1.0), ByMonitor()])
+    request = Request(NORMALIZED, params=NormalizedParams(stops=stops))
+
+    assert request.params['stops'] == {
+        'by': [{'mode': 'time', 'seconds': 1.0}, {'mode': 'monitor'}]
+    }
+
+
+def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
+    request = Request(
+        NORMALIZED,
+        params=NormalizedParams(normalization=Normalization(by=ByTime(seconds=1.0))),
+    )
+
+    assert request.params == {'normalization': {'by': {'mode': 'time', 'seconds': 1.0}}}
+
+
+def test_a_callable_discriminator_keyed_on_a_tag_works(datasets: FakeDatasets) -> None:
+    def describe(params: CallableParams) -> Value:
+        return Value(value=params.group.by.seconds)
+
+    with local(
+        proposal='p1',
+        datasets=datasets,
+        bind=[function_binding(CALLABLE, describe)],
+    ) as client:
+        record = client.compute(
+            CALLABLE, params={'group': CallableGroup(by=ByTime(seconds=3.0))}
+        )
+
+        assert client.output(record, 'value') == 3.0
 
 
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
