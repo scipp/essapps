@@ -79,8 +79,8 @@ class DatasetRef(_Ref, frozen=True):
     catalogue PID, an instrument and run number, a path, makes the string
     self-describing, ``pid:...`` or ``run:...``, and normalizes it before it
     enters a record, because two references are equal only when their strings
-    are. A file parameter takes a reference to a dataset, and no other
-    parameter does (see :func:`ess.spec.field_types.is_file`).
+    are. A place whose type is a file takes a reference to a dataset, and no
+    other place does (see :func:`ess.spec.field_types.is_file`).
     """
 
     kind: Literal['dataset'] = Field(default='dataset', alias='@ref', repr=False)

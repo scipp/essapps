@@ -63,6 +63,13 @@ class Node(BaseModel):
     children: list['Node'] = []
 
 
+class WholeTree(BaseModel):
+    """A recursive group whose children are not places: written whole."""
+
+    name: str
+    children: list['WholeTree'] | None = None
+
+
 class Tree(BaseModel):
     """A group that holds itself through another group."""
 
@@ -274,12 +281,12 @@ class TestMetadata:
             IOFQ.title = 'Other'
 
     def test_a_type_with_a_json_form_takes_an_inline_value(self) -> None:
-        assert [n for n in IofQParams.model_fields if IOFQ.takes_inline(n)] == [
+        assert [n for n in IofQParams.model_fields if _takes_inline(IOFQ, n)] == [
             'reduction',
             'sample_geometry',
             'time_range',
         ]
-        assert not IOFQ_MULTI.takes_inline('sample')
+        assert not _takes_inline(IOFQ_MULTI, 'sample')
 
     @pytest.mark.parametrize(
         'tp',
@@ -294,17 +301,31 @@ class TestMetadata:
         ],
     )
     def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
-        assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
+        assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
     @pytest.mark.parametrize(
         'tp', [By, list[By], Annotated[ByRun | ByTime, Field(discriminator='mode')]]
     )
     def test_a_union_of_groups_takes_an_inline_value(self, tp: Any) -> None:
-        assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
+        assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
     @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
-        assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
+        assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
+
+
+def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
+    """
+    Whether the params schema offers an inline form for the parameter
+    ``name``, or each row of it: a form that is not a reference, which names
+    its type in ``dataType``, or ``null``.
+    """
+    prop = spec.serialize().params_schema['properties'][name]
+    prop = prop.get('items', prop)
+    if 'dataType' in prop:
+        return False
+    forms = prop.get('anyOf', [prop])
+    return any('dataType' not in f and f.get('type') != 'null' for f in forms)
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
@@ -402,6 +423,7 @@ class TestModelRules:
                     'P', reduction=(model('R', mask=(CentreArray | None, None)), ...)
                 )
             },
+            {'params': model('P', tree=(WholeTree, ...))},
         ],
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
@@ -451,11 +473,12 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', tree=(Node, ...))},
-                'P.tree: Node.children: Node: a group does not hold itself',
+                'P.tree: Node.children: Node: a group is not at a place inside itself',
             ),
             (
                 {'params': model('P', tree=(Tree, Tree()))},
-                'P.tree: Tree.branch: Branch.tree: Tree: a group does not hold itself',
+                'P.tree: Tree.branch: Branch.tree: Tree: a group is not at a place '
+                'inside itself',
             ),
             (
                 {'params': model('P', pair=(tuple[SampleFile, CanFile], ...))},
@@ -665,6 +688,25 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
+                        r=(
+                            model(
+                                'R',
+                                bins=(int, 1),
+                                twice=(
+                                    int,
+                                    Field(default_factory=lambda d: 2 * d['bins']),
+                                ),
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.r: R.twice: the default_factory of a field of a group takes no',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
                         steps=(Annotated[list[TimeRange], AfterValidator(len)], []),
                     )
                 },
@@ -826,7 +868,7 @@ class TestTables:
             spec(params=model('P', **params), tables=tables)
 
     def test_a_table_may_be_of_groups_that_hold_a_file(self) -> None:
-        assert RUNS.takes_inline('sample')
+        assert _takes_inline(RUNS, 'sample')
         params = RUNS.params(
             sample=[
                 {'file': Path('a.nxs')},

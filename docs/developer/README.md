@@ -152,6 +152,7 @@ The type at the place decides which of the two it accepts, with `| None` removed
 | a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
+| a list that may be `None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
 | any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
 | anything else | `Transmission` | no | to an output that fits |
 
@@ -202,7 +203,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
-- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It does not hold itself, at any depth.
+- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.

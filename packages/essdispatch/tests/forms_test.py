@@ -505,6 +505,26 @@ def test_a_group_is_validated_whole_in_the_call_phase(client: Client) -> None:
     assert 'a negative offset' in _failed(client, computed)
 
 
+@pytest.mark.parametrize(
+    ('params', 'place'),
+    [
+        ({'runs': [None]}, ('runs', 0)),
+        ({'runs': ['a.nxs']}, ('runs', 0)),
+        ({'runs': [{'file': dataset_ref(run=1), 'shift': 1.0}]}, ('runs', 0, 'shift')),
+    ],
+)
+def test_a_value_at_a_group_that_is_not_an_object_is_refused(
+    client: Client, params: dict[str, Any], place: tuple[str | int, ...]
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RUNS, params=params)
+    (error,) = raised.value.errors
+    assert error.loc == place
+    assert error.msg.endswith(
+        'is not an object; a group is written as an object of its fields'
+    )
+
+
 def test_a_reference_is_allowed_at_any_place(client: Client, loaded: Record) -> None:
     computed = client.compute(
         DEEP,
@@ -596,7 +616,7 @@ def test_a_reference_inside_an_inline_value_at_depth_is_refused(
         client.submit(DEEP, params={'reduction': reduction})
     (error,) = raised.value.errors
     assert error.loc == ('reduction', 'limits', 1)
-    assert 'is inside a value of tuple, given inline' in error.msg
+    assert 'is inside a value of tuple, given inline, whole' in error.msg
 
 
 def test_a_group_without_a_reference_is_validated_whole_when_submitted(

@@ -190,7 +190,9 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
   group as the object of its places, each in the JSON form of its own type,
   and these would make the group's own JSON form differ from it. It may have
   field and model validators of any mode, which run when the group is
-  validated whole. It does not hold itself, at any depth.
+  validated whole. It is not at a place inside itself, at any depth, such as
+  a tree with `children: list[Node]`; a tree is written whole,
+  `children: list[Node] | None`.
 - A default is a value, never a reference: what a request may write at the
   place, which round-trips and holds no `@ref` object at any depth; of a type
   without a JSON form, `None` or `[]`. It is the value that validating it

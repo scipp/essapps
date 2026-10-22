@@ -312,14 +312,15 @@ class Client:
         Submit a spec or a stage with values, or requests.
 
         A spec takes its params, a dict by name or an instance of its params
-        model if every value is given inline. Each value, or each row of a
-        list parameter, is given inline or by reference, as its type allows: a
-        type with a JSON form takes an inline value, such as a group as a model
-        or a dict, a file a reference to a dataset, and any other type a
-        reference to an output that fits::
+        model if every value is given inline. The value at each place, a
+        parameter, an element of a list, or a field of a group, is given
+        inline or by reference, as its type allows: a group as a model or a
+        dict of its fields, a file a reference to a dataset, any other type
+        with a JSON form an inline value, and any type but a file a reference
+        to an output that fits and holds no file::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
-                                        'sample': dataset(run=60339)})
+                                        'sample': {'run': dataset(run=60339)}})
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape

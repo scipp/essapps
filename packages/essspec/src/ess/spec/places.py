@@ -18,7 +18,8 @@ parameter, each element of a list, and each field of a group, at any depth::
     }
 
 The type at a place decides what the request writes there, with ``| None``
-removed (a place of type ``X | None`` also takes ``None``):
+removed (a place of type ``X | None`` also takes ``None``), but for a list:
+``list[X] | None`` is written whole, as a dict is:
 
 ========================================  =====================================
 Type at the place                         The request writes
@@ -31,6 +32,7 @@ a union of groups                         an object of the fields of one
                                           reference to an output
 a list, ``list[X]``                       a list, each element a place of
                                           type ``X``
+``list[X] | None``, ``dict[str, X]``      the value as JSON, whole (*inline*)
 any other type with a JSON form           the value as JSON (*inline*); or a
                                           reference to an output
 any other type                            a reference to an output
@@ -38,8 +40,10 @@ any other type                            a reference to an output
 
 A reference to an output fits the place's type, and the output's type holds
 no file, so that a file comes only from a dataset, which the dataset source
-checks. The contents of a tuple, a set, a dict, a ``TypedDict``, or a
-dataclass are not places: such a value is written whole, inline. ``"@ref"``
+checks. The contents of a tuple, a set, a dict, a list that may be
+``None``, a ``TypedDict``, or a dataclass are not places: such a value is
+written whole, inline, and a reference stands neither for it nor for a
+part of it. ``"@ref"``
 is reserved at every depth, so that a reference is found without the spec
 (see :func:`ess.spec.refs.positions`), and a reference at a position that is
 not a place is refused.
@@ -49,7 +53,8 @@ A *union of groups* is a pydantic discriminated union,
 alternative is a group with the *tag* field ``kind`` typed as a ``Literal``
 of one string, its own, such as ``Literal['find']``. The tag is written
 inline, never as a reference: it says which alternative's fields the object
-has, and so what each of them takes.
+has, and so what each of them takes. A union that holds a group holds groups
+only, since a value of another type has no tag.
 
 A group with no reference inside, at any depth, is an inline value. In the
 request phase, :func:`held` validates it whole, from its JSON form, so that
@@ -166,8 +171,8 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
             whole = 'list' if get_origin(tp) is list else 'dict'
             raise _refused(
                 loc,
-                f'{ref} is a reference to a whole {whole}; a reference stands '
-                'for one element of a list',
+                f'{ref} is a reference to a whole {whole}; a reference never '
+                'stands for a whole list or dict',
             )
         return on_ref(loc, ref, tp)
     if value is None and nullable:
@@ -198,9 +203,9 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
         if (inner := ref_at(at, item)) is not None:
             raise _refused(
                 at,
-                f'{inner} is inside a value of {type_name(tp)}, given inline; a '
-                'reference stands for a value, an element of a list, or a '
-                'field of a group',
+                f'{inner} is inside a value of {type_name(tp)}, given inline, '
+                'whole: the contents of a tuple, a dict, or a list that may be '
+                'None are not places',
             )
     return _inline(loc, slot, value)
 

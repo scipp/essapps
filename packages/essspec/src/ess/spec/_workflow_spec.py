@@ -29,9 +29,12 @@ a file: ``Path``, or a ``NewType``     no          to a dataset
 of it
 a group, or a union of groups          its fields  to an output that fits and
                                                    holds no file
-has a *JSON form*: pydantic makes a    yes         to an output that fits
-JSON schema of it, with the config of
-its model, and it holds no file
+a list, ``list[X]``                    each        no
+                                       element a
+                                       place
+has a *JSON form*: pydantic makes a    yes         to an output that fits;
+JSON schema of it, with the config of              none for a list that may
+its model, and it holds no file                    be ``None`` or a dict
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
 
@@ -82,8 +85,10 @@ framework: what the framework needs, it reads from the field types (see
   may have field and model validators of any mode, which run when the group
   is validated whole: in the request phase if it has no reference inside,
   else in the call phase only. So a validator that widens what a field
-  accepts works only for a group written without references. It does not
-  hold itself, at any depth.
+  accepts works only for a group written without references. It is not at
+  a place inside itself, at any depth, such as a tree with
+  ``children: list[Node]``, since the schema of the forms at its places
+  would not end; a tree is written whole, ``children: list[Node] | None``.
 - A default is a value, never a reference: what a request may write at the
   place, in a JSON form that reads back as the value, with no ``@ref``
   object at any depth; of a type without a JSON form, ``None`` or an empty
@@ -266,15 +271,6 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
 
-    def takes_inline(self, name: str) -> bool:
-        """
-        Whether a request may give the parameter ``name``, or each row of it
-        if it is a list parameter, inline: its type, with ``| None`` removed
-        and for a list parameter its element type taken, has a JSON form, or
-        is a group or a union of groups, written as an object of its fields.
-        """
-        return has_json_form(self.params, name) or bool(groups_at(self.params, name))
-
     def has_json_form(self, name: str) -> bool:
         """
         Whether the type of the parameter ``name``, with ``| None`` removed
@@ -418,7 +414,7 @@ def _place_problems(
     """
     Refuse a field of ``model`` whose places a request cannot write: a file
     at a position that is not a place, a union that the framework cannot
-    take apart by a value's tag, a group that holds itself, and the problems
+    take apart by a value's tag, a group at a place inside itself, and the problems
     of each group at its places, each named by its group (see
     :func:`_group_problems`). ``path`` holds the groups that hold the field,
     and ``seen`` the groups checked already, so that a group at several
@@ -436,7 +432,9 @@ def _place_problems(
     problems = []
     for group in groups:
         if group in path:
-            problems.append(f'{group.__name__}: a group does not hold itself')
+            problems.append(
+                f'{group.__name__}: a group is not at a place inside itself'
+            )
         elif group not in seen:
             seen.add(group)
             problems.extend(_group_problems(group, (*path, group), seen))
@@ -477,6 +475,11 @@ def _group_problems(
             problems.append(
                 f'{where}: a field of a group that is a dict, or a list that may '
                 'be None, has a JSON form; its contents are not places'
+            )
+        elif field.default_factory_takes_validated_data:
+            problems.append(
+                f'{where}: the default_factory of a field of a group takes no other '
+                'values'
             )
         elif not field.is_required() and (problem := _default_problem(group, name)):
             problems.append(f'{where}: {problem}')
