@@ -983,6 +983,28 @@ class TestSerialization:
             },
         }
 
+    def test_the_tag_of_an_alternative_is_titled_by_its_value_unless_given(
+        self,
+    ) -> None:
+        class ByCount(BaseModel):
+            mode: Literal['by_count'] = Field(
+                title='Per count', description='By the counts of the run.'
+            )
+
+        by = (Annotated[ByCount | ByTime, Field(discriminator='mode')], ...)
+        defs = spec(params=model('P', by=by)).serialize().params_schema['$defs']
+        assert defs['ByCount']['properties']['mode'] == {
+            'const': 'by_count',
+            'type': 'string',
+            'title': 'Per count',
+            'description': 'By the counts of the run.',
+        }
+        assert defs['ByTime']['properties']['mode'] == {
+            'const': 'time',
+            'type': 'string',
+            'title': 'Time',
+        }
+
     def test_a_file_or_a_scipp_type_is_a_reference_to_its_type(self) -> None:
         properties = IOFQ.serialize().params_schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {

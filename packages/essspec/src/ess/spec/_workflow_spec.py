@@ -653,17 +653,23 @@ def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     A model of the fields of a group, each replaced by the forms it takes
     (see :func:`_field_forms`); the tag field ``tag`` of an alternative of a
     union by itself, since a tag is written inline only, and required, since
-    a request always writes it.
+    a request always writes it. The title of a tag labels its alternative,
+    so a tag without one is titled by its value, as a parameter is by its
+    name; pydantic's title, made of the name of the field, would be that of
+    every alternative.
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
+        title = info.title
+        if name == tag and title is None:
+            title = get_args(info.annotation)[0].replace('_', ' ').title()
         fields[name] = (
             info.annotation if name == tag else _field_forms(group, name),
             Field(
                 default=PydanticUndefined
                 if name == tag
                 else info.get_default(call_default_factory=True),
-                title=info.title,
+                title=title,
                 description=info.description,
                 examples=info.examples,
                 **(
