@@ -26,27 +26,38 @@ Type at the place                         The request writes
 ========================================  =====================================
 a file: ``Path``, or a ``NewType`` of it  a reference to a dataset
 a group                                   an object of its fields, each a
-                                          place; or a reference to an output
+                                          place, unless one is a data value;
+                                          or a reference to an output
 a union of groups                         an object of the fields of one
-                                          alternative, with its tag; or a
-                                          reference to an output
+                                          alternative, with its tag, as for a
+                                          group; or a reference to an output
 a list, ``list[X]``                       a list, each element a place of
                                           type ``X``
 ``list[X] | None``, ``dict[str, X]``      the value as JSON, whole (*inline*)
-any other type with a JSON form           the value as JSON (*inline*); or a
-                                          reference to an output
-any other type                            a reference to an output
+any other type with a JSON form           the value as JSON (*inline*)
+any other type, a *data value*            nothing: it is a field of a group
 ========================================  =====================================
 
-A reference to an output fits the place's type, and the output's type holds
-no file, so that a file comes only from a dataset, which the dataset source
-checks. The contents of a tuple, a set, a dict, a list that may be
-``None``, a ``TypedDict``, or a dataclass are not places: such a value is
-written whole, inline, and a reference stands neither for it nor for a
-part of it. ``"@ref"``
-is reserved at every depth, so that a reference is found without the spec
-(see :func:`ess.spec.refs.positions`), and a reference at a position that is
-not a place is refused.
+A reference stands for a group or a file only. A reference to an output
+fits the place's type, and the output's type holds no file, so that a file
+comes only from a dataset, which the dataset source checks. A number, a
+string, or a ``sc.DataArray`` names no role: every output of its type would
+fit, so a value computed by another workflow comes as a group, such as a
+found beam centre, and a data value is a field of one::
+
+    class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
+        kind: Literal['computed'] = 'computed'
+        transmission: sc.DataArray  # a data value: given by reference only
+
+A group that holds a file is given field by field, so it holds no data
+value (see :func:`unwritten`).
+
+The contents of a tuple, a set, a dict, a list that may be ``None``, a
+``TypedDict``, or a dataclass are not places: such a value is written
+whole, inline, and a reference stands neither for it nor for a part of
+it. ``"@ref"`` is reserved at every depth, so that a reference is found
+without the spec (see :func:`ess.spec.refs.positions`), and a reference at
+a position that is not a place is refused.
 
 A *union of groups* is a pydantic discriminated union,
 ``Annotated[A | B, Field(discriminator='kind')]``, in which each
@@ -80,6 +91,7 @@ An error inside a union names its place without the tag:
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import NoneType, UnionType
@@ -174,6 +186,12 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 f'{ref} is a reference to a whole {whole}; a reference never '
                 'stands for a whole list or dict',
             )
+        if not (is_file(tp) or groups_at(slot.model, slot.name)):
+            raise _refused(
+                loc,
+                f'{ref}: {type_name(tp)} is given inline; a reference stands for '
+                'a group or a file only',
+            )
         return on_ref(loc, ref, tp)
     if value is None and nullable:
         return None
@@ -190,15 +208,22 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 'of its fields',
             )
         group = _group(loc, slot, fields)
+        if group is not None and (data := unwritten(group)) is not None:
+            held_type = type_name(group.model_fields[data].annotation)
+            raise _refused(
+                loc,
+                f'{type_name(group)} is given by reference: no request writes '
+                f'its field {data}, of {held_type}',
+            )
         if any(ref_at(at, v) is not None for at, v in positions(loc, fields)):
             return _fields(loc, group, fields, on_ref)
         return _inline(loc, slot, value)
-    if not has_json_form(slot.model, slot.name):
+    if is_file(tp):
         raise _refused(
-            loc,
-            f'{value!r} is not a reference; {type_name(tp)} has no JSON form, '
-            'so it is given by reference, a file as dataset(path=...)',
+            loc, f'{value!r} is not a dataset; a file is given as dataset(path=...)'
         )
+    if not has_json_form(slot.model, slot.name):
+        raise _refused(loc, f'{value!r}: {type_name(tp)} has no JSON form')
     for at, item in positions(loc, value):
         if (inner := ref_at(at, item)) is not None:
             raise _refused(
@@ -442,6 +467,34 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
         return [base(tp)]
     union = alternatives(slot.annotation, slot.discriminator)
     return [] if union is None else [base(g) for g in union[1].values()]
+
+
+@functools.cache
+def unwritten(
+    group: type[BaseModel], seen: frozenset[type[BaseModel]] = frozenset()
+) -> str | None:
+    """
+    The first field of ``group`` at which a request writes nothing, ``None``
+    aside, or ``None`` if there is none. Such a field is a data value, which
+    has no JSON form and takes no reference, or a group that holds a file
+    and a field so. A group with such a field is given by reference only.
+    ``seen`` holds the groups looked into already, so that a group at a
+    place inside itself ends.
+    """
+    seen = seen | {group}
+    for name in group.model_fields:
+        tp, _ = optional(_Slot(group, name).one.annotation)
+        if is_file(tp):
+            continue
+        if groups := groups_at(group, name):
+            if not any(
+                not holds_file(g) or g in seen or unwritten(g, seen) is None
+                for g in groups
+            ):
+                return name
+        elif not has_json_form(group, name):
+            return name
+    return None
 
 
 def file_off_place(model: type[BaseModel], name: str) -> bool:

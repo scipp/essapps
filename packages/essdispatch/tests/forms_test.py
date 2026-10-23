@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The value at each place given inline or by reference, as the request chooses."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Annotated, Any, Literal, NewType
 
@@ -22,14 +22,14 @@ from pydantic.dataclasses import dataclass
 from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
 from ess.dispatch import dataset as dataset_ref
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
-from ess.spec import WorkflowSpec, function_binding
+from ess.spec import OutputRef, WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
 Offset = NewType('Offset', float)
 
 
 class Blob:
-    """A type without a JSON form."""
+    """A data value: a type without a JSON form."""
 
     def __init__(self, value: float) -> None:
         self.value = value
@@ -37,6 +37,22 @@ class Blob:
 
 class Shift(BaseModel):
     offset: float = 0.0
+
+
+class MeasuredTransmission(BaseModel, arbitrary_types_allowed=True):
+    """A group that holds a data value, so is given by reference only."""
+
+    kind: Literal['measured'] = 'measured'
+    transmission: Blob
+
+
+class AssumedTransmission(BaseModel):
+    kind: Literal['assumed'] = 'assumed'
+    value: float = 1.0
+
+
+class Point(BaseModel):
+    x: float
 
 
 class LabelledShift(Shift):
@@ -63,7 +79,7 @@ class Run(BaseModel, arbitrary_types_allowed=True):
     shift: Shift = Field(default_factory=Shift)
     offset: Offset | None = None
     weights: list[float] = Field(default_factory=list, max_length=3)
-    transmission: Blob | None = None
+    transmission: MeasuredTransmission | None = None
 
     @model_validator(mode='after')
     def _offset_not_negative(self) -> 'Run':
@@ -72,28 +88,28 @@ class Run(BaseModel, arbitrary_types_allowed=True):
         return self
 
 
-class LoadOutputs(BaseModel, arbitrary_types_allowed=True):
+class LoadOutputs(BaseModel):
     value: float
     shift: Shift
     labelled: LabelledShift
-    blob: Blob
+    shifts: list[Shift]
+    transmission: MeasuredTransmission
+    point: Point
     values: list[float]
     run: Run
 
 
 class AddParams(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     shift: Shift = Field(default_factory=Shift)
     offset: Offset | None = None
-    blob: Blob | None = None
+    transmission: MeasuredTransmission | None = None
     pair: tuple[float, float] = (0.0, 0.0)
     terms: list[float] = Field(default_factory=list)
     kind: Kind | None = None
 
 
 class SumParams(BaseModel):
-    part: list[float] = Field(min_length=1)
+    part: list[Shift] = Field(min_length=1)
 
 
 class ShiftsParams(BaseModel):
@@ -134,9 +150,9 @@ SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
 RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
 
 
-class Reduction(BaseModel, arbitrary_types_allowed=True):
+class Reduction(BaseModel):
     bins: int = 1
-    mask: Blob | None = None
+    transmission: MeasuredTransmission | None = None
     limits: tuple[float, float] = (0.0, 1.0)
 
 
@@ -148,6 +164,7 @@ class ByRun(BaseModel):
 class Given(BaseModel):
     kind: Literal['given'] = 'given'
     x: float = 0.0
+    shift: Shift = Field(default_factory=Shift)
 
 
 class Centre(BaseModel):
@@ -162,13 +179,14 @@ class DeepParams(BaseModel):
 
 
 class Range(BaseModel):
-    start: float
-    stop: float
+    start: Point
+    stop: Point
 
     @field_validator('stop')
     @classmethod
-    def _after_start(cls, stop: float, info: ValidationInfo) -> float:
-        if stop <= info.data.get('start', stop - 1):
+    def _after_start(cls, stop: Point, info: ValidationInfo) -> Point:
+        start = info.data.get('start')
+        if start is not None and stop.x <= start.x:
             raise ValueError('stop must be greater than start')
         return stop
 
@@ -255,6 +273,14 @@ class CentreOutputs(BaseModel):
     centre: BeamCentre
 
 
+class CorrectedParams(BaseModel):
+    """A union, an alternative of which holds a data value."""
+
+    transmission: Annotated[
+        MeasuredTransmission | AssumedTransmission, Field(discriminator='kind')
+    ] = AssumedTransmission()
+
+
 DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
@@ -262,6 +288,7 @@ LENGTH = _spec('length', LengthParams, Value)
 STEPS = _spec('steps', StepsParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
+CORRECTED = _spec('corrected', CorrectedParams, Value)
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -270,17 +297,20 @@ def load(params: LoadParams) -> LoadOutputs:
         value=value,
         shift=Shift(offset=value),
         labelled=LabelledShift(offset=value, label='first'),
-        blob=Blob(value),
+        shifts=[Shift(offset=value), Shift(offset=2.0)],
+        transmission=MeasuredTransmission(transmission=Blob(value)),
+        point=Point(x=value),
         values=[value, 2.0],
         run=Run(file=params.sample),
     )
 
 
 def add(params: AddParams) -> Value:
+    transmission = params.transmission
     return Value(
         value=params.shift.offset
         + (params.offset or 0.0)
-        + (0.0 if params.blob is None else params.blob.value)
+        + (0.0 if transmission is None else transmission.transmission.value)
         + sum(params.pair)
         + sum(params.terms)
     )
@@ -293,22 +323,24 @@ def runs(params: RunsParams) -> Value:
             read_dataset(run.file)
             + run.shift.offset
             + (run.offset or 0.0)
-            + (0.0 if run.transmission is None else run.transmission.value)
+            + (0.0 if run.transmission is None else run.transmission.transmission.value)
             for run in rows
         )
     )
 
 
 def total(params: Any) -> Value:
-    return Value(value=sum(params.part))
+    return Value(value=sum(shift.offset for shift in params.part))
 
 
 def deep(params: DeepParams) -> Value:
     by = params.centre.by
-    centre = read_dataset(by.run) if isinstance(by, ByRun) else by.x
-    mask = params.reduction.mask
+    centre = read_dataset(by.run) if isinstance(by, ByRun) else by.x + by.shift.offset
+    transmission = params.reduction.transmission
     return Value(
-        value=params.reduction.bins + centre + (0.0 if mask is None else mask.value)
+        value=params.reduction.bins
+        + centre
+        + (0.0 if transmission is None else transmission.transmission.value)
     )
 
 
@@ -322,6 +354,13 @@ def centred(params: CentredParams) -> Value:
 
 def find(params: LoadParams) -> CentreOutputs:
     return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample)))
+
+
+def corrected(params: CorrectedParams) -> Value:
+    transmission = params.transmission
+    if isinstance(transmission, MeasuredTransmission):
+        return Value(value=transmission.transmission.value)
+    return Value(value=transmission.value)
 
 
 @pytest.fixture
@@ -341,12 +380,13 @@ def client(tmp_path: Path) -> Iterator[Client]:
             ),
             function_binding(RUNS, runs),
             function_binding(DEEP, deep),
-            function_binding(RANGE, lambda p: Value(value=p.range.stop)),
+            function_binding(RANGE, lambda p: Value(value=p.range.stop.x)),
             function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
             function_binding(LENGTH, lambda p: Value(value=0.0)),
             function_binding(STEPS, lambda p: Value(value=sum(p.steps.root))),
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
+            function_binding(CORRECTED, corrected),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -359,25 +399,46 @@ def loaded(client: Client) -> Record:
     return client.compute(LOAD, params={'sample': dataset_ref(run=1)})
 
 
-def test_a_number_or_a_group_is_given_by_value_or_by_reference(
+def test_a_group_is_given_by_value_or_by_reference(
     client: Client, loaded: Record
 ) -> None:
     by_reference = client.compute(
-        ADD,
-        params={
-            'shift': loaded.ref('shift'),
-            'offset': loaded.ref('value'),
-            'terms': [loaded.ref('values', key='0'), 2.0],
-        },
+        ADD, params={'shift': loaded.ref('shift'), 'offset': 1.0, 'terms': [2.0]}
     )
     by_value = client.compute(
-        ADD, params={'shift': Shift(offset=1.0), 'offset': 1.0, 'terms': [1.0, 2.0]}
+        ADD, params={'shift': Shift(offset=1.0), 'offset': 1.0, 'terms': [2.0]}
     )
 
-    assert client.output(by_reference, 'value') == 5.0
-    assert client.output(by_value, 'value') == 5.0
+    assert client.output(by_reference, 'value') == 4.0
+    assert client.output(by_value, 'value') == 4.0
     assert by_reference.request.params['shift'] == loaded.ref('shift')
     assert by_value.request.params['shift'] == {'offset': 1.0}
+
+
+@pytest.mark.parametrize(
+    ('params', 'place', 'tp'),
+    [
+        (lambda ref: {'offset': ref}, 'offset', 'Offset'),
+        (lambda ref: {'terms': [ref]}, 'terms[0]', 'float'),
+        (lambda ref: {'shift': {'offset': ref}}, 'shift.offset', 'float'),
+    ],
+)
+def test_a_reference_at_a_number_is_refused(
+    client: Client,
+    loaded: Record,
+    params: Callable[[OutputRef], dict[str, Any]],
+    place: str,
+    tp: str,
+) -> None:
+    # A float names no role: every output of type float would fit.
+    ref = loaded.ref('value')
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(ADD, params=params(ref))
+    assert str(raised.value) == (
+        f'{place}: {ref}: {tp} is given inline; a reference stands for a group or '
+        'a file only'
+    )
 
 
 def test_each_field_of_a_group_is_given_inline_or_by_reference(
@@ -392,7 +453,10 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
                     'shift': loaded.ref('shift'),
                     'offset': 2.0,
                 },
-                {'file': dataset_ref(run=2), 'offset': loaded.ref('value')},
+                {
+                    'file': dataset_ref(run=2),
+                    'transmission': loaded.ref('transmission'),
+                },
             ]
         },
     )
@@ -402,7 +466,7 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
     assert first['shift'] == loaded.ref('shift')
     assert first['offset'] == 2.0
     assert second['shift'] == {'offset': 0.0}  # left out, so its default
-    assert second['offset'] == loaded.ref('value')
+    assert second['transmission'] == loaded.ref('transmission')
 
 
 @pytest.mark.parametrize(
@@ -525,11 +589,13 @@ def test_a_value_at_a_group_that_is_not_an_object_is_refused(
     )
 
 
-def test_a_reference_is_allowed_at_any_place(client: Client, loaded: Record) -> None:
+def test_a_reference_is_allowed_at_a_group_at_any_depth(
+    client: Client, loaded: Record
+) -> None:
     computed = client.compute(
         DEEP,
         params={
-            'reduction': {'bins': 2, 'mask': loaded.ref('blob')},
+            'reduction': {'bins': 2, 'transmission': loaded.ref('transmission')},
             'centre': {'by': {'kind': 'run', 'run': dataset_ref(run=2)}},
         },
     )
@@ -538,7 +604,7 @@ def test_a_reference_is_allowed_at_any_place(client: Client, loaded: Record) -> 
     params = computed.request.params
     assert params['reduction'] == {
         'bins': 2,
-        'mask': loaded.ref('blob'),
+        'transmission': loaded.ref('transmission'),
         'limits': [0.0, 1.0],
     }
     (run,) = computed.request.datasets()
@@ -557,8 +623,8 @@ def test_a_reference_is_allowed_at_a_field_of_a_row(
                 {**file, 'offset': 1.0},
                 {
                     **file,
-                    'shift': {'offset': loaded.ref('value')},
-                    'transmission': loaded.ref('blob'),
+                    'shift': loaded.ref('shift'),
+                    'transmission': loaded.ref('transmission'),
                 },
             ]
         },
@@ -566,8 +632,8 @@ def test_a_reference_is_allowed_at_a_field_of_a_row(
 
     assert client.output(computed, 'value') == 1.0 + 2.0 + 3.0
     row = computed.request.params['runs'][2]
-    assert row['shift'] == {'offset': loaded.ref('value')}
-    assert row['transmission'] == loaded.ref('blob')
+    assert row['shift'] == loaded.ref('shift')
+    assert row['transmission'] == loaded.ref('transmission')
 
 
 def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None:
@@ -595,15 +661,16 @@ def test_a_reference_in_an_alternative_fits_its_field(
     client: Client, loaded: Record
 ) -> None:
     given = client.compute(
-        DEEP, params={'centre': {'by': {'kind': 'given', 'x': loaded.ref('value')}}}
+        DEEP, params={'centre': {'by': {'kind': 'given', 'shift': loaded.ref('shift')}}}
     )
 
     assert client.output(given, 'value') == 1 + 1.0
     with pytest.raises(
-        SubmitError, match=r'^centre\.by\.x: .* of type Blob, does not fit float$'
+        SubmitError, match=r'^centre\.by\.shift: .* of type float, does not fit Shift$'
     ):
         client.submit(
-            DEEP, params={'centre': {'by': {'kind': 'given', 'x': loaded.ref('blob')}}}
+            DEEP,
+            params={'centre': {'by': {'kind': 'given', 'shift': loaded.ref('value')}}},
         )
 
 
@@ -622,8 +689,9 @@ def test_a_reference_inside_an_inline_value_at_depth_is_refused(
 def test_a_group_without_a_reference_is_validated_whole_when_submitted(
     client: Client,
 ) -> None:
+    backwards = {'start': {'x': 10.0}, 'stop': {'x': 5.0}}
     with pytest.raises(SubmitError) as raised:
-        client.submit(RANGE, params={'range': {'start': 10.0, 'stop': 5.0}})
+        client.submit(RANGE, params={'range': backwards})
     (error,) = raised.value.errors
     assert error.loc == ('range', 'stop')
     assert 'stop must be greater than start' in error.msg
@@ -675,10 +743,10 @@ def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
     client: Client, loaded: Record
 ) -> None:
     after = client.compute(
-        RANGE, params={'range': {'start': 0.0, 'stop': loaded.ref('value')}}
+        RANGE, params={'range': {'start': {'x': 0.0}, 'stop': loaded.ref('point')}}
     )
     before = client.submit(
-        RANGE, params={'range': {'start': 10.0, 'stop': loaded.ref('value')}}
+        RANGE, params={'range': {'start': {'x': 10.0}, 'stop': loaded.ref('point')}}
     )
 
     assert client.output(after, 'value') == 1.0
@@ -756,7 +824,7 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
 
 def test_a_root_model_is_written_as_its_root_value(client: Client) -> None:
     schema = STEPS.serialize().params_schema
-    inline, _ = schema['properties']['steps']['anyOf']
+    inline = schema['properties']['steps']
     assert schema['$defs'][inline['$ref'].rsplit('/', 1)[1]]['type'] == 'array'
 
     computed = client.compute(STEPS, params={'steps': [1.0, 2.0]})
@@ -782,10 +850,18 @@ def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
 def test_a_key_that_an_output_lacks_fails_the_record(
     client: Client, loaded: Record
 ) -> None:
-    ref = loaded.ref('values', key='7')
-    computed = client.submit(ADD, params={'terms': [ref]})
+    ref = loaded.ref('shifts', key='7')
+    computed = client.submit(SHIFTS, params={'shifts': [ref]})
 
     assert _failed(client, computed) == f"{ref}: the output has no element '7'"
+
+
+def test_a_key_names_an_element_of_an_output(client: Client, loaded: Record) -> None:
+    computed = client.compute(
+        SHIFTS, params={'shifts': [loaded.ref('shifts', key='1'), Shift()]}
+    )
+
+    assert client.output(computed, 'value') == 2.0
 
 
 def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
@@ -797,24 +873,62 @@ def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
         client.submit(ADD, params={'kind': Kind(kind='output')})
 
 
-def test_a_type_without_a_json_form_takes_a_reference_only(
+def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
     client: Client, loaded: Record
 ) -> None:
-    computed = client.compute(ADD, params={'blob': loaded.ref('blob')})
+    computed = client.compute(ADD, params={'transmission': loaded.ref('transmission')})
 
     assert client.output(computed, 'value') == 1.0
+    ref, null = ADD.serialize().params_schema['properties']['transmission']['anyOf']
+    assert (ref['dataType'], null) == ('MeasuredTransmission', {'type': 'null'})
     with pytest.raises(
-        SubmitError, match=r"^blob: \{'value': 1.0\} is not a reference; Blob has no"
+        SubmitError,
+        match=r'^transmission: MeasuredTransmission is given by reference: no '
+        r'request writes its field transmission, of Blob$',
     ):
-        client.submit(ADD, params={'blob': {'value': 1.0}})
+        client.submit(ADD, params={'transmission': {'transmission': 1.0}})
+
+
+def test_an_alternative_that_holds_a_data_value_is_given_by_reference(
+    client: Client, loaded: Record
+) -> None:
+    measured = client.compute(
+        CORRECTED, params={'transmission': loaded.ref('transmission')}
+    )
+    assumed = client.compute(
+        CORRECTED, params={'transmission': {'kind': 'assumed', 'value': 0.5}}
+    )
+
+    assert client.output(measured, 'value') == 1.0
+    assert client.output(assumed, 'value') == 0.5
+    with pytest.raises(
+        SubmitError,
+        match=r'^transmission: MeasuredTransmission is given by reference: no '
+        r'request writes its field transmission, of Blob$',
+    ):
+        client.submit(
+            CORRECTED,
+            params={'transmission': {'kind': 'measured', 'transmission': 1.0}},
+        )
+
+
+def test_the_schema_of_a_union_offers_inline_the_alternatives_a_request_writes() -> (
+    None
+):
+    inline, ref = CORRECTED.serialize().params_schema['properties']['transmission'][
+        'anyOf'
+    ]
+
+    assert inline['oneOf'] == [{'$ref': '#/$defs/AssumedTransmission'}]
+    assert ref['dataType'] == 'MeasuredTransmission | AssumedTransmission'
 
 
 @pytest.mark.parametrize(
     ('name', 'output', 'refused'),
     [
         ('shift', 'value', r'shift: .* of type float, does not fit Shift'),
-        ('offset', 'shift', r'offset: .* of type Shift, does not fit Offset'),
-        ('blob', 'value', r'blob: .* of type float, does not fit Blob'),
+        ('shift', 'transmission', r'shift: .* MeasuredTransmission, does not fit'),
+        ('transmission', 'shift', r'transmission: .* Shift, does not fit Measured'),
     ],
 )
 def test_a_reference_must_fit_its_parameter(
@@ -840,7 +954,7 @@ def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) 
     with pytest.raises(SubmitError, match=r'^terms: .* is a reference to a whole list'):
         client.submit(ADD, params={'terms': loaded.ref('values')})
     with pytest.raises(SubmitError, match=r'^part: .* is a reference to a whole list'):
-        client.submit(SUM, params={'part': loaded.ref('values')})
+        client.submit(SUM, params={'part': loaded.ref('shifts')})
 
 
 def _failed(client: Client, record: Record) -> str:
@@ -852,16 +966,19 @@ def test_an_inline_value_and_a_reference_to_equal_data_are_one_row(
     client: Client, loaded: Record
 ) -> None:
     summed = client.accumulator(Template(SUM, blanks=('part',)))
-    summed.push(part=[loaded.ref('value')])
+    summed.push(part=[loaded.ref('shift')])
     assert client.output(summed, 'value') == 1.0
 
-    summed.push(part=[2.0, 1.0])  # distinct as the record holds them
+    summed.push(part=[Shift(offset=2.0), Shift(offset=1.0)])  # distinct as held
     with pytest.raises(
-        LookupError, match=r'push 1 failed: part\[2\]: repeats part\[0\], 1.0$'
+        LookupError,
+        match=r'push 1 failed: part\[2\]: repeats part\[0\], \{"offset":1.0\}$',
     ):
         client.output(summed, 'value')
-    plain = client.submit(SUM, params={'part': [1.0, loaded.ref('value')]})
-    assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
+    plain = client.submit(
+        SUM, params={'part': [Shift(offset=1.0), loaded.ref('shift')]}
+    )
+    assert _failed(client, plain) == 'part[1]: repeats part[0], {"offset":1.0}'
 
 
 def test_references_to_two_records_with_equal_data_are_one_row(
@@ -869,10 +986,10 @@ def test_references_to_two_records_with_equal_data_are_one_row(
 ) -> None:
     again = client.compute(LOAD, params={'sample': dataset_ref(run=1)})
     plain = client.submit(
-        SUM, params={'part': [loaded.ref('value'), again.ref('value')]}
+        SUM, params={'part': [loaded.ref('shift'), again.ref('shift')]}
     )
 
-    assert _failed(client, plain) == 'part[1]: repeats part[0], 1.0'
+    assert _failed(client, plain) == 'part[1]: repeats part[0], {"offset":1.0}'
 
 
 def test_rows_read_are_compared_as_the_element_type_dumps_them(
@@ -889,8 +1006,12 @@ def test_a_stage_call_with_a_repeated_row_read_fails(
     client: Client, loaded: Record
 ) -> None:
     stage = client.stage(Template(STAGED_SUM, blanks=('part',)))
-    distinct = client.submit(stage, params={'part': [loaded.ref('value'), 2.0]})
-    repeated = client.submit(stage, params={'part': [loaded.ref('value'), 1.0]})
+    distinct = client.submit(
+        stage, params={'part': [loaded.ref('shift'), Shift(offset=2.0)]}
+    )
+    repeated = client.submit(
+        stage, params={'part': [loaded.ref('shift'), Shift(offset=1.0)]}
+    )
 
     assert client.output(distinct, 'value') == 3.0
-    assert _failed(client, repeated) == 'part[1]: repeats part[0], 1.0'
+    assert _failed(client, repeated) == 'part[1]: repeats part[0], {"offset":1.0}'

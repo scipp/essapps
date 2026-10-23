@@ -174,11 +174,11 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
         volume.push(runs=[run])  # added once the previous cut is copied
         pushed.append(run)
-        cuts.append(client.output(volume, 'counts', select={'q': 0}))  # no record
+        cuts.append(client.output(volume, 'volume', select={'q': 0}))  # no record
     total = client.freeze(volume, persist=True)
 
-    assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
-    assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
+    assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
+    assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
     assert total.request == Request(VOLUME, params={'runs': pushed})  # push order
     assert client.records() == [total]  # the cuts made no record
     provenance = client.provenance(total)

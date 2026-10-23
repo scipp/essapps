@@ -4,7 +4,6 @@
 
 import copy
 import gc
-import operator
 import re
 import threading
 import time
@@ -51,20 +50,20 @@ from ess.spec import (
 
 type Spec = WorkflowSpec[Any, Any]
 
-# The toy specs over floats. A reference must fit the field it is given to,
-# and two NewTypes of float do not fit each other. So a field that takes any
-# float, as SHIFT's source does, is typed float, and SHIFT's output is a
-# NewType; other fields are NewTypes, which the plain float outputs fit.
+# The toy specs over numbers. A reference stands for a group only, so a
+# number that one workflow outputs and another takes is a Number.
+
+
+class Number(BaseModel):
+    value: float
+
+
+def _add(a: Number, b: Number) -> Number:
+    return Number(value=a.value + b.value)
+
 
 SampleFile = NewType('SampleFile', Path)
 RunFile = NewType('RunFile', Path)
-Shifted = NewType('Shifted', float)
-Extra = NewType('Extra', float)
-Part = NewType('Part', float)
-Offset = NewType('Offset', float)
-Low = NewType('Low', float)
-High = NewType('High', float)
-Spread = NewType('Spread', float)
 
 
 class Shift(BaseModel):
@@ -80,21 +79,21 @@ class Sample(BaseModel):
 
 
 class Value(BaseModel):
-    value: float
+    value: Number
 
 
 class LoadOutputs(BaseModel):
-    value: float
-    extra: Extra
+    value: Number
+    extra: Number
 
 
 class ShiftParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-    source: float
+    source: Number
 
 
 class ShiftOutputs(BaseModel):
-    value: Shifted
+    value: Number
 
 
 class ScaleParams(BaseModel):
@@ -103,7 +102,7 @@ class ScaleParams(BaseModel):
 
 
 class Parts(BaseModel):
-    parts: list[Part] = Field(min_length=1)
+    parts: list[Number] = Field(min_length=1)
 
 
 def _spec(
@@ -150,7 +149,7 @@ class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
     runs: list[TaggedRun]
-    offset: Offset | None = None
+    offset: Number | None = None
 
 
 SUM = _spec('sum', params=SumParams, tables=('runs',))
@@ -175,8 +174,8 @@ WEIGHTED = _spec('weighted', params=WeightedParams, tables=('runs',))
 
 
 class MeanAndSpread(BaseModel):
-    mean: float
-    spread: Spread | None = None
+    mean: Number
+    spread: Number | None = None
 
 
 SPREAD = _spec('spread', params=Parts, outputs=MeanAndSpread, tables=('parts',))
@@ -188,8 +187,8 @@ class Reference(BaseModel):
 
 class StitchParams(BaseModel):
     reference: Reference
-    low: list[Low]
-    high: list[High]
+    low: list[Number]
+    high: list[Number]
 
 
 class Curve(BaseModel):
@@ -273,22 +272,26 @@ class NormalizedParams(BaseModel):
 NORMALIZED = _spec('normalized', params=NormalizedParams)
 
 
+def _value(value: float) -> Value:
+    return Value(value=Number(value=value))
+
+
 def load_run(params: Sample) -> LoadOutputs:
     run = read_dataset(params.sample)
-    return LoadOutputs(value=run, extra=-run)
+    return LoadOutputs(value=Number(value=run), extra=Number(value=-run))
 
 
 def shift(params: ShiftParams) -> ShiftOutputs:
-    return ShiftOutputs(value=params.source + params.shift.offset)
+    return ShiftOutputs(value=Number(value=params.source.value + params.shift.offset))
 
 
 def scale(params: ScaleParams) -> Value:
-    return Value(value=read_dataset(params.sample) * params.scaling.factor)
+    return _value(read_dataset(params.sample) * params.scaling.factor)
 
 
 def weighted(params: Any) -> Value:
     """WEIGHTED as a plain function: each run times its weight, summed."""
-    return Value(value=sum(r.weight.value * read_dataset(r.file) for r in params.runs))
+    return _value(sum(r.weight.value * read_dataset(r.file) for r in params.runs))
 
 
 def stitch(params: StitchParams) -> Curve:
@@ -297,15 +300,15 @@ def stitch(params: StitchParams) -> Curve:
     values, low ones first, scaled together so that they sum to the reference
     total.
     """
-    values = [*params.low, *params.high]
+    values = [number.value for number in (*params.low, *params.high)]
     total = params.reference.total
     return Curve(curve=[total * value / sum(values) for value in values])
 
 
-def append_digit(number: float, digit: float) -> float:
+def append_digit(number: Number, digit: Number) -> Number:
     """An order-sensitive combination, slow enough for pushes to overlap."""
     time.sleep(0.001)
-    return number * 10 + digit
+    return Number(value=number.value * 10 + digit.value)
 
 
 class Fold:
@@ -349,11 +352,11 @@ class Averaging:
         self._count = 0
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
-        self._total += sum(rows)
+        self._total += sum(row.value for row in rows)
         self._count += len(rows)
 
     def outputs(self) -> MeanAndSpread:
-        return MeanAndSpread(mean=self._total / self._count)
+        return MeanAndSpread(mean=Number(value=self._total / self._count))
 
 
 class _ScaledTotal:
@@ -361,7 +364,7 @@ class _ScaledTotal:
 
     def __init__(self, fixed: Mapping[str, Any]) -> None:
         self._factor = fixed['scale'].factor
-        self.total = fixed['offset'] or 0.0
+        self.total = 0.0 if fixed['offset'] is None else fixed['offset'].value
         self.tags: list[Any] = []
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
@@ -370,7 +373,7 @@ class _ScaledTotal:
             self.total += self._factor * read_dataset(run.file)
 
     def outputs(self) -> Value:
-        return Value(value=self.total)
+        return _value(self.total)
 
 
 class ScaledSum:
@@ -401,7 +404,7 @@ class Walking:
         self._total += sum(step.size for step in rows)
 
     def outputs(self) -> Value:
-        return Value(value=self._factor * self._total)
+        return _value(self._factor * self._total)
 
 
 def _eventually(condition: Callable[[], bool]) -> bool:
@@ -498,7 +501,7 @@ def backend(
             function_binding(LOAD, load),
             shifting,
             scaling,
-            folding(TOTAL, operator.add),
+            folding(TOTAL, _add),
             folding(DIGITS, append_digit),
             DriverBinding(SUM, scaled_sum),
             kept_rows(WEIGHTED, weighted),
@@ -538,7 +541,7 @@ def test_calls_through_a_stage_are_staged_once(
         params={'shift': Shift(offset=1.5), 'source': load.ref('value')},
     )
 
-    assert [client.output(r, 'value') for r in shifted] == [1.5, 2.5]
+    assert [client.output(r, 'value').value for r in shifted] == [1.5, 2.5]
     assert shifted[1].request == plain.request
     assert shifting.staged == [('shift',)]  # the plain request makes no stage
 
@@ -552,7 +555,7 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
     loading.set()
     client.wait(pending)
 
-    assert [client.output(r, 'value') for r in pending] == [2.0, 3.0, 4.0, 5.0]
+    assert [client.output(r, 'value').value for r in pending] == [2.0, 3.0, 4.0, 5.0]
     assert shifting.staged == [('shift',)]
 
 
@@ -568,7 +571,7 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     with pytest.raises(SubmitError, match='the stage was released'):
         _shift(client, stage, 2.0)
     assert client.wait(pending) is Status.COMPLETED
-    assert client.output(pending, 'value') == 3.0
+    assert client.output(pending, 'value').value == 3.0
     assert shifting.staged == [('shift',)]
 
 
@@ -583,7 +586,7 @@ def test_a_stage_keeps_what_its_template_references_until_it_has_staged(
 
     shifted = [_shift(client, stage, x) for x in (1.0, 2.0)]
     client.wait(shifted)
-    assert [client.output(r, 'value') for r in shifted] == [3.0, 4.0]
+    assert [client.output(r, 'value').value for r in shifted] == [3.0, 4.0]
     with pytest.raises(SubmitError, match='not kept by this client'):
         client.submit(_read(load))
 
@@ -616,7 +619,7 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     assert datasets.resolve(dataset(run=1)) != run
     assert stage.template.params == {'sample': run}
     assert after.request == before.request
-    assert [client.output(r, 'value') for r in (before, after)] == [2.0, 2.0]
+    assert [client.output(r, 'value').value for r in (before, after)] == [2.0, 2.0]
     assert scaling.staged == [('scaling',)]
 
 
@@ -710,7 +713,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
         'sample: unknown dataset run:9': Template(
             SCALE, params={'sample': dataset(run=9)}, blanks=('scaling',)
         ),
-        r'source: dataset .* does not fit float': Template(
+        r'source: dataset .* does not fit Number': Template(
             SHIFT, params={'source': dataset(run=1)}, blanks=('shift',)
         ),
         f'source: record {cancelled.id} cancelled': Template(
@@ -760,7 +763,7 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
 ) -> None:
     def describe(params: NormalizedParams) -> Value:
         by = params.normalization.by
-        return Value(value=by.seconds if isinstance(by, ByTime) else -1.0)
+        return _value(by.seconds if isinstance(by, ByTime) else -1.0)
 
     with local(
         proposal='p1', datasets=datasets, bind=[function_binding(NORMALIZED, describe)]
@@ -773,8 +776,8 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
             NORMALIZED, params={'normalization': {'by': {'mode': 'time', 'seconds': 2}}}
         )
 
-        assert client.output(timed, 'value') == 2.0
-        assert client.output(as_dict, 'value') == 2.0
+        assert client.output(timed, 'value').value == 2.0
+        assert client.output(as_dict, 'value').value == 2.0
 
 
 def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
@@ -807,7 +810,7 @@ def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
 
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
     def sizes(params: StepsParams) -> Value:
-        return Value(value=params.scale.factor * sum(s.size for s in params.steps))
+        return _value(params.scale.factor * sum(s.size for s in params.steps))
 
     bind = [
         function_binding(UNCHECKED_PLAIN, sizes),
@@ -825,9 +828,9 @@ def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> 
         rows = client.accumulator(Template(UNCHECKED_ROWS, blanks=('steps',)))
         rows.push(steps=[Step(size=3.0)])
 
-        assert client.output(plain, 'value') == 1.0
-        assert client.output(staged, 'value') == 4.0
-        assert client.output(rows, 'value') == 3.0
+        assert client.output(plain, 'value').value == 1.0
+        assert client.output(staged, 'value').value == 4.0
+        assert client.output(rows, 'value').value == 3.0
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:
@@ -838,8 +841,8 @@ def test_a_template_and_its_calls_take_models(client: Client) -> None:
     )
     tuned = client.compute(_stage_shift(client, load), params={'shift': half})
 
-    assert client.output(client.compute(stage), 'value') == 1.5
-    assert client.output(tuned, 'value') == 1.5
+    assert client.output(client.compute(stage), 'value').value == 1.5
+    assert client.output(tuned, 'value').value == 1.5
 
 
 def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None:
@@ -884,7 +887,7 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
     client.release(first)
     loading.set()
 
-    assert client.output(total, 'value') == 3.0
+    assert client.output(total, 'value').value == 3.0
     with pytest.raises(NotReadable, match='not kept'):  # read, then dropped
         client.output(first, 'value')
 
@@ -918,7 +921,7 @@ def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
     with pytest.raises(SubmitError, match=not_kept):  # however far it has run
         client.submit(_read(load))
     loading.set()
-    assert client.output(shifted, 'value') == 2.0
+    assert client.output(shifted, 'value').value == 2.0
     assert client.status(load) is Status.COMPLETED
 
 
@@ -985,7 +988,7 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         with pytest.raises(NotReadable, match='is not kept by this client'):
             released()
     with pytest.raises(SubmitError, match='is not kept by this client'):
-        total.push(parts=[1.0])  # a push is refused, not read
+        total.push(parts=[Number(value=1.0)])  # a push is refused, not read
     for unknown in (
         lambda: client.output(unknown_load, 'value'),
         lambda: client.output(unknown_total),
@@ -998,7 +1001,7 @@ def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) 
     load = client.compute(_load(1))
     Client(backend, proposal='p1', submitter='bob').release(load)
 
-    assert client.output(load, 'value') == 1.0
+    assert client.output(load, 'value').value == 1.0
 
 
 def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> None:
@@ -1100,7 +1103,7 @@ def test_a_reference_names_the_record_of_the_state_pinned_at_submission(
     second = client.compute(_read(total))
 
     states = [_state(client, r) for r in (first, second)]
-    assert [client.output(r, 'value') for r in (first, second)] == [3.0, 6.0]
+    assert [client.output(r, 'value').value for r in (first, second)] == [3.0, 6.0]
     assert [r.request.params['source'] for r in (first, second)] == [
         state.ref('value') for state in states
     ]
@@ -1134,7 +1137,7 @@ def test_a_submission_makes_one_record_of_each_state_its_requests_read(
     assert state.request == Request(TOTAL, params=_parts(load))
     assert (state.label, state.member, state.submitter) == (None, None, 'anna')
     assert client.records(label='shifted') == list(reads.values())
-    assert [client.output(r, 'value') for r in reads.values()] == [1.0, 2.0]
+    assert [client.output(r, 'value').value for r in reads.values()] == [1.0, 2.0]
 
 
 def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
@@ -1155,8 +1158,10 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     read = client.compute(_read(total))
     plain = client.compute(SUM, params={'runs': runs, **fixed})
 
-    assert client.output(read, 'value') == client.output(plain, 'value') == 5.0
-    opened = {'scale': Factor(), 'labels': Labels(), 'offset': 2.0}
+    assert (
+        client.output(read, 'value').value == client.output(plain, 'value').value == 5.0
+    )
+    opened = {'scale': Factor(), 'labels': Labels(), 'offset': Number(value=2.0)}
     assert scaled_sum.opened == [opened] * 2  # the accumulator and the plain request
     assert total.template == Template(SUM, params=fixed, blanks=('runs',))
     state = _state(client, read)
@@ -1178,7 +1183,9 @@ def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) ->
     read = client.compute(_read(spread, 'mean'))
     plain = client.compute(SPREAD, params=_parts(*loads))
 
-    assert client.output(read, 'value') == client.output(plain, 'mean') == 1.5
+    assert (
+        client.output(read, 'value').value == client.output(plain, 'mean').value == 1.5
+    )
 
 
 def test_a_field_validator_gives_the_driver_the_plain_request_s_values(
@@ -1190,7 +1197,9 @@ def test_a_field_validator_gives_the_driver_the_plain_request_s_values(
     walk.push(steps=steps)
     plain = client.compute(WALK, params={**flipped, 'steps': steps})
 
-    assert client.output(walk, 'value') == client.output(plain, 'value') == 6.0
+    assert (
+        client.output(walk, 'value').value == client.output(plain, 'value').value == 6.0
+    )
     assert plain.request.params['scale'] == {'factor': 2.0}  # made positive
 
 
@@ -1211,7 +1220,7 @@ def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(
         client.freeze(walk)
     walk.push(steps=[Step(size=2.0)])
 
-    assert client.output(walk, 'value') == 6.0
+    assert client.output(walk, 'value').value == 6.0
 
 
 def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
@@ -1227,7 +1236,7 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
             client.output(walk)
         walk.push(steps=[Step(size=2.0)])
 
-        assert client.output(walk, 'value') == 3.0
+        assert client.output(walk, 'value').value == 3.0
 
 
 def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
@@ -1239,7 +1248,7 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=('c', 'd'))}])
     read = client.compute(_read(acc))
 
-    assert client.output(read, 'value') == 1.0
+    assert client.output(read, 'value').value == 1.0
     assert acc.template.params == {'labels': {'tags': ['a', 'b']}}  # JSON has no tuple
     (run,) = _state(client, read).request.params['runs']
     assert run['tag'] == {'tags': ['c', 'd']}
@@ -1254,7 +1263,7 @@ def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
     spread.push(**parts)
     reading = client.compute(_read(spread, 'spread'))
 
-    assert client.output(record) == client.output(spread) == {'mean': 1.5}
+    assert client.output(record) == client.output(spread) == {'mean': Number(value=1.5)}
     for read in (
         lambda: client.output(record, 'spread'),
         lambda: client.output(spread, 'spread'),
@@ -1279,7 +1288,11 @@ def test_a_state_with_nothing_pushed_is_read_as_the_plain_request_over_no_rows(
     with pytest.raises(SubmitError, match='parts: the table has no row') as refused:
         client.submit(TOTAL, params={'parts': []})
 
-    assert client.output(summed, 'value') == client.output(plain, 'value') == 0.0
+    assert (
+        client.output(summed, 'value').value
+        == client.output(plain, 'value').value
+        == 0.0
+    )
     assert client.provenance(summed).request == plain.request
     with pytest.raises(NotReadable, match=f'^{re.escape(str(refused.value))}$'):
         client.output(total)
@@ -1292,8 +1305,9 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     total = _total(client)
     total.push(parts=[load.ref('value')])
 
-    assert client.output(load) == {'value': 1.0, 'extra': -1.0}
-    assert client.output(total) == {'value': 1.0}
+    one = Number(value=1.0)
+    assert client.output(load) == {'value': one, 'extra': Number(value=-1.0)}
+    assert client.output(total) == {'value': one}
     assert load.refs() == {name: load.ref(name) for name in ('value', 'extra')}
     assert total.refs() == {'value': total.ref('value')}
 
@@ -1409,7 +1423,9 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
     read = client.compute(_read(weighted))
     plain = client.compute(WEIGHTED, params={'runs': rows})
 
-    assert client.output(read, 'value') == client.output(plain, 'value') == 5.0
+    assert (
+        client.output(read, 'value').value == client.output(plain, 'value').value == 5.0
+    )
     state = _state(client, read)
     assert state.request == plain.request
     assert client.provenance(read).records() == [state]
@@ -1449,7 +1465,7 @@ def test_a_reference_in_a_push_must_fit_its_field(client: Client) -> None:
     weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
 
     with pytest.raises(
-        SubmitError, match=r'^runs\[0\]\.weight: .*, of type float, does not'
+        SubmitError, match=r'^runs\[0\]\.weight: .*, of type Number, does not fit'
     ):
         weighted.push(runs=[{'file': dataset(run=1), 'weight': load.ref('value')}])
 
@@ -1469,7 +1485,9 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
     with pytest.raises(SubmitError, match=r"^source: total/v1 has no output 'extra'$"):
         client.submit(SHIFT, params={'source': extra})
     with pytest.raises(SubmitError, match=r'^shift: .* does not fit Shift'):
-        client.submit(SHIFT, params={'shift': total.ref('value'), 'source': 1.0})
+        client.submit(
+            SHIFT, params={'shift': total.ref('value'), 'source': Number(value=1.0)}
+        )
     with pytest.raises(
         SubmitError, match=r'^source: no accumulator .* in proposal p2$'
     ):
@@ -1505,7 +1523,7 @@ def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
     with pytest.raises(SubmitError, match=rf'^source: {refusals[state]}'):
         client.submit(SHIFT, params={'source': state})
     loading.set()
-    assert client.output(read, 'value') == 3.0
+    assert client.output(read, 'value').value == 3.0
 
 
 def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
@@ -1523,7 +1541,7 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
 
     state = _state(client, read)
     assert [r.id for r in client.provenance(read).records()] == [state.id, pending.id]
-    assert client.output(read, 'value') == 1.0
+    assert client.output(read, 'value').value == 1.0
 
 
 def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
@@ -1563,7 +1581,7 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     pushed = _state(client, read).request.params  # in the order they were logged
     plain = client.compute(DIGITS, params=pushed)
 
-    assert client.output(read, 'value') == client.output(plain, 'value')
+    assert client.output(read, 'value').value == client.output(plain, 'value').value
 
 
 def test_a_push_is_added_after_a_request_that_has_not_started(
@@ -1582,8 +1600,8 @@ def test_a_push_is_added_after_a_request_that_has_not_started(
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)  # the push waits for summed
     loading.set()
-    assert read.result(timeout=5) == 3.0
-    assert client.output(summed, 'value') == 3.0  # read 1.0 before the push
+    assert read.result(timeout=5).value == 3.0
+    assert client.output(summed, 'value').value == 3.0  # read 1.0 before the push
 
 
 def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
@@ -1602,7 +1620,7 @@ def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)
     client.cancel(summed)
-    assert read.result(timeout=5) == 3.0
+    assert read.result(timeout=5).value == 3.0
     assert client.status([pending, summed]) == [Status.PENDING, Status.CANCELLED]
     loading.set()
 
@@ -1612,7 +1630,7 @@ def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
 
 class Sum:
     """
-    Makes drivers that sum like ``Fold(TOTAL, operator.add)``, and counts the
+    Makes drivers that sum like ``Fold(TOTAL, _add)``, and counts the
     pushes they add.
 
     A push is added while ``go`` is set; ``adding`` says a push has started.
@@ -1633,7 +1651,7 @@ class Sum:
 class _Summing:
     def __init__(self, owner: Sum) -> None:
         self._owner = owner
-        self._fold = Fold(TOTAL, operator.add)
+        self._fold = Fold(TOTAL, _add)
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         self._owner.adding.set()
@@ -1690,7 +1708,7 @@ def test_an_accumulator_adds_each_row_once(
     values = []
     for n in (1, 2, 3, 4):
         total.push(parts=[client.compute(_load(n)).ref('value')])
-        values.append(client.output(client.submit(_read(total)), 'value'))
+        values.append(client.output(client.submit(_read(total)), 'value').value)
 
     assert values == [1.0, 3.0, 6.0, 10.0]
     assert summing.pushed == 4
@@ -1721,7 +1739,7 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     for read in (lambda: client.output(total), lambda: client.provenance(total)):
         with pytest.raises(NotReadable, match=f'^{stopped}$'):
             read()
-    assert client.output(before, 'value') == 1.0
+    assert client.output(before, 'value').value == 1.0
 
 
 def _refuse(fixed: Mapping[str, Any]) -> Fold:
@@ -1806,7 +1824,7 @@ def test_a_released_accumulator_adds_the_pushes_up_to_the_last_state_read(
     client.release(total)
     summing.go.set()
 
-    assert client.output(read, 'value') == 3.0
+    assert client.output(read, 'value').value == 3.0
     assert summing.pushed == 2  # the last push was dropped
 
 
@@ -1831,7 +1849,9 @@ def test_an_accumulator_value_that_does_not_fit_the_spec_fails_the_reader(
         ]
 
 
-# The toy specs over arrays
+# The toy specs over arrays. An array is a data value, which no request
+# writes, so an array that one workflow outputs and another takes is the field
+# of a group, Counts, which a request gives by reference.
 
 
 class Data(BaseModel):
@@ -1840,42 +1860,44 @@ class Data(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-ArrayPart = NewType('ArrayPart', sc.Variable)
-SampleArray = NewType('SampleArray', sc.Variable)
-BackgroundArray = NewType('BackgroundArray', sc.Variable)
-Copied = NewType('Copied', sc.Variable)
-SidesTotal = NewType('SidesTotal', sc.Variable)
+class Counts(Data):
+    counts: sc.Variable
+
+
+def _add_in_place(total: Counts, part: Counts) -> Counts:
+    total.counts += part.counts
+    return total
 
 
 class ArrayValue(Data):
-    value: sc.Variable
+    value: Counts
 
 
 class ArrayParts(Data):
-    parts: list[ArrayPart] = Field(min_length=1)
+    parts: list[Counts] = Field(min_length=1)
 
 
 class CopyParams(Data):
-    source: sc.Variable
+    source: Counts
 
 
 class CopyOutputs(Data):
-    value: Copied
+    value: Counts
 
 
 class SidesParams(Data):
-    samples: list[SampleArray]
-    backgrounds: list[BackgroundArray]
+    samples: list[Counts]
+    backgrounds: list[Counts]
 
 
 class BothParams(Data):
-    samples: list[SampleArray] = Field(min_length=1)
-    backgrounds: list[BackgroundArray] = Field(min_length=1)
+    samples: list[Counts] = Field(min_length=1)
+    backgrounds: list[Counts] = Field(min_length=1)
 
 
 class Sides(Data):
-    difference: sc.Variable
-    total: SidesTotal
+    difference: Counts
+    total: Counts
 
 
 ARRAY = _spec('array', params=Sample, outputs=ArrayValue)
@@ -1893,11 +1915,12 @@ BOTH = _spec(
 
 def array(params: Sample) -> ArrayValue:
     """A run as an array of one value."""
-    return ArrayValue(value=sc.array(dims=['x'], values=[read_dataset(params.sample)]))
+    values = [read_dataset(params.sample)]
+    return ArrayValue(value=Counts(counts=sc.array(dims=['x'], values=values)))
 
 
-def _listed(value: sc.Variable) -> list[float]:
-    return value.values.tolist()
+def _listed(counts: Counts) -> list[float]:
+    return counts.counts.values.tolist()
 
 
 class Copying:
@@ -1916,7 +1939,7 @@ class Copying:
         self.started.set()
         self.go.wait(timeout=5)
         self.finished.set()
-        return CopyOutputs(value=params.source.copy())
+        return CopyOutputs(value=Counts(counts=params.source.counts.copy()))
 
 
 class Subtracting:
@@ -1942,7 +1965,7 @@ class Subtracting:
         self.refusing = False
         self.failing = False
         self.held: list[weakref.ref[_Sides]] = []
-        self.returned: list[weakref.ref[sc.Variable]] = []
+        self.returned: list[weakref.ref[Counts]] = []
 
     def __call__(self, fixed: Mapping[str, Any]) -> '_Sides':
         driver = _Sides(self)
@@ -1961,8 +1984,8 @@ class _Sides:
         if self._owner.refusing:
             self._owner.refusing = False
             raise ValueError('cannot add')
-        for value in rows:
-            self._sums[table] += value  # in place from the second row
+        for row in rows:
+            self._sums[table] += row.counts  # in place from the second row
 
     def outputs(self) -> Sides:
         self._owner.computing.set()
@@ -1977,7 +2000,10 @@ class _Sides:
 
 
 def _subtract(samples: Any, backgrounds: Any) -> Sides:
-    return Sides(difference=samples - backgrounds, total=samples + backgrounds)
+    return Sides(
+        difference=Counts(counts=samples - backgrounds),
+        total=Counts(counts=samples + backgrounds),
+    )
 
 
 @pytest.fixture
@@ -1997,7 +2023,7 @@ def in_place(
     """A client of a backend whose ARRAY_TOTAL and SIDES add arrays in place."""
     bind = [
         function_binding(ARRAY, array),
-        folding(ARRAY_TOTAL, operator.iadd),
+        folding(ARRAY_TOTAL, _add_in_place),
         StagedFunction(COPY, copying),
         DriverBinding(SIDES, subtracting),
         DriverBinding(BOTH, subtracting),
@@ -2044,7 +2070,7 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
         def make_stage(
             self, fixed: Mapping[str, Any], blanks: Collection[str]
         ) -> Callable[[Mapping[str, Any]], CopyOutputs]:
-            total = CopyOutputs(value=fixed['source'].sum())
+            total = CopyOutputs(value=Counts(counts=fixed['source'].counts.sum()))
             return lambda given: total
 
     bind = [function_binding(ARRAY, array), KeepsTheSum()]
@@ -2058,7 +2084,8 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
         first = client.compute(stage)
         assert value() is None
         again = client.compute(stage)
-        assert [client.output(r, 'value').value for r in (first, again)] == [2.0] * 2
+        sums = [client.output(r, 'value').counts.value for r in (first, again)]
+        assert sums == [2.0] * 2
 
 
 # Accumulators that add in place
@@ -2310,7 +2337,7 @@ def _sides_of(client: Client) -> Accumulator:
     return client.accumulator(Template(SIDES, blanks=('samples', 'backgrounds')))
 
 
-def _sides(outputs: Mapping[str, sc.Variable]) -> dict[str, list[float]]:
+def _sides(outputs: Mapping[str, Counts]) -> dict[str, list[float]]:
     return {name: _listed(value) for name, value in outputs.items()}
 
 
@@ -2522,7 +2549,10 @@ def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(
 
     def sides(params: SidesParams) -> Sides:
         calls.append(len(params.samples))
-        return _subtract(sum(params.samples, 0.0), sum(params.backgrounds, 0.0))
+        return _subtract(
+            sum((s.counts for s in params.samples), 0.0),
+            sum((b.counts for b in params.backgrounds), 0.0),
+        )
 
     bind = [
         function_binding(ARRAY, array),
@@ -2717,22 +2747,57 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
 
 
 class Grid(Data):
-    value: sc.Variable
+    """Counts on an x-y grid, their sum over y, and a label."""
+
+    counts: sc.Variable
+    profile: sc.Variable
+    label: str
+
+
+class Label(BaseModel):
     text: str
 
 
-GRID = _spec('grid', params=Sample, outputs=Grid)
+class GridOutputs(Data):
+    grid: Grid
+    counts: sc.Variable  # an array output, which no request references
+    label: Label
 
 
-def grid(params: Sample) -> Grid:
+class GridParts(Data):
+    parts: list[Grid] = Field(min_length=1)
+
+
+class GridTotal(Data):
+    grid: Grid
+
+
+GRID = _spec('grid', params=Sample, outputs=GridOutputs)
+GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('parts',))
+
+
+def grid(params: Sample) -> GridOutputs:
     values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample)
-    return Grid(value=sc.array(dims=['x', 'y'], values=values), text='a')
+    counts = sc.array(dims=['x', 'y'], values=values)
+    return GridOutputs(
+        grid=Grid(counts=counts, profile=counts.sum('y'), label='a'),
+        counts=counts.copy(),
+        label=Label(text='a'),
+    )
+
+
+def _add_grids(total: Grid, part: Grid) -> Grid:
+    return Grid(
+        counts=total.counts + part.counts,
+        profile=total.profile + part.profile,
+        label=total.label,
+    )
 
 
 @pytest.fixture
 def grids(datasets: FakeDatasets) -> Iterator[Client]:
-    """A client of a backend with GRID, a 3x2 array per run, and ARRAY_TOTAL."""
-    bind = [function_binding(GRID, grid), folding(ARRAY_TOTAL, operator.add)]
+    """A client of a backend with GRID, a 3x2 grid per run, and GRID_TOTAL."""
+    bind = [function_binding(GRID, grid), folding(GRID_TOTAL, _add_grids)]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         yield client
 
@@ -2741,19 +2806,49 @@ def _grid(client: Client, n: int) -> Record:
     return client.compute(GRID, params={'sample': dataset(run=n)})
 
 
+def _grid_total(client: Client) -> Accumulator:
+    return client.accumulator(Template(GRID_TOTAL, blanks=('parts',)))
+
+
 def test_a_selection_copies_part_of_an_output_and_makes_no_record(
     grids: Client,
 ) -> None:
     client = grids
     record = _grid(client, 1)
-    row = client.output(record, 'value', select={'x': 1})
-    corner = client.output(record, 'value', select={'x': slice(0, 2), 'y': 1})
+    row = client.output(record, 'counts', select={'x': 1})
+    corner = client.output(record, 'counts', select={'x': slice(0, 2), 'y': 1})
     row.values[0] = 99.0
 
     assert row.dims == ('y',)
-    assert _listed(corner) == [1.0, 3.0]
-    assert _listed(client.output(record, 'value')['x', 1]) == [2.0, 3.0]
+    assert corner.values.tolist() == [1.0, 3.0]
+    assert client.output(record, 'counts')['x', 1].values.tolist() == [2.0, 3.0]
     assert client.records() == [record]
+
+
+def test_a_selection_of_a_group_slices_its_arrays_and_copies_its_other_fields(
+    grids: Client,
+) -> None:
+    client = grids
+    record = _grid(client, 1)
+    row = client.output(record, 'grid', select={'x': 1})
+    selected = (row.counts.values.tolist(), row.profile.value, row.label)
+    row.counts.values[0] = 99.0
+    row.profile.value = 99.0
+
+    assert selected == ([2.0, 3.0], 5.0, 'a')
+    again = client.output(record, 'grid', select={'x': 1})
+    assert (again.counts.values.tolist(), again.profile.value) == ([2.0, 3.0], 5.0)
+    assert client.records() == [record]
+
+
+def test_a_selection_of_a_group_copies_whole_an_array_without_the_dimension(
+    grids: Client,
+) -> None:
+    client = grids
+    column = client.output(_grid(client, 1), 'grid', select={'y': 1})
+
+    assert column.counts.values.tolist() == [1.0, 3.0, 5.0]
+    assert column.profile.values.tolist() == [1.0, 5.0, 9.0]
 
 
 def test_a_selection_of_an_accumulator_copies_part_of_its_current_state(
@@ -2761,14 +2856,36 @@ def test_a_selection_of_an_accumulator_copies_part_of_its_current_state(
 ) -> None:
     client = grids
     runs = [_grid(client, n) for n in (1, 2)]
-    total = _array_total(client)
+    total = _grid_total(client)
     cuts = []
     for run in runs:
-        total.push(parts=[run.ref('value')])
-        cuts.append(client.output(total, 'value', select={'y': 1}))
+        total.push(parts=[run.ref('grid')])
+        cuts.append(client.output(total, 'grid', select={'y': 1}))
 
-    assert [_listed(c) for c in cuts] == [[1.0, 3.0, 5.0], [3.0, 9.0, 15.0]]
+    assert [c.counts.values.tolist() for c in cuts] == [
+        [1.0, 3.0, 5.0],
+        [3.0, 9.0, 15.0],
+    ]
+    assert [c.profile.values.tolist() for c in cuts] == [  # has no y: whole
+        [1.0, 5.0, 9.0],
+        [3.0, 15.0, 27.0],
+    ]
     assert client.records() == runs
+
+
+def test_a_selection_of_a_group_by_a_dimension_no_array_has_is_refused(
+    grids: Client,
+) -> None:
+    client = grids
+    record = _grid(client, 1)
+    total = _grid_total(client)
+    total.push(parts=[record.ref('grid')])
+
+    for reader in (record, total):
+        with pytest.raises(
+            ValueError, match=r"^Grid has no array field with dimension 'z'$"
+        ):
+            client.output(reader, 'grid', select={'z': 0})
 
 
 def test_a_selection_is_refused_for_an_output_not_declared_as_an_array(
@@ -2777,8 +2894,8 @@ def test_a_selection_is_refused_for_an_output_not_declared_as_an_array(
     client = grids
     record = _grid(client, 1)
 
-    with pytest.raises(ValueError, match='needs an array'):
-        client.output(record, 'text', select={'x': 0})
+    with pytest.raises(ValueError, match='needs an array, or a group with an array'):
+        client.output(record, 'label', select={'x': 0})  # a group without one
     with pytest.raises(ValueError, match='name of an output'):
         client.output(record, select={'x': 0})
 
@@ -2788,14 +2905,15 @@ def test_a_selection_the_output_cannot_take_raises_what_the_slice_raises(
 ) -> None:
     client = grids
     record, other = _grid(client, 1), _grid(client, 2)
-    total = _array_total(client)
-    total.push(parts=[record.ref('value')])
+    total = _grid_total(client)
+    total.push(parts=[record.ref('grid')])
 
     with pytest.raises(IndexError):
-        client.output(record, 'value', select={'x': 3})
+        client.output(record, 'grid', select={'x': 3})
     with pytest.raises(IndexError):
-        client.output(total, 'value', select={'x': 3})
+        client.output(total, 'grid', select={'x': 3})
     with pytest.raises(sc.DimensionError):
-        client.output(total, 'value', select={'z': 0})
-    total.push(parts=[other.ref('value')])  # the reads let go of the state
-    assert _listed(client.output(total, 'value', select={'x': 2})) == [12.0, 15.0]
+        client.output(record, 'counts', select={'z': 0})
+    total.push(parts=[other.ref('grid')])  # the reads let go of the state
+    selected = client.output(total, 'grid', select={'x': 2})
+    assert selected.counts.values.tolist() == [12.0, 15.0]

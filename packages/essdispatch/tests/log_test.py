@@ -40,7 +40,6 @@ from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_d
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, WorkflowSpec
 
 SampleFile = NewType('SampleFile', Path)
-Part = NewType('Part', float)
 
 
 class Selection(BaseModel):
@@ -52,8 +51,14 @@ class LoadParams(BaseModel):
     sample: SampleFile
 
 
-class Value(BaseModel):
+class Amount(BaseModel):
+    """A value one workflow returns and another takes by reference."""
+
     value: float
+
+
+class ValueOutputs(BaseModel):
+    value: Amount
 
 
 LOAD = WorkflowSpec(
@@ -62,7 +67,7 @@ LOAD = WorkflowSpec(
     title='load',
     description='load',
     params=LoadParams,
-    outputs=Value,
+    outputs=ValueOutputs,
 )
 
 
@@ -72,7 +77,7 @@ class Weight(BaseModel):
 
 class TotalParams(BaseModel):
     weight: Weight | None = None
-    part: list[Part] = Field(min_length=1)
+    part: list[Amount] = Field(min_length=1)
 
 
 TOTAL = WorkflowSpec(
@@ -81,14 +86,14 @@ TOTAL = WorkflowSpec(
     title='total',
     description='a total of parts',
     params=TotalParams,
-    outputs=Value,
+    outputs=ValueOutputs,
     tables=('part',),
 )
 
 
-def total(params: TotalParams) -> Value:
+def total(params: TotalParams) -> ValueOutputs:
     factor = 1.0 if params.weight is None else params.weight.factor
-    return Value(value=factor * sum(params.part))
+    return ValueOutputs(value=Amount(value=factor * sum(p.value for p in params.part)))
 
 
 @pytest.fixture
@@ -121,11 +126,12 @@ def start(
     """A client of a new backend over the log at a path."""
     backends: list[Backend] = []
 
-    def load(params: LoadParams) -> Value:
+    def load(params: LoadParams) -> ValueOutputs:
         low, high = window = params.selection.window
         windows.append(window)
         loading.wait(timeout=5)
-        return Value(value=read_dataset(params.sample) * (high - low))
+        value = read_dataset(params.sample) * (high - low)
+        return ValueOutputs(value=Amount(value=value))
 
     def start(path: Path) -> Client:
         bind = [StagedFunction(LOAD, load), kept_rows(TOTAL, total)]
@@ -226,7 +232,7 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
     assert again.records()[0] == load
     assert load.request.params['selection']['window'] == [1.0, 2.0]  # as JSON holds it
     assert windows == [(1.0, 2.0), (1.0, 2.0)]  # as the params model declares it
-    assert again.output(rerun, 'value') == 3.0
+    assert again.output(rerun, 'value') == Amount(value=3.0)
 
 
 def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_record(
@@ -268,7 +274,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_read_as_a_rec
             'part': [load.ref('value') for load in loads],
         },
     )
-    assert client.output(read, 'value') == 6.0
+    assert client.output(read, 'value') == Amount(value=6.0)
 
 
 def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
@@ -285,7 +291,7 @@ def test_a_push_is_logged_as_its_rows_by_table_with_references_as_written(
         params={'part': [load.ref('value') for load in loads]},
     )
     assert all(isinstance(ref, OutputRef) for ref in pushed.params['part'])
-    assert client.output(total, 'value') == 3.0
+    assert client.output(total, 'value') == Amount(value=3.0)
 
 
 def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) -> None:

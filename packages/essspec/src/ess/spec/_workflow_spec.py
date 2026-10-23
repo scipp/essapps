@@ -28,21 +28,32 @@ The type at a place                    Inline      By reference
 a file: ``Path``, or a ``NewType``     no          to a dataset
 of it
 a group, or a union of groups          its fields  to an output that fits and
-                                                   holds no file
+                                       unless one  holds no file
+                                       is a data
+                                       value
 a list, ``list[X]``                    each        no
                                        element a
                                        place
-has a *JSON form*: pydantic makes a    yes         to an output that fits;
-JSON schema of it, with the config of              none for a list that may
-its model, and it holds no file                    be ``None`` or a dict
-anything else, such as a scipp array   no          to an output that fits
+has a *JSON form*: pydantic makes a    yes         no
+JSON schema of it, with the config of
+its model, and it holds no file
+anything else, a *data value*, such    no          no: it is a field of a
+as a scipp array                                   group
 =====================================  ==========  ===========================
+
+A reference stands for a group or a file only, since a number or a scipp
+array names no role: every output of its type would fit. A value that
+another workflow computes comes as a group, which the producing workflow
+outputs, such as a found beam centre.
 
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
 as ``Reduction``, written as an object of its fields, each a place, so a
 file in it comes from a dataset; a ``RootModel`` is not a group, but a type
 written as its root value::
+
+    class PixelMask(BaseModel, arbitrary_types_allowed=True):
+        mask: sc.DataArray             # a data value: the group is given by reference
 
     class Sample(BaseModel):
         run: SampleFile
@@ -71,6 +82,9 @@ framework: what the framework needs, it reads from the field types (see
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, whose contents are not places, so no
   dataset can give it.
+- A data value is a field of a group, not a parameter or the element of
+  one, since no request writes it at a place of its own. A group that holds
+  a file holds no data value: the file makes it given field by field.
 - A union of groups, a parameter or inside a group, is discriminated by the
   name of its tag field, not by a callable, so that the tag of a value tells
   its alternative. The tag field of each alternative is a ``Literal`` of one
@@ -159,7 +173,14 @@ from .field_types import (
     type_name,
     value_type,
 )
-from .places import alternatives, file_off_place, groups_at, held, validated
+from .places import (
+    alternatives,
+    file_off_place,
+    groups_at,
+    held,
+    unwritten,
+    validated,
+)
 from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
@@ -284,11 +305,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         Project to the plain-data form.
 
         The params schema has the value at each place in the forms it takes:
-        ``anyOf`` its JSON schema and a reference if it takes an inline value,
-        else a reference; a group as the object of its fields, each so. A
-        reference's schema is the ``@ref`` object of each kind it may be, with
-        the name of the data type it must fit in ``dataType``, as the outputs
-        schema has each output.
+        a file as a reference to a dataset; a group as ``anyOf`` the object of
+        its fields, each so, and a reference to an output, or one of them
+        only; any other value as its JSON schema. A reference's schema is the
+        ``@ref`` object of each kind it may be, with the name of the data type
+        it must fit in ``dataType``, as the outputs schema has each output.
         The projection is one-way: pydantic validators do not survive it, so
         a consumer of the serialized form can validate only optimistically.
         """
@@ -308,11 +329,34 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     """
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
-    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A form
-    shows the params schema: a group by its fields, with a choice to give it
-    by reference, and a picker at each place that takes a reference only,
-    which names the type of the data it takes in ``dataType``; a list as an
-    array of these, an optional one with ``null`` in ``anyOf``.
+    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A
+    form reads the widget at each place from the forms the params schema
+    gives it. A schema with ``dataType`` is a reference, of the kinds that
+    the ``@ref`` const of each object it allows names:
+
+    ==================================  =================================
+    Forms at the place                  Widget
+    ==================================  =================================
+    a reference to a dataset only       a dataset picker (a file)
+    the object of a group's fields      the group's fields
+    a reference to an output only       a record picker (a group that
+                                        holds a data value)
+    both                                the group's fields, and a choice
+                                        to pick a record instead
+    any other schema                    a widget for the value, inline
+    ==================================  =================================
+
+    ``dataType`` names the type of the data a picker takes, as the outputs
+    schema names the type of each output. A union of groups is a ``oneOf``
+    of the alternatives a request writes inline, with a ``discriminator``.
+    A list is an array of these, and an optional value has ``null`` in
+    ``anyOf``::
+
+        "sample":    {"$ref": "#/$defs/DatasetRef", "dataType": "SampleFile"}
+        "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
+                                {"anyOf": [OutputRef, AccumulatorRef],
+                                 "dataType": "Reduction"}]}
+        "bins":      {"type": "integer", "default": 10}
     """
 
     params_schema: dict[str, Any] = Field(
@@ -389,6 +433,12 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             )
         if place := _place_problems(model, name, (), set()):
             problems.extend(f'{where}: {problem}' for problem in place)
+        elif not (is_file(tp) or groups_at(model, name) or has_json_form(model, name)):
+            problems.append(
+                f'{where}: {type_name(tp)} has no JSON form, and only a group or a '
+                'file takes a reference; a data value is a field of a group, which '
+                'a request gives by reference'
+            )
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a parameter takes no other values'
@@ -454,8 +504,10 @@ def _group_problems(
     places, the problems of the places of its fields, and a default that is
     not a value, since a field left out holds its default. Field and model
     validators of any mode are allowed: they run whenever the group is
-    validated whole (see :mod:`ess.spec.places`). ``path`` holds the groups
-    that hold ``group`` and itself.
+    validated whole (see :mod:`ess.spec.places`). A group that holds a file
+    and a data value is refused too: the file makes it given field by field,
+    and no request writes the data value (see :func:`~ess.spec.places.unwritten`).
+    ``path`` holds the groups that hold ``group`` and itself.
     """
     problems = []
     if found := _decorators(group, _SERIALIZERS):
@@ -483,6 +535,11 @@ def _group_problems(
             )
         elif not field.is_required() and (problem := _default_problem(group, name)):
             problems.append(f'{where}: {problem}')
+    if not problems and holds_file(group) and (data := unwritten(group)) is not None:
+        problems.append(
+            f'{group.__name__}.{data}: no request writes it, since a group that '
+            'holds a file is given field by field, never by reference'
+        )
     return problems
 
 
@@ -590,61 +647,62 @@ def _field_forms(model: type[BaseModel], name: str) -> Any:
     metadata = list(info.metadata)
     if info.discriminator is not None:
         metadata.append(Field(discriminator=info.discriminator))
-    return _forms(
-        info.annotation, metadata, has_json_form(model, name), is_list(model, name)
-    )
+    return _forms(info.annotation, metadata, is_list(model, name))
 
 
-def _forms(tp: Any, metadata: Sequence[Any], json: bool, rows: bool) -> Any:
+def _forms(tp: Any, metadata: Sequence[Any], rows: bool) -> Any:
     """
     ``tp``, the type at a place, replaced by the forms it takes: a file by a
     reference to a dataset; a group by the forms of its fields (see
-    :func:`_group_forms`), a union of groups by those of its alternatives;
-    any other type by itself if ``json``, it has a JSON form; and each but a
-    file also by a reference to an output, unless it holds a file, or for a
-    union of groups, unless each alternative holds one. The elements of a
-    list are places if ``rows``; the contents of any other list or dict are
-    not, so it is given inline only. ``metadata``, the constraints of the
-    field, goes to the list if ``tp`` is one, else to the value, so that a
-    constraint of a number, say, is not put on a reference.
+    :func:`_group_forms`), unless a request writes nothing at one of them
+    (see :func:`~ess.spec.places.unwritten`), and by a reference to an
+    output, unless it holds a file; a union of groups so, by those of its
+    alternatives, and by a reference that fits one without a file; any other
+    type by itself, inline only. The elements of a list are places if
+    ``rows``; the contents of any other list or dict are not, so it is given
+    inline only. ``metadata``, the constraints of the field, goes to the list
+    if ``tp`` is one, else to the value, so that a constraint of a number,
+    say, is not put on a reference.
     """
     origin, args = get_origin(tp), get_args(tp)
     if origin is Annotated:
-        return _forms(args[0], [*metadata, *tp.__metadata__], json, rows)
+        return _forms(args[0], [*metadata, *tp.__metadata__], rows)
     if origin is list and rows:
-        row = _forms(args[0], [], json, rows=False)
+        row = _forms(args[0], [], rows=False)
         listed: Any = list[row]  # type: ignore[valid-type]
         return Annotated[listed, *metadata] if metadata else listed
     if origin in (Union, UnionType) and NoneType in args:
         rest = tuple(arg for arg in args if arg is not NoneType)
         inner = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
-        return Union[_forms(inner, metadata, json, rows), None]  # noqa: UP007
+        return Union[_forms(inner, metadata, rows), None]  # noqa: UP007
     value = Annotated[tp, *metadata] if metadata else tp
     if element(tp) is not None:
         return value
     if is_file(tp):
         return _ref_form(tp)
-    ref = None if holds_file(tp) else _ref_form(tp)
     if is_group(tp):
-        group = _group_forms(base(tp))
-        value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
+        tag, members = None, (tp,)
     elif (union := alternatives(value)) is not None:
-        tag, groups = union
-        members = tuple(groups.values())
-        forms = tuple(_group_forms(base(m), tag) for m in members)
-        # An output fits the union if it fits an alternative without a file.
-        if fileless := tuple(m for m in members if not holds_file(m)):
-            ref = _ref_form(Union[fileless])  # noqa: UP007
+        tag, members = union[0], tuple(union[1].values())
+    else:
+        return value
+    forms = []
+    if inline := tuple(
+        _group_forms(base(m), tag) for m in members if unwritten(base(m)) is None
+    ):
         # Only an object reads as a reference; JSON Schema's ``required``
         # holds for any other value, so ``not`` would refuse it.
-        value = Annotated[
-            Union[forms],  # noqa: UP007
-            *metadata,
-            Field(json_schema_extra=_not_a_ref),
-        ]
-    elif not json:
-        return ref
-    return value if ref is None else Union[value, ref]  # noqa: UP007
+        forms.append(
+            Annotated[
+                Union[inline],  # noqa: UP007
+                *metadata,
+                Field(json_schema_extra=_not_a_ref),
+            ]
+        )
+    # An output fits the union if it fits an alternative without a file.
+    if fileless := tuple(m for m in members if not holds_file(m)):
+        forms.append(_ref_form(Union[fileless]))  # noqa: UP007
+    return Union[tuple(forms)]  # noqa: UP007
 
 
 @functools.cache

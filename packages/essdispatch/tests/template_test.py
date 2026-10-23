@@ -26,8 +26,12 @@ from ess.dispatch import (
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import DriverBinding, NoParams, StageCall, WorkflowSpec, function_binding
 
+
+class Number(BaseModel):
+    value: float
+
+
 SampleFile = NewType('SampleFile', Path)
-PositiveValue = NewType('PositiveValue', float)
 
 
 class Factor(BaseModel):
@@ -59,24 +63,22 @@ class Value(BaseModel):
     value: float
 
 
-def _positive(value: float) -> float:
-    if value <= 0:
+def _positive(number: Number) -> Number:
+    if number.value <= 0:
         raise ValueError('not positive')
-    return value
+    return number
 
 
 class PositiveParams(BaseModel):
-    positive: Annotated[PositiveValue, AfterValidator(_positive)]
+    positive: Annotated[Number, AfterValidator(_positive)]
 
 
 class PositivesParams(BaseModel):
-    positive: list[Annotated[PositiveValue, AfterValidator(_positive)]] = Field(
-        min_length=1
-    )
+    positive: list[Annotated[Number, AfterValidator(_positive)]] = Field(min_length=1)
 
 
 class Made(BaseModel):
-    made: PositiveValue
+    made: Number
 
 
 class CheckedParams(BaseModel):
@@ -132,15 +134,15 @@ def _weighted(run: WeightedRun) -> float:
 
 
 def make(params: NoParams) -> Made:
-    return Made(made=-1.0)
+    return Made(made=Number(value=-1.0))
 
 
 def use(params: PositiveParams) -> Value:
-    return Value(value=params.positive)
+    return Value(value=params.positive.value)
 
 
 def use_many(params: PositivesParams) -> Value:
-    return Value(value=sum(params.positive))
+    return Value(value=sum(number.value for number in params.positive))
 
 
 class Count:
@@ -411,7 +413,7 @@ def test_a_push_whose_file_cannot_be_read_stops_the_accumulator(
         client.output(acc, 'value')
 
 
-def test_a_data_value_that_fails_its_type_s_check_fails_where_it_is_read(
+def test_a_value_referenced_that_fails_its_type_s_check_fails_where_it_is_read(
     client: Client,
 ) -> None:
     made = client.compute(MAKE).ref('made')

@@ -102,8 +102,8 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
         plain = client.compute(
             STITCH, params={'runs': runs[:n], 'reference': reference}
         )
-        reads.append(client.output(series, 'stitched'))
-        plains.append(client.output(plain, 'stitched'))
+        reads.append(client.output(series, 'stitched').curve)
+        plains.append(client.output(plain, 'stitched').curve)
 
     assert all(sc.identical(r, p) for r, p in zip(reads, plains, strict=True))
     assert reads[-1].values.tolist() == [4.0, 2.0, 2.0, 1.0, 1.0, 0.5]
