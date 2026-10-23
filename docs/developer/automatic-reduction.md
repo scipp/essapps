@@ -10,8 +10,8 @@ Its stories are S7, C1, D1 to D6, and E1 to E4 in [user-stories.md](user-stories
 It reads metadata through `client.datasets` and builds plain data; it submits nothing.
 
 ```python
-requests = apply(Template(IOFQ, blanks=('sample',)), samples, client.datasets, at=('sample', 'run'),
-                 member_field='temperature')
+requests = apply(Template(IOFQ, blanks=('sample',)), samples, client.datasets, at=('sample', 'file'),
+                 fields={'transmission': None}, member_field='temperature')
 records = client.submit(requests, label='scan', persist=True)
 ```
 
@@ -19,40 +19,39 @@ A batch application submits with `persist=`, so its client keeps nothing, and th
 
 A lookup fills further blanks per dataset. `LastBefore(selector)` takes the matching dataset with the highest run number below the filled dataset's.
 Each dataset fills the one blank the lookup leaves, at the place `at`: the dataset reference is the value there, and `apply` fills no other parameters.
-`at` names the blank and the fields down to a file, such as `('sample', 'run')` for the run of the group `sample: Sample`.
-It is by default the blank itself, for a blank that is a file parameter, such as `can: CanFile`.
-A dataset is never the value of a whole group, so for a blank that is a group, `at` is required: without it, the backend refuses the requests, naming the blank.
+Every parameter is a group, so `at` names the blank and the fields down to a file, such as `('sample', 'file')` for the file of the group `sample: Sample`.
+`fields` gives the group's other fields, the same for each dataset, such as `{'transmission': None}` for a `Sample` reduced without a transmission correction; a field left out takes its default, and a field without a default makes the backend refuse the requests, naming the field.
+A lookup names its place the same way, such as `('can', 'file')` for the file of the group `can: Can`, one place per blank.
 So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `sample` and `can`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
 ```python
-cans = Lookup(can=LastBefore(Selector(role='can')))
-requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets, at=('sample', 'run'),
-                 lookup=cans)
+cans = Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
+requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets, at=('sample', 'file'),
+                 fields={'transmission': None}, lookup=cans)
 ```
 
 ## Rules
 
-A rule is plain data: a template, a selector, a label, and optionally the place `at`, a lookup, a series, and the outputs it persists, every output by default.
+A rule is plain data: a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a lookup, a series, and the outputs it persists, every output by default.
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
 rule = Rule('auto-iofq', Template(IOFQ, blanks=('sample',)), selector=Selector(role='sample'),
-            label='iofq', at=('sample', 'run'))
+            label='iofq', at=('sample', 'file'), fields={'transmission': None})
 ```
 
 With `series='sample'`, a request takes every matching dataset with the same `sample` so far, in run order, and `sample` is its member.
 The template's blank `runs` is a table with a row for each dataset, and the lookup is not used.
-Without `at`, the dataset reference is the row, of a table of files.
-For a table of groups, `at` names the blank and the fields within a row down to the file: `at=('runs', 'run')` makes the rows `[{'run': dataset}, ...]`, and the other fields of each row take their defaults.
+`at` names the blank and the fields within a row down to the file: `at=('runs', 'file')` makes the rows `[{'file': dataset}, ...]`, and `fields` gives the other fields of each row, the same for every row, or they take their defaults.
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
 rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
-            selector=Selector(role='sample'), series='sample', label='reflectivity')
+            selector=Selector(role='sample'), series='sample', at=('runs', 'file'), label='reflectivity')
 ```
 
-A rule whose template leaves no single blank for a dataset, or whose `at` is not in that blank, is refused when it is made.
+A rule whose template leaves no single blank for a dataset, or whose `at` is not a field of that blank, is refused when it is made.
 
 Templates and rules are frozen dataclasses; `dataclasses.replace` changes them.
 The core keeps no store of them, and records do not name them: a record's request says everything that determines its result.
@@ -69,7 +68,7 @@ loop.status(rule).reason     # why the rule submitted nothing or skipped a datas
 loop.run()                   # steps forever
 ```
 
-The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the place `at`, or for a series at that place in a row of the blank table, `runs[i].run`, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
+The loop keeps no memory of its own. A rule has handled a dataset when a record under the rule's label holds it at the place `at`, or for a series at that place in a row of the blank table, `runs[i].file`, so a restarted or replaced loop does not reduce a dataset again, and a dataset whose file arrives again keeps its identity and is not reduced twice.
 A dataset that the record holds at another place, such as a can that a lookup fills, does not count.
 This holds while the proposal's history is kept. A running loop keeps it, since a proposal with an open client is not idle (README.md, [How long records and values are kept](README.md#how-long-records-and-values-are-kept)).
 

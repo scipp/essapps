@@ -104,7 +104,7 @@ same value is typed in by one user and computed by another: a beam centre is
 typed in, or found by a first reduction; the time slices of a slicing
 reduction are typed in, or found from a log. A place is the value of a
 parameter, an element of a list, or a field of a group, at any depth, such as
-`sample.run` or `sample.transmission`. The type at the place decides which
+`sample.file` or `sample.transmission`. The type at the place decides which
 forms it accepts, with `| None` removed. A type has a *JSON form* when it is
 not a file, holds no file, and pydantic makes a JSON schema of it with its
 model's config. A value *round-trips* when its JSON form reads back as the
@@ -112,7 +112,7 @@ value.
 
 | The type at a place | Example | Inline | By reference |
 |---|---|---|---|
-| a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
+| a file: `Path` | `Sample.file` | no | to a dataset |
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
@@ -140,7 +140,7 @@ group has no inline form and is given by reference only, as
 `ComputedTransmission` below. No field of a group that holds a file is a data
 value: no reference stands for such a group, so a request writes it field by
 field. A group in it that holds no file may have a field that is a data value,
-as in `Sample.transmission: FromFile | ComputedTransmission`.
+as in `Sample.transmission: ComputedTransmission | None`.
 
 A data value that a request may leave out is wrapped as a group typed
 `| None`, such as `mask: PixelMask | None`, with the array a field of
@@ -149,13 +149,25 @@ reference only, even where the value is `None`.
 
 The contents of a tuple, a set, a dict, a list that may be `None`, a
 `TypedDict`, or a dataclass are not places: such a value is written whole,
-inline. A parameter, or a field of a group, may be a discriminated union of
-groups, such as a beam centre that is given, `GivenCentre`, or found from a
-run with a tolerance, `FindCentre`; the request writes the fields of one
-alternative with its tag, inline, which says what each of the other fields
-takes: `{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`.
-Why a choice is a union, and what `X | None` means, is
-[ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
+inline.
+
+Each parameter is a group, a union of groups, or a list of one, possibly
+`| None`; a file or a number is a field of a group. So a form shows each
+parameter as a group of fields, and a sciline binding keys each by its
+class. No type in the params or the outputs is a `NewType`: a class names a
+role, which a `NewType` of a shared type cannot do without the fit check
+looking through it, and a `NewType` that a sciline graph needs as a key
+belongs to the binding (`keys=`).
+
+A parameter may be a discriminated union of groups, such as a beam centre
+that is given, `GivenCentre`, or found from a run with a tolerance,
+`FindCentre`; the request writes the fields of one alternative with its tag,
+inline, which says what each of the other fields takes:
+`{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`. A union is
+a parameter, or the element of a list parameter, never a field of a group:
+a choice between ways is a parameter of its own, which a form shows as a
+choice at the top of its tab. Why a choice is a union, and what `X | None`
+means, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 ```python
 class Reduction(BaseModel):                       # a group
@@ -165,24 +177,20 @@ class BeamCentre(BaseModel):                      # a group: inline, or a finder
     x: float = 0.0
     y: float = 0.0
 
-SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
-CanFile = NewType('CanFile', Path)
-
-class FromFile(BaseModel):                        # the transmission in the run's file
-    kind: Literal['file'] = 'file'
-
 class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
-    kind: Literal['computed'] = 'computed'
     transmission: sc.DataArray                    # a data value: given by reference only
 
 class Sample(BaseModel):                          # a group that holds a file
-    run: SampleFile
-    transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
+    file: Path                                    # a NeXus file of a sample run
+    transmission: ComputedTransmission | None     # None: no transmission correction
+
+class Can(BaseModel):
+    file: Path
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
-    can: CanFile
+    can: Can
     beam_centre: BeamCentre = BeamCentre()        # the nominal centre
 
 class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it by reference
@@ -196,13 +204,14 @@ IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs
 
 Two requests, written with essdispatch: `client` connects to a backend,
 `dataset(...)` names a dataset, and `finder` is the record of a request that
-finds the beam centre, so `finder.ref('centre')` names its output `centre`:
+finds the beam centre, so `finder.ref('centre')` names its output `centre`;
+`t` is the record of a transmission reduction:
 
 ```python
-client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
-                            'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
-client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
-                            'beam_centre': finder.ref('centre')})            # a reference
+runs = {'sample': {'file': dataset(run=60339), 'transmission': t.ref('transmission')},
+        'can': {'file': dataset(run=60338)}}
+client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # inline
+client.submit(IOFQ, params={**runs, 'beam_centre': finder.ref('centre')})          # a reference
 ```
 
 **Rules.** The models carry no annotations for the framework: what the
@@ -210,17 +219,19 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 `WorkflowSpec` checks these rules when it is made:
 
 - The names of params and outputs are distinct.
-- Each parameter's type is a type, possibly optional, or a list of one; a list
-  parameter is not optional, and no parameter is a dict. The type may be a
-  union, such as a union of groups.
+- Each parameter is a group, a union of groups, or a list of one, possibly
+  optional; a list parameter is not optional. A file or a number is a field
+  of a group.
+- No type in the params or the outputs is a `NewType`, at any depth.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, where no dataset can give it.
 - A data value is a field of a group, not a parameter or the element of a
   list parameter. No field of a group that holds a file is a data value: no
   reference stands for such a group, so a request writes it field by field.
-- A union of groups is discriminated by the name of its tag field, not by a
-  callable. The tag field of each alternative is a `Literal` of one string,
+- A union of groups is a parameter, or the element of a list parameter,
+  never a field of a group. It is discriminated by the name of its tag
+  field, not by a callable. The tag field of each alternative is a `Literal` of one string,
   its own, such as `Literal['find']`, without an alias. A union that holds a
   group holds groups only: a value of a type that is not a group has no tag.
 - A group has no serializers, computed fields, or aliases: the record holds a
@@ -265,13 +276,11 @@ runs. A binding may run the model validators,
 
 A request that leaves out a parameter, or a field of a group, never leaves out
 a correction that a correct reduction needs. The default of `reduction` is a
-setting, and the default transmission of a `Sample`, `FromFile()`, takes the
-one in the run's file. The can run
-has no default, so a request or a template that leaves it out is refused. A
-correction that a correct reduction needs, but that a request may still leave
-out, is typed `X | None` with no default, such as
-`direct_beam: DirectBeamFile | None`: the request writes `None`, and its
-record says so. The output is I(Q) either way, and the params of its record
+setting. The can run has no default, so a request or a template that leaves it
+out is refused. A correction that a correct reduction needs, but that a
+request may still leave out, is typed `X | None` with no default, such as the
+transmission of a `Sample` or `direct_beam: DirectBeam | None`: the request
+writes `None`, and its record says so. The output is I(Q) either way, and the params of its record
 say which corrections were applied. A step whose omission changes what a
 reader of the output must do with it, such as a normalization without which
 I(Q) is in counts, makes another output type, and so another spec. What
@@ -285,7 +294,7 @@ string), or an output of an accumulator (`AccumulatorRef`: accumulator and
 output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
 state. A reference stands for the value at a place whose type is a group, a
-union of groups, or a file, such as `sample.run` or `beam_centre`: never for a
+union of groups, or a file, such as `sample.file` or `beam_centre`: never for a
 number, a whole list, a tag of a union, or a position inside a value given
 inline. Its JSON form is an object with the key `@ref`, which names its kind:
 
@@ -308,9 +317,10 @@ has several kinds of identity, as a URI does with its scheme:
 framework normalizes it before a reference enters a record.
 
 **Fit.** A reference *fits* a place when the type of the data it names can be
-the value there: a `BeamCentre` output fits a place typed `BeamCentre`, and a
-`ComputedTransmission` output fits the union `FromFile | ComputedTransmission`,
-since data fit a union of groups when they fit one alternative.
+the value there: its type is the place's class or a subclass of it. A
+`BeamCentre` output fits a place typed `BeamCentre`, and a `GivenCentre`
+output fits the union `GivenCentre | FindCentre`, since data fit a union of
+groups when they fit one alternative.
 A dataset reference fits a file only. A framework checks fit in the request
 phase, so that a chain of requests is refused before anything runs.
 `ess.spec.field_types.fits` states the rule.
@@ -376,11 +386,11 @@ class IofQSettings(BaseModel):
 
 class IofQParams(IofQSettings):
     sample: Sample
-    can: CanFile
+    can: Can
 
 class IofQMultiParams(IofQSettings):
     sample: list[Sample] = Field(min_length=1)
-    can: list[CanFile] = Field(min_length=1)
+    can: list[Can] = Field(min_length=1)
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title=..., description=...,
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
@@ -395,14 +405,15 @@ is a tuple of the names of the tables. A list parameter makes a table only when
 `tables` names it. A spec whose outputs differ from those of a single-run spec,
 such as a stitch of all angles, or that has no single-run spec, such as a sum
 of counts over the runs of a scan, is written the same way:
-`angle: list[AngleFile] = Field(min_length=1)`, with `tables=('angle',)`.
+`angle: list[Angle] = Field(min_length=1)`, with `tables=('angle',)` and a
+group `Angle` of the run's `file: Path`.
 
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
 lacks or has wrong is given next to the run, as a field of the row's group,
 so the request and its record hold it. Such a field takes
-an inline value in one row and a reference to a computed value in another, as a
-transmission computed for one run and not another. A blank of a template is a
+a reference to a computed value in one row and an inline value in another, as
+a transmission computed for one run and `None` for another. A blank of a template is a
 whole parameter, and a group is one key of a sciline pipeline. So a stage of
 the single-run spec that tunes a transmission has `sample` as its blank, and
 reads the run again at each call.
@@ -545,11 +556,23 @@ output, and dims and units of an output for a UI.
   another record. Every output of the type fits, so a picker of the outputs
   that fit lists every number that any record holds; a group that holds the
   number names what it is.
-- **A data value as a parameter of a `NewType`**, such as
-  `Transmission = NewType('Transmission', sc.DataArray)`, which names the role
-  for the fit check. A place typed plain `sc.DataArray` takes every array that
-  any record holds. A group names the role with a class, and costs a binding
-  an adapter that takes the array out.
+- **`NewType`s as roles**, such as
+  `Transmission = NewType('Transmission', sc.DataArray)` or
+  `SampleFile = NewType('SampleFile', Path)`, which name the role for the fit
+  check and give each parameter a sciline key of its own. The fit check must
+  then look through `NewType`s, both ways for a plain output to fit a role,
+  and a place typed plain `sc.DataArray` still takes every array that any
+  record holds. A class names the role, and a sciline key that differs from
+  the spec's class is the binding's (`keys=`), or an adapter provider that
+  takes the value out of the group.
+- **Parameters of any type**, such as `sample: Path` or `bins: int` at the top
+  level. Two files of one type then need `keys=` for distinct sciline keys,
+  and a form shows a parameter that is not a group outside the tabs of the
+  groups.
+- **A union inside a group**, such as a transmission that is taken from each
+  run's file or computed, per row of a table. A form would show a choice
+  inside a tab, and a table a choice per row; a per-row correction is a group
+  typed `X | None` instead, and a choice of way for all rows a parameter.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **References at a few places only**, the top of a value, of an element of a
