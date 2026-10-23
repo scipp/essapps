@@ -787,7 +787,6 @@ Each binding serves some of the client's actions:
 | a function (`function_binding`) | yes | refused | refused |
 
 A stage or an accumulator that its binding does not serve is refused when it is made.
-[plans/binding-jobs.md](plans/binding-jobs.md) describes bindings in more depth.
 
 **The protocol.** The backend calls a binding through three protocols of `ess.spec.binding`, one per client action:
 
