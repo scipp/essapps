@@ -74,7 +74,7 @@ A value obtained in another way is not `None` but an alternative that says so:
 
 ```python
 class FromFile(BaseModel):                # an alternative without fields
-    kind: Literal['file'] = 'file'
+    kind: Literal['file'] = Field('file', title="From the sample's file")
 
 class TransmissionFraction(BaseModel):
     kind: Literal['given'] = 'given'
@@ -87,11 +87,13 @@ transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='ki
 A UI shows a union as a choice between its alternatives, and a type `X | None` as a toggle:
 
 ```
-Transmission: (•) from the sample's file  ( ) given: [0.75]  [or from a record ▾]
+Transmission: (•) From the sample's file  ( ) Given: [0.75]  [or from a record ▾]
 [x] Direct beam  Run: [60340]
 [ ] Mask
 ```
 
+The title of an alternative's tag labels it in the choice, and the tag's description explains it; the schema titles a tag without a title by its value, `'given'` as "Given".
+A union without a default starts with no alternative chosen, as any field without a default starts empty.
 A toggle that is off reads as "without X", so `None` must mean that.
 A type `U | None`, for a union `U`, is a toggle with a choice inside.
 This is a guideline, not a rule the framework checks.
