@@ -6,7 +6,8 @@ Toy specs and fixtures of the user stories (docs/developer/user-stories.md).
 A dataset made by ``measure`` is a file of a list of counts. The toy specs
 compute what the table in user-stories.md says, so that every number can be
 checked by hand. Each toy workflow takes an instance of its spec's params model,
-where a file is a path, and reads the counts of each file.
+where each run is a group with the path of its file, and reads the counts of
+each file.
 
 After each story, every record whose outputs a client of the story still keeps
 is run again as its request by that client, and must give the same outputs
@@ -18,7 +19,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Literal, NewType
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import pytest
@@ -88,16 +89,34 @@ def _array(values: Any) -> sc.Variable:
     return sc.array(dims=['q'], values=np.asarray(values, dtype=float))
 
 
-SampleFile = NewType('SampleFile', Path)
-CanFile = NewType('CanFile', Path)
-DirectBeamFile = NewType('DirectBeamFile', Path)
-VanadiumFile = NewType('VanadiumFile', Path)
-RunFile = NewType('RunFile', Path)
-BackgroundFile = NewType('BackgroundFile', Path)
-ReferenceFile = NewType('ReferenceFile', Path)
+class Run(BaseModel):
+    """A measured run, by its file; each role of a run is a subclass."""
 
-IofQ = NewType('IofQ', sc.Variable)
-Masked = NewType('Masked', sc.Variable)
+    file: Path
+
+
+class SampleRun(Run):
+    """A run of the sample."""
+
+
+class CanRun(Run):
+    """A run of the empty can, subtracted from a sample run."""
+
+
+class DirectBeamRun(Run):
+    """A run of the direct beam, without a sample."""
+
+
+class VanadiumRun(Run):
+    """A run of vanadium, which a normalization is computed from."""
+
+
+class BackgroundRun(Run):
+    """A background run, subtracted from sample runs."""
+
+
+class ReferenceRun(Run):
+    """A run of a reference, such as a supermirror, that a reflectivity divides by."""
 
 
 class Reduction(BaseModel):
@@ -139,21 +158,21 @@ Normalization = Annotated[
 
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleFile
+    sample: SampleRun
     beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
 
 class IofQOutputs(Data):
-    iofq: IofQ
-    masked: Masked
+    iofq: sc.Variable
+    masked: sc.Variable
 
 
 IOFQ = _spec('sans-iofq', IofQOutputs, params=IofQParams)
 
 
 def iofq(params: IofQParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample))
+    return _reduce(params, _counts(params.sample.file))
 
 
 def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
@@ -164,8 +183,8 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     reduced = masked - (0.0 if centre is None else centre.position.value)
     reduced = reduced / _factor(params.normalization)
     return IofQOutputs(
-        iofq=IofQ(_array(reduced.reshape(reduction.bins, -1).sum(axis=1))),
-        masked=Masked(_array(masked)),
+        iofq=_array(reduced.reshape(reduction.bins, -1).sum(axis=1)),
+        masked=_array(masked),
     )
 
 
@@ -181,14 +200,14 @@ def _factor(
 
 
 class IofQCanParams(IofQParams):
-    can: CanFile
+    can: CanRun
 
 
 IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
 
 
 def iofq_can(params: IofQCanParams) -> IofQOutputs:
-    return _reduce(params, _counts(params.sample) - _counts(params.can))
+    return _reduce(params, _counts(params.sample.file) - _counts(params.can.file))
 
 
 class ReductionV2(BaseModel):
@@ -198,7 +217,7 @@ class ReductionV2(BaseModel):
 
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
-    sample: SampleFile
+    sample: SampleRun
     beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
@@ -220,7 +239,7 @@ def iofq_v2(params: IofQV2Params) -> IofQOutputs:
 
 
 class BeamCentreParams(Data):
-    direct_beam: DirectBeamFile
+    direct_beam: DirectBeamRun
 
 
 class CentreOutputs(Data):
@@ -232,7 +251,9 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
-        centre=BeamCentre(position=sc.scalar(float(_counts(params.direct_beam).mean())))
+        centre=BeamCentre(
+            position=sc.scalar(float(_counts(params.direct_beam.file).mean()))
+        )
     )
 
 
@@ -244,7 +265,7 @@ class Scaling(BaseModel):
 
 class VanadiumParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    vanadium: VanadiumFile
+    vanadium: VanadiumRun
 
 
 class VanadiumOutputs(Data):
@@ -255,7 +276,7 @@ VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 
 
 def vanadium(params: VanadiumParams) -> VanadiumOutputs:
-    total = float(_counts(params.vanadium).sum())
+    total = float(_counts(params.vanadium.file).sum())
     return VanadiumOutputs(
         normalization=ComputedNormalization(
             factor=sc.scalar(total * params.scaling.scale)
@@ -265,14 +286,11 @@ def vanadium(params: VanadiumParams) -> VanadiumOutputs:
 
 class NormalizeParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    runs: list[RunFile] = Field(min_length=1)
-
-
-Normalized = NewType('Normalized', sc.Variable)
+    runs: list[SampleRun] = Field(min_length=1)
 
 
 class NormalizedOutputs(Data):
-    normalized: Normalized
+    normalized: sc.Variable
 
 
 NORMALIZE = _spec(
@@ -281,21 +299,16 @@ NORMALIZE = _spec(
 
 
 def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
-    return NormalizedOutputs(
-        normalized=Normalized(_array(runs / runs.sum() * scaling.scale))
-    )
+    return NormalizedOutputs(normalized=_array(runs / runs.sum() * scaling.scale))
 
 
 class BackgroundParams(Data):
-    sample_runs: list[SampleFile] = Field(min_length=1)
-    background_runs: list[BackgroundFile] = Field(min_length=1)
-
-
-Subtracted = NewType('Subtracted', sc.Variable)
+    sample_runs: list[SampleRun] = Field(min_length=1)
+    background_runs: list[BackgroundRun] = Field(min_length=1)
 
 
 class BackgroundOutputs(Data):
-    subtracted: Subtracted
+    subtracted: sc.Variable
 
 
 BACKGROUND = _spec(
@@ -309,9 +322,7 @@ BACKGROUND = _spec(
 def background(
     sample_runs: np.ndarray, background_runs: np.ndarray
 ) -> BackgroundOutputs:
-    return BackgroundOutputs(
-        subtracted=Subtracted(_array(sample_runs - background_runs))
-    )
+    return BackgroundOutputs(subtracted=_array(sample_runs - background_runs))
 
 
 class Transmission(Data):
@@ -328,7 +339,7 @@ class Parts(Data):
 
 
 class ContributeParams(Data):
-    sample: SampleFile
+    sample: SampleRun
 
 
 class ContributeOutputs(Data):
@@ -340,7 +351,7 @@ CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams
 
 
 def contribute(params: ContributeParams) -> ContributeOutputs:
-    counts = _counts(params.sample)
+    counts = _counts(params.sample.file)
     return ContributeOutputs(
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
@@ -353,13 +364,9 @@ class PartsParams(Data):
     parts: list[Parts]
 
 
-TotalNumerator = NewType('TotalNumerator', sc.Variable)
-TotalDenominator = NewType('TotalDenominator', sc.Variable)
-
-
 class PartsOutputs(Data):
-    numerator: TotalNumerator
-    denominator: TotalDenominator
+    numerator: sc.Variable
+    denominator: sc.Variable
 
 
 PARTS_SUM = _spec('sans-parts-sum', PartsOutputs, params=PartsParams)
@@ -369,10 +376,7 @@ def parts_sum(params: PartsParams) -> PartsOutputs:
     def total(field: str) -> sc.Variable:
         return functools.reduce(sc.add, [getattr(p, field) for p in params.parts])
 
-    return PartsOutputs(
-        numerator=TotalNumerator(total('numerator')),
-        denominator=TotalDenominator(total('denominator')),
-    )
+    return PartsOutputs(numerator=total('numerator'), denominator=total('denominator'))
 
 
 class Summing:
@@ -393,8 +397,8 @@ class Summing:
         self._sums: dict[str, Any] = dict.fromkeys(spec.tables, 0.0)
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
-        for path in rows:
-            self._sums[table] += _counts(path)  # in place from the second row
+        for run in rows:
+            self._sums[table] += _counts(run.file)  # in place from the second row
 
     def outputs(self) -> BaseModel:
         return self._finalize(**self._sums, **self._fixed)
@@ -418,11 +422,11 @@ class VolumeOutputs(Data):
 
 
 class AngleParams(Data):
-    sample: SampleFile
+    sample: SampleRun
 
 
 class RunsParams(Data):
-    runs: list[RunFile] = Field(min_length=1)
+    runs: list[SampleRun] = Field(min_length=1)
 
 
 ANGLE = _spec('angle', VolumeOutputs, params=AngleParams)
@@ -430,7 +434,7 @@ VOLUME = _spec('volume', VolumeOutputs, params=RunsParams, tables=('runs',))
 
 
 def angle(params: AngleParams) -> VolumeOutputs:
-    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample))))
+    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample.file))))
 
 
 def volume(runs: np.ndarray) -> VolumeOutputs:
@@ -446,11 +450,8 @@ class CutParams(Data):
     volume: Volume
 
 
-Cut = NewType('Cut', sc.Variable)
-
-
 class CutOutputs(Data):
-    cut: Cut
+    cut: sc.Variable
 
 
 CUT = _spec('cut', CutOutputs, params=CutParams)
@@ -458,12 +459,12 @@ CUT = _spec('cut', CutOutputs, params=CutParams)
 
 def cut(params: CutParams) -> CutOutputs:
     counts = params.volume.counts
-    return CutOutputs(cut=Cut(counts['q', params.position.index].copy()))
+    return CutOutputs(cut=counts['q', params.position.index].copy())
 
 
 class StitchParams(Data):
-    runs: list[RunFile] = Field(min_length=1)
-    reference: ReferenceFile
+    runs: list[SampleRun] = Field(min_length=1)
+    reference: ReferenceRun
 
 
 class Reflectivity(Data):
@@ -480,8 +481,8 @@ STITCH = _spec('stitch', StitchOutputs, params=StitchParams, tables=('runs',))
 
 
 def stitch(params: StitchParams) -> StitchOutputs:
-    reference = _counts(params.reference)
-    curves = [_counts(run) / reference for run in params.runs]
+    reference = _counts(params.reference.file)
+    curves = [_counts(run.file) / reference for run in params.runs]
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
@@ -511,7 +512,7 @@ class TimeRange(BaseModel):
 
 
 class SlicerParams(Data):
-    log: RunFile
+    sample: SampleRun
 
 
 class SlicerOutputs(Data):
@@ -522,23 +523,20 @@ SLICER = _spec('slicer', SlicerOutputs, params=SlicerParams)
 
 
 def slicer(params: SlicerParams) -> SlicerOutputs:
-    """A slice of every two bins of the log."""
-    n = len(_counts(params.log))
+    """A slice of every two bins of the log of the sample run."""
+    n = len(_counts(params.sample.file))
     return SlicerOutputs(
         slices=[TimeRange(start=i, stop=min(i + 2, n)) for i in range(0, n, 2)]
     )
 
 
 class SlicesParams(Data):
-    sample: SampleFile
+    sample: SampleRun
     time_range: list[TimeRange] = Field(min_length=1)
 
 
-Sliced = NewType('Sliced', sc.Variable)
-
-
 class SlicedOutputs(Data):
-    sliced: Sliced
+    sliced: sc.Variable
 
 
 SLICES = _spec('slices', SlicedOutputs, params=SlicesParams, tables=('time_range',))
@@ -546,9 +544,9 @@ SLICES = _spec('slices', SlicedOutputs, params=SlicesParams, tables=('time_range
 
 def sliced(params: SlicesParams) -> SlicedOutputs:
     """The counts of the sample in every time range, summed."""
-    counts = _counts(params.sample)
+    counts = _counts(params.sample.file)
     total = sum(float(counts[r.start : r.stop].sum()) for r in params.time_range)
-    return SlicedOutputs(sliced=Sliced(sc.scalar(total)))
+    return SlicedOutputs(sliced=sc.scalar(total))
 
 
 class Centre(BaseModel):
@@ -562,7 +560,7 @@ class Centre(BaseModel):
 
 
 class FindCentreParams(Data):
-    direct_beam: DirectBeamFile
+    direct_beam: DirectBeamRun
 
 
 class FoundCentre(Data):
@@ -573,27 +571,23 @@ FIND_CENTRE = _spec('find-centre', FoundCentre, params=FindCentreParams)
 
 
 def find_centre(params: FindCentreParams) -> FoundCentre:
-    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam).mean())))
+    return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.file).mean())))
 
 
-class SampleRun(Data):
+class SampleRunWithTransmission(SampleRun):
     """A sample run and its transmission, or None: a group that holds a file."""
 
-    file: SampleFile
     transmission: Transmission | None
 
 
 class CentredParams(Data):
     centre: Centre
-    sample: list[SampleRun] = Field(min_length=1)
-    can: list[CanFile] = Field(min_length=1)
-
-
-Centred = NewType('Centred', sc.Variable)
+    sample: list[SampleRunWithTransmission] = Field(min_length=1)
+    can: list[CanRun] = Field(min_length=1)
 
 
 class CentredOutputs(Data):
-    centred: Centred
+    centred: sc.Variable
 
 
 CENTRED_MULTI = _spec(
@@ -614,8 +608,8 @@ def centred(params: CentredParams) -> CentredOutputs:
         * (1.0 if s.transmission is None else s.transmission.fraction.value)
         for s in params.sample
     )
-    cans = sum((_counts(c) for c in params.can), 0.0)
-    return CentredOutputs(centred=Centred(_array(samples - cans - params.centre.x)))
+    cans = sum((_counts(c.file) for c in params.can), 0.0)
+    return CentredOutputs(centred=_array(samples - cans - params.centre.x))
 
 
 TOYS: dict[SpecId, Binding[Any, Any]] = {

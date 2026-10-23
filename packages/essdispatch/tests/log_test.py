@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -39,7 +39,9 @@ from ess.dispatch.log import (
 from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_dataset
 from ess.spec import AccumulatorRef, DatasetRef, OutputRef, WorkflowSpec
 
-SampleFile = NewType('SampleFile', Path)
+
+class SampleRun(BaseModel):
+    file: Path
 
 
 class Selection(BaseModel):
@@ -48,7 +50,7 @@ class Selection(BaseModel):
 
 class LoadParams(BaseModel):
     selection: Selection = Field(default_factory=Selection)
-    sample: SampleFile
+    sample: SampleRun
 
 
 class Amount(BaseModel):
@@ -130,7 +132,7 @@ def start(
         low, high = window = params.selection.window
         windows.append(window)
         loading.wait(timeout=5)
-        value = read_dataset(params.sample) * (high - low)
+        value = read_dataset(params.sample.file) * (high - low)
         return ValueOutputs(value=Amount(value=value))
 
     def start(path: Path) -> Client:
@@ -173,7 +175,7 @@ def _submitted(record_id: str, request: Request) -> Submitted:
 
 
 def _sample(n: int) -> dict[str, Any]:
-    return {'sample': dataset(run=n)}
+    return {'sample': {'file': dataset(run=n)}}
 
 
 def _total(client: Client) -> Accumulator:
@@ -298,7 +300,7 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     sample = DatasetRef(dataset='uuid:run-1')
     part = OutputRef(record='r1', output='values', key='0')
     events: list[Event] = [
-        _submitted('r2', Request(LOAD, params={'sample': sample})),
+        _submitted('r2', Request(LOAD, params={'sample': {'file': sample}})),
         Pushed(
             accumulator='a1',
             params={'part': [part]},
@@ -307,7 +309,7 @@ def test_a_reference_is_logged_in_its_json_form_and_read_back(tmp_path: Path) ->
     _write(tmp_path / 'log', *events)
 
     submitted, pushed = (tmp_path / 'log').read_text().splitlines()
-    assert '"sample":{"@ref":"dataset","dataset":"uuid:run-1"}' in submitted
+    assert '"sample":{"file":{"@ref":"dataset","dataset":"uuid:run-1"}}' in submitted
     assert '{"@ref":"output","record":"r1","output":"values","key":"0"}' in pushed
     assert Log.read(tmp_path / 'log') == events
 
@@ -419,7 +421,9 @@ def test_a_write_that_fails_leaves_the_log_as_it_was(
 ) -> None:
     resource = pytest.importorskip('resource')
     path = tmp_path / 'log'
-    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
+    request = Request(
+        LOAD, params={'sample': {'file': datasets.resolve(dataset(run=1))}}
+    )
     with Log(path) as log:
         log.append(_submitted('load', request))
         soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
@@ -446,7 +450,9 @@ def test_a_last_line_cut_short_is_dropped(
     tmp_path: Path, datasets: FakeDatasets
 ) -> None:
     path = tmp_path / 'log'
-    request = Request(LOAD, params={'sample': datasets.resolve(dataset(run=1))})
+    request = Request(
+        LOAD, params={'sample': {'file': datasets.resolve(dataset(run=1))}}
+    )
     _write(path, _submitted('load', request))
     with path.open('ab') as file:
         file.write(b'{"kind":"finish')  # the backend stopped while writing

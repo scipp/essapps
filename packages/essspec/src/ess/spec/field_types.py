@@ -8,15 +8,13 @@ needs, it reads from the field types. A field's type is built from a few
 pieces, which these functions take apart::
 
     BeamCentre | None       optional(...)   -> (BeamCentre, True)
-    list[SampleFile]        element(...)    -> SampleFile
+    list[SampleRun]         element(...)    -> SampleRun
     list[BeamCentre | None] value_type(...) -> BeamCentre
-    IofQ                    supertypes(...) -> [IofQ, sc.DataArray]
 
-with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
-``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
-(see :func:`plain`). :func:`fits` says whether data
-of one type can be the value of a field of another, so that an output of one
-spec can feed a parameter of another. :func:`model_of` makes a model of one
+Each function sees through ``Annotated`` metadata, such as a validator:
+``Annotated[X, ...]`` is ``X`` (see :func:`plain`). :func:`fits` says whether
+data of one type can be the value of a field of another, so that an output of
+one spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone:
 :func:`inline` validates a value given inline at one place, and
 :func:`ess.spec.places.validated` a parameter's value whole, in the call
@@ -104,25 +102,24 @@ def value_type(annotation: Any) -> Any:
     return tp
 
 
-def supertypes(tp: Any) -> list[Any]:
-    """``tp`` and the types it is a ``NewType`` of, removed one by one."""
-    chain = [tp]
-    while isinstance(chain[-1], NewType):
-        chain.append(chain[-1].__supertype__)
-    return chain
-
-
-def base(tp: Any) -> Any:
-    """``tp`` with its ``NewType``s removed."""
-    return supertypes(tp)[-1]
+def newtype_in(tp: Any) -> Any | None:
+    """
+    The first ``NewType`` in the annotation ``tp``, at any depth of its
+    arguments, such as in ``list[X | None]``, or ``None`` if it has none.
+    """
+    if isinstance(tp, NewType):
+        return tp
+    return next(
+        (found for arg in get_args(tp) if (found := newtype_in(arg)) is not None),
+        None,
+    )
 
 
 def is_single(tp: Any) -> bool:
     """
     Whether ``tp`` is the type of a single value: any type but a list, a
-    dict, a union, or ``None``, once its ``NewType``s are removed.
+    dict, a union, or ``None``.
     """
-    tp = base(tp)
     return tp not in (NoneType, list, dict) and get_origin(tp) not in (
         list,
         dict,
@@ -132,18 +129,15 @@ def is_single(tp: Any) -> bool:
 
 
 def is_file(tp: Any) -> bool:
-    """Whether ``tp`` is a file: ``Path``, or a ``NewType`` of it."""
-    tp = base(tp)
+    """Whether ``tp`` is a file: ``Path``, or a subclass of it."""
     return isinstance(tp, type) and issubclass(tp, PurePath)
 
 
 def is_group(tp: Any) -> bool:
     """
-    Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one, but
-    not a ``RootModel``, which is written as its root value, not as an object
-    of its fields.
+    Whether ``tp`` is a group: a pydantic model, but not a ``RootModel``,
+    which is written as its root value, not as an object of its fields.
     """
-    tp = base(tp)
     return _is_model(tp) and not issubclass(tp, RootModel)
 
 
@@ -157,7 +151,6 @@ def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     in it, is a file; ``seen`` holds the classes looked into already, so that
     a recursive class ends.
     """
-    tp = base(tp)
     if is_file(tp):
         return True
     if _is_model(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
@@ -208,14 +201,11 @@ def fits(data: Any, field: Any) -> bool:
     """
     Whether data of type ``data`` can be the value of a field of type ``field``.
 
-    ``| None`` is removed on both sides. Then the data fit when ``data``, with
-    its ``NewType``s removed one by one, reaches ``field`` or a subclass of it;
-    or when ``field``, with its ``NewType``s removed, reaches ``data`` or a
-    superclass of it. Data of one type fit a union when they fit one of its
-    members: a ``BeamCentre`` fits ``BeamCentre | FindCentre``. Other generic
-    aliases, such as ``list[int]``, fit only themselves. So a
-    ``ComputedTransmission`` fits ``FromFile | ComputedTransmission``, and an
-    instance of a subclass of a group fits the group.
+    ``| None`` is removed on both sides. Then the data fit when ``data`` is
+    ``field`` or a subclass of it, and data of one type fit a union when they
+    fit one of its members: a ``ComputedTransmission`` fits
+    ``FromFile | ComputedTransmission``. Other generic aliases, such as
+    ``list[int]``, fit only themselves.
     """
     data, _ = optional(data)
     field, _ = optional(field)
@@ -223,16 +213,9 @@ def fits(data: Any, field: Any) -> bool:
         return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
-    return any(_reaches(d, field) for d in supertypes(data)) or any(
-        _reaches(data, f) for f in supertypes(field)
+    return data is field or (
+        isinstance(data, type) and isinstance(field, type) and issubclass(data, field)
     )
-
-
-def _reaches(sub: Any, sup: Any) -> bool:
-    """Whether ``sub`` is ``sup`` or a subclass of it."""
-    if sub is sup:
-        return True
-    return isinstance(sub, type) and isinstance(sup, type) and issubclass(sub, sup)
 
 
 @functools.cache

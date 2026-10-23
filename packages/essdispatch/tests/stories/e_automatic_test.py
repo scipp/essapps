@@ -21,12 +21,15 @@ def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-    template = Template(STITCH, params={'reference': reference}, blanks=('runs',))
+    template = Template(
+        STITCH, params={'reference': {'file': reference}}, blanks=('runs',)
+    )
     rule = Rule(
         'reflectivity',
         template,
         selector=Selector(role='sample'),
         series='sample',
+        at=('runs', 'file'),
         label='reflectivity',
     )
     loop = TriggerLoop(client, rules=[rule])
@@ -41,7 +44,9 @@ def test_e1_series_grows_reduction_follows(
     user = connect()  # any client of the proposal
     latest = user.latest('reflectivity', member='si')
     assert len(user.records(label='reflectivity')) == 2
-    assert latest.request.params['runs'] == [r2, r3, r4]  # run order
+    assert latest.request.params['runs'] == [
+        {'file': r} for r in (r2, r3, r4)
+    ]  # run order
     assert user.output(latest, 'stitched').curve.values.tolist() == [
         1.0,
         2.0,
@@ -58,6 +63,7 @@ def test_e2_automatic_reduction_goes_quiet(
     rule = Rule(
         'auto-iofq',
         Template(IOFQ, blanks=('sample',)),
+        at=('sample', 'file'),
         selector=Selector(role='sample'),
         label='iofq',
     )
@@ -76,6 +82,7 @@ def test_e3_reduction_of_our_own_output(
     rule = Rule(
         'auto-iofq',
         Template(IOFQ, blanks=('sample',)),
+        at=('sample', 'file'),
         selector=Selector(),
         label='iofq',
     )
@@ -94,6 +101,7 @@ def test_e4_template_improved_during_a_beamtime(
     rule = Rule(
         'auto-iofq',
         Template(IOFQ, blanks=('sample',)),
+        at=('sample', 'file'),
         selector=Selector(role='sample'),
         label='iofq',
     )

@@ -30,13 +30,19 @@ from ess.dispatch.testing import FakeDatasets, read_dataset
 from ess.spec import DriverBinding, WorkflowSpec
 from ess.spec.pipeline import PipelineBinding
 
-SampleFile = NewType('SampleFile', Path)
-CanFile = NewType('CanFile', Path)
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
 SampleDenominator = NewType('SampleDenominator', float)
 CanNumerator = NewType('CanNumerator', np.ndarray)
 CanDenominator = NewType('CanDenominator', float)
 IofQ = NewType('IofQ', sc.Variable)
+
+
+class SampleRun(BaseModel):
+    file: Path
+
+
+class CanRun(BaseModel):
+    file: Path
 
 
 class Reduction(BaseModel):
@@ -45,20 +51,20 @@ class Reduction(BaseModel):
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleFile
-    can: CanFile
+    sample: SampleRun
+    can: CanRun
 
 
 class IofQMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: list[SampleFile] = Field(min_length=1)
-    can: list[CanFile] = Field(min_length=1)
+    sample: list[SampleRun] = Field(min_length=1)
+    can: list[CanRun] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    iofq: IofQ
+    iofq: sc.Variable
 
 
 IOFQ = WorkflowSpec(
@@ -80,24 +86,24 @@ IOFQ_MULTI = WorkflowSpec(
 )
 
 
-def _counts(run: Path) -> np.ndarray:
+def _counts(run: SampleRun | CanRun) -> np.ndarray:
     """A run's counts per pixel."""
-    return np.asarray(read_dataset(run), dtype=float)
+    return np.asarray(read_dataset(run.file), dtype=float)
 
 
-def sample_numerator(run: SampleFile, reduction: Reduction) -> SampleNumerator:
+def sample_numerator(run: SampleRun, reduction: Reduction) -> SampleNumerator:
     return SampleNumerator(_counts(run).reshape(reduction.bins, -1).sum(axis=1))
 
 
-def sample_denominator(run: SampleFile) -> SampleDenominator:
+def sample_denominator(run: SampleRun) -> SampleDenominator:
     return SampleDenominator(_counts(run).sum())
 
 
-def can_numerator(run: CanFile, reduction: Reduction) -> CanNumerator:
+def can_numerator(run: CanRun, reduction: Reduction) -> CanNumerator:
     return CanNumerator(_counts(run).reshape(reduction.bins, -1).sum(axis=1))
 
 
-def can_denominator(run: CanFile) -> CanDenominator:
+def can_denominator(run: CanRun) -> CanDenominator:
     return CanDenominator(_counts(run).sum())
 
 
@@ -114,7 +120,7 @@ def iofq(
 SANS = sciline.Pipeline(
     [sample_numerator, sample_denominator, can_numerator, can_denominator, iofq]
 )
-SINGLE = PipelineBinding(IOFQ, lambda fixed: SANS.copy())
+SINGLE = PipelineBinding(IOFQ, lambda fixed: SANS.copy(), keys={'iofq': (IofQ,)})
 
 
 class IofQDriver:
@@ -127,8 +133,8 @@ class IofQDriver:
         wf = SANS.copy()
         wf[Reduction] = fixed['reduction']
         parts = {
-            'sample': (SampleFile, (SampleNumerator, SampleDenominator)),
-            'can': (CanFile, (CanNumerator, CanDenominator)),
+            'sample': (SampleRun, (SampleNumerator, SampleDenominator)),
+            'can': (CanRun, (CanNumerator, CanDenominator)),
         }
         self._contribute = {
             table: (key, sciline.Stage(wf, inputs=(key,), outputs=summed))
@@ -161,8 +167,8 @@ def client(tmp_path: Path) -> Iterator[Client]:
         yield client
 
 
-SAMPLE, CAN = dataset(run=611), dataset(run=614)
-SAMPLES = [SAMPLE, dataset(run=612)]
+SAMPLE, CAN = {'file': dataset(run=611)}, {'file': dataset(run=614)}
+SAMPLES = [SAMPLE, {'file': dataset(run=612)}]
 
 
 def _single(client: Client, **params: Any) -> sc.Variable:

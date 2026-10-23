@@ -14,17 +14,30 @@ from ess.spec.pipeline import PipelineBinding
 from ess.spec.testing import check_arrival_and_order, check_caching, check_one_row
 
 # A toy SANS reduction of a sample run and a can run, each a file of counts. The
-# pipeline sets each field under its type as written, such as ``CanFile``.
-# ``IofQDriver`` sums the numerator and the denominator of each table's runs,
-# and computes the outputs from the sums.
+# pipeline sets each parameter at its class, such as ``CanRun``; the two outputs,
+# both arrays, are computed at keys of the workflow's own, ``IofQ`` and
+# ``CanIofQ``. ``IofQDriver`` sums the numerator and the denominator of each
+# table's runs, and computes the outputs from the sums.
 
 
 class Reduction(BaseModel):
     bins: int = 2
 
 
-SampleFile = NewType('SampleFile', Path)
-CanFile = NewType('CanFile', Path)
+class Run(BaseModel):
+    """A run, a text file of counts."""
+
+    file: Path
+
+
+class SampleRun(Run):
+    pass
+
+
+class CanRun(Run):
+    pass
+
+
 SampleCounts = NewType('SampleCounts', np.ndarray)
 CanCounts = NewType('CanCounts', np.ndarray)
 SampleNumerator = NewType('SampleNumerator', np.ndarray)
@@ -38,19 +51,22 @@ IofQ = NewType('IofQ', np.ndarray)
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleFile
-    can: CanFile
+    sample: SampleRun
+    can: CanRun
 
 
 class IofQMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: list[SampleFile] = Field(min_length=1)
-    can: list[CanFile] = Field(min_length=1)
+    sample: list[SampleRun] = Field(min_length=1)
+    can: list[CanRun] = Field(min_length=1)
 
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
-    iofq: IofQ
-    can_iofq: CanIofQ
+    iofq: np.ndarray
+    can_iofq: np.ndarray
+
+
+OUTPUT_KEYS = {'iofq': (IofQ,), 'can_iofq': (CanIofQ,)}
 
 
 def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
@@ -102,13 +118,13 @@ def loaded() -> list[Path]:
 
 @pytest.fixture
 def make_pipeline(loaded: list[Path]) -> MakePipeline:
-    def load_sample(path: SampleFile) -> SampleCounts:
-        loaded.append(path)
-        return SampleCounts(np.loadtxt(path))
+    def load_sample(run: SampleRun) -> SampleCounts:
+        loaded.append(run.file)
+        return SampleCounts(np.loadtxt(run.file))
 
-    def load_can(path: CanFile) -> CanCounts:
-        loaded.append(path)
-        return CanCounts(np.loadtxt(path))
+    def load_can(run: CanRun) -> CanCounts:
+        loaded.append(run.file)
+        return CanCounts(np.loadtxt(run.file))
 
     def make(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         sample = [load_sample, sample_numerator, sample_denominator, sample_iofq]
@@ -146,8 +162,8 @@ class IofQDriver:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         key, stage = self._contribute[table]
-        for path in rows:
-            for k, part in stage.compute({key: path}).items():
+        for run in rows:
+            for k, part in stage.compute({key: run}).items():
                 self._sums[k] = self._sums[k] + part if k in self._sums else part
 
     def outputs(self) -> IofQOutputs:
@@ -158,7 +174,7 @@ class IofQDriver:
 
 @pytest.fixture
 def single(make_pipeline: MakePipeline) -> PipelineBinding:
-    return PipelineBinding(IOFQ, make_pipeline)
+    return PipelineBinding(IOFQ, make_pipeline, keys=OUTPUT_KEYS)
 
 
 @pytest.fixture
@@ -177,13 +193,15 @@ def write(tmp_path: Path, name: str, counts: list[float]) -> Path:
 
 
 @pytest.fixture
-def samples(tmp_path: Path) -> list[Path]:
-    return [write(tmp_path, f'sample{i}', c) for i, c in enumerate(SAMPLES)]
+def samples(tmp_path: Path) -> list[SampleRun]:
+    return [
+        SampleRun(file=write(tmp_path, f'sample{i}', c)) for i, c in enumerate(SAMPLES)
+    ]
 
 
 @pytest.fixture
-def cans(tmp_path: Path) -> list[Path]:
-    return [write(tmp_path, f'can{i}', c) for i, c in enumerate(CANS)]
+def cans(tmp_path: Path) -> list[CanRun]:
+    return [CanRun(file=write(tmp_path, f'can{i}', c)) for i, c in enumerate(CANS)]
 
 
 def reduction(bins: int) -> dict[str, Reduction]:
@@ -195,7 +213,7 @@ def iofq(counts: list[float], bins: int = 2) -> np.ndarray:
 
 
 def test_a_plain_request_computes_the_outputs_model(
-    single: PipelineBinding, samples: list[Path], cans: list[Path]
+    single: PipelineBinding, samples: list[SampleRun], cans: list[CanRun]
 ) -> None:
     outputs = single.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert isinstance(outputs, IofQOutputs)
@@ -204,7 +222,7 @@ def test_a_plain_request_computes_the_outputs_model(
 
 
 def test_make_pipeline_gets_the_fixed_values_with_defaults_and_no_blank(
-    make_pipeline: MakePipeline, samples: list[Path]
+    make_pipeline: MakePipeline, samples: list[SampleRun]
 ) -> None:
     made: list[Mapping[str, Any]] = []
 
@@ -212,23 +230,27 @@ def test_make_pipeline_gets_the_fixed_values_with_defaults_and_no_blank(
         made.append(fixed)
         return make_pipeline(fixed)
 
-    PipelineBinding(IOFQ, recording).make_stage({'sample': samples[0]}, ('can',))
+    binding = PipelineBinding(IOFQ, recording, keys=OUTPUT_KEYS)
+    binding.make_stage({'sample': samples[0]}, ('can',))
     assert made == [{'sample': samples[0], 'reduction': Reduction()}]
 
 
 def test_a_stage_loads_each_run_once(
-    single: PipelineBinding, samples: list[Path], cans: list[Path], loaded: list[Path]
+    single: PipelineBinding,
+    samples: list[SampleRun],
+    cans: list[CanRun],
+    loaded: list[Path],
 ) -> None:
     tune = single.make_stage({'sample': samples[0], 'can': cans[0]}, ('reduction',))
     for bins in (1, 2, 4):
         np.testing.assert_allclose(
             tune(reduction(bins)).iofq, iofq(SAMPLES[0], bins) - iofq(CANS[0], bins)
         )
-    assert sorted(loaded) == sorted([samples[0], cans[0]])
+    assert sorted(loaded) == sorted([samples[0].file, cans[0].file])
 
 
 def test_a_stage_call_takes_the_blanks_exactly(
-    single: PipelineBinding, samples: list[Path], cans: list[Path]
+    single: PipelineBinding, samples: list[SampleRun], cans: list[CanRun]
 ) -> None:
     tune = single.make_stage({'sample': samples[0], 'can': cans[0]}, ('reduction',))
     with pytest.raises(ValueError, match=r"give the blanks \['reduction'\]"):
@@ -246,8 +268,8 @@ def test_a_stage_refuses_values_that_do_not_fit(single: PipelineBinding) -> None
 def test_the_bindings_keep_the_symmetries(
     single: PipelineBinding,
     multi: DriverBinding,
-    samples: list[Path],
-    cans: list[Path],
+    samples: list[SampleRun],
+    cans: list[CanRun],
 ) -> None:
     check_one_row(single, multi, IofQParams(sample=samples[0], can=cans[0]))
     runs = {'sample': samples[0], 'can': cans[0]}
@@ -259,33 +281,36 @@ def test_the_bindings_keep_the_symmetries(
 def test_summing_the_rows_gives_the_reduction_of_the_summed_runs(
     single: PipelineBinding,
     multi: DriverBinding,
-    samples: list[Path],
-    cans: list[Path],
+    samples: list[SampleRun],
+    cans: list[CanRun],
     tmp_path: Path,
 ) -> None:
     summed = IofQParams(
-        sample=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0)),
-        can=write(tmp_path, 'cans', np.sum(CANS, axis=0)),
+        sample=SampleRun(file=write(tmp_path, 'samples', np.sum(SAMPLES, axis=0))),
+        can=CanRun(file=write(tmp_path, 'cans', np.sum(CANS, axis=0))),
     )
     rows = IOFQ_MULTI.params(sample=samples, can=cans)
     np.testing.assert_allclose(multi.compute(rows).iofq, single.compute(summed).iofq)
 
 
 def test_a_driver_with_fixed_rows_loads_each_run_once_across_reads(
-    multi: DriverBinding, samples: list[Path], cans: list[Path], loaded: list[Path]
+    multi: DriverBinding,
+    samples: list[SampleRun],
+    cans: list[CanRun],
+    loaded: list[Path],
 ) -> None:
     driver = multi.make_accumulator({'can': cans, **reduction(2)}, ('sample',))
     for sample in samples:
         driver.push('sample', [sample])
         driver.outputs()
-    assert loaded == cans + samples
+    assert loaded == [run.file for run in cans + samples]
 
 
 def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
     assert dict(single.keys) == {
         'reduction': (Reduction,),
-        'sample': (SampleFile,),
-        'can': (CanFile,),
+        'sample': (SampleRun,),
+        'can': (CanRun,),
         'iofq': (IofQ,),
         'can_iofq': (CanIofQ,),
     }
@@ -294,7 +319,7 @@ def test_keys_give_the_key_of_each_field(single: PipelineBinding) -> None:
 
 
 def test_pipeline_sets_each_fixed_value_at_its_key(
-    single: PipelineBinding, samples: list[Path], cans: list[Path]
+    single: PipelineBinding, samples: list[SampleRun], cans: list[CanRun]
 ) -> None:
     pipeline = single.pipeline({**reduction(4), 'sample': samples[0], 'can': cans[0]})
     np.testing.assert_allclose(
@@ -304,23 +329,20 @@ def test_pipeline_sets_each_fixed_value_at_its_key(
         single.pipeline({'iofq': None})
 
 
-# Keys of a workflow's own: the pipeline reads a ``Filename`` and computes a
-# ``Total``, where the spec has a ``SampleFile`` and a ``SampleTotal``.
+# Keys of a workflow's own: the pipeline reads a ``Run`` and computes a
+# ``Total``, where the spec has a ``SampleRun`` and a ``float``.
 
-Filename = NewType('Filename', Path)
 Counts = NewType('Counts', np.ndarray)
 Total = NewType('Total', float)
-SampleTotal = NewType('SampleTotal', float)
-SampleMean = NewType('SampleMean', float)
 
 
 class TotalMultiParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: list[SampleFile] = Field(min_length=1)
+    sample: list[SampleRun] = Field(min_length=1)
 
 
 class TotalOutputs(BaseModel):
-    total: SampleTotal
+    total: float
 
 
 TOTAL = _spec('total', params=IofQParams, outputs=TotalOutputs)
@@ -329,8 +351,8 @@ TOTAL_MULTI = _spec(
 )
 
 
-def load(filename: Filename) -> Counts:
-    return Counts(np.loadtxt(filename))
+def load(run: Run) -> Counts:
+    return Counts(np.loadtxt(run.file))
 
 
 def total(counts: Counts, reduction: Reduction) -> Total:
@@ -338,32 +360,32 @@ def total(counts: Counts, reduction: Reduction) -> Total:
 
 
 def test_keys_name_keys_of_the_workflows_own(
-    samples: list[Path], cans: list[Path]
+    samples: list[SampleRun], cans: list[CanRun]
 ) -> None:
     binding = PipelineBinding(
         TOTAL,
         lambda _: sciline.Pipeline([load, total]),
-        keys={'sample': (Filename,), 'total': (Total,)},
+        keys={'sample': (Run,), 'total': (Total,)},
     )
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalOutputs(total=2 * sum(SAMPLES[0]))
 
 
 class TotalAndMeanOutputs(BaseModel):
-    total: SampleTotal
-    mean: SampleMean | None = None
+    total: float
+    mean: float | None = None
 
 
-def mean(counts: Counts) -> SampleMean:
-    return SampleMean(counts.mean())
+def mean(counts: Counts) -> float:
+    return counts.mean()
 
 
 @pytest.mark.parametrize(
     ('providers', 'expected_mean'), [([load, total], None), ([load, total, mean], 3.0)]
 )
 def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
-    samples: list[Path],
-    cans: list[Path],
+    samples: list[SampleRun],
+    cans: list[CanRun],
     providers: list[Callable[..., Any]],
     expected_mean: float | None,
 ) -> None:
@@ -371,15 +393,18 @@ def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
     binding = PipelineBinding(
         spec,
         lambda _: sciline.Pipeline(providers),
-        keys={'sample': (Filename,), 'total': (Total,)},
+        keys={'sample': (Run,), 'total': (Total,)},
     )
+    assert binding.keys['mean'] == (float,)  # the key of the output's type
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalAndMeanOutputs(total=2 * 12.0, mean=expected_mean)
 
 
-def test_a_table_sets_the_key_of_its_type_to_its_list(samples: list[Path]) -> None:
-    def load_all(paths: list[SampleFile]) -> Counts:
-        return Counts(sum(np.loadtxt(path) for path in paths))
+def test_a_table_sets_the_key_of_its_type_to_its_list(
+    samples: list[SampleRun],
+) -> None:
+    def load_all(runs: list[SampleRun]) -> Counts:
+        return Counts(sum(np.loadtxt(run.file) for run in runs))
 
     binding = PipelineBinding(
         TOTAL_MULTI,
@@ -394,9 +419,11 @@ def test_a_table_sets_the_key_of_its_type_to_its_list(samples: list[Path]) -> No
     check_caching(binding, {}, [{'sample': samples}, {'sample': samples[:1]}])
 
 
-def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -> None:
+def test_a_field_without_a_key_is_for_make_pipeline_alone(
+    samples: list[SampleRun],
+) -> None:
     def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-        counts = sum(load(path) for path in fixed['sample'])
+        counts = sum(load(run) for run in fixed['sample'])
         return sciline.Pipeline([total], params={Counts: counts})
 
     binding = PipelineBinding(
@@ -414,11 +441,11 @@ def test_a_field_without_a_key_is_for_make_pipeline_alone(samples: list[Path]) -
         ({'speed': (Total,)}, r"\['speed'\]: not fields of total"),
         ({'total': ()}, r"\['total'\]: an output is computed as one key"),
         ({'total': (Total, Counts)}, r"\['total'\]: an output is computed as one key"),
-        ({'sample': (Filename, Counts)}, r"\['sample'\]: a parameter sets one key, or"),
-        ({'sample': (CanFile,)}, 'total: sample and can have the key CanFile; no two'),
+        ({'sample': (Run, Counts)}, r"\['sample'\]: a parameter sets one key, or"),
+        ({'sample': (CanRun,)}, 'total: sample and can have the key CanRun; no two'),
         (
-            {'sample': (Filename,), 'total': (Filename,)},
-            'total: sample and total have the key Filename; no two fields share',
+            {'sample': (Run,), 'total': (Run,)},
+            'total: sample and total have the key Run; no two fields share',
         ),
     ],
 )
@@ -429,18 +456,33 @@ def test_keys_that_do_not_fit_the_spec_are_refused(
         PipelineBinding(TOTAL, lambda _: sciline.Pipeline([load, total]), keys=keys)
 
 
-class TwoFiles(BaseModel):
-    first: SampleFile
-    second: SampleFile
+class TwoRuns(BaseModel):
+    first: SampleRun
+    second: SampleRun
 
 
-def test_two_parameters_of_one_type_need_a_key_each() -> None:
-    spec = _spec('twins', params=TwoFiles, outputs=TotalOutputs)
+FirstRun = NewType('FirstRun', SampleRun)
+SecondRun = NewType('SecondRun', SampleRun)
+
+
+def test_two_parameters_of_one_class_need_a_key_each() -> None:
+    spec = _spec('twins', params=TwoRuns, outputs=TotalOutputs)
     with pytest.raises(
         ValueError,
-        match='twins: first and second have the key SampleFile; no two fields share',
+        match='twins: first and second have the key SampleRun; no two fields share',
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))
+    keys = {'first': (FirstRun,), 'second': (SecondRun,)}
+    binding = PipelineBinding(spec, lambda _: sciline.Pipeline([total]), keys=keys)
+    assert {n: binding.keys[n] for n in keys} == keys
+
+
+def test_two_outputs_of_one_type_need_keys(make_pipeline: MakePipeline) -> None:
+    with pytest.raises(
+        ValueError,
+        match='iofq: iofq and can_iofq have the key ndarray; no two fields share',
+    ):
+        PipelineBinding(IOFQ, make_pipeline)
 
 
 def test_keys_are_given_as_tuples() -> None:
@@ -450,8 +492,8 @@ def test_keys_are_given_as_tuples() -> None:
         )
 
 
-Offset = NewType('Offset', float)
-Shifted = NewType('Shifted', float)
+class Offset(BaseModel):
+    amount: float
 
 
 class OffsetParams(BaseModel):
@@ -459,14 +501,14 @@ class OffsetParams(BaseModel):
 
 
 class ShiftedOutputs(BaseModel):
-    shifted: Shifted
+    shifted: float
 
 
 SHIFTED = _spec('shifted', params=OffsetParams, outputs=ShiftedOutputs)
 
 
-def shift(offset: Offset) -> Shifted:
-    return Shifted(offset + 1.0)
+def shift(offset: Offset) -> float:
+    return offset.amount + 1.0
 
 
 @pytest.mark.parametrize('keys', [None, {'offset': (Offset,)}])
@@ -483,14 +525,14 @@ def test_an_optional_parameter_without_a_key_reaches_make_pipeline() -> None:
     def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         pipeline = sciline.Pipeline([shift])
         if fixed['offset'] is None:
-            pipeline[Shifted] = Shifted(-1.0)
+            pipeline[float] = -1.0
         else:
             pipeline[Offset] = fixed['offset']
         return pipeline
 
     binding = PipelineBinding(SHIFTED, make_pipeline, keys={'offset': ()})
     assert binding.keys['offset'] == ()
-    assert binding.compute(OffsetParams(offset=2.0)).shifted == 3.0
+    assert binding.compute(OffsetParams(offset=Offset(amount=2.0))).shifted == 3.0
     assert binding.compute(OffsetParams()).shifted == -1.0
 
 
@@ -502,16 +544,17 @@ def test_make_pipeline_may_return_a_pipeline_it_holds() -> None:
     spec = _spec('shifted', params=RequiredOffsetParams, outputs=ShiftedOutputs)
     base = sciline.Pipeline([shift])
     binding = PipelineBinding(spec, lambda _: base)
-    assert binding.compute(RequiredOffsetParams(offset=2.0)).shifted == 3.0
-    assert binding.compute(RequiredOffsetParams(offset=5.0)).shifted == 6.0
+    for amount in (2.0, 5.0):
+        params = RequiredOffsetParams(offset=Offset(amount=amount))
+        assert binding.compute(params).shifted == amount + 1.0
     with pytest.raises(sciline.UnsatisfiedRequirement):
-        base.compute(Shifted)
+        base.compute(float)
 
 
 # A beam centre, given or found from the sample run. ``find_centre`` leads from
 # the key of one alternative, ``FindCentre``, to that of the other,
 # ``BeamCentre``, so one graph serves both. The output ``centre`` reports the
-# centre given or found, at a key of its own.
+# centre given or found, at a key of the workflow's own, ``UsedCentre``.
 
 
 class BeamCentre(BaseModel):
@@ -531,29 +574,29 @@ class RefinedCentre(BeamCentre):
 
 
 Centre = Annotated[BeamCentre | FindCentre, Field(discriminator='kind')]
-Centred = NewType('Centred', float)
 UsedCentre = NewType('UsedCentre', BeamCentre)
+CENTRE_KEYS = {'centre': (UsedCentre,)}
 
 
 class CentredParams(BaseModel):
-    sample: SampleFile
+    sample: SampleRun
     beam_centre: Centre = BeamCentre()
 
 
 class CentredOutputs(BaseModel):
-    centred: Centred
-    centre: UsedCentre
+    centred: float
+    centre: BeamCentre
 
 
 CENTRED = _spec('centred', params=CentredParams, outputs=CentredOutputs)
 
 
-def load_counts(path: SampleFile) -> SampleCounts:
-    return SampleCounts(np.loadtxt(path))
+def load_counts(run: SampleRun) -> SampleCounts:
+    return SampleCounts(np.loadtxt(run.file))
 
 
-def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:
-    return Centred(counts.sum() - centre.x)
+def centred(counts: SampleCounts, centre: BeamCentre) -> float:
+    return counts.sum() - centre.x
 
 
 def used_centre(centre: BeamCentre) -> UsedCentre:
@@ -579,11 +622,12 @@ def centring(find_centre: Callable[..., BeamCentre]) -> PipelineBinding:
     return PipelineBinding(
         CENTRED,
         lambda _: sciline.Pipeline([load_counts, find_centre, centred, used_centre]),
+        keys=CENTRE_KEYS,
     )
 
 
 def test_one_graph_serves_both_alternatives_of_a_union(
-    centring: PipelineBinding, samples: list[Path], found: list[FindCentre]
+    centring: PipelineBinding, samples: list[SampleRun], found: list[FindCentre]
 ) -> None:
     assert centring.keys['beam_centre'] == (BeamCentre, FindCentre)
     total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
@@ -602,7 +646,7 @@ def test_one_graph_serves_both_alternatives_of_a_union(
 
 
 def test_a_union_left_out_takes_the_key_of_its_default(
-    centring: PipelineBinding, samples: list[Path], found: list[FindCentre]
+    centring: PipelineBinding, samples: list[SampleRun], found: list[FindCentre]
 ) -> None:
     outputs = centring.compute(CentredParams(sample=samples[0]))
     assert outputs.centre == BeamCentre()
@@ -610,7 +654,7 @@ def test_a_union_left_out_takes_the_key_of_its_default(
 
 
 def test_the_key_of_a_union_is_chosen_by_tag_not_by_type(
-    centring: PipelineBinding, samples: list[Path]
+    centring: PipelineBinding, samples: list[SampleRun]
 ) -> None:
     refined = RefinedCentre(x=2.0)
     params = CentredParams(sample=samples[0], beam_centre=refined)
@@ -619,7 +663,7 @@ def test_the_key_of_a_union_is_chosen_by_tag_not_by_type(
 
 
 def test_a_union_cannot_be_a_blank(
-    centring: PipelineBinding, samples: list[Path]
+    centring: PipelineBinding, samples: list[SampleRun]
 ) -> None:
     with pytest.raises(
         ValueError, match=r"\['beam_centre'\]: a union cannot be a blank"
@@ -630,7 +674,7 @@ def test_a_union_cannot_be_a_blank(
 @pytest.mark.parametrize('centre', [BeamCentre(x=1.0), FindCentre(tolerance=0.5)])
 def test_a_stage_with_a_union_fixed_keeps_the_symmetries(
     centring: PipelineBinding,
-    samples: list[Path],
+    samples: list[SampleRun],
     centre: BeamCentre | FindCentre,
 ) -> None:
     # The blank sample is upstream of find_centre.
@@ -642,7 +686,7 @@ def test_a_stage_with_a_union_fixed_keeps_the_symmetries(
 @pytest.mark.parametrize('held', [BeamCentre, FindCentre])
 def test_a_value_held_at_a_key_of_a_union_is_refused(
     find_centre: Callable[..., BeamCentre],
-    samples: list[Path],
+    samples: list[SampleRun],
     centre: BeamCentre | FindCentre,
     held: type[BaseModel],
 ) -> None:
@@ -655,6 +699,7 @@ def test_a_value_held_at_a_key_of_a_union_is_refused(
             [load_counts, find_centre, centred, used_centre],
             params={held: held()},
         ),
+        keys=CENTRE_KEYS,
     )
     params = CentredParams(sample=samples[0], beam_centre=centre)
     with pytest.raises(
@@ -677,28 +722,39 @@ def test_a_value_held_at_a_key_of_a_union_is_refused(
             {'centred': (BeamCentre,)},
             'centred: beam_centre and centred have the key BeamCentre; no two',
         ),
+        (
+            {'centre': (BeamCentre,)},
+            'centred: beam_centre and centre have the key BeamCentre; no two',
+        ),
     ],
 )
 def test_keys_of_a_union_that_do_not_fit_are_refused(
     keys: dict[str, Any], reason: str
 ) -> None:
     with pytest.raises(ValueError, match=reason):
-        PipelineBinding(CENTRED, lambda _: sciline.Pipeline([centred]), keys=keys)
+        PipelineBinding(
+            CENTRED,
+            lambda _: sciline.Pipeline([centred]),
+            keys={**CENTRE_KEYS, **keys},
+        )
+
+
+class CentredOnly(BaseModel):
+    centred: float
 
 
 CentreSetting = NewType('CentreSetting', BaseModel)
 
 
-def centred_by_setting(counts: SampleCounts, setting: CentreSetting) -> Centred:
+def centred_by_setting(counts: SampleCounts, setting: CentreSetting) -> float:
     if isinstance(setting, BeamCentre):
-        return Centred(counts.sum() - setting.x)
-    return Centred(counts.sum() - counts.mean() * setting.tolerance)
+        return counts.sum() - setting.x
+    return counts.sum() - counts.mean() * setting.tolerance
 
 
-def test_a_union_may_set_one_key_for_both_alternatives(samples: list[Path]) -> None:
-    class CentredOnly(BaseModel):
-        centred: Centred
-
+def test_a_union_may_set_one_key_for_both_alternatives(
+    samples: list[SampleRun],
+) -> None:
     binding = PipelineBinding(
         _spec('centred', params=CentredParams, outputs=CentredOnly),
         lambda _: sciline.Pipeline([load_counts, centred_by_setting]),
@@ -713,11 +769,8 @@ def test_a_union_may_set_one_key_for_both_alternatives(samples: list[Path]) -> N
 
 
 def test_a_value_held_at_the_one_key_of_a_union_is_set_over(
-    samples: list[Path],
+    samples: list[SampleRun],
 ) -> None:
-    class CentredOnly(BaseModel):
-        centred: Centred
-
     binding = PipelineBinding(
         _spec('centred', params=CentredParams, outputs=CentredOnly),
         lambda _: sciline.Pipeline(
@@ -736,7 +789,7 @@ def test_an_optional_union_with_a_key_is_refused() -> None:
     class OptionalCentreParams(BaseModel):
         beam_centre: Centre | None = None
 
-    spec = _spec('centred', params=OptionalCentreParams, outputs=CentredOutputs)
+    spec = _spec('centred', params=OptionalCentreParams, outputs=CentredOnly)
     with pytest.raises(
         ValueError, match=r"\['beam_centre'\]: a parameter typed X \| None sets no"
     ):
@@ -751,79 +804,87 @@ def test_a_list_of_unions_sets_the_key_of_its_type() -> None:
     class CentresParams(BaseModel):
         centres: list[Centre] = []
 
-    spec = _spec('centres', params=CentresParams, outputs=CentredOutputs)
+    spec = _spec('centres', params=CentresParams, outputs=CentredOnly)
     binding = PipelineBinding(spec, lambda _: sciline.Pipeline([centred]))
     assert binding.keys['centres'] == (list[BeamCentre | FindCentre],)
 
 
 # Two union parameters of one sample run: the centre of the sample and that of
-# the can, each told apart by ``NewType`` alternatives, as two parameters of
-# one plain type are.
+# the can, each told apart by alternatives of a class of their own, as two
+# parameters of one group are.
 
-SampleCentre = NewType('SampleCentre', BeamCentre)
-FindSampleCentre = NewType('FindSampleCentre', FindCentre)
-CanCentre = NewType('CanCentre', BeamCentre)
-FindCanCentre = NewType('FindCanCentre', FindCentre)
-Shift = NewType('Shift', float)
+
+class SampleCentre(BeamCentre):
+    pass
+
+
+class FindSampleCentre(FindCentre):
+    pass
+
+
+class CanCentre(BeamCentre):
+    pass
+
+
+class FindCanCentre(FindCentre):
+    pass
 
 
 class TwoCentresParams(BaseModel):
-    sample: SampleFile
+    sample: SampleRun
     sample_centre: Annotated[
         SampleCentre | FindSampleCentre, Field(discriminator='kind')
-    ] = BeamCentre()
+    ] = SampleCentre()
     can_centre: Annotated[CanCentre | FindCanCentre, Field(discriminator='kind')] = (
-        BeamCentre()
+        CanCentre()
     )
 
 
-class SameCentresParams(BaseModel):
-    sample: SampleFile
-    sample_centre: Centre = BeamCentre()
-    can_centre: Centre = BeamCentre()
-
-
 class ShiftOutputs(BaseModel):
-    shift: Shift
+    shift: float
 
 
 def find_sample_centre(
     settings: FindSampleCentre, counts: SampleCounts
 ) -> SampleCentre:
-    return SampleCentre(BeamCentre(x=counts.mean() * settings.tolerance))
+    return SampleCentre(x=counts.mean() * settings.tolerance)
 
 
 def find_can_centre(settings: FindCanCentre, counts: SampleCounts) -> CanCentre:
-    return CanCentre(BeamCentre(x=-counts.mean() * settings.tolerance))
+    return CanCentre(x=-counts.mean() * settings.tolerance)
 
 
-def shift_between(sample: SampleCentre, can: CanCentre) -> Shift:
-    return Shift(sample.x - can.x)
+def shift_between(sample: SampleCentre, can: CanCentre) -> float:
+    return sample.x - can.x
 
 
-NEWTYPE_KEYS = {
-    'sample_centre': (SampleCentre, FindSampleCentre),
-    'can_centre': (CanCentre, FindCanCentre),
-}
-
-
-@pytest.mark.parametrize(
-    ('params', 'keys'), [(TwoCentresParams, None), (SameCentresParams, NEWTYPE_KEYS)]
-)
-def test_union_parameters_are_told_apart_by_newtype_alternatives(
-    samples: list[Path], params: type[BaseModel], keys: dict[str, Any] | None
+def test_union_parameters_are_told_apart_by_the_classes_of_their_alternatives(
+    samples: list[SampleRun],
 ) -> None:
-    spec = _spec('shift', params=params, outputs=ShiftOutputs)
+    spec = _spec('shift', params=TwoCentresParams, outputs=ShiftOutputs)
     providers = [load_counts, find_sample_centre, find_can_centre, shift_between]
-    binding = PipelineBinding(spec, lambda _: sciline.Pipeline(providers), keys=keys)
-    assert {n: binding.keys[n] for n in NEWTYPE_KEYS} == NEWTYPE_KEYS
+    binding = PipelineBinding(spec, lambda _: sciline.Pipeline(providers))
+    assert binding.keys['sample_centre'] == (SampleCentre, FindSampleCentre)
+    assert binding.keys['can_centre'] == (CanCentre, FindCanCentre)
 
-    request = params(
+    request = TwoCentresParams(
         sample=samples[0],
-        sample_centre=FindCentre(tolerance=0.5),
-        can_centre=BeamCentre(x=1.0),
+        sample_centre={'kind': 'find', 'tolerance': 0.5},
+        can_centre={'kind': 'given', 'x': 1.0},
     )
     assert binding.compute(request).shift == 0.5 * np.mean(SAMPLES[0]) - 1.0
+
+
+class SameCentresParams(BaseModel):
+    sample: SampleRun
+    sample_centre: Centre = BeamCentre()
+    can_centre: Centre = BeamCentre()
+
+
+SampleCentreKey = NewType('SampleCentreKey', BeamCentre)
+FindSampleCentreKey = NewType('FindSampleCentreKey', FindCentre)
+CanCentreKey = NewType('CanCentreKey', BeamCentre)
+FindCanCentreKey = NewType('FindCanCentreKey', FindCentre)
 
 
 def test_two_union_parameters_of_one_type_need_keys() -> None:
@@ -833,3 +894,11 @@ def test_two_union_parameters_of_one_type_need_keys() -> None:
         match='shift: sample_centre and can_centre have the key BeamCentre; ',
     ):
         PipelineBinding(spec, lambda _: sciline.Pipeline([shift_between]))
+    keys = {
+        'sample_centre': (SampleCentreKey, FindSampleCentreKey),
+        'can_centre': (CanCentreKey, FindCanCentreKey),
+    }
+    binding = PipelineBinding(
+        spec, lambda _: sciline.Pipeline([shift_between]), keys=keys
+    )
+    assert {n: binding.keys[n] for n in keys} == keys

@@ -25,8 +25,7 @@ two it takes, with ``| None`` removed:
 =====================================  ==========  ===========================
 The type at a place                    Inline      By reference
 =====================================  ==========  ===========================
-a file: ``Path``, or a ``NewType``     no          to a dataset
-of it
+a file: ``Path``                       no          to a dataset
 a group, or a union of groups          its fields  to an output that fits and
                                        unless one  holds no file
                                        is a data
@@ -56,7 +55,7 @@ written as its root value::
         mask: sc.DataArray             # a data value: the group is given by reference
 
     class Sample(BaseModel):
-        run: SampleFile
+        run: Path
         mask: PixelMask | None = None  # None: no pixels masked
 
     {'sample': {'run': dataset(run=101), 'mask': m.ref('mask')}}
@@ -77,8 +76,12 @@ framework: what the framework needs, it reads from the field types (see
 :mod:`ess.spec.field_types`). The rules on them, checked when a spec is made:
 
 - The names of params and outputs are distinct.
-- Each parameter's type is a type, possibly optional, or a list of one; not
-  a dict. A type may be a union, such as a union of groups.
+- Each parameter is a group, a union of groups, or a list of one, possibly
+  optional; a value of another type, such as a file or a number, is a field
+  of a group. So a form shows a parameter as a group of fields, and a
+  binding keys it by its class.
+- No type in the params or the outputs is a ``NewType``: a spec names a
+  role by a class, and a binding maps it to a key of its own.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, whose contents are not places, so no
   dataset can give it.
@@ -86,14 +89,16 @@ framework: what the framework needs, it reads from the field types (see
   one, since no request writes it at a place of its own. No field of a group
   that holds a file is a data value: no reference stands for such a group,
   so a request writes it field by field.
-- A union of groups, a parameter or inside a group, is discriminated by the
-  name of its tag field, not by a callable, so that the tag of a value tells
-  its alternative. The tag field of each alternative is a ``Literal`` of one
-  string, its own, such as ``Literal['find']``, without an alias. A union
-  that holds a group holds groups only, not ``GivenCentre | float``: a value
-  of a type that is not a group has no tag. A field of a group that
-  is a dict, or a list that may be ``None``, has a JSON form, since its
-  contents are not places and no reference stands for a whole one.
+- A union of groups is a parameter, or the element of a list parameter,
+  never a field of a group: a choice between ways is a parameter of its own.
+  It is discriminated by the name of its tag field, not by a callable, so
+  that the tag of a value tells its alternative. The tag field of each
+  alternative is a ``Literal`` of one string, its own, such as
+  ``Literal['find']``, without an alias. A union that holds a group holds
+  groups only, not ``GivenCentre | float``: a value of a type that is not a
+  group has no tag. A field of a group that is a dict, or a list that may be
+  ``None``, has a JSON form, since its contents are not places and no
+  reference stands for a whole one.
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
@@ -162,7 +167,6 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
 from .field_types import (
-    base,
     element,
     has_json_form,
     holds_file,
@@ -170,6 +174,7 @@ from .field_types import (
     is_group,
     is_list,
     is_single,
+    newtype_in,
     optional,
     type_name,
     value_type,
@@ -353,7 +358,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     A list is an array of these, and an optional value has ``null`` in
     ``anyOf``::
 
-        "sample":    {"$ref": "#/$defs/DatasetRef", "dataType": "SampleFile"}
+        "file":      {"$ref": "#/$defs/DatasetRef", "dataType": "Path"}
         "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
                                 {"anyOf": [OutputRef, AccumulatorRef],
                                  "dataType": "Reduction"}]}
@@ -418,6 +423,9 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
         union = get_origin(tp) in (Union, UnionType)
+        if (newtype := newtype_in(field.annotation)) is not None:
+            problems.append(f'{where}: {_newtype_problem(newtype)}')
+            continue
         if not (_one_or_list(field.annotation) and (is_single(tp) or union)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
@@ -434,11 +442,11 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
             )
         if place := _place_problems(model, name, (), {}):
             problems.extend(f'{where}: {problem}' for problem in place)
-        elif not (is_file(tp) or groups_at(model, name) or has_json_form(model, name)):
+        elif not groups_at(model, name):
             problems.append(
-                f'{where}: {type_name(tp)} has no JSON form, and only a group or a '
-                'file takes a reference; a data value is a field of a group, which '
-                'a request gives by reference'
+                f'{where}: {type_name(tp)} is not a group; a parameter is a group, '
+                'a union of groups, or a list of one, and a value of another type '
+                'is a field of a group, such as the file of a run'
             )
         elif field.default_factory_takes_validated_data:
             problems.append(
@@ -447,6 +455,13 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         elif not field.is_required() and (problem := _default_problem(model, name)):
             problems.append(f'{where}: {problem}')
     return problems
+
+
+def _newtype_problem(newtype: Any) -> str:
+    return (
+        f'{newtype.__name__} is a NewType; a spec names a role by a class, such '
+        'as a group, and a binding maps it to a key of its own'
+    )
 
 
 def _has_alias(field: FieldInfo) -> bool:
@@ -508,7 +523,9 @@ def _group_problems(
     places, the problems of the places of its fields, and a default that is
     not a value, since a field left out holds its default. Field and model
     validators of any mode are allowed: they run whenever the group is
-    validated whole (see :mod:`ess.spec.places`). A group that holds a file
+    validated whole (see :mod:`ess.spec.places`). A field of a group is not a
+    ``NewType`` and not a union of groups: a choice between ways is a
+    parameter of its own. A group that holds a file
     is refused if a field of it is a data value: a request writes the group
     field by field, and the data value it cannot write (see
     :func:`~ess.spec.places.unwritten`).
@@ -522,8 +539,14 @@ def _group_problems(
         tp, _ = optional(field.annotation)
         if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
+        elif (newtype := newtype_in(field.annotation)) is not None:
+            problems.append(f'{where}: {_newtype_problem(newtype)}')
         elif place := _place_problems(group, name, path, seen):
             problems.extend(f'{where}: {problem}' for problem in place)
+        elif len(groups_at(group, name)) > 1:
+            problems.append(
+                f'{where}: a union of groups is a parameter, never a field of a group'
+            )
         elif (
             not is_list(group, name)
             and element(tp) is not None
@@ -572,12 +595,17 @@ def _no_ref(loc: Loc, ref: Ref, tp: Any) -> Any:
 
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:
-    return [
-        f'{model.__name__}.{name}: an output is a type, possibly optional, '
-        'or a list or a dict of one'
-        for name, field in model.model_fields.items()
-        if not is_single(value_type(field.annotation))
-    ]
+    problems = []
+    for name, field in model.model_fields.items():
+        where = f'{model.__name__}.{name}'
+        if (newtype := newtype_in(field.annotation)) is not None:
+            problems.append(f'{where}: {_newtype_problem(newtype)}')
+        elif not is_single(value_type(field.annotation)):
+            problems.append(
+                f'{where}: an output is a type, possibly optional, or a list or a '
+                'dict of one'
+            )
+    return problems
 
 
 def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
@@ -692,9 +720,7 @@ def _forms(tp: Any, metadata: Sequence[Any], rows: bool) -> Any:
     else:
         return value
     forms = []
-    if inline := tuple(
-        _group_forms(base(m), tag) for m in members if unwritten(base(m)) is None
-    ):
+    if inline := tuple(_group_forms(m, tag) for m in members if unwritten(m) is None):
         # Only an object reads as a reference; JSON Schema's ``required``
         # holds for any other value, so ``not`` would refuse it.
         forms.append(

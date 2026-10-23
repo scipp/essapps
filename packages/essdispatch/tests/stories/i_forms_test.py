@@ -25,10 +25,10 @@ def test_i1_time_slices_found_by_a_first_reduction(
     client: Client, measure: Measure
 ) -> None:
     run = measure(611, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    slicer = client.compute(SLICER, params={'log': run})
+    slicer = client.compute(SLICER, params={'sample': {'file': run}})
     n = len(client.output(slicer, 'slices'))  # a reference names one row
     slices = client.accumulator(
-        Template(SLICES, params={'sample': run}, blanks=('time_range',))
+        Template(SLICES, params={'sample': {'file': run}}, blanks=('time_range',))
     )
     found = [slicer.ref('slices', key=str(i)) for i in range(n)]
     slices.push(time_range=found)
@@ -47,7 +47,7 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
     direct_beam = measure(600, [0.5, 1.5])
     samples = [measure(611, [3.0, 4.0]), measure(612, [5.0, 6.0])]
     can = measure(620, [1.0, 1.0])
-    finder = client.compute(FIND_CENTRE, params={'direct_beam': direct_beam})
+    finder = client.compute(FIND_CENTRE, params={'direct_beam': {'file': direct_beam}})
     computed = client.accumulator(
         Template(
             CENTRED_MULTI,
@@ -64,7 +64,7 @@ def test_i2_beam_centre_typed_in_or_computed(client: Client, measure: Measure) -
         accumulator.push(
             sample=[{'file': sample, 'transmission': None} for sample in samples]
         )
-        accumulator.push(can=[can])
+        accumulator.push(can=[{'file': can}])
 
     assert client.output(finder, 'centre') == Centre(x=1.0)
     assert [
@@ -80,7 +80,9 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
 ) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
     can = measure(620, [1.0, 1.0])
-    t611 = client.compute(CONTRIBUTE, params={'sample': r611})  # transmission 1/4
+    t611 = client.compute(
+        CONTRIBUTE, params={'sample': {'file': r611}}
+    )  # transmission 1/4
     total = client.accumulator(
         Template(
             CENTRED_MULTI, params={'centre': Centre(x=0.0)}, blanks=('sample', 'can')
@@ -92,7 +94,7 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
             {'file': r612, 'transmission': None},
         ]
     )
-    total.push(can=[can])
+    total.push(can=[{'file': can}])
 
     assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]
     assert client.provenance(total).records() == [t611]
