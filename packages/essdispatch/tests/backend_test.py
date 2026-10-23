@@ -29,8 +29,12 @@ from ess.dispatch.testing import FakeDatasets, StagedFunction, read_dataset
 from ess.spec import WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
-A = NewType('A', float)
-B = NewType('B', float)
+
+
+class Amount(BaseModel):
+    """A value one workflow returns and another takes by reference."""
+
+    value: float
 
 
 class LoadParams(BaseModel):
@@ -38,7 +42,7 @@ class LoadParams(BaseModel):
 
 
 class ValueOutputs(BaseModel):
-    value: float
+    value: Amount
 
 
 class Shift(BaseModel):
@@ -47,8 +51,8 @@ class Shift(BaseModel):
 
 class AddParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-    a: A
-    b: B
+    a: Amount
+    b: Amount
 
 
 def _spec(
@@ -95,11 +99,11 @@ class SumParams(BaseModel):
 
 
 class PartsOutputs(BaseModel):
-    parts: dict[str, float]
+    parts: dict[str, Amount]
 
 
 class PiecesOutputs(BaseModel):
-    pieces: list[float]
+    pieces: list[Amount]
 
 
 class Item(BaseModel):
@@ -126,7 +130,7 @@ class Mode(Enum):
 
 class Strict(BaseModel, strict=True):
     mode: Mode = Mode.fast
-    factor: float = 1.0
+    factor: Amount = Amount(value=1.0)
 
 
 class ModeParams(BaseModel):
@@ -137,7 +141,8 @@ class ModeParams(BaseModel):
 
 def slow(params: ModeParams) -> ValueOutputs:
     strict = params.strict
-    return ValueOutputs(value=float(strict.mode is Mode.slow) * strict.factor)
+    value = float(strict.mode is Mode.slow) * strict.factor.value
+    return ValueOutputs(value=Amount(value=value))
 
 
 SPLIT = _spec('split', outputs=PartsOutputs)
@@ -149,26 +154,28 @@ SUM = _spec('sum', params=SumParams, tables=('sample',))
 
 
 def add(params: AddParams) -> ValueOutputs:
-    return ValueOutputs(value=params.a + params.b + params.shift.offset)
+    value = params.a.value + params.b.value + params.shift.offset
+    return ValueOutputs(value=Amount(value=value))
 
 
 def total(params: SumParams) -> ValueOutputs:
-    return ValueOutputs(
-        value=sum(
-            (1.0 if run.scale is None else run.scale.factor) * read_dataset(run.file)
-            for run in params.sample
-        )
+    value = sum(
+        (1.0 if run.scale is None else run.scale.factor) * read_dataset(run.file)
+        for run in params.sample
     )
+    return ValueOutputs(value=Amount(value=value))
 
 
 def split(params: LoadParams) -> PartsOutputs:
     value = read_dataset(params.sample)
-    return PartsOutputs(parts={'whole': value, 'half': value / 2})
+    return PartsOutputs(
+        parts={'whole': Amount(value=value), 'half': Amount(value=value / 2)}
+    )
 
 
 def pieces(params: LoadParams) -> PiecesOutputs:
     value = read_dataset(params.sample)
-    return PiecesOutputs(pieces=[value, value / 2])
+    return PiecesOutputs(pieces=[Amount(value=value), Amount(value=value / 2)])
 
 
 class Gate:
@@ -182,7 +189,7 @@ class Gate:
         self.open.wait(timeout=5)
         if run < 0:
             raise ValueError('negative run')
-        return ValueOutputs(value=run)
+        return ValueOutputs(value=Amount(value=run))
 
 
 @pytest.fixture
@@ -208,7 +215,7 @@ def backend(datasets: FakeDatasets, gate: Gate) -> Iterator[Backend]:
         function_binding(SUM, total),
         function_binding(SPLIT, split),
         function_binding(PIECES, pieces),
-        function_binding(ANYTHING, lambda p: ValueOutputs(value=0.0)),
+        function_binding(ANYTHING, lambda p: ValueOutputs(value=Amount(value=0.0))),
         StagedFunction(MODES, slow),
     ]
     backend = Backend(datasets, bindings)
@@ -236,7 +243,7 @@ def test_a_request_waits_for_its_pending_references(client: Client, gate: Gate) 
 
     assert client.status(total) is Status.PENDING
     gate.open.set()
-    assert client.output(total, 'value') == 3.0
+    assert client.output(total, 'value') == Amount(value=3.0)
 
 
 def test_closing_waits_until_no_record_is_pending(
@@ -360,8 +367,12 @@ def test_a_strict_group_is_validated_from_its_json_form(client: Client) -> None:
     stage = client.stage(Template(MODES, params=strict, blanks=('sample',)))
     staged = client.compute(stage, params={'sample': dataset(run=1)})
 
-    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': 1.0}
-    assert client.output(plain, 'value') == client.output(staged, 'value') == 1.0
+    assert plain.request.params['strict'] == {'mode': 'slow', 'factor': {'value': 1.0}}
+    assert (
+        client.output(plain, 'value')
+        == client.output(staged, 'value')
+        == Amount(value=1.0)
+    )
 
 
 def test_a_strict_group_with_a_reference_passes_the_call_phase(
@@ -378,7 +389,7 @@ def test_a_strict_group_with_a_reference_passes_the_call_phase(
         'mode': 'slow',
         'factor': loaded.ref('value'),
     }
-    assert client.output(plain, 'value') == 2.0
+    assert client.output(plain, 'value') == Amount(value=2.0)
 
 
 def test_a_field_a_nested_group_lacks_is_refused(client: Client) -> None:
@@ -464,7 +475,7 @@ def test_a_table_takes_a_list_of_rows(client: Client) -> None:
 
 
 def test_a_file_given_as_a_string_is_refused(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'sample: .* is not a reference'):
+    with pytest.raises(SubmitError, match=r'sample: .* is not a dataset'):
         client.submit(LOAD, params={'sample': '/data/run-1.json'})
 
 
@@ -476,11 +487,11 @@ def test_a_file_given_by_path_is_the_dataset_of_that_path(
     by_path = client.compute(LOAD, params={'sample': dataset(path=path)})
 
     assert by_path.request == client.compute(load(1)).request
-    assert client.output(by_path, 'value') == 1.0
+    assert client.output(by_path, 'value') == Amount(value=1.0)
 
 
 def test_a_dataset_fits_a_file_field_only(client: Client) -> None:
-    with pytest.raises(SubmitError, match=r'a: dataset .* does not fit A'):
+    with pytest.raises(SubmitError, match=r'a: dataset .* does not fit Amount'):
         client.submit(ADD, params=operands(dataset(run=1), dataset(run=2)))
 
 
@@ -624,7 +635,7 @@ def test_a_reference_with_a_key_reads_an_element_of_an_output(client: Client) ->
     )
     total = client.compute(ADD, params=operands(whole, half))
 
-    assert client.output(total, 'value') == 3.0
+    assert client.output(total, 'value') == Amount(value=3.0)
 
 
 def test_a_reference_to_an_element_of_an_output_without_elements_is_refused(
@@ -640,7 +651,7 @@ def test_a_reference_with_a_key_into_a_list_is_by_integer(client: Client) -> Non
     whole, half = (split.ref('pieces', key=k) for k in ('0', '1'))
 
     assert client.output(client.compute(ADD, params=operands(whole, half))) == {
-        'value': 3.0
+        'value': Amount(value=3.0)
     }
     for key in ('half', '01', '+1', '-1', ' 1'):
         named = split.ref('pieces', key=key)
@@ -707,7 +718,7 @@ def test_a_row_is_a_group_of_a_run_and_its_scale(client: Client) -> None:
         },
     )
 
-    assert client.output(summed, 'value') == 12.0
+    assert client.output(summed, 'value') == Amount(value=12.0)
 
 
 def test_a_table_that_needs_a_row_is_refused_without_one(client: Client) -> None:
@@ -729,6 +740,6 @@ def test_rows_are_distinct_as_a_whole(client: Client) -> None:
     scaled = {'file': dataset(run=1), 'scale': Scale(factor=2.0)}
     summed = client.compute(SUM, params={'sample': [{'file': dataset(run=1)}, scaled]})
 
-    assert client.output(summed, 'value') == 3.0
+    assert client.output(summed, 'value') == Amount(value=3.0)
     with pytest.raises(SubmitError, match=r'sample\[1\]: repeats sample\[0\]'):
         client.submit(SUM, params={'sample': [scaled, dict(scaled)]})

@@ -18,7 +18,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, Literal, NewType
 
 import numpy as np
 import pytest
@@ -96,8 +96,6 @@ RunFile = NewType('RunFile', Path)
 BackgroundFile = NewType('BackgroundFile', Path)
 ReferenceFile = NewType('ReferenceFile', Path)
 
-CentreArray = NewType('CentreArray', sc.Variable)
-Normalization = NewType('Normalization', sc.Variable)
 IofQ = NewType('IofQ', sc.Variable)
 Masked = NewType('Masked', sc.Variable)
 
@@ -107,10 +105,42 @@ class Reduction(BaseModel):
     threshold: float = 0.0
 
 
+class BeamCentre(Data):
+    """
+    The beam centre that ``BEAM_CENTRE`` finds, as a position: a group that
+    holds a data value, so a request gives it by reference only (C1). Compare
+    :class:`Centre`, a beam centre that a request may also type in (I2).
+    """
+
+    position: sc.Variable
+
+
+class ComputedNormalization(Data):
+    """
+    The normalization that ``VANADIUM`` computes from a vanadium run: a group
+    that holds a data value, so a request gives it by reference only.
+    """
+
+    kind: Literal['computed'] = 'computed'
+    factor: sc.Variable
+
+
+class PublishedNormalization(Data):
+    """A normalization published to the catalogue, as a file of its factor (C2)."""
+
+    kind: Literal['published'] = 'published'
+    file: Path
+
+
+Normalization = Annotated[
+    ComputedNormalization | PublishedNormalization, Field(discriminator='kind')
+]
+
+
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: SampleFile
-    beam_centre: CentreArray | None = None
+    beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
 
@@ -131,13 +161,23 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     reduction = params.reduction
     masked = np.where(counts < reduction.threshold, 0.0, counts)
     centre = params.beam_centre
-    reduced = masked - (0.0 if centre is None else centre.value)
-    norm = params.normalization
-    reduced = reduced / (1.0 if norm is None else norm.value)
+    reduced = masked - (0.0 if centre is None else centre.position.value)
+    reduced = reduced / _factor(params.normalization)
     return IofQOutputs(
         iofq=IofQ(_array(reduced.reshape(reduction.bins, -1).sum(axis=1))),
         masked=Masked(_array(masked)),
     )
+
+
+def _factor(
+    normalization: ComputedNormalization | PublishedNormalization | None,
+) -> float:
+    """The factor of a normalization, read from its file if it is published."""
+    if normalization is None:
+        return 1.0
+    if isinstance(normalization, PublishedNormalization):
+        return float(read_dataset(normalization.file))
+    return normalization.factor.value
 
 
 class IofQCanParams(IofQParams):
@@ -159,7 +199,7 @@ class ReductionV2(BaseModel):
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
     sample: SampleFile
-    beam_centre: CentreArray | None = None
+    beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
 
@@ -184,7 +224,7 @@ class BeamCentreParams(Data):
 
 
 class CentreOutputs(Data):
-    centre: CentreArray
+    centre: BeamCentre
 
 
 BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
@@ -192,7 +232,7 @@ BEAM_CENTRE = _spec('beam-centre', CentreOutputs, params=BeamCentreParams)
 
 def beam_centre(params: BeamCentreParams) -> CentreOutputs:
     return CentreOutputs(
-        centre=CentreArray(sc.scalar(float(_counts(params.direct_beam).mean())))
+        centre=BeamCentre(position=sc.scalar(float(_counts(params.direct_beam).mean())))
     )
 
 
@@ -208,7 +248,7 @@ class VanadiumParams(Data):
 
 
 class VanadiumOutputs(Data):
-    normalization: Normalization
+    normalization: ComputedNormalization
 
 
 VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
@@ -217,7 +257,9 @@ VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 def vanadium(params: VanadiumParams) -> VanadiumOutputs:
     total = float(_counts(params.vanadium).sum())
     return VanadiumOutputs(
-        normalization=Normalization(sc.scalar(total * params.scaling.scale))
+        normalization=ComputedNormalization(
+            factor=sc.scalar(total * params.scaling.scale)
+        )
     )
 
 
@@ -272,7 +314,10 @@ def background(
     )
 
 
-TransmissionArray = NewType('TransmissionArray', sc.Variable)
+class Transmission(Data):
+    """The transmission of a sample run, computed by ``CONTRIBUTE``."""
+
+    fraction: sc.Variable
 
 
 class Parts(Data):
@@ -288,7 +333,7 @@ class ContributeParams(Data):
 
 class ContributeOutputs(Data):
     parts: Parts
-    transmission: TransmissionArray
+    transmission: Transmission
 
 
 CONTRIBUTE = _spec('sans-contribute', ContributeOutputs, params=ContributeParams)
@@ -300,7 +345,7 @@ def contribute(params: ContributeParams) -> ContributeOutputs:
         parts=Parts(
             numerator=_array(counts), denominator=sc.scalar(float(counts.sum()))
         ),
-        transmission=TransmissionArray(sc.scalar(float(counts[0] / counts.sum()))),
+        transmission=Transmission(fraction=sc.scalar(float(counts[0] / counts.sum()))),
     )
 
 
@@ -362,11 +407,14 @@ def summing(
     return DriverBinding(spec, functools.partial(Summing, finalize, spec))
 
 
-Counts = NewType('Counts', sc.Variable)
+class Volume(Data):
+    """A volume of counts, of which a client selects a part and ``CUT`` cuts."""
+
+    counts: sc.Variable
 
 
-class CountsOutputs(Data):
-    counts: Counts
+class VolumeOutputs(Data):
+    volume: Volume
 
 
 class AngleParams(Data):
@@ -377,16 +425,16 @@ class RunsParams(Data):
     runs: list[RunFile] = Field(min_length=1)
 
 
-ANGLE = _spec('angle', CountsOutputs, params=AngleParams)
-VOLUME = _spec('volume', CountsOutputs, params=RunsParams, tables=('runs',))
+ANGLE = _spec('angle', VolumeOutputs, params=AngleParams)
+VOLUME = _spec('volume', VolumeOutputs, params=RunsParams, tables=('runs',))
 
 
-def angle(params: AngleParams) -> CountsOutputs:
-    return CountsOutputs(counts=Counts(_array(_counts(params.sample))))
+def angle(params: AngleParams) -> VolumeOutputs:
+    return VolumeOutputs(volume=Volume(counts=_array(_counts(params.sample))))
 
 
-def volume(runs: np.ndarray) -> CountsOutputs:
-    return CountsOutputs(counts=Counts(_array(runs)))
+def volume(runs: np.ndarray) -> VolumeOutputs:
+    return VolumeOutputs(volume=Volume(counts=_array(runs)))
 
 
 class Position(BaseModel):
@@ -395,7 +443,7 @@ class Position(BaseModel):
 
 class CutParams(Data):
     position: Position
-    volume: sc.Variable
+    volume: Volume
 
 
 Cut = NewType('Cut', sc.Variable)
@@ -409,7 +457,8 @@ CUT = _spec('cut', CutOutputs, params=CutParams)
 
 
 def cut(params: CutParams) -> CutOutputs:
-    return CutOutputs(cut=Cut(params.volume['q', params.position.index].copy()))
+    counts = params.volume.counts
+    return CutOutputs(cut=Cut(counts['q', params.position.index].copy()))
 
 
 class StitchParams(Data):
@@ -417,11 +466,14 @@ class StitchParams(Data):
     reference: ReferenceFile
 
 
-Stitched = NewType('Stitched', sc.Variable)
+class Reflectivity(Data):
+    """A reflectivity curve, stitched by ``STITCH`` and exported by ``EXPORT``."""
+
+    curve: sc.Variable
 
 
 class StitchOutputs(Data):
-    stitched: Stitched
+    stitched: Reflectivity
 
 
 STITCH = _spec('stitch', StitchOutputs, params=StitchParams, tables=('runs',))
@@ -433,11 +485,11 @@ def stitch(params: StitchParams) -> StitchOutputs:
     scaled = [curves[0]]
     for curve in curves[1:]:
         scaled.append(curve * scaled[-1][-1] / curve[0])
-    return StitchOutputs(stitched=Stitched(_array(np.concatenate(scaled))))
+    return StitchOutputs(stitched=Reflectivity(curve=_array(np.concatenate(scaled))))
 
 
 class ExportParams(Data):
-    result: sc.Variable
+    result: Reflectivity
 
 
 class ExportOutputs(BaseModel):
@@ -448,7 +500,7 @@ EXPORT = _spec('export', ExportOutputs, params=ExportParams)
 
 
 def export(params: ExportParams) -> ExportOutputs:
-    return ExportOutputs(text=','.join(str(v) for v in params.result.values))
+    return ExportOutputs(text=','.join(str(v) for v in params.result.curve.values))
 
 
 class TimeRange(BaseModel):
@@ -500,7 +552,11 @@ def sliced(params: SlicesParams) -> SlicedOutputs:
 
 
 class Centre(BaseModel):
-    """A beam centre as plain data: typed in, or found by ``FIND_CENTRE``."""
+    """
+    A beam centre as a number, so a request may type it in, or give it by
+    reference to the output of ``FIND_CENTRE`` (I2). Compare
+    :class:`BeamCentre`, which a request gives by reference only (C1).
+    """
 
     x: float
 
@@ -524,7 +580,7 @@ class SampleRun(Data):
     """A sample run and its transmission, or None: a group that holds a file."""
 
     file: SampleFile
-    transmission: TransmissionArray | None
+    transmission: Transmission | None
 
 
 class CentredParams(Data):
@@ -554,7 +610,8 @@ def centred(params: CentredParams) -> CentredOutputs:
     minus the centre.
     """
     samples = sum(
-        _counts(s.file) * (1.0 if s.transmission is None else s.transmission.value)
+        _counts(s.file)
+        * (1.0 if s.transmission is None else s.transmission.fraction.value)
         for s in params.sample
     )
     cans = sum((_counts(c) for c in params.can), 0.0)

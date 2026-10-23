@@ -313,11 +313,14 @@ class Client:
 
         A spec takes its params, a dict by name or an instance of its params
         model if every value is given inline. The value at each place, a
-        parameter, an element of a list, or a field of a group, is given
-        inline or by reference, as its type allows: a group as a model or a
-        dict of its fields, a file a reference to a dataset, any other type
-        with a JSON form an inline value, and any type but a file a reference
-        to an output that fits and holds no file::
+        parameter, an element of a list, or a field of a group, is given as
+        its type allows (see :mod:`ess.spec.places`):
+
+        - a file, by reference to a dataset;
+        - a group, or a union of groups, as a model or a dict of its fields,
+          unless a field is a data value; or by reference to an output that
+          fits and holds no file;
+        - any other type, inline::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': {'run': dataset(run=60339)}})
@@ -331,9 +334,9 @@ class Client:
         The backend checks the values against its own spec, so a ``SpecId``
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or dataset,
-        an inline value for a type without a JSON form, a reference where
-        none may stand, such as to a whole list, a reference the client may
-        not read, or one whose data do not fit its field. Each of its
+        an inline group with a field that is a data value, a reference where
+        none may stand, such as at a number or to a whole list, a reference
+        the client may not read, or one whose data do not fit its field. Each of its
         ``errors`` names the field at fault by its place, ``loc``, and the
         request by its key or index, ``entry``, if several are given (see
         :class:`~ess.dispatch.errors.FieldError`)::
@@ -521,12 +524,16 @@ class Client:
 
         ``select`` picks part of the named array output by dimension name, an
         index or a slice for each dimension it names, such as
-        ``{'q': slice(0, 10)}``, and copies only that part. It is refused
-        without ``name``, and for an output not declared as an array; a
-        dimension the output lacks, or an index out of range, raises what the
-        slice raises. A read of an accumulator holds back its next push while
-        the state is checked, its outputs are computed if no reader has yet,
-        and the part is copied.
+        ``{'q': slice(0, 10)}``, and copies only that part. Of a group output,
+        it picks that part of each array field that has the dimension, as
+        ``sc.DataGroup`` slices its items, and copies the other fields whole:
+        ``client.output(scan, 'volume', select={'q': 0})``. It is refused
+        without ``name``, and for an output declared neither as an array nor
+        as a group with an array field. A dimension that an array lacks, or an
+        index out of range, raises what the slice raises; a dimension that no
+        array field of a group has raises ``ValueError``. A read
+        of an accumulator holds back its next push while the state is checked,
+        its outputs are computed if no reader has yet, and the part is copied.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):

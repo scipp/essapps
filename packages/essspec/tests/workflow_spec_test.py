@@ -115,6 +115,19 @@ class ByRun(BaseModel):
     run: SampleFile
 
 
+class ByWindow(BaseModel):
+    """An alternative with a group field."""
+
+    mode: Literal['window'] = 'window'
+    window: TimeRange
+
+
+class Undiscriminated(BaseModel):
+    """A group that holds a union of groups without a discriminator."""
+
+    by: ByMonitor | ByTime
+
+
 @pydantic.dataclasses.dataclass
 class RunFiles:
     """A dataclass, whose fields are not places."""
@@ -177,11 +190,39 @@ class ComputedParams(BaseModel):
         return self.reduction.bins
 
 
-class IofQSettings(BaseModel, arbitrary_types_allowed=True):
+class BeamCentre(BaseModel, arbitrary_types_allowed=True):
+    """A group that holds a data value: given by reference only."""
+
+    position: CentreArray
+
+
+class ByCentre(BaseModel, arbitrary_types_allowed=True):
+    """An alternative that holds a data value: given by reference only."""
+
+    mode: Literal['centre'] = 'centre'
+    centre: CentreArray
+
+
+class Centring(BaseModel):
+    """A group given inline, with a place for a group given by reference only."""
+
+    centre: BeamCentre | None = None
+
+
+@pydantic.dataclasses.dataclass(
+    config=pydantic.ConfigDict(arbitrary_types_allowed=True)
+)
+class CentrePeak:
+    """A dataclass that holds a data value: a data value itself."""
+
+    centre: CentreArray
+
+
+class IofQSettings(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample_geometry: SampleGeometry | None = None
     time_range: TimeRange | None = None
-    beam_centre: CentreArray | None = None
+    beam_centre: BeamCentre | None = None
 
 
 class IofQParams(IofQSettings):
@@ -309,8 +350,10 @@ class TestMetadata:
     def test_a_union_of_groups_takes_an_inline_value(self, tp: Any) -> None:
         assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
-    @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
-    def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
+    @pytest.mark.parametrize('tp', [BeamCentre, SampleFile, list[SampleFile | None]])
+    def test_a_file_or_a_group_that_holds_a_data_value_takes_no_inline_value(
+        self, tp: Any
+    ) -> None:
         assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
 
@@ -411,16 +454,24 @@ class TestModelRules:
             },
             {
                 'params': model(
-                    'P',
-                    run=(
-                        model('Run', path=(Path, ...), shifts=(list[CentreArray], [])),
-                        ...,
-                    ),
+                    'P', reduction=(model('R', mask=(CentreArray | None, None)), ...)
                 )
             },
             {
                 'params': model(
-                    'P', reduction=(model('R', mask=(CentreArray | None, None)), ...)
+                    'P',
+                    run=(model('Run', path=(Path, ...), centre=(BeamCentre, ...)), ...),
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    centre=(BeamCentre | None, None),
+                    centres=(list[BeamCentre], []),
+                    by=(
+                        Annotated[ByTime | ByCentre, Field(discriminator='mode')],
+                        ...,
+                    ),
                 )
             },
             {'params': model('P', tree=(WholeTree, ...))},
@@ -442,10 +493,77 @@ class TestModelRules:
                 {'outputs': model('O', sample=(IofQ, ...))},
                 'sample: a field of both IofQParams and O',
             ),
+            *(
+                (
+                    {'params': model('P', centre=centre)},
+                    f'P.centre: {name} has no JSON form, and only a group or a file '
+                    'takes a reference; a data value is a field of a group',
+                )
+                for centre, name in (
+                    ((CentreArray, sc.scalar(1.0)), 'CentreArray'),
+                    ((sc.DataArray | None, None), 'DataArray'),
+                    ((list[CentreArray], []), 'CentreArray'),
+                    ((CentrePeak, ...), 'CentrePeak'),
+                )
+            ),
             (
-                {'params': model('P', centre=(CentreArray, sc.scalar(1.0)))},
-                f'P.centre: {NOT_A_VALUE}: centre: .* is not a reference; '
-                'CentreArray has no JSON form',
+                {
+                    'params': model(
+                        'P', centre=(BeamCentre, BeamCentre(position=sc.scalar(1.0)))
+                    )
+                },
+                f'P.centre: {NOT_A_VALUE}: centre: BeamCentre is given by reference: '
+                'no request writes its field position, of CentreArray',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        centring=(
+                            Centring,
+                            Centring(centre=BeamCentre(position=sc.scalar(1.0))),
+                        ),
+                    )
+                },
+                f'P.centring: {NOT_A_VALUE}: centring.centre: BeamCentre is given by '
+                'reference: no request writes its field position, of CentreArray',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        x=(float, {'@ref': 'output', 'record': 'r1', 'output': 'x'}),
+                    )
+                },
+                f'P.x: {NOT_A_VALUE}: x: r1.x: float is given inline; a reference '
+                'stands for a group or a file only',
+            ),
+            *(
+                (
+                    {
+                        'params': model(
+                            'P', run=(model('Run', path=(Path, ...), **centre), ...)
+                        )
+                    },
+                    f'P.run: {where}: no request writes it, since a group that holds '
+                    'a file is given field by field',
+                )
+                for centre, where in (
+                    ({'centre': (CentreArray, ...)}, 'Run.centre'),
+                    ({'centre': (CentreArray | None, None)}, 'Run.centre'),
+                    ({'shifts': (list[CentreArray], [])}, 'Run.shifts'),
+                    (
+                        {
+                            'can': (
+                                model(
+                                    'Can', path=(Path, ...), centre=(CentreArray, ...)
+                                ),
+                                ...,
+                            )
+                        },
+                        'Run.can: Can.centre',
+                    ),
+                )
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
@@ -530,6 +648,15 @@ class TestModelRules:
                     )
                 },
                 'P.n: N.by: a union of groups has a discriminator',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', a=(Undiscriminated, ...), b=(Undiscriminated, ...)
+                    )
+                },
+                'P.a: Undiscriminated.by: a union of groups has a discriminator.*; '
+                'P.b: Undiscriminated.by: a union of groups has a discriminator',
             ),
             (
                 {
@@ -786,11 +913,12 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleFile, Path('run.nxs')))},
-                f'P.sample: {NOT_A_VALUE}: sample: .* is not a reference',
+                f'P.sample: {NOT_A_VALUE}: sample: .* is not a dataset; a file is '
+                r'given as dataset\(path=...\)',
             ),
             (
                 {'params': model('P', runs=(list[SampleFile], [Path('run.nxs')]))},
-                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a reference',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a dataset',
             ),
             (
                 {'outputs': model('O', iofq=(IofQ | Banks, ...))},
@@ -914,7 +1042,7 @@ def file_ref(data_type: str) -> dict[str, Any]:
 
 
 def data_ref(data_type: str) -> dict[str, Any]:
-    """The schema of a reference to data of any other type, an output."""
+    """The schema of a reference to a group, or a union of groups: an output."""
     kinds = ('OutputRef', 'AccumulatorRef')
     return {'anyOf': [{'$ref': f'#/$defs/{k}'} for k in kinds], 'dataType': data_type}
 
@@ -946,13 +1074,7 @@ class TestSerialization:
         assert schema['$defs']['Reduction'] == {
             'title': 'Reduction',
             'type': 'object',
-            'properties': {
-                'bins': {
-                    'anyOf': [{'type': 'integer'}, data_ref('int')],
-                    'default': 2,
-                    'title': 'Bins',
-                }
-            },
+            'properties': {'bins': {'type': 'integer', 'default': 2, 'title': 'Bins'}},
             'additionalProperties': False,
         }
         assert schema['required'] == ['sample', 'can']
@@ -964,23 +1086,17 @@ class TestSerialization:
             assert defs[kind.__name__] == kind.model_json_schema()
             assert '@ref' in defs[kind.__name__]['required']
 
-    def test_a_float_and_an_enum_are_their_json_schema_or_a_reference(self) -> None:
+    def test_a_float_and_an_enum_are_their_json_schema_only(self) -> None:
         schema = spec(params=ScaledParams).serialize().params_schema
         assert schema['properties'] == {
             'scale': {
-                'anyOf': [
-                    {'type': 'number', 'exclusiveMinimum': 0},
-                    data_ref('float'),
-                ],
+                'type': 'number',
+                'exclusiveMinimum': 0,
                 'default': 1.0,
                 'title': 'Scale',
                 'description': 'A factor.',
             },
-            'mode': {
-                'anyOf': [{'$ref': '#/$defs/Mode'}, data_ref('Mode')],
-                'default': 'fast',
-                'title': 'Mode',
-            },
+            'mode': {'$ref': '#/$defs/Mode', 'default': 'fast', 'title': 'Mode'},
         }
 
     def test_the_tag_of_an_alternative_is_titled_by_its_value_unless_given(
@@ -1005,17 +1121,49 @@ class TestSerialization:
             'title': 'Time',
         }
 
-    def test_a_file_or_a_scipp_type_is_a_reference_to_its_type(self) -> None:
-        properties = IOFQ.serialize().params_schema['properties']
+    def test_a_file_or_a_group_that_holds_a_data_value_is_a_reference_to_its_type(
+        self,
+    ) -> None:
+        schema = IOFQ.serialize().params_schema
+        properties = schema['properties']
         assert {n: properties[n] for n in ('sample', 'can', 'beam_centre')} == {
             'sample': {**file_ref('SampleFile'), 'title': 'Sample run'},
             'can': {**file_ref('CanFile'), 'title': 'Can'},
             'beam_centre': {
-                'anyOf': [data_ref('CentreArray'), {'type': 'null'}],
+                'anyOf': [data_ref('BeamCentre'), {'type': 'null'}],
                 'default': None,
                 'title': 'Beam Centre',
             },
         }
+        assert 'BeamCentre' not in schema['$defs']
+
+    def test_a_union_offers_inline_only_the_alternatives_without_a_data_value(
+        self,
+    ) -> None:
+        by = Annotated[ByMonitor | ByTime | ByCentre, Field(discriminator='mode')]
+        schema = spec(params=model('P', by=(by, ...))).serialize().params_schema
+        assert schema['properties']['by'] == {
+            'anyOf': [
+                inline(
+                    {
+                        'oneOf': [
+                            {'$ref': '#/$defs/ByMonitor'},
+                            {'$ref': '#/$defs/ByTime'},
+                        ],
+                        'discriminator': {
+                            'propertyName': 'mode',
+                            'mapping': {
+                                'monitor': '#/$defs/ByMonitor',
+                                'time': '#/$defs/ByTime',
+                            },
+                        },
+                    }
+                ),
+                data_ref('ByMonitor | ByTime | ByCentre'),
+            ],
+            'title': 'By',
+        }
+        assert 'ByCentre' not in schema['$defs']
 
     def test_a_list_parameter_has_the_forms_per_row(self) -> None:
         params = model(
@@ -1119,7 +1267,7 @@ class TestSerialization:
                 to_jsonable_python({**CAN, **params}), IOFQ.serialize().params_schema
             )
 
-    def test_the_schema_takes_a_reference_at_any_place(self) -> None:
+    def test_the_schema_takes_a_reference_at_a_group_at_any_depth(self) -> None:
         jsonschema = pytest.importorskip('jsonschema')
         run = model(
             'Run', file=(SampleFile, ...), geometry=(SampleGeometry | None, None)
@@ -1128,23 +1276,30 @@ class TestSerialization:
             'P',
             reduction=(Reduction, Reduction()),
             normalization=(Normalization, ...),
+            gate=(Annotated[ByMonitor | ByWindow, Field(discriminator='mode')], ...),
             sample=(run, ...),
         )
         schema = spec(params=params).serialize().params_schema
         jsonschema.Draft202012Validator.check_schema(schema)
         ref = OutputRef(record='r1', output='x')
         request = {
-            'reduction': {'bins': ref},
-            'normalization': {'by': {'mode': 'time', 'seconds': ref}},
-            'sample': {
-                'file': DatasetRef(dataset='run:loki/1'),
-                'geometry': {'thickness': ref},
-            },
+            'reduction': ref,
+            'normalization': {'by': ref},
+            'gate': {'mode': 'window', 'window': ref},  # in an alternative
+            'sample': {'file': DatasetRef(dataset='run:loki/1'), 'geometry': ref},
         }
         jsonschema.validate(to_jsonable_python(request), schema)
         for refused in (
+            {'reduction': {'bins': ref}},  # a number is given inline only
+            {'normalization': {'by': {'mode': 'time', 'seconds': ref}}},
             {'normalization': {'by': {'mode': ref, 'seconds': 1.0}}},  # at a tag
-            {'normalization': {'by': {'mode': 'time', 'seconds': {'@ref': 'x'}}}},
+            {'gate': {'mode': 'window', 'window': {'start': ref, 'stop': 1.0}}},
+            {
+                'sample': {
+                    'file': DatasetRef(dataset='run:loki/1'),
+                    'geometry': {'thickness': ref},
+                }
+            },
             {'sample': {'file': ref}},  # a file is given by a dataset only
             {'sample': ref},  # an output of a group that holds a file
         ):

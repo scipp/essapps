@@ -60,9 +60,9 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
 | group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. A `RootModel` is not a group: a request writes it as its root value. |
-| place | a position in a request where it writes a value or a reference: the value of a parameter, an element of a list, or a field of a group, at any depth, such as `sample.run` (see Specs and bindings) |
-| data value | a value of a type without a JSON form: a file, or an object such as a scipp array. It is given by reference only. |
-| fits | a reference fits a parameter when the type of the data it names can be the parameter's value (see References) |
+| place | the value of a parameter, an element of a list, or a field of a group, at any depth, such as `sample.run`. The type at a place decides what a request writes there: a value, a reference, or, at a data value, nothing (see Specs and bindings). |
+| data value | a value of a type that is neither a file, a group, a union of groups, a list, nor a dict, and has no JSON form, such as a scipp array. It is a field of a group, which a request gives by reference only. |
+| fits | a reference fits a place when the type of the data it names can be the value at the place (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
 | request | a spec and its params, each value given inline or by reference |
 | request phase, call phase | the *request phase* is what the client and the backend do with a request before any data is read: validate, log, record, pin. The *call phase* starts when the backend reads data for the binding. |
@@ -121,15 +121,13 @@ class BeamCentre(BaseModel):                      # a group: inline, or an outpu
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)                # a NeXus file of an empty-can run
-Transmission = NewType('Transmission', sc.DataArray)
-IofQ = NewType('IofQ', sc.DataArray)
 
 class FromFile(BaseModel):                        # the transmission in the run's file
     kind: Literal['file'] = 'file'
 
 class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
     kind: Literal['computed'] = 'computed'
-    value: Transmission
+    transmission: sc.DataArray                    # a data value: the group is given by reference only
 
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
@@ -143,7 +141,10 @@ class IofQParams(IofQSettings):
     sample: Sample
     can: CanFile                                  # the empty-can run
 
-class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
+class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it by reference
+    intensity: sc.DataArray
+
+class IofQOutputs(BaseModel):
     iofq: IofQ
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, title='I(Q)', description='...',
@@ -156,15 +157,30 @@ The type at the place decides which of the two it accepts, with `| None` removed
 | The type at a place | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
-| a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
-| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | to an output that fits and holds no file |
+| a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| a list that may be `None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
-| any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
-| anything else | `Transmission` | no | to an output that fits |
+| at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
+| any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
+| any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
 For the same reason a reference to an output whose type holds a file, such as an output of type `Sample`, is refused.
+
+A reference stands for a group or a file only.
+A number or an `sc.DataArray` names no role: every output of its type would fit, so a picker of records would list unrelated outputs.
+A group names the role, such as `BeamCentre` or `ComputedTransmission`, and a reference fits it by the group's class.
+So a data value is a field of a group, such as the field `transmission` of `ComputedTransmission` above, and the workflow that computes it outputs the group.
+Neither a data value nor a number takes a reference:
+
+```python
+transmission: sc.DataArray                        # refused by WorkflowSpec: a data value at a parameter
+{'reduction': {'bins': r.ref('bins')}}            # refused at submission: an int is given inline
+```
+
+A data value that a request may leave out is wrapped as a group typed `| None`, `mask: PixelMask | None`, with the array a field of `PixelMask`.
+A group with a field `mask: sc.DataArray | None` is given by reference only, even where the value is `None`.
+
 A field of a group left out takes its default.
 `t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `ComputedTransmission`, which fits the union `FromFile | ComputedTransmission`:
 
@@ -193,7 +209,7 @@ class FindCentre(BaseModel):                      # an alternative: settings to 
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
 
 {'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
-{'beam_centre': found.ref('centre')}              # an output of type GivenCentre
+{'beam_centre': finder.ref('centre')}             # an output of type GivenCentre
 ```
 
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
@@ -208,12 +224,12 @@ direct_beam: DirectBeamFile | None               # [x] Direct beam  Run: [60340]
 
 transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
 # Transmission: (•) from the run's file  ( ) computed: [from a record ▾]
-# not `transmission: Transmission | None  # None: the one in the run's file`,
+# not `transmission: ComputedTransmission | None = None  # None: the one in the run's file`,
 # whose toggle, off, reads as "no transmission correction"
 ```
 
 `direct_beam` has no default (see Defaults below), so a UI shows its toggle with neither state chosen until the user picks one.
-A data value obtained in one of several ways is a field of an alternative, as the `Transmission` array of `ComputedTransmission` above, since a union holds groups only.
+A data value obtained in one of several ways is a field of an alternative, as the field `transmission` of `ComputedTransmission` above, since a union holds groups only.
 The workflow that computes it outputs the alternative, so that a reference to the output fits the union.
 The reasons are [ADR 0008](../../packages/essspec/docs/developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md).
 
@@ -225,10 +241,11 @@ A request computes every output its spec declares.
 A value *round-trips* when its JSON form reads back as the value.
 `WorkflowSpec` checks these rules when it is made:
 
-- Each parameter is a type, possibly optional, or a list of one. The type may be a union, such as a union of groups.
+- Each parameter is a type, possibly optional, or a list of one; a list parameter is not optional, and no parameter is a dict. The type may be a union, such as a union of groups. It is not a data value, and a list parameter's element is not one either: a data value is a field of a group.
 - Each output is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A union of groups is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
+- No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: FromFile | ComputedTransmission`.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
 - A table has no default (see Combining runs: tables).
@@ -261,7 +278,7 @@ draft = function_binding(IOFQ, iofq)        # from ess.spec
 ```
 
 The binding never sees a reference: the backend reads the data of each reference before it calls the binding.
-Each value is its type, whichever form the request gave it in: a group as the model, a file as a local path, any other data value as the object, such as a `Transmission`.
+Each value is its type, whichever form the request gave it in: a group as the model, with each data value in it as the scipp object, such as the field `transmission` of a `ComputedTransmission`, and a file as a local path.
 The backend passes every parameter, with the defaults of the model filled in.
 Defaults belong in the model only.
 A binding must not modify the values it gets or return an output that shares memory with one of them.
@@ -296,7 +313,8 @@ Its *status* is `pending`, then `completed`, `failed`, or `cancelled`.
 
 In the user's process, `client.output` of a record returns the output value itself, not a copy.
 The framework never changes a record's output value (see open question 7).
-`select=` copies the part of an array output that it names, by dimension, and makes no record.
+`select=` copies the part of an output that it names, by dimension, and makes no record.
+Of a group output, such as `IofQ`, it slices each array field that has the dimension, as `sc.DataGroup` slices its items, and copies the other fields whole; a dimension that no array field has raises `ValueError`.
 On the service, only that part leaves the backend.
 
 | Call | Does |
@@ -326,12 +344,12 @@ A group with no reference inside is an inline value: the record holds the JSON f
 A group with a reference inside is checked field by field at submission, each field given inline by its own type and constraints, and its validators run in the call phase:
 
 ```python
-{'range': {'start': 10.0, 'stop': 5.0}}             # refused at submission, at range.stop
-{'range': {'start': 10.0, 'stop': r.ref('value')}}  # with value 5.0, fails in the call phase, at range.stop
+{'range': {'start': 10.0, 'stop': 5.0}}                   # refused at submission, at range.stop
+{'sample': {'run': dataset(run=611), 'thickness': -1.0}}  # refused by a validator of Sample, in the call phase
 ```
 
+A value refused in the call phase fails the record, or the push.
 So a validator that widens what a field accepts, such as a `mode='before'` validator that parses a string, works only for a group written without references.
-A value that only a validator of a group with a reference inside refuses, such as a negative thickness in a `Sample`, whose run is a dataset, fails the record, or the push, in the call phase.
 The call phase validates from the JSON form the record holds, which reads back as the value; it does so with `strict=False`, so that a strict model takes an enum from its string, as the request phase took it from JSON.
 It makes the params instance from the validated values.
 A request that cannot run is refused at submission with a `SubmitError`.
@@ -361,7 +379,7 @@ A file is always given by reference: `dataset(path=...)` names a file by its pat
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for the value at a place, such as `reduction.mask`, `sample.run`, or `runs[2].transmission`: never for a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
+A reference stands for the value at a place whose type is a group, a union of groups, or a file, such as `beam_centre`, `sample.run`, or `sample[2].transmission`: never for a value of another type, a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -374,24 +392,21 @@ The key `@ref` is reserved at every depth: an object with it is a reference.
 So the framework finds the references of a request without the spec, in every array and every object.
 With the spec, it refuses an `@ref` object that is not at a place, such as an element of a `tuple`, and an inline value or a default whose JSON form holds the key `@ref`.
 
-A reference *fits* a parameter when the type of the data it names can be the parameter's value.
+A reference *fits* a place when the type of the data it names can be the value at the place.
 `| None` is removed on both sides.
-A reference with a key names one element, of the output's element type, and a list parameter takes each reference by its element type.
+A reference with a key names one element, of the output's element type, and an element of a list parameter takes a reference by the element type.
 A reference at a field of a group takes the field's type, and one in an alternative of a union that of the alternative the tag names.
 Data fit a union when they fit one of its alternatives.
-Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the parameter's type or a subclass of it, or when the parameter's type, with its `NewType`s removed, reaches the output's type or a superclass of it:
+Then the data fit when the output's type, with its `NewType`s removed one by one, reaches the type at the place or a subclass of it, or when the type at the place, with its `NewType`s removed, reaches the output's type or a superclass of it:
 
-| Type of the output | Type of the parameter | Fits |
+| Type of the output | Type at the place | Fits |
 |---|---|---|
 | `BeamCentre` | `BeamCentre \| None` | yes |
 | `GivenCentre` | `GivenCentre \| FindCentre`, a union of groups | yes |
 | `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
-| `IofQ` | `sc.DataArray`, as an export takes it | yes |
-| `sc.DataArray` | `Transmission`, a `NewType` of `sc.DataArray` | yes: a role narrows a general output |
-| `IofQ` | `Transmission` | no: two `NewType`s of `sc.DataArray` |
+| `ComputedTransmission` | `FromFile \| ComputedTransmission`, the field `transmission` of a `Sample` | yes |
+| `sc.DataArray` | `FromFile \| ComputedTransmission` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
 | a dataset | `SampleFile`, also as the field `run` of a `Sample` | yes: a dataset fits a file only |
-
-A generic alias, such as a sciline scope `SampleSurfaceNormal[SampleRun]`, fits only itself.
 
 ## Labels and members
 
@@ -640,6 +655,7 @@ The backend has the binding make the driver, and pushes each push into it, later
 **Pins.** A call that pins takes state n, where n is the number of pushes logged so far.
 Pinning does not wait for these pushes to be added.
 `client.output` then waits for state n before it copies.
+`EXPORT` writes an I(Q) to a text file; its parameter `result` is an `IofQ`.
 
 | Call | Returns | Holds back push n+1 |
 |---|---|---|
@@ -696,17 +712,19 @@ The accumulator *stops* if
 
 Later pushes and pins are refused with the reason, and the records of states it did not reach fail.
 
-**Adding waits for readers.** The example uses the toy specs `VOLUME`, which sums counts over its table `runs`, and `CUT`, which takes the value at `position.index` of its parameter `volume` ([user-stories.md](user-stories.md)):
+**Adding waits for readers.** The example uses the toy specs `VOLUME` and `CUT` ([user-stories.md](user-stories.md)).
+`VOLUME` sums the counts of the runs of its table `runs` into its output `volume`, a group `Volume` whose field `counts` is an array with the dimension `q`.
+`CUT` takes the value at `position.index` of its parameter `volume`, a `Volume`:
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in runs:
     volume.push(runs=[run])                 # returns once logged; the backend adds it later
     cut = client.submit(CUT, params={'position': Position(index=0),
-                                     'volume': volume.ref('counts')})
+                                     'volume': volume.ref('volume')})
                                             # pins this state; CUT reads it in place
-    show(client.output(volume, 'counts', select={'q': 0}))
-                                            # pins this state, waits for it, copies the slice
+    show(client.output(volume, 'volume', select={'q': 0}))
+                                            # pins this state, waits for it, copies the slice of counts
 ```
 
 `push` and `submit` return once logged, and the backend adds pushes and runs readers in parallel.
@@ -787,7 +805,7 @@ A stage or an accumulator is made from some values only, so `make_stage` and `ma
 
 ```python
 {'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
- 'sample': [Sample(run=path_611), Sample(run=path_612, transmission=t612)]}      # a table as the list of its rows; t612 a ComputedTransmission
+ 'sample': [Sample(run=path_611), Sample(run=path_612, transmission=computed_612)]}  # a table as the list of its rows; computed_612 a ComputedTransmission
 ```
 
 `fixed` holds the fixed values, and `blanks` names the others, a table among them.
@@ -802,16 +820,24 @@ Each parameter sets the sciline key of its type, without `Annotated` metadata, s
 Each output is computed as the key of its type without `| None`, such as `IofQ`.
 A table sets the key of its type, a list, to its rows.
 A group is one key, so a provider takes it apart, such as one that reads the file `sample.run`.
-A workflow with keys of its own names them with `keys=`:
+A workflow with keys of its own names them with `keys=`, for a value that it takes as the spec types it, such as a path.
+For a value in another shape, `make_pipeline` inserts an adapter provider, such as one that makes the group `IofQ` from the workflow's array:
 
 ```python
-PipelineBinding(IOFQ, make_pipeline,
-                keys={'can': (Filename[BackgroundRun],), 'iofq': (BackgroundSubtractedIofQ,)})
+def iofq(intensity: BackgroundSubtractedIofQ) -> IofQ:
+    return IofQ(intensity=intensity)
+
+def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
+    pipeline = sans_workflow()
+    pipeline.insert(iofq)
+    return pipeline
+
+PipelineBinding(IOFQ, make_pipeline, keys={'can': (Filename[BackgroundRun],)})
 ```
 
-[roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows the other routes from a spec's values to such keys: adapter providers, and providers that take the spec's models.
+[roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows these routes from a spec's values to such keys, and providers that take the spec's models.
 `binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
-Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one; or the spec gives each a `NewType`.
+Two parameters may share a type, such as two axes of a Q map, if `keys=` names a key for one.
 No two fields, parameters or outputs, share a key, over all alternatives of a union: an output computed at a parameter's key would be the value the binding was given, which an output must not share memory with.
 An output that reports the centre given or found has a key of its own, such as `UsedCentre`, computed by a provider from `GivenCentre`.
 
@@ -886,7 +912,7 @@ class IofQDriver:
     def outputs(self):                            # a state read has a sample row and a can row
         sample_num, sample_den = self._sums['sample']
         can_num, can_den = self._sums['can']
-        return IofQOutputs(iofq=IofQ(sample_num / sample_den - can_num / can_den))
+        return IofQOutputs(iofq=IofQ(intensity=sample_num / sample_den - can_num / can_den))
 ```
 
 A workflow that needs every row at once, such as `STITCH`, writes a driver that keeps its rows and computes over all of them at each read.
@@ -907,8 +933,8 @@ Code that calls a driver itself keeps the same order:
 driver = binding.make_accumulator(fixed, blanks=('runs',))
 for run in runs:
     driver.push('runs', [run])
-    counts = driver.outputs().counts      # may be the array the next push adds into
-    show(counts['q', 0])                  # done with it before the next push
+    counts = driver.outputs().volume.counts   # may be the array the next push adds into
+    show(counts['q', 0])                      # done with it before the next push
 ```
 
 `DriverBinding` may call its function that makes a driver from several threads at once, since plain requests run in parallel.
@@ -930,7 +956,7 @@ This one adds each run of a rotation scan to a volume as it arrives, and cuts th
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):   # the scan's 300 runs
     volume.push(runs=[run])                                 # added once the previous cut is copied
-    show(client.output(volume, 'counts', select={'q': 0}))
+    show(client.output(volume, 'volume', select={'q': 0}))
 total = client.freeze(volume)
 ```
 

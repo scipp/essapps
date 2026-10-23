@@ -14,7 +14,9 @@ until the division, so that the runs of a sum add up correctly.
 
 A beam centre is typed in, or found by ``FIND_CENTRE``; a transmission is the
 one in the sample's file, typed in, or computed by ``TRANSMISSION`` from a
-transmission run.
+transmission run. ``FORWARD`` takes the I(Q) that ``IOFQ`` or ``IOFQ_MULTI``
+outputs, as the group ``IofQ``, since a reference stands for a group or a file
+only.
 
 workflow-authors.ipynb writes the specs and bindings below step by step; the other
 notebooks import them from here.
@@ -38,7 +40,6 @@ from ess.spec.pipeline import PipelineBinding
 SampleFile = NewType('SampleFile', Path)
 CanFile = NewType('CanFile', Path)
 TransmissionFile = NewType('TransmissionFile', Path)
-IofQ = NewType('IofQ', sc.Variable)
 
 
 class Reduction(BaseModel):
@@ -63,6 +64,19 @@ class TransmissionFraction(BaseModel):
 
     kind: Literal['given'] = 'given'
     value: float = Field(gt=0, le=1)
+
+
+class IofQ(BaseModel):
+    """
+    I(Q) of a sample, minus that of its can: one value per Q bin.
+
+    ``intensity`` is a data value, so a request gives an ``IofQ`` by
+    reference to an output only.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    intensity: sc.Variable
 
 
 class Sample(BaseModel):
@@ -90,8 +104,6 @@ class IofQMultiParams(IofQSettings):
 
 
 class IofQOutputs(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     iofq: IofQ
 
 
@@ -117,8 +129,6 @@ ForwardIntensity = NewType('ForwardIntensity', sc.Variable)
 
 
 class ForwardParams(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
     curve: IofQ
 
 
@@ -279,7 +289,7 @@ def iofq(
     can_denominator: Denominator[CanRun],
 ) -> IofQ:
     sample = sample_numerator / sample_denominator
-    return IofQ(sample - can_numerator / can_denominator)
+    return IofQ(intensity=sample - can_numerator / can_denominator)
 
 
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
@@ -351,7 +361,7 @@ multi = DriverBinding(IOFQ_MULTI, IofQDriver)
 
 
 def forward(params: ForwardParams) -> ForwardOutputs:
-    return ForwardOutputs(i0=ForwardIntensity(params.curve['Q', 0].copy()))
+    return ForwardOutputs(i0=ForwardIntensity(params.curve.intensity['Q', 0].copy()))
 
 
 def find_centre(params: FindCentreParams) -> FindCentreOutputs:

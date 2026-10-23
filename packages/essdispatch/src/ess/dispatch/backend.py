@@ -186,8 +186,10 @@ and it may be frozen again; its computed outputs are dropped once the last
 reader of its state is done, since no push comes to drop them.
 
 A selection reads part of an array output of a record or an accumulator's
-state by dimension name, and copies only that part. A read of an
-accumulator's state still has the state's outputs computed whole.
+state by dimension name, and copies only that part; of a group output, the
+part of each array field that has the dimension, as ``sc.DataGroup`` slices
+its items. A read of an accumulator's state still has the state's outputs
+computed whole.
 """
 
 from __future__ import annotations
@@ -216,7 +218,7 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, json_form, optional
+from ess.spec.field_types import base, is_group, json_form, optional
 from ess.spec.places import ref_types, validated
 from ess.spec.refs import Loc, iter_refs, map_refs
 
@@ -287,16 +289,39 @@ Selection = Mapping[str, int | slice]
 
 def _selected(value: Any, select: Selection) -> Any:
     """
-    A copy of the part of an array that ``select`` names; needs no lock.
+    A copy of the part of an array, or of a group, that ``select`` names;
+    needs no lock.
 
     An array is a value with named dimensions that slices as
     ``value[dim, index]``, such as a scipp variable or data array. A
     dimension it lacks, or an index out of range, raises what the slice
-    raises.
+    raises. Of a group, each dimension slices the array fields that have
+    it, as ``sc.DataGroup`` slices its items, and every other field is
+    copied whole, a group in it too. Unlike a ``sc.DataGroup``, a group
+    refuses a dimension that no array field has, with ``ValueError``.
     """
+    if not isinstance(value, BaseModel):
+        for dim, index in select.items():
+            value = value[dim, index]
+        return value.copy()
+    fields = dict(value)
     for dim, index in select.items():
-        value = value[dim, index]
-    return value.copy()
+        sliced = {
+            n: v[dim, index] for n, v in fields.items() if dim in getattr(v, 'dims', ())
+        }
+        if not sliced:
+            raise ValueError(
+                f'{type(value).__name__} has no array field with dimension {dim!r}'
+            )
+        fields |= sliced
+    # A deep copy of a slice copies the slice only.
+    return value.model_copy(update=copy.deepcopy(fields))
+
+
+def _is_array(tp: Any) -> bool:
+    """Whether ``tp``, possibly optional, is a type with named dimensions."""
+    tp = base(optional(tp)[0])
+    return isinstance(tp, type) and hasattr(tp, 'dims')
 
 
 def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
@@ -2106,7 +2131,8 @@ class Backend:
         Values of a record's outputs, once it has completed: of ``names``, or
         of every output the workflow returned if ``names`` is ``None``; with
         ``select``, a copy of that part of each. A selection names outputs
-        declared as arrays: of a type with named dimensions, ``dims``.
+        declared as arrays, of a type with named dimensions, ``dims``, or as
+        groups with an array field (see :func:`_selected`).
 
         A record the client keeps is read from memory; otherwise its
         persisted outputs are read from the store, once written (see
@@ -2171,17 +2197,26 @@ class Backend:
 
     def _check_select(self, spec_id: SpecId, names: Sequence[str] | None) -> None:
         """
-        Refuse a selection unless it names outputs, each declared as an array;
-        needs no lock. A selection names the dimensions of the outputs it
-        reads, so it reads only outputs named.
+        Refuse a selection unless it names outputs, each declared as an array
+        or as a group with an array field; needs no lock. A selection names
+        the dimensions of the outputs it reads, so it reads only outputs named.
         """
         if names is None:
             raise ValueError('select= needs the name of an output')
         declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
             tp = base(optional(declared[name].annotation)[0])
-            if not (isinstance(tp, type) and hasattr(tp, 'dims')):
-                raise ValueError(f'{spec_id} output {name!r}: select= needs an array')
+            if not (
+                _is_array(tp)
+                or (
+                    is_group(tp)
+                    and any(_is_array(f.annotation) for f in tp.model_fields.values())
+                )
+            ):
+                raise ValueError(
+                    f'{spec_id} output {name!r}: select= needs an array, or a group '
+                    'with an array field'
+                )
 
     def accumulator_outputs(
         self,

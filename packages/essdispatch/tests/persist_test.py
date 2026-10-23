@@ -36,12 +36,17 @@ from ess.dispatch.testing import (
 )
 from ess.spec import Binding, WorkflowSpec, function_binding
 
+
+class Amount(BaseModel):
+    """
+    A number that one workflow outputs and another takes: a group, since a
+    reference stands for a group or a file only.
+    """
+
+    value: float
+
+
 SampleFile = NewType('SampleFile', Path)
-Extra = NewType('Extra', float)
-Note = NewType('Note', float)
-Part = NewType('Part', float)
-Offset = NewType('Offset', float)
-Shifted = NewType('Shifted', float)
 
 
 class Box:
@@ -54,30 +59,26 @@ class RunParams(BaseModel):
 
 
 class Loaded(BaseModel):
-    value: float
-    extra: Extra
-    note: Note | None = None
+    value: Amount
+    extra: Amount
+    note: Amount | None = None
 
 
 class SourceParams(BaseModel):
-    source: float
+    source: Amount
 
 
 class OffsetParams(BaseModel):
-    source: float
-    shift: Offset
-
-
-class ShiftedOutputs(BaseModel):
-    value: Shifted
+    source: Amount
+    shift: Amount
 
 
 class TotalParams(BaseModel):
-    part: list[Part] = Field(min_length=1)
+    part: list[Amount] = Field(min_length=1)
 
 
 class Value(BaseModel):
-    value: float
+    value: Amount
 
 
 class Listed(BaseModel):
@@ -85,11 +86,17 @@ class Listed(BaseModel):
 
 
 class Boxed(BaseModel, arbitrary_types_allowed=True):
-    value: Box
+    """A group that holds a data value, so is given by reference only."""
+
+    box: Box
 
 
-class BoxParams(BaseModel, arbitrary_types_allowed=True):
-    source: Box
+class BoxOutputs(BaseModel):
+    value: Boxed
+
+
+class BoxParams(BaseModel):
+    source: Boxed
 
 
 def _spec(
@@ -110,12 +117,12 @@ def _spec(
 
 
 LOAD = _spec('load', RunParams, Loaded)
-SHIFT = _spec('shift', SourceParams, ShiftedOutputs)
+SHIFT = _spec('shift', SourceParams, Value)
 TOTAL = _spec('total', TotalParams, Value, tables=('part',))
 LIST = _spec('list', RunParams, Listed)  # a value that can be changed in place
-BOX = _spec('box', RunParams, Boxed)  # a value that can be referenced weakly
+BOX = _spec('box', RunParams, BoxOutputs)  # a value that can be referenced weakly
 UNBOX = _spec('unbox', BoxParams, Value)
-OFFSET = _spec('offset', OffsetParams, ShiftedOutputs)
+OFFSET = _spec('offset', OffsetParams, Value)
 
 
 def _sample(n: int) -> dict[str, Any]:
@@ -180,25 +187,30 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
     def load(params: RunParams) -> Loaded:
         run = read_dataset(params.sample)
         loading.wait(timeout=5)
-        return Loaded(value=run, extra=-run)
+        return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
-    def box(params: RunParams) -> Boxed:
+    def box(params: RunParams) -> BoxOutputs:
         boxes.append(weakref.ref(value := Box(read_dataset(params.sample))))
-        return Boxed(value=value)
+        return BoxOutputs(value=Boxed(box=value))
 
     def total(params: TotalParams) -> Value:
-        return Value(value=sum(params.part))
+        return Value(value=Amount(value=sum(part.value for part in params.part)))
 
-    def offset(params: OffsetParams) -> ShiftedOutputs:
-        return ShiftedOutputs(value=params.source + params.shift)
+    def shift(params: SourceParams) -> Value:
+        return Value(value=Amount(value=params.source.value + 10.0))
+
+    def offset(params: OffsetParams) -> Value:
+        return Value(value=Amount(value=params.source.value + params.shift.value))
 
     return [
         function_binding(LOAD, load),
-        function_binding(SHIFT, lambda p: ShiftedOutputs(value=p.source + 10.0)),
+        function_binding(SHIFT, shift),
         kept_rows(TOTAL, total),
         function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample)])),
         function_binding(BOX, box),
-        function_binding(UNBOX, lambda p: Value(value=p.source.value)),
+        function_binding(
+            UNBOX, lambda p: Value(value=Amount(value=p.source.box.value))
+        ),
         StagedFunction(OFFSET, offset),
     ]
 
@@ -247,7 +259,7 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     load = client.compute(LOAD, params=_sample(1), persist=('value',))
 
     other = connect()
-    assert other.output(load, 'value') == 1.0
+    assert other.output(load, 'value') == Amount(value=1.0)
     assert (load.id, 'value') in store
     assert (load.id, 'extra') not in store
     with pytest.raises(NotReadable, match='not kept by this client'):
@@ -255,7 +267,7 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     with pytest.raises(SubmitError, match='not kept by this client'):
         client.submit(SHIFT, params={'source': load.ref('extra')})
     shift = other.compute(SHIFT, params={'source': load.ref('value')})
-    assert other.output(shift, 'value') == 11.0
+    assert other.output(shift, 'value') == Amount(value=11.0)
 
 
 def test_a_record_persisted_at_submission_completes_once_written(
@@ -267,7 +279,10 @@ def test_a_record_persisted_at_submission_completes_once_written(
     assert client.status(load) is Status.PENDING
     store.gate.set()
     assert client.wait(load) is Status.COMPLETED
-    assert client.output(load) == {'value': 1.0, 'extra': -1.0}
+    assert client.output(load) == {
+        'value': Amount(value=1.0),
+        'extra': Amount(value=-1.0),
+    }
 
 
 def test_a_failed_write_fails_a_record_persisted_at_submission(
@@ -312,14 +327,14 @@ def test_persist_keeps_the_client_s_hold_and_lets_other_clients_read(
     client.persist(load, 'value')
     # The request waits for the write.
     shift = other.submit(SHIFT, params={'source': load.ref('value')})
-    assert client.output(load, 'value') == 1.0  # from memory meanwhile
+    assert client.output(load, 'value') == Amount(value=1.0)  # from memory meanwhile
     assert other.status(shift) is Status.PENDING
     store.gate.set()
 
-    assert other.output(shift, 'value') == 11.0
-    assert other.output(load, 'value') == 1.0
+    assert other.output(shift, 'value') == Amount(value=11.0)
+    assert other.output(load, 'value') == Amount(value=1.0)
     client.release(load)
-    assert client.output(load, 'value') == 1.0  # from the store
+    assert client.output(load, 'value') == Amount(value=1.0)  # from the store
     with pytest.raises(NotReadable, match='not kept by this client'):
         client.output(load, 'extra')
 
@@ -338,7 +353,9 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
     assert other.wait(shift) is Status.FAILED
     assert 'the write failed: no space left' in other.failure(shift)
     assert client.status(load) is Status.COMPLETED
-    assert client.output(load, 'value') == 1.0  # the client still keeps it
+    assert client.output(load, 'value') == Amount(
+        value=1.0
+    )  # the client still keeps it
     with pytest.raises(NotReadable, match='the write failed: no space left'):
         other.output(load, 'value')
     with pytest.raises(SubmitError, match='the write failed: no space left'):
@@ -346,7 +363,7 @@ def test_a_failed_write_of_persist_fails_only_the_persist_request(
 
     store.free()
     client.persist(load)  # ask again
-    assert other.output(load, 'value') == 1.0
+    assert other.output(load, 'value') == Amount(value=1.0)
 
 
 def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> None:
@@ -354,7 +371,7 @@ def test_persisting_what_is_persisted_logs_nothing(client: Client, log: Log) -> 
     client.persist(load, 'value')
     client.persist([load, load], 'value', 'extra')
     client.release(load)
-    assert client.output(load, 'extra') == -1.0
+    assert client.output(load, 'extra') == Amount(value=-1.0)
 
     persisted = [e for e in log if isinstance(e, Persist)]
     assert [e.outputs for e in persisted] == [('value',), ('extra',)]
@@ -364,6 +381,7 @@ def test_persist_is_refused_for_what_the_client_cannot_persist(
     client: Client, connect: Callable[[], Client], datasets: FakeDatasets
 ) -> None:
     load = client.compute(LOAD, params=_sample(1))
+    zero = Amount(value=0.0)
 
     with pytest.raises(SubmitError, match='not kept by this client'):
         connect().persist(load)
@@ -374,7 +392,7 @@ def test_persist_is_refused_for_what_the_client_cannot_persist(
     with local(
         proposal='p1',
         datasets=datasets,
-        bind=[function_binding(LOAD, lambda p: Loaded(value=0.0, extra=0.0))],
+        bind=[function_binding(LOAD, lambda p: Loaded(value=zero, extra=zero))],
     ) as alone:
         with pytest.raises(SubmitError, match='needs a store'):
             alone.submit(LOAD, params=_sample(1), persist=True)
@@ -387,7 +405,10 @@ def test_an_output_the_workflow_did_not_return_is_persisted_as_not_returned(
 
     with pytest.raises(NotReadable, match='did not return it'):
         connect().output(load, 'note')
-    assert connect().output(load) == {'value': 1.0, 'extra': -1.0}
+    assert connect().output(load) == {
+        'value': Amount(value=1.0),
+        'extra': Amount(value=-1.0),
+    }
 
 
 def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
@@ -399,7 +420,7 @@ def test_releasing_a_pending_record_persisted_by_the_client_still_writes_it(
     client.release(load)  # the persist request keeps it
     loading.set()
 
-    assert connect().output(load, 'value') == 1.0
+    assert connect().output(load, 'value') == Amount(value=1.0)
 
 
 def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
@@ -410,8 +431,8 @@ def test_a_frozen_accumulator_persisted_is_kept_by_the_store(
     total.push(part=[load.ref('value')])
     frozen = client.freeze(total, persist=True)
 
-    assert connect().output(frozen, 'value') == 1.0
-    assert client.output(frozen, 'value') == 1.0
+    assert connect().output(frozen, 'value') == Amount(value=1.0)
+    assert client.output(frozen, 'value') == Amount(value=1.0)
     with pytest.raises(NotReadable, match=f'read record {frozen.id} instead'):
         client.output(total, 'value')
 
@@ -443,7 +464,7 @@ def test_persisting_a_pending_record_does_not_delay_its_completion(
     loading.set()
 
     assert client.wait(load) is Status.COMPLETED  # while its write waits
-    assert client.output(load, 'value') == 1.0
+    assert client.output(load, 'value') == Amount(value=1.0)
     store.gate.set()
 
 
@@ -486,7 +507,7 @@ def test_reading_every_output_raises_if_a_write_failed(
         connect().output(load)
     store.free()
     client.persist(load, 'value')
-    assert connect().output(load) == {'value': 1.0}
+    assert connect().output(load) == {'value': Amount(value=1.0)}
 
 
 def test_closing_a_client_raises_if_a_write_it_asked_for_failed(
@@ -529,7 +550,7 @@ def test_a_frozen_record_kept_by_the_client_is_persisted_later(
     frozen = client.freeze(total)
     client.persist(frozen)
 
-    assert connect().output(frozen, 'value') == 1.0
+    assert connect().output(frozen, 'value') == Amount(value=1.0)
 
 
 # A restart over the same log and store
@@ -590,7 +611,7 @@ def test_a_restart_runs_pending_persisted_work_and_cancels_the_rest(
         Status.COMPLETED,
     ]
     assert again.failure(alone) == 'the backend restarted'
-    assert again.output(total, 'value') == 3.0
+    assert again.output(total, 'value') == Amount(value=3.0)
 
 
 def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
@@ -661,7 +682,7 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
     assert again.failure(calls[0]) == (
         f'the backend restarted: record {kept.id} output value was not persisted'
     )
-    assert again.output(calls[1], 'value') == 4.0
+    assert again.output(calls[1], 'value') == Amount(value=4.0)
 
 
 def test_a_write_that_had_not_ended_at_a_restart_has_failed(
@@ -695,7 +716,7 @@ def test_a_restart_runs_again_a_record_written_but_not_finished(
     again = start(tmp_path / 'crashed')
 
     assert again.wait(load) is Status.COMPLETED
-    assert again.output(load, 'value') == 1.0  # written again
+    assert again.output(load, 'value') == Amount(value=1.0)  # written again
 
 
 def test_a_restart_runs_a_pending_record_that_the_client_persisted(
@@ -713,7 +734,7 @@ def test_a_restart_runs_a_pending_record_that_the_client_persisted(
     loading.set()
 
     assert again.wait(load) is Status.COMPLETED
-    assert again.output(load, 'value') == 1.0
+    assert again.output(load, 'value') == Amount(value=1.0)
 
 
 def test_a_restart_fails_a_reader_of_a_write_that_was_lost(
