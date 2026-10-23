@@ -8,3 +8,4 @@ Facts are checked against pinned sources; each study names its commits and date.
 - [AiiDA](aiida.md): a provenance-tracking workflow engine; failure kinds, transient failures, software versions.
 - [Snakemake](snakemake.md): file-based pipelines on clusters; rerun triggers, failure capture, resources.
 - [Git](git.md): objects that never change, references, and names that move.
+- [esslivedata](esslivedata.md): params models and factories for live data; what a binding takes from them.

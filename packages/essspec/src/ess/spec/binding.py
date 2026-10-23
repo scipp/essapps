@@ -83,7 +83,8 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
         A callable that computes the outputs from the values of ``blanks``,
         by name, with the values of ``fixed``.
 
-        The callable takes a value of each blank, a table as its rows.
+        The callable takes a value of each blank, a table as its rows, from
+        a request that passed the checks of a plain request.
 
         The callable gets the values of the blanks only, and gives what
         :meth:`compute` gives with the same values. It may compute what
@@ -128,7 +129,12 @@ class Driver[O: BaseModel](Protocol):
     """
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
-        """Add ``rows``, never none, to the table ``table``, in order."""
+        """
+        Add ``rows``, never none, to the table ``table``, in order.
+
+        A push may carry several rows, so that the driver can work on them
+        together, such as by loading their files in parallel.
+        """
         ...
 
     def outputs(self) -> O:
