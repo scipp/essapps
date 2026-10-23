@@ -26,7 +26,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 ) -> None:
     centre_run = measure(1, [1.0, 1.0, 1.0, 1.0])
     centre = client.compute(
-        BEAM_CENTRE, params={'direct_beam': centre_run}, label='beam-centre'
+        BEAM_CENTRE, params={'direct_beam': {'file': centre_run}}, label='beam-centre'
     )
     samples = [
         measure(2, [2.0, 3.0, 4.0, 5.0], role='sample'),
@@ -36,7 +36,9 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
         IOFQ, params={'beam_centre': centre.ref('centre')}, blanks=('sample',)
     )
 
-    requests = apply(template, samples, client.datasets, member_field='run')
+    requests = apply(
+        template, samples, client.datasets, at=('sample', 'file'), member_field='run'
+    )
     reduced = list(client.compute(requests, label='iofq').values())
 
     assert [client.output(r, 'iofq').values.tolist() for r in reduced] == [
@@ -54,7 +56,10 @@ def test_c2_vanadium_from_the_catalogue(
 ) -> None:
     vanadium = other.compute(
         VANADIUM,
-        params={'scaling': Scaling(scale=2.0), 'vanadium': measure(1, [1.0, 1.0])},
+        params={
+            'scaling': Scaling(scale=2.0),
+            'vanadium': {'file': measure(1, [1.0, 1.0])},
+        },
     )
     pid = other.publish(vanadium.ref('normalization'), 'scicat')
     published = datasets.add_published(scicat.entries[pid])
@@ -62,7 +67,7 @@ def test_c2_vanadium_from_the_catalogue(
     sample = measure(2, [4.0, 8.0])
     normalization = {'kind': 'published', 'file': dataset(pid=pid)}
     result = client.compute(
-        IOFQ, params={'sample': sample, 'normalization': normalization}
+        IOFQ, params={'sample': {'file': sample}, 'normalization': normalization}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
@@ -78,7 +83,13 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(13, [4.0, 2.0], angle=2.0),
         measure(14, [2.0, 0.5], angle=4.0),
     ]
-    series = client.submit(STITCH, params={'runs': angles, 'reference': reference})
+    series = client.submit(
+        STITCH,
+        params={
+            'runs': [{'file': angle} for angle in angles],
+            'reference': {'file': reference},
+        },
+    )
     exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
@@ -94,13 +105,18 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
         for n, counts in [(11, [8.0, 4.0]), (12, [2.0, 1.0]), (13, [4.0, 2.0])]
     ]
     series = client.accumulator(
-        Template(STITCH, params={'reference': reference}, blanks=('runs',))
+        Template(STITCH, params={'reference': {'file': reference}}, blanks=('runs',))
     )
     reads, plains = [], []
     for n, run in enumerate(runs, start=1):
-        series.push(runs=[run])  # STITCH keeps the rows and stitches at each read
+        # STITCH keeps the rows and stitches at each read
+        series.push(runs=[{'file': run}])
         plain = client.compute(
-            STITCH, params={'runs': runs[:n], 'reference': reference}
+            STITCH,
+            params={
+                'runs': [{'file': run} for run in runs[:n]],
+                'reference': {'file': reference},
+            },
         )
         reads.append(client.output(series, 'stitched').curve)
         plains.append(client.output(plain, 'stitched').curve)
@@ -114,10 +130,12 @@ def test_c5_vanadium_and_sample_tuned_together(
 ) -> None:
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.stage(
-        Template(VANADIUM, params={'vanadium': vanadium_run}, blanks=('scaling',))
+        Template(
+            VANADIUM, params={'vanadium': {'file': vanadium_run}}, blanks=('scaling',)
+        )
     )
     reduce = client.stage(
-        Template(IOFQ, params={'sample': sample}, blanks=('normalization',))
+        Template(IOFQ, params={'sample': {'file': sample}}, blanks=('normalization',))
     )
     reduced = []
     for scale in (1.0, 2.0):

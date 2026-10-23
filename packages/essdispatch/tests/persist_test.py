@@ -9,7 +9,7 @@ import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -46,7 +46,8 @@ class Amount(BaseModel):
     value: float
 
 
-SampleFile = NewType('SampleFile', Path)
+class SampleRun(BaseModel):
+    file: Path
 
 
 class Box:
@@ -55,7 +56,7 @@ class Box:
 
 
 class RunParams(BaseModel):
-    sample: SampleFile
+    sample: SampleRun
 
 
 class Loaded(BaseModel):
@@ -126,7 +127,7 @@ OFFSET = _spec('offset', OffsetParams, Value)
 
 
 def _sample(n: int) -> dict[str, Any]:
-    return {'sample': dataset(run=n)}
+    return {'sample': {'file': dataset(run=n)}}
 
 
 class GatedStore(FakeStore):
@@ -185,12 +186,12 @@ def boxes() -> list[weakref.ref[Box]]:
 @pytest.fixture
 def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Binding]:
     def load(params: RunParams) -> Loaded:
-        run = read_dataset(params.sample)
+        run = read_dataset(params.sample.file)
         loading.wait(timeout=5)
         return Loaded(value=Amount(value=run), extra=Amount(value=-run))
 
     def box(params: RunParams) -> BoxOutputs:
-        boxes.append(weakref.ref(value := Box(read_dataset(params.sample))))
+        boxes.append(weakref.ref(value := Box(read_dataset(params.sample.file))))
         return BoxOutputs(value=Boxed(box=value))
 
     def total(params: TotalParams) -> Value:
@@ -206,7 +207,7 @@ def bind(loading: threading.Event, boxes: list[weakref.ref[Box]]) -> list[Bindin
         function_binding(LOAD, load),
         function_binding(SHIFT, shift),
         kept_rows(TOTAL, total),
-        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample)])),
+        function_binding(LIST, lambda p: Listed(value=[read_dataset(p.sample.file)])),
         function_binding(BOX, box),
         function_binding(
             UNBOX, lambda p: Value(value=Amount(value=p.source.box.value))

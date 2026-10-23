@@ -218,7 +218,7 @@ from ess.spec import (
     StageCall,
     WorkflowSpec,
 )
-from ess.spec.field_types import base, is_group, json_form, optional
+from ess.spec.field_types import is_group, json_form, optional
 from ess.spec.places import ref_types, validated
 from ess.spec.refs import Loc, iter_refs, map_refs
 
@@ -319,8 +319,8 @@ def _selected(value: Any, select: Selection) -> Any:
 
 
 def _is_array(tp: Any) -> bool:
-    """Whether ``tp``, possibly optional, is a type with named dimensions."""
-    tp = base(optional(tp)[0])
+    """Whether ``tp``, possibly typed ``X | None``, has named dimensions."""
+    tp = optional(tp)[0]
     return isinstance(tp, type) and hasattr(tp, 'dims')
 
 
@@ -2205,7 +2205,7 @@ class Backend:
             raise ValueError('select= needs the name of an output')
         declared = self._bindings[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
-            tp = base(optional(declared[name].annotation)[0])
+            tp = optional(declared[name].annotation)[0]
             if not (
                 _is_array(tp)
                 or (

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from dataclasses import dataclass
 from pathlib import Path, PosixPath
 from typing import Annotated, Any, Literal, NewType
 
@@ -8,22 +9,19 @@ import scipp as sc
 from pydantic import BaseModel
 
 from ess.spec.field_types import (
-    base,
+    arguments,
     element,
+    fields_of,
     fits,
+    is_alias,
     is_file,
     is_single,
     optional,
     plain,
-    supertypes,
+    reachable,
     type_name,
     value_type,
 )
-
-SampleFile = NewType('SampleFile', Path)
-IofQ = NewType('IofQ', sc.DataArray)
-Transmission = NewType('Transmission', sc.DataArray)
-ScaledIofQ = NewType('ScaledIofQ', IofQ)
 
 
 class Parts(BaseModel, arbitrary_types_allowed=True):
@@ -31,8 +29,12 @@ class Parts(BaseModel, arbitrary_types_allowed=True):
     denominator: sc.DataArray
 
 
-SampleParts = NewType('SampleParts', Parts)
-CanParts = NewType('CanParts', Parts)
+class SampleParts(Parts):
+    pass
+
+
+class CanParts(Parts):
+    pass
 
 
 class BeamCentre(BaseModel):
@@ -42,59 +44,51 @@ class BeamCentre(BaseModel):
 
 class FindCentre(BaseModel):
     kind: Literal['find'] = 'find'
-    run: SampleFile
+    run: Path
 
 
 def test_optional_removes_none_and_says_whether_it_was_there() -> None:
-    assert optional(SampleFile | None) == (SampleFile, True)
-    assert optional(SampleFile) == (SampleFile, False)
+    assert optional(Parts | None) == (Parts, True)
+    assert optional(Parts) == (Parts, False)
     assert optional(int | str | None) == (int | str, True)
     assert optional(int | str) == (int | str, False)
 
 
 def test_annotated_metadata_is_removed_at_any_depth() -> None:
-    known = Annotated[SampleFile, 'a validator']
-    assert plain(list[known | None]) == list[SampleFile | None]
-    assert plain(dict[str, known]) == dict[str, SampleFile]
-    assert optional(known | None) == (SampleFile, True)
-    assert value_type(list[known]) is SampleFile
+    known = Annotated[Parts, 'a validator']
+    assert plain(list[known | None]) == list[Parts | None]
+    assert plain(dict[str, known]) == dict[str, Parts]
+    assert optional(known | None) == (Parts, True)
+    assert value_type(list[known]) is Parts
 
 
 def test_element_of_a_list_or_a_dict() -> None:
-    assert element(list[SampleFile]) is SampleFile
-    assert element(dict[str, IofQ | None]) == IofQ | None
-    assert element(SampleFile) is None
+    assert element(list[Parts]) is Parts
+    assert element(dict[str, sc.DataArray | None]) == sc.DataArray | None
+    assert element(Parts) is None
     assert element(list[int] | None) is None
 
 
 @pytest.mark.parametrize(
     'annotation',
     [
-        SampleFile,
-        SampleFile | None,
-        list[SampleFile],
-        list[SampleFile | None],
-        list[SampleFile] | None,
-        dict[str, SampleFile],
+        Parts,
+        Parts | None,
+        list[Parts],
+        list[Parts | None],
+        list[Parts] | None,
+        dict[str, Parts],
     ],
 )
 def test_value_type_is_the_type_of_one_value_of_a_field(annotation: Any) -> None:
-    assert value_type(annotation) is SampleFile
+    assert value_type(annotation) is Parts
 
 
 def test_value_type_removes_one_list() -> None:
-    assert value_type(list[list[SampleFile]]) == list[SampleFile]
+    assert value_type(list[list[Parts]]) == list[Parts]
 
 
-def test_supertypes_remove_newtypes_one_by_one() -> None:
-    assert supertypes(ScaledIofQ) == [ScaledIofQ, IofQ, sc.DataArray]
-    assert supertypes(sc.DataArray) == [sc.DataArray]
-    assert base(ScaledIofQ) is sc.DataArray
-
-
-@pytest.mark.parametrize(
-    'tp', [Path, SampleFile, sc.DataArray, IofQ, Parts, SampleParts, float]
-)
+@pytest.mark.parametrize('tp', [Path, sc.DataArray, Parts, SampleParts, float])
 def test_a_data_value_is_one_value(tp: Any) -> None:
     assert is_single(tp)
 
@@ -103,13 +97,11 @@ def test_a_data_value_is_one_value(tp: Any) -> None:
     'tp',
     [
         list[Path],
-        dict[str, IofQ],
+        dict[str, sc.DataArray],
         list,
         dict,
-        NewType('Runs', list),
-        NewType('Runs', list[Path]),
-        IofQ | Transmission,
-        IofQ | None,
+        sc.DataArray | sc.Variable,
+        sc.DataArray | None,
         type(None),
     ],
 )
@@ -117,17 +109,53 @@ def test_lists_dicts_and_unions_are_not_data_values(tp: Any) -> None:
     assert not is_single(tp)
 
 
-def test_a_file_is_a_path_or_a_newtype_of_it() -> None:
+def test_a_file_is_a_path_or_a_subclass_of_it() -> None:
     assert is_file(Path)
     assert is_file(PosixPath)
-    assert is_file(SampleFile)
     assert not is_file(str)
-    assert not is_file(NewType('Name', str))
     assert not is_file(list[Path])
 
 
-def test_type_name_is_the_name_of_the_newtype() -> None:
-    assert type_name(IofQ) == 'IofQ'
+def test_a_newtype_and_a_type_alias_are_aliases() -> None:
+    type Folder = Path
+    assert is_alias(NewType('SampleFile', Path))
+    assert is_alias(Folder)
+    assert not is_alias(Path)
+    assert not is_alias(list[Path])
+
+
+def test_arguments_are_the_type_arguments_at_any_depth() -> None:
+    sample_file = NewType('SampleFile', Path)
+    assert sample_file in list(arguments(list[sample_file | None]))
+    assert sc.DataArray not in list(arguments(Parts | None))  # not its fields
+
+
+def test_fields_of_a_model_a_dataclass_or_a_typeddict() -> None:
+    @dataclass
+    class Window:
+        start: float
+        stop: float
+
+    assert fields_of(Parts) == {'numerator': sc.DataArray, 'denominator': sc.DataArray}
+    assert fields_of(Window) == {'start': float, 'stop': float}
+    assert fields_of(Path) == {}
+    assert fields_of(list[Parts]) == {}
+
+
+class Node(BaseModel):
+    file: Path
+    children: list['Node'] = []
+
+
+def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() -> None:
+    found = list(reachable(Annotated[list[Node] | None, 'a validator']))
+    assert Node in found
+    assert Path in found
+    assert 'a validator' not in found  # not the metadata
+    assert sc.DataArray in list(reachable(dict[str, SampleParts]))
+
+
+def test_type_name_is_the_name_of_the_class() -> None:
     assert type_name(sc.DataArray) == 'DataArray'
     assert type_name(BeamCentre | FindCentre) == 'BeamCentre | FindCentre'
 
@@ -135,20 +163,16 @@ def test_type_name_is_the_name_of_the_newtype() -> None:
 @pytest.mark.parametrize(
     ('data', 'field'),
     [
-        (IofQ, sc.DataArray),  # an export takes any data array
-        (ScaledIofQ, IofQ),
-        (sc.DataArray, Transmission),  # a role narrows a general output
-        (IofQ, ScaledIofQ),
-        (Parts, SampleParts),
-        (Parts, CanParts),
-        (IofQ, IofQ),
-        (PosixPath, SampleFile),  # a subclass
-        (IofQ | None, sc.DataArray),
-        (IofQ, sc.DataArray | None),
+        (sc.DataArray, sc.DataArray),
+        (Parts, Parts),
+        (SampleParts, Parts),  # a subclass fits its base
+        (PosixPath, Path),
+        (sc.DataArray | None, sc.DataArray),
+        (sc.DataArray, sc.DataArray | None),
         (list[int], list[int]),
         (BeamCentre, BeamCentre | FindCentre),  # data fit one alternative
         (BeamCentre, BeamCentre | FindCentre | None),
-        (ScaledIofQ, Transmission | IofQ),
+        (SampleParts, BeamCentre | Parts),  # a subclass of one alternative
     ],
 )
 def test_fits(data: Any, field: Any) -> None:
@@ -158,15 +182,16 @@ def test_fits(data: Any, field: Any) -> None:
 @pytest.mark.parametrize(
     ('data', 'field'),
     [
-        (IofQ, Transmission),  # two roles of one type
-        (SampleParts, CanParts),
+        (Parts, SampleParts),  # a base does not fit its subclass
+        (SampleParts, CanParts),  # two subclasses of one base
         (sc.Variable, sc.DataArray),
         (Path, PosixPath),
         (list[int], list[float]),
         (list[int], list),
-        (list[IofQ], list[sc.DataArray]),  # generic aliases fit only themselves
-        (IofQ, list[IofQ]),
-        (IofQ, Transmission | sc.Variable),
+        (list[SampleParts], list[Parts]),  # generic aliases fit only themselves
+        (sc.DataArray, list[sc.DataArray]),
+        (sc.DataArray, Parts | sc.Variable),
+        (Parts, SampleParts | CanParts),
         (BeamCentre | FindCentre, BeamCentre),
     ],
 )

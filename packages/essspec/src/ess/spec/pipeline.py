@@ -34,7 +34,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     ``make_pipeline`` may return a pipeline that it holds. Each parameter
     sets the sciline key of its type, without ``Annotated`` metadata, such as
     ``Reduction``; a list parameter, such as a table, sets the key of its type,
-    a list, to its list, ``list[Run]`` or ``list[BeamCentre | FindCentre]``.
+    a list, to its list, ``list[Run]`` or ``list[GivenCentre | FindCentre]``.
     A union of groups sets the key of the alternative that the value's tag
     names (see below). Each output is computed as the key of its type without
     ``| None``, since an optional output means that the graph may lack it,
@@ -51,57 +51,52 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
             pipeline = sciline.Pipeline(providers)
             if fixed['direct_beam'] is None:
-                pipeline[DirectBeam] = None  # its providers take None
+                pipeline[sans.DirectBeam] = None  # esssans' providers take None
             else:
-                pipeline[DirectBeamFilename] = fixed['direct_beam']
+                pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
             return pipeline
 
         PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 
     A union of groups has a key for each alternative, the alternative as
-    declared, a ``NewType`` included, in the order of the union. The binding
-    sets the key of the alternative that the value's tag names, read from the
-    value's tag field, and not that of the value's type: the value may be an
-    instance of a subclass of an alternative, or of a ``NewType``
-    alternative's group. Here one graph serves both alternatives, since
+    declared, in the order of the union. The binding sets the key of the
+    alternative that the value's tag names, read from the value's tag field,
+    and not that of the value's type: the value may be an instance of a
+    subclass of an alternative. Here one graph serves both alternatives, since
     ``find_centre`` leads from one alternative's key to the other's::
 
         class IofQParams(BaseModel):
-            sample: SampleFile
+            sample: Sample
             beam_centre: Annotated[
-                BeamCentre | FindCentre, Field(discriminator='kind')
-            ] = BeamCentre()
+                GivenCentre | FindCentre, Field(discriminator='kind')
+            ] = GivenCentre()
 
-        def find_centre(settings: FindCentre, data: SampleData) -> BeamCentre: ...
+        def find_centre(settings: FindCentre, data: SampleData) -> GivenCentre: ...
 
         binding = PipelineBinding(
             IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq])
         )
-        binding.keys['beam_centre']  # (BeamCentre, FindCentre)
-        # tag 'given': pipeline[BeamCentre] = value, which replaces find_centre
+        binding.keys['beam_centre']  # (GivenCentre, FindCentre)
+        # tag 'given': pipeline[GivenCentre] = value, which replaces find_centre
         # tag 'find':  pipeline[FindCentre] = value, and find_centre computes
-        #              BeamCentre
+        #              GivenCentre
 
     Where the alternatives need different providers for one key,
     ``make_pipeline`` branches on the fixed value. That always works, since a
     union is never a blank, even with one key for all alternatives: its key
     may depend on its value. A union typed ``U | None`` sets no key, as
-    ``X | None`` does. A union inside a group or a list sets no key of its
-    own: the group's or the list's key holds it, and a provider reads its
-    tag.
+    ``X | None`` does. A union in a list, such as a table, sets no key of its
+    own: the list's key holds it, and a provider reads the tag of each row.
 
     ``keys`` gives a tuple of keys for a parameter or an output: ``(K,)``,
     for a union a key for each alternative in the order of the union, or
     ``()`` for a parameter that sets none. It names keys of a workflow's own,
-    such as for two parameters of one type::
+    such as the key at which the graph computes an output, or keys for two
+    parameters of one class, which may instead each have a class of their
+    own, ``class Can(Run): ...``::
 
         PipelineBinding(
-            IOFQ,
-            make_pipeline,
-            keys={
-                'sample': (Filename[SampleRun],),
-                'iofq': (BackgroundSubtractedIofQ,),
-            },
+            IOFQ, make_pipeline, keys={'iofq': (BackgroundSubtractedIofQ,)}
         )
 
     No two fields, parameters or outputs, share a key, over all

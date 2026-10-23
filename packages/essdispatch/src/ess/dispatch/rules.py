@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from ess.spec import DatasetRef
 from ess.spec.refs import Loc, iter_refs
@@ -37,41 +39,43 @@ class Rule:
     Apply a template to each new dataset the selector matches.
 
     A dataset fills the place ``at`` in the blank the lookup leaves, as
-    :func:`apply` fills it: by default the blank itself, a file parameter,
-    or for a blank that is a group its file field, such as
-    ``('sample', 'run')``. A dataset is new until a record under the label
-    holds it at that place: a dataset that a request holds elsewhere, such
-    as a can that the lookup fills, is not handled by it.
+    :func:`apply` fills it: a file field of the blank, a group, such as
+    ``('sample', 'file')``, and ``fields`` gives the blank's other fields, as
+    :func:`apply` takes them; for a series, of each row. A dataset is new
+    until a record under the label holds it at that place: a dataset that a
+    request holds elsewhere, such as a can that the lookup fills, is not
+    handled by it.
 
     With ``series``, a request instead takes every dataset with the same
     value of that metadata field so far, in run order, and that value is its
     member. The blank is then a table with a row for each dataset, and the
     lookup is not used. ``at`` names the place in each row, the blank and
-    the fields within a row down to the file: ``at=('runs', 'run')`` makes
-    the rows ``[{'run': dataset}, ...]``. Without ``at``, each dataset is a
-    row, of a table of files. A dataset is new until a record under the
-    label holds it at that place in a row, ``runs[i].run``.
+    the fields within a row down to the file: ``at=('runs', 'file')`` makes
+    the rows ``[{'file': dataset}, ...]``. A dataset is new until a record
+    under the label holds it at that place in a row, ``runs[i].file``.
 
     ``persist`` names the outputs the loop persists, or is ``None`` for every
     one; the loop always persists, so that its client keeps nothing. What the
     template references must be persisted for the same reason.
 
     Raises ``ValueError`` when made if no single blank is left for a dataset,
-    or ``at`` is not in it (see :func:`dataset_place`).
+    if ``at`` is not in it (see :func:`dataset_place`), or if ``fields``
+    gives the place ``at`` (see :func:`~ess.dispatch.batch.holding`).
     """
 
     name: str
     template: Template
     selector: Selector
     label: str
-    at: tuple[str, ...] | None = None
+    at: tuple[str, ...]
+    fields: Mapping[str, Any] | None = None
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
     persist: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        _ = self.place  # refuses a template or an ``at`` that no dataset fills
+        holding(self.place, None, self.fields)  # refuses an at that none fills
 
     @property
     def place(self) -> tuple[str, ...]:
@@ -158,6 +162,7 @@ class TriggerLoop:
                 new,
                 self._source,
                 at=place,
+                fields=rule.fields,
                 member_field=rule.member_field,
                 lookup=rule.lookup,
             )
@@ -175,7 +180,7 @@ class TriggerLoop:
             series[str(self._source.metadata(ref)[rule.series])].append(ref)
         return {
             value: rule.template.fill(
-                params={place[0]: [holding(place, ref) for ref in refs]}
+                params={place[0]: [holding(place, ref, rule.fields) for ref in refs]}
             )
             for value, refs in series.items()
             if any(ref in new for ref in refs)
@@ -186,7 +191,7 @@ def _fills(loc: Loc, place: tuple[str, ...], series: str | None) -> bool:
     """
     Whether a dataset at ``loc`` in a request of a rule fills the rule's
     ``place``: is at it, or for a series, at it in a row of the blank table,
-    such as ``('runs', 2, 'run')`` for the place ``('runs', 'run')``.
+    such as ``('runs', 2, 'file')`` for the place ``('runs', 'file')``.
     """
     if series is None:
         return loc == place

@@ -4,13 +4,14 @@
 Each check passes for a binding or driver that keeps its symmetry and fails
 for one with a bug that breaks it.
 
-The toy spec ``SUB`` takes a sample and a can value and gives
-``diff = factor * (sample - can)``; ``SUB_MULTI`` sums the rows of each table.
+The toy spec ``SUB`` takes a sample and a can run and gives
+``diff = factor * (sample.counts - can.counts)``; ``SUB_MULTI`` sums the
+counts of the rows of each table.
 """
 
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, NewType
+from typing import Any
 
 import numpy as np
 import pytest
@@ -33,25 +34,28 @@ class Scale(BaseModel):
     factor: float = 1.0
 
 
-SampleValue = NewType('SampleValue', float)
-CanValue = NewType('CanValue', float)
-Diff = NewType('Diff', float)
+class SampleRun(BaseModel):
+    counts: float
+
+
+class CanRun(BaseModel):
+    counts: float
 
 
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    sample: SampleValue
-    can: CanValue
+    sample: SampleRun
+    can: CanRun
 
 
 class SubMultiParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    sample: list[SampleValue] = Field(min_length=1)
-    can: list[CanValue] = Field(min_length=1)
+    sample: list[SampleRun] = Field(min_length=1)
+    can: list[CanRun] = Field(min_length=1)
 
 
 class SubOutputs(BaseModel):
-    diff: Diff | None
+    diff: float | None
 
 
 def _spec(name: str, **fields: Any) -> WorkflowSpec[Any, Any]:
@@ -64,8 +68,8 @@ SUB_MULTI = _spec(
 )
 
 
-def subtract(scale: Scale, sample: float, can: float) -> SubOutputs:
-    return SubOutputs(diff=scale.factor * (sample - can))
+def subtract(scale: Scale, sample: SampleRun, can: CanRun) -> SubOutputs:
+    return SubOutputs(diff=scale.factor * (sample.counts - can.counts))
 
 
 @dataclass(frozen=True)
@@ -110,7 +114,7 @@ class Sums:
         self.sums = {'sample': 0.0, 'can': 0.0}
 
     def push(self, table: str, rows: Rows) -> None:
-        self.sums[table] += sum(rows)
+        self.sums[table] += sum(row.counts for row in rows)
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self.factor * (self.sums['sample'] - self.sums['can']))
@@ -128,7 +132,7 @@ class KeepsLastPush(Sums):
     """Breaks arrival: each push replaces what was pushed before into its table."""
 
     def push(self, table: str, rows: Rows) -> None:
-        self.sums[table] = sum(rows)
+        self.sums[table] = sum(row.counts for row in rows)
 
 
 class StartsAtFirstSample(Sums):
@@ -143,19 +147,19 @@ class StartsAtFirstSample(Sums):
         self.total: float | None = None
 
     def push(self, table: str, rows: Rows) -> None:
-        for value in rows:
+        for row in rows:
             if table == 'sample':
-                self.total = value + (self.total or 0.0)
+                self.total = row.counts + (self.total or 0.0)
             elif self.total is not None:
-                self.total -= value
+                self.total -= row.counts
 
     def outputs(self) -> SubOutputs:
         total = self.total
         return SubOutputs(diff=None if total is None else self.factor * total)
 
 
-Part = NewType('Part', object)
-Joined = NewType('Joined', object)
+class Part(BaseModel):
+    values: list[float]
 
 
 class PartsParams(BaseModel):
@@ -163,7 +167,7 @@ class PartsParams(BaseModel):
 
 
 class JoinedOutputs(BaseModel):
-    joined: Joined | None
+    joined: list[float] | None
 
 
 PARTS = _spec('parts', params=PartsParams, outputs=JoinedOutputs, tables=['parts'])
@@ -179,18 +183,22 @@ class JoinsInPlace:
         self.joined: list[float] | None = None
 
     def push(self, table: str, rows: Rows) -> None:
-        for value in rows:
+        for row in rows:
             if self.joined is None:
-                self.joined = value
+                self.joined = row.values
             else:
-                self.joined += value
+                self.joined += row.values
 
     def outputs(self) -> JoinedOutputs:
         return JoinedOutputs(joined=self.joined)
 
 
 FIXED = {'scale': Scale(factor=2.0)}
-TABLES = {'sample': [5.0, 7.0], 'can': [1.0, 2.0, 4.0]}
+TABLES = {
+    'sample': [SampleRun(counts=c) for c in (5.0, 7.0)],
+    'can': [CanRun(counts=c) for c in (1.0, 2.0, 4.0)],
+}
+RUNS = {'sample': SampleRun(counts=5.0), 'can': CanRun(counts=1.0)}
 
 
 def test_arrival_and_order_pass_for_sums_kept_per_table() -> None:
@@ -214,9 +222,12 @@ def test_order_fails_for_a_driver_that_drops_rows_of_a_table_pushed_first() -> N
 def test_arrival_fails_for_a_driver_that_modifies_the_values_pushed() -> None:
     with pytest.raises(
         AssertionError,
-        match=r"values after pushing them, one push per table, 'parts'\[0\]: ",
+        match=r"values after pushing them, one push per table, "
+        r"'parts'\[0\], 'values': ",
     ):
-        check_arrival_and_order(JoinsInPlace, {}, {'parts': [[1.0], [2.0]]})
+        check_arrival_and_order(
+            JoinsInPlace, {}, {'parts': [Part(values=[1.0]), Part(values=[2.0])]}
+        )
 
 
 def test_states_that_a_driver_refuses_are_not_read() -> None:
@@ -226,32 +237,33 @@ def test_states_that_a_driver_refuses_are_not_read() -> None:
 
     check_arrival_and_order(Ratio, FIXED, TABLES)
     with pytest.raises(ZeroDivisionError):
-        check_arrival_and_order(Ratio, FIXED, {'sample': [1.0], 'can': []})
+        check_arrival_and_order(
+            Ratio, FIXED, {'sample': [SampleRun(counts=1.0)], 'can': []}
+        )
 
 
 def test_caching_passes_for_a_stage_that_computes_each_call() -> None:
     calls = [{'scale': Scale(factor=f)} for f in (1.0, 2.0, 1.0)]
-    check_caching(Calls(SUB, subtract), {'sample': 5.0, 'can': 1.0}, calls)
+    check_caching(Calls(SUB, subtract), RUNS, calls)
 
 
 def test_caching_fails_for_a_stage_that_holds_the_outputs_of_its_first_call() -> None:
     calls = [{'scale': Scale(factor=f)} for f in (1.0, 2.0)]
-    runs = {'sample': 5.0, 'can': 1.0}
     with pytest.raises(AssertionError, match=r"caching, call 2 \{'scale': "):
-        check_caching(RemembersFirstCall(SUB, subtract), runs, calls)
+        check_caching(RemembersFirstCall(SUB, subtract), RUNS, calls)
 
 
 def test_one_row_gives_each_table_a_row_of_the_value() -> None:
-    request = one_row(SUB_MULTI, SubParams(sample=5.0, can=1.0))
+    request = one_row(SUB_MULTI, SubParams(**RUNS))
     assert request.scale == Scale()
-    assert (request.sample, request.can) == ([5.0], [1.0])
+    assert (request.sample, request.can) == ([RUNS['sample']], [RUNS['can']])
 
 
 def test_one_row_passes_if_one_row_per_table_gives_the_single_run_outputs() -> None:
     check_one_row(
         Calls(SUB, subtract),
         DriverBinding(SUB_MULTI, Sums),
-        SubParams(scale=Scale(factor=2.0), sample=5.0, can=1.0),
+        SubParams(scale=Scale(factor=2.0), **RUNS),
     )
 
 
@@ -260,21 +272,23 @@ def test_one_row_fails_if_the_outputs_differ() -> None:
         check_one_row(
             Calls(SUB, subtract),
             DriverBinding(SUB_MULTI, IgnoresCans),
-            SubParams(scale=Scale(factor=2.0), sample=5.0, can=1.0),
+            SubParams(scale=Scale(factor=2.0), **RUNS),
         )
 
 
-Data = NewType('Data', object)
-Out = NewType('Out', object)
+class Measured(BaseModel):
+    """A measurement: a numpy array, a variable, or a data array."""
+
+    array: object
 
 
 class DataParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    data: Data | None = None
+    data: Measured | None = None
 
 
 class DataOutputs(BaseModel):
-    out: Out
+    out: object
 
 
 DATA = _spec('data', params=DataParams, outputs=DataOutputs)
@@ -325,13 +339,13 @@ def test_assert_close_compares_models_of_one_type_field_by_field() -> None:
         assert_close({'diff': 1.0}, SubOutputs(diff=1.0), where='out')
 
 
-def first_half(data: Any, **_: Any) -> DataOutputs:
+def first_half(data: Measured, **_: Any) -> DataOutputs:
     """Breaks the promise on memory: returns a view of the value it reads."""
-    return DataOutputs(out=data[: len(data) // 2])
+    return DataOutputs(out=data.array[: len(data.array) // 2])
 
 
-def first_half_copied(data: Any, **_: Any) -> DataOutputs:
-    return DataOutputs(out=data[: len(data) // 2].copy())
+def first_half_copied(data: Measured, **_: Any) -> DataOutputs:
+    return DataOutputs(out=data.array[: len(data.array) // 2].copy())
 
 
 @pytest.mark.parametrize(
@@ -349,7 +363,7 @@ def test_one_row_fails_for_an_output_that_shares_memory_with_a_value(
     data: Any,
 ) -> None:
     copied, viewed = Calls(DATA, first_half_copied), Calls(DATA, first_half)
-    params = DataParams(data=data)
+    params = DataParams(data=Measured(array=data))
     check_one_row(copied, copied, params)
     with pytest.raises(
         AssertionError, match=r"^one-row, single-run: output \['out'\]\S* shares"
@@ -358,9 +372,10 @@ def test_one_row_fails_for_an_output_that_shares_memory_with_a_value(
 
 
 def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> None:
-    def masked(data: sc.DataArray, scale: Scale) -> DataOutputs:
+    def masked(data: Measured, scale: Scale) -> DataOutputs:
+        array = data.array
         return DataOutputs(
-            out=sc.DataArray(data.data * scale.factor, masks=dict(data.masks))
+            out=sc.DataArray(array.data * scale.factor, masks=dict(array.masks))
         )
 
     data = sc.DataArray(
@@ -369,4 +384,6 @@ def test_caching_fails_for_a_call_whose_output_shares_a_mask_with_a_value() -> N
     )
     shared = r"(?s)^caching, call 1 .*, plain: output \['out'\]\.masks\['m'\]"
     with pytest.raises(AssertionError, match=shared):
-        check_caching(Calls(DATA, masked), {'data': data}, [{'scale': Scale()}])
+        check_caching(
+            Calls(DATA, masked), {'data': Measured(array=data)}, [{'scale': Scale()}]
+        )

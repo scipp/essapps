@@ -11,7 +11,7 @@ import weakref
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Annotated, Any, Literal, NewType, Self
+from typing import Annotated, Any, Literal, Self
 
 import numpy as np
 import pytest
@@ -63,8 +63,8 @@ def _add(a: Amount, b: Amount) -> Amount:
     return Amount(value=a.value + b.value)
 
 
-SampleFile = NewType('SampleFile', Path)
-RunFile = NewType('RunFile', Path)
+class SampleRun(BaseModel):
+    file: Path
 
 
 class Shift(BaseModel):
@@ -76,7 +76,7 @@ class Factor(BaseModel):
 
 
 class Sample(BaseModel):
-    sample: SampleFile
+    sample: SampleRun
 
 
 class Value(BaseModel):
@@ -99,7 +99,7 @@ class ShiftOutputs(BaseModel):
 
 class ScaleParams(BaseModel):
     scaling: Factor = Field(default_factory=Factor)
-    sample: SampleFile
+    sample: SampleRun
 
 
 class Parts(BaseModel):
@@ -142,7 +142,7 @@ class Tag(BaseModel):
 class TaggedRun(BaseModel):
     """A run and its tag, if given: a group that holds a file."""
 
-    file: RunFile
+    file: Path
     tag: Tag | None = None
 
 
@@ -163,7 +163,7 @@ class Weight(BaseModel):
 class WeightedRun(BaseModel):
     """A run and its weight, which has no default: a group that holds a file."""
 
-    file: RunFile
+    file: Path
     weight: Weight
 
 
@@ -251,23 +251,19 @@ class ByMonitor(BaseModel):
 class ByTime(BaseModel):
     mode: Literal['time'] = 'time'
     seconds: float = Field(gt=0)
-
-
-class Normalization(BaseModel):
-    by: ByMonitor | ByTime = Field(ByMonitor(), discriminator='mode')
     scale: float = 1.0
 
 
-class Stops(BaseModel):
-    """A list of unions that are discriminated through ``Annotated``."""
-
-    by: list[Annotated[ByMonitor | ByTime, Field(discriminator='mode')]]
-
-
 class NormalizedParams(BaseModel):
-    normalization: Normalization = Field(default_factory=Normalization)
-    stops: Stops | None = None
-    stop: Annotated[ByMonitor | ByTime, Field(discriminator='mode')] = ByMonitor()
+    """
+    A union discriminated through ``Field``, and a list of unions
+    discriminated through ``Annotated``.
+    """
+
+    normalization: ByMonitor | ByTime = Field(ByMonitor(), discriminator='mode')
+    stops: list[Annotated[ByMonitor | ByTime, Field(discriminator='mode')]] = Field(
+        default_factory=list
+    )
 
 
 NORMALIZED = _spec('normalized', params=NormalizedParams)
@@ -278,7 +274,7 @@ def _value(value: float) -> Value:
 
 
 def load_run(params: Sample) -> LoadOutputs:
-    run = read_dataset(params.sample)
+    run = read_dataset(params.sample.file)
     return LoadOutputs(value=Amount(value=run), extra=Amount(value=-run))
 
 
@@ -287,7 +283,7 @@ def shift(params: ShiftParams) -> ShiftOutputs:
 
 
 def scale(params: ScaleParams) -> Value:
-    return _value(read_dataset(params.sample) * params.scaling.factor)
+    return _value(read_dataset(params.sample.file) * params.scaling.factor)
 
 
 def weighted(params: Any) -> Value:
@@ -438,7 +434,7 @@ def _start(call: Callable[[], Any]) -> Future[Any]:
 
 
 def _load(n: int) -> Request:
-    return Request(LOAD, params={'sample': dataset(run=n)})
+    return Request(LOAD, params={'sample': {'file': dataset(run=n)}})
 
 
 def _read(accumulator: Accumulator | Record, output: str = 'value') -> Request:
@@ -615,7 +611,9 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
 ) -> None:
     run = datasets.resolve(dataset(run=1))
     stage = client.stage(
-        Template(SCALE, params={'sample': dataset(run=1)}, blanks=('scaling',))
+        Template(
+            SCALE, params={'sample': {'file': dataset(run=1)}}, blanks=('scaling',)
+        )
     )
     twice = {'scaling': Factor(factor=2.0)}
     before = client.compute(stage, params=twice)
@@ -624,7 +622,7 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     after = client.compute(stage, params=twice)
 
     assert datasets.resolve(dataset(run=1)) != run
-    assert stage.template.params == {'sample': run}
+    assert stage.template.params == {'sample': {'file': run}}
     assert after.request == before.request
     assert [client.output(r, 'value') for r in (before, after)] == [
         Amount(value=v) for v in (2.0, 2.0)
@@ -637,7 +635,9 @@ def test_a_stage_whose_staging_fails_stops(
 ) -> None:
     scaling.fail_next = True
     stage = client.stage(
-        Template(SCALE, params={'sample': dataset(run=2)}, blanks=('scaling',))
+        Template(
+            SCALE, params={'sample': {'file': dataset(run=2)}}, blanks=('scaling',)
+        )
     )
     twice = {'scaling': Factor(factor=2.0)}
     failed = client.compute(stage, params=twice)
@@ -672,14 +672,16 @@ def test_a_request_through_a_stage_must_have_the_stage_s_values(
     client = backend.open_client('p1', 'anna')
     (load,) = backend.submit([Entry(_load(1))], client=client)
     stage, template = backend.open_stage(
-        Template(SCALE, params={'sample': dataset(run=1)}, blanks=('scaling',)),
+        Template(
+            SCALE, params={'sample': {'file': dataset(run=1)}}, blanks=('scaling',)
+        ),
         client=client,
     )
     twice = {'scaling': {'factor': 2.0}}
     refused = {
         'the stage holds scale': _read(load),
         r"\['sample'\]: differ from the stage's values": Request(
-            SCALE, params={**twice, 'sample': dataset(run=2)}
+            SCALE, params={**twice, 'sample': {'file': dataset(run=2)}}
         ),
     }
     for reason, request in refused.items():
@@ -719,8 +721,8 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
     released = client.compute(_load(1))
     client.release(released)
     refused = {
-        'sample: unknown dataset run:9': Template(
-            SCALE, params={'sample': dataset(run=9)}, blanks=('scaling',)
+        r'sample\.file: unknown dataset run:9': Template(
+            SCALE, params={'sample': {'file': dataset(run=9)}}, blanks=('scaling',)
         ),
         r'source: dataset .* does not fit Amount': Template(
             SHIFT, params={'source': dataset(run=1)}, blanks=('shift',)
@@ -752,7 +754,7 @@ def test_bind_is_a_list_of_bindings(datasets: FakeDatasets) -> None:
 
 def test_values_go_with_a_spec_or_a_stage(client: Client) -> None:
     with pytest.raises(TypeError, match='params go with a spec or a stage'):
-        client.submit(_load(1), params={'sample': dataset(run=2)})
+        client.submit(_load(1), params={'sample': {'file': dataset(run=2)}})
 
 
 def test_a_params_model_makes_the_request_of_its_dict() -> None:
@@ -771,18 +773,17 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
     datasets: FakeDatasets,
 ) -> None:
     def describe(params: NormalizedParams) -> Value:
-        by = params.normalization.by
+        by = params.normalization
         return _value(by.seconds if isinstance(by, ByTime) else -1.0)
 
     with local(
         proposal='p1', datasets=datasets, bind=[function_binding(NORMALIZED, describe)]
     ) as client:
         timed = client.compute(
-            NORMALIZED,
-            params={'normalization': Normalization(by=ByTime(seconds=2.0))},
+            NORMALIZED, params={'normalization': ByTime(seconds=2.0)}
         )
         as_dict = client.compute(
-            NORMALIZED, params={'normalization': {'by': {'mode': 'time', 'seconds': 2}}}
+            NORMALIZED, params={'normalization': {'mode': 'time', 'seconds': 2}}
         )
 
         assert client.output(timed, 'value') == Amount(value=2.0)
@@ -790,31 +791,29 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
 
 
 def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
-    stops = Stops(by=[ByTime(seconds=1.0), ByMonitor()])
+    stops = [ByTime(seconds=1.0), ByMonitor()]
     request = Request(NORMALIZED, params=NormalizedParams(stops=stops))
 
-    assert request.params['stops'] == {
-        'by': [{'mode': 'time', 'seconds': 1.0}, {'mode': 'monitor'}]
-    }
+    assert request.params['stops'] == [
+        {'mode': 'time', 'seconds': 1.0},
+        {'mode': 'monitor'},
+    ]
 
 
-@pytest.mark.parametrize('stop', [ByMonitor(), ByTime(seconds=1.0)])
-def test_a_discriminator_of_a_union_parameter_is_kept(
-    stop: ByMonitor | ByTime,
-) -> None:
-    by_model = Request(NORMALIZED, params=NormalizedParams(stop=stop))
-    by_dict = Request(NORMALIZED, params={'stop': stop})
+@pytest.mark.parametrize('by', [ByMonitor(), ByTime(seconds=1.0, scale=2.0)])
+def test_a_discriminator_of_a_union_parameter_is_kept(by: ByMonitor | ByTime) -> None:
+    by_model = Request(NORMALIZED, params=NormalizedParams(normalization=by))
+    by_dict = Request(NORMALIZED, params={'normalization': by})
 
-    assert by_model.params == by_dict.params == {'stop': stop.model_dump()}
+    assert by_model.params == by_dict.params == {'normalization': by.model_dump()}
 
 
 def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
     request = Request(
-        NORMALIZED,
-        params=NormalizedParams(normalization=Normalization(by=ByTime(seconds=1.0))),
+        NORMALIZED, params=NormalizedParams(normalization=ByTime(seconds=1.0))
     )
 
-    assert request.params == {'normalization': {'by': {'mode': 'time', 'seconds': 1.0}}}
+    assert request.params == {'normalization': {'mode': 'time', 'seconds': 1.0}}
 
 
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
@@ -860,7 +859,10 @@ def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None
     with pytest.raises(SubmitError, match=r'scaling\.speed: Extra inputs are not'):
         client.submit(
             SCALE,
-            params={'scaling': {'factor': 2.0, 'speed': 2.0}, 'sample': dataset(run=1)},
+            params={
+                'scaling': {'factor': 2.0, 'speed': 2.0},
+                'sample': {'file': dataset(run=1)},
+            },
         )
     with pytest.raises(
         SubmitError, match=r'runs\[0\]\.tag\.speed: Extra inputs are not'
@@ -1072,7 +1074,7 @@ def test_closing_a_local_client_closes_its_backend_once_its_workflows_return(
     def load(params: Sample) -> LoadOutputs:
         started.set()
         loading.wait(timeout=5)
-        loaded.append(read_dataset(params.sample))
+        loaded.append(read_dataset(params.sample.file))
         return load_run(params)
 
     loading.clear()
@@ -1588,7 +1590,9 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     client: Client, datasets: FakeDatasets
 ) -> None:
     runs = [datasets.measure(n, float(n)) for n in range(3, 10)]
-    loads = client.compute([Request(LOAD, params={'sample': run}) for run in runs])
+    loads = client.compute(
+        [Request(LOAD, params={'sample': {'file': run}}) for run in runs]
+    )
     digits = client.accumulator(Template(DIGITS, blanks=('parts',)))
     pushes = [
         threading.Thread(target=lambda x=x: digits.push(parts=[x.ref('value')]))
@@ -1938,7 +1942,7 @@ BOTH = _spec(
 
 def array(params: Sample) -> ArrayValue:
     """A run as an array of one value."""
-    values = [read_dataset(params.sample)]
+    values = [read_dataset(params.sample.file)]
     return ArrayValue(value=Counts(counts=sc.array(dims=['x'], values=values)))
 
 
@@ -2063,7 +2067,7 @@ def in_place(
 def loads(in_place: Client) -> list[Record]:
     """The arrays of runs 1 and 2."""
     return in_place.compute(
-        [Request(ARRAY, params={'sample': dataset(run=n)}) for n in (1, 2)]
+        [Request(ARRAY, params={'sample': {'file': dataset(run=n)}}) for n in (1, 2)]
     )
 
 
@@ -2098,7 +2102,7 @@ def test_a_stage_lets_go_of_what_its_template_references_once_staged(
 
     bind = [function_binding(ARRAY, array), KeepsTheSum()]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        loaded = client.compute(ARRAY, params={'sample': dataset(run=2)})
+        loaded = client.compute(ARRAY, params={'sample': {'file': dataset(run=2)}})
         value = weakref.ref(client.output(loaded, 'value'))
         stage = client.stage(Template(COPY, params={'source': loaded.ref('value')}))
         client.release(loaded)
@@ -2238,7 +2242,9 @@ def test_references_in_one_submission_pin_one_state_while_rows_are_pushed(
 ) -> None:
     client = in_place
     runs = [datasets.measure(n, float(n)) for n in range(3, 23)]
-    loads = client.compute([Request(ARRAY, params={'sample': run}) for run in runs])
+    loads = client.compute(
+        [Request(ARRAY, params={'sample': {'file': run}}) for run in runs]
+    )
     total = _array_total(client)
     total.push(parts=[loads[0].ref('value')])
     pushing = threading.Thread(
@@ -2583,7 +2589,7 @@ def test_readers_of_a_state_of_kept_rows_compute_the_plain_request_once(
         kept_rows(SIDES, sides),
     ]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
-        load = client.compute(ARRAY, params={'sample': dataset(run=1)})
+        load = client.compute(ARRAY, params={'sample': {'file': dataset(run=1)}})
         kept = client.accumulator(
             Template(SIDES, params={'backgrounds': []}, blanks=('samples',))
         )
@@ -2808,7 +2814,7 @@ GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('p
 
 
 def grid(params: Sample) -> GridOutputs:
-    values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample)
+    values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample.file)
     counts = sc.array(dims=['x', 'y'], values=values)
     axis = Axis(edges=sc.array(dims=['x'], values=[0.0, 1.0, 2.0, 3.0]))
     return GridOutputs(
@@ -2837,7 +2843,7 @@ def grids(datasets: FakeDatasets) -> Iterator[Client]:
 
 
 def _grid(client: Client, n: int) -> Record:
-    return client.compute(GRID, params={'sample': dataset(run=n)})
+    return client.compute(GRID, params={'sample': {'file': dataset(run=n)}})
 
 
 def _grid_total(client: Client) -> Accumulator:

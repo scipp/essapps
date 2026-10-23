@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from collections.abc import Mapping, Sequence
-from typing import Any, NewType
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -22,25 +22,28 @@ class Scale(BaseModel):
     factor: float = 2.0
 
 
-SampleValue = NewType('SampleValue', float)
-CanValue = NewType('CanValue', float)
-Diff = NewType('Diff', float)
+class SampleRun(BaseModel):
+    counts: float
+
+
+class CanRun(BaseModel):
+    counts: float
 
 
 class SubParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    sample: SampleValue
-    can: CanValue
+    sample: SampleRun
+    can: CanRun
 
 
 class SubMultiParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    sample: list[SampleValue] = Field(min_length=1)
-    can: list[CanValue] = Field(min_length=1)
+    sample: list[SampleRun] = Field(min_length=1)
+    can: list[CanRun] = Field(min_length=1)
 
 
 class SubOutputs(BaseModel):
-    diff: Diff
+    diff: float
 
 
 SUB = WorkflowSpec(
@@ -64,7 +67,7 @@ SUB_MULTI = WorkflowSpec(
 
 class SumParams(BaseModel):
     scale: Scale = Field(default_factory=Scale)
-    sample: list[SampleValue]
+    sample: list[SampleRun]
 
 
 SUM = WorkflowSpec(
@@ -79,7 +82,9 @@ SUM = WorkflowSpec(
 
 
 def subtract(params: SubParams) -> SubOutputs:
-    return SubOutputs(diff=params.scale.factor * (params.sample - params.can))
+    return SubOutputs(
+        diff=params.scale.factor * (params.sample.counts - params.can.counts)
+    )
 
 
 class Recorder:
@@ -105,7 +110,8 @@ class Subtracting:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         self._recorder.pushes.append((table, rows))
-        self._total += sum(rows) if table == 'sample' else -sum(rows)
+        counts = sum(row.counts for row in rows)
+        self._total += counts if table == 'sample' else -counts
 
     def outputs(self) -> SubOutputs:
         return SubOutputs(diff=self._factor * self._total)
@@ -121,17 +127,18 @@ def binding(recorder: Recorder) -> DriverBinding:
     return DriverBinding(SUB_MULTI, recorder.make_driver)
 
 
-SAMPLES = [5.0, 7.0]
+SAMPLES = [SampleRun(counts=5.0), SampleRun(counts=7.0)]
+CANS = [CanRun(counts=1.0)]
 
 
 def test_fixed_values_fill_in_the_default_of_each_parameter_in_neither() -> None:
-    assert fixed_values(SUB_MULTI, {'can': [1.0]}, ('sample',)) == {
+    assert fixed_values(SUB_MULTI, {'can': CANS}, ('sample',)) == {
         'scale': Scale(),
-        'can': [1.0],
+        'can': CANS,
     }
-    assert fixed_values(SUB, {'sample': 5.0}, ('can',)) == {
+    assert fixed_values(SUB, {'sample': SAMPLES[0]}, ('can',)) == {
         'scale': Scale(),
-        'sample': 5.0,
+        'sample': SAMPLES[0],
     }
 
 
@@ -180,16 +187,16 @@ def test_each_fixed_table_with_rows_is_one_push_of_its_rows(
 ) -> None:
     driver = binding.make_accumulator({'sample': SAMPLES}, ('can',))
     assert recorder.pushes == [('sample', SAMPLES)]
-    driver.push('can', [1.0])
+    driver.push('can', CANS)
     assert driver.outputs() == SubOutputs(diff=2.0 * (5.0 + 7.0 - 1.0))
 
 
 def test_a_plain_request_is_an_accumulator_without_blanks_read_once(
     binding: DriverBinding, recorder: Recorder
 ) -> None:
-    params = SUB_MULTI.params(sample=SAMPLES, can=[1.0])
+    params = SUB_MULTI.params(sample=SAMPLES, can=CANS)
     assert binding.compute(params) == SubOutputs(diff=22.0)
-    assert recorder.pushes == [('sample', SAMPLES), ('can', [1.0])]
+    assert recorder.pushes == [('sample', SAMPLES), ('can', CANS)]
 
 
 def test_a_table_without_rows_is_not_pushed(recorder: Recorder) -> None:
@@ -219,7 +226,7 @@ def test_an_accumulator_refuses_values_that_do_not_fit(
 def test_a_function_gets_the_params_as_a_model_instance() -> None:
     binding = function_binding(SUB, subtract)
     assert binding.spec is SUB
-    params = SubParams(sample=5.0, can=1.0)
+    params = SubParams(sample=SampleRun(counts=5.0), can=CanRun(counts=1.0))
     assert binding.compute(params) == SubOutputs(diff=8.0)
 
 

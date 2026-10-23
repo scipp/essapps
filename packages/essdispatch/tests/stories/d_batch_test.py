@@ -27,7 +27,13 @@ def test_d1_temperature_scan(
     template = Template(
         IOFQ, params={'reduction': Reduction(bins=1)}, blanks=('sample',)
     )
-    requests = apply(template, runs, client.datasets, member_field='temperature')
+    requests = apply(
+        template,
+        runs,
+        client.datasets,
+        at=('sample', 'file'),
+        member_field='temperature',
+    )
     scan = client.compute(requests, label='scan', persist=True)
 
     assert [
@@ -54,7 +60,11 @@ def test_d2_overnight_cluster_batch(
     corrupt(runs['7'])
     for member, run in runs.items():
         client.submit(
-            IOFQ, params={'sample': run}, label='night', member=member, persist=True
+            IOFQ,
+            params={'sample': {'file': run}},
+            label='night',
+            member=member,
+            persist=True,
         )
     client.close()  # the laptop is closed; the persisted runs go on
 
@@ -91,14 +101,14 @@ def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
         IOFQ, params={'reduction': Reduction(threshold=20.0)}, blanks=('sample',)
     )
     first = client.submit(
-        apply(wrong, runs, client.datasets, member_field='run'),
+        apply(wrong, runs, client.datasets, at=('sample', 'file'), member_field='run'),
         label='scan',
         persist=True,
     )
     client.cancel(first)
     fixed = replace(wrong, params={'reduction': Reduction(threshold=0.5)})
     second = client.compute(
-        apply(fixed, runs, client.datasets, member_field='run'),
+        apply(fixed, runs, client.datasets, at=('sample', 'file'), member_field='run'),
         label='scan',
         persist=True,
     )
@@ -115,7 +125,9 @@ def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) ->
     typo = Template(
         IOFQ, params={'reduction': {'threshold': '2,5'}}, blanks=('sample',)
     )
-    requests = apply(typo, runs, client.datasets, member_field='run')
+    requests = apply(
+        typo, runs, client.datasets, at=('sample', 'file'), member_field='run'
+    )
 
     with pytest.raises(SubmitError, match=r'reduction\.threshold'):
         client.submit(requests, label='scan')
@@ -130,22 +142,30 @@ def test_d6_rerun_a_batch_with_a_new_workflow_version(
     )
     runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
     client.compute(
-        apply(template, runs, client.datasets, member_field='run'),
+        apply(
+            template, runs, client.datasets, at=('sample', 'file'), member_field='run'
+        ),
         label='scan',
         persist=True,
     )
 
     before = client.records(label='scan')
-    runs = [r.request.params['sample'] for r in before]
+    runs = [r.request.params['sample']['file'] for r in before]
     renamed = apply(
-        replace(template, spec=IOFQ_V2), runs, client.datasets, member_field='run'
+        replace(template, spec=IOFQ_V2),
+        runs,
+        client.datasets,
+        at=('sample', 'file'),
+        member_field='run',
     )
     with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
         client.submit(renamed, label='scan')
     moved = replace(
         template, spec=IOFQ_V2, params={'reduction': ReductionV2(mask_below=1.5)}
     )
-    requests = apply(moved, runs, client.datasets, member_field='run')
+    requests = apply(
+        moved, runs, client.datasets, at=('sample', 'file'), member_field='run'
+    )
     after = list(client.compute(requests, label='scan', persist=True).values())
 
     assert [
@@ -172,8 +192,8 @@ def test_d7_rotation_scan_over_three_hundred_angles(
     cuts, pushed = [], []
     scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
     for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-        scan.push(runs=[run])  # added once the previous cut is copied
-        pushed.append(run)
+        scan.push(runs=[{'file': run}])  # added once the previous cut is copied
+        pushed.append({'file': run})
         cuts.append(client.output(scan, 'volume', select={'q': 0}))  # no record
     total = client.freeze(scan, persist=True)
 

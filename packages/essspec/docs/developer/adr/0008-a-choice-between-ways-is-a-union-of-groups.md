@@ -41,7 +41,7 @@ Terms of this ADR:
 ## Decision
 
 **A choice between ways is a discriminated union of groups.**
-A parameter, or a field of a group, may be a union whose alternatives are groups, each with a tag:
+A parameter may be a union whose alternatives are groups, each with a tag; a union is never a field of a group, so that a choice between ways is a parameter of its own (ADR 0001):
 
 ```python
 class GivenCentre(BaseModel):
@@ -51,7 +51,7 @@ class GivenCentre(BaseModel):
 
 class FindCentre(BaseModel):
     kind: Literal['find'] = 'find'
-    run: SampleFile
+    file: Path
     tolerance: float = 0.1
 
 class IofQParams(BaseModel):
@@ -59,7 +59,7 @@ class IofQParams(BaseModel):
     ...
 
 # the params of two requests; `finder` is the record of a request whose output `centre` is a GivenCentre
-{'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
+{'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
 {'beam_centre': finder.ref('centre')}
 ```
 
@@ -69,7 +69,7 @@ class IofQParams(BaseModel):
 - An output fits the union when it fits one alternative.
 
 **`X | None` means *without X*.**
-`mask: PixelMask | None = None` applies no mask for `None`; `direct_beam: DirectBeamFile | None` applies no direct-beam correction.
+`mask: PixelMask | None = None` applies no mask for `None`; `direct_beam: DirectBeam | None`, a group of the direct-beam run's `file: Path`, applies no direct-beam correction.
 A value obtained in another way is not `None` but an alternative that says so:
 
 ```python
@@ -88,7 +88,7 @@ A UI shows a union as a choice between its alternatives, and a type `X | None` a
 
 ```
 Transmission: (•) From the sample's file  ( ) Given: [0.75]  [or from a record ▾]
-[x] Direct beam  Run: [60340]
+[x] Direct beam  File: [60340]
 [ ] Mask
 ```
 
@@ -114,17 +114,17 @@ transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='ki
 
 **A default never leaves out a correction that a correct reduction needs.**
 A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently left out.
-So a correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, `direct_beam: DirectBeamFile | None`, and the request writes `None`.
+So a correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, `direct_beam: DirectBeam | None`, and the request writes `None`.
 The output is I(Q) either way; the params of its record say which corrections were applied.
 A correction that a correct reduction does not need, such as a mask, may default to `None`.
 A step whose omission changes what a reader of the output must do with it, such as a normalization without which I(Q) is in counts, makes another output type, and so another spec.
 
 **`PipelineBinding` sets one key per alternative of a union parameter, chosen by the tag.**
-A union parameter has a key for each alternative, the alternative as declared, a `NewType` included: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`.
+A union parameter has a key for each alternative, the alternative's class: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`.
 The binding sets the key of the alternative that the value's tag names, so sciline picks the providers:
 
 ```python
-def find_centre(settings: FindCentre) -> GivenCentre: ...   # reads settings.run
+def find_centre(settings: FindCentre) -> GivenCentre: ...   # reads settings.file
 
 PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
 # tag 'given' -> pipeline[GivenCentre] = value   (replaces find_centre)
@@ -132,7 +132,7 @@ PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
 ```
 
 `keys=` may give the alternatives one key, `(K, K)`, which every value then sets.
-A union inside a group or a list sets no key of its own: the group's or the list's key holds it, and a provider reads its tag.
+A union in a list parameter sets no key of its own: the list's key holds it, and a provider reads the tag of each row.
 
 **`PipelineBinding` sets no key for a parameter typed `X | None`; `make_pipeline` says what `None` means.**
 Every value of a union sets the key of an alternative that the request chose; `None` names no key.
@@ -144,9 +144,9 @@ So `keys=` gives such a parameter `()`, and the binding refuses it otherwise, wi
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     pipeline = sciline.Pipeline(providers)     # made for this call, never one it keeps
     if fixed['direct_beam'] is None:
-        pipeline[DirectBeam] = None            # esssans' providers take None: no correction
+        pipeline[sans.DirectBeam] = None       # esssans' key; its providers take None: no correction
     else:
-        pipeline[DirectBeamFilename] = fixed['direct_beam']
+        pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
     return pipeline
 
 PipelineBinding(IOFQ, make_pipeline, keys={'direct_beam': ()})
@@ -169,22 +169,23 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 ## Consequences
 
 - A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`. A toggle is the choice between two alternatives, one of them empty.
-- An output whose type is an alternative carries the tag, such as `TRANSMISSION`'s `TransmissionFraction`, so that it fits the union.
+- An output whose type is an alternative carries the tag, such as a `ComputedTransmission` output, so that it fits the union.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces it with a provider, `pipeline.insert(adapter)`, such as an adapter from `GivenCentre` to esssans' `BeamCenter`. Mapping the alternatives to other keys with `keys=` does not help while the held value stays further down the graph.
 - An author tests that each alternative has its effect, and that a request with `None` after one with a value gives the result without X. The second fails if `make_pipeline` sets the value in a pipeline it keeps.
 - A spec that tunes a value in a stage, such as a scan of the beam centre, types that parameter as a plain group, or its client submits plain requests.
 - A table whose single-run parameter is a union has a key per alternative, so the driver of the multi-run spec cannot cut the single-run graph at one key for its rows.
+- A choice for one field of a row of a table is not a union, since a union is never a field of a group. A choice of way per row, such as a transmission from the sample run or from a separate transmission run, is a table whose rows are a union, `list[A | B]`; a correction that some rows have is a group typed `X | None` in the row; and a choice of way for all rows is a parameter.
 
 ## Alternatives considered
 
 - **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it: a group that holds a run cannot be disabled without naming a run. An output of one mode's type does not fit.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
 - **An exception for data values**, whose `None` could mean something else when the field's description says what. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach. The alternative that holds the data value costs no level in a request when the workflow that computes it outputs the alternative.
-- **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every place that may go without a value would be a union, and a request that goes without it would write a tagged object, also at a field of a group, such as a transmission computed for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
+- **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every place that may go without a value would be a union, and a request that goes without it would write a tagged object, also at a field of a group, such as a mask for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.
 - **A framework `NotSet` type as an alternative.** One type for many parameters would be one key for all of them, which `PipelineBinding` refuses; a generic `NotSet[Mask]` is an empty alternative such as `NoMask`, written by the author with no new type.
-- **Keying by `type(value)`.** A subclass instance passes the union unchanged, and a `NewType` alternative's values are instances of its group, so the type names the wrong key.
+- **Keying by `type(value)`.** A subclass instance passes the union unchanged, so its type names the wrong key.
 - **A union blank cut once per tag.** A stage would cut the pipeline at the key of each call's tag, the first time that tag comes, and hold one cut per tag; each cut computes its fixed part once. It needs one graph for all alternatives, and would also let a driver cut a table of unions. No story needs it yet; it is the extension to add when one does, such as a beam-centre scan in a stage.
 - **No check of held values**, leaving defaults to the spec by convention and to tests. A test that runs each alternative but does not compare the results misses a held value.
 - **A check of held values at every key a parameter sets.** A value at a plain parameter's key is harmless, and sciline cannot leave a key empty once a value is set, so the check would make an author insert a provider for every default of a workflow factory, for no gain.

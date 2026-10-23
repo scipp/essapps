@@ -10,11 +10,11 @@ parameter, each element of a list, and each field of a group, at any depth::
 
     {
         'sample': {                                    # sample
-            'run': dataset(run=101),                   # sample.run
+            'file': dataset(run=101),                  # sample.file
             'transmission': t.ref('transmission'),     # sample.transmission
         },
         'reduction': {'bins': 50, 'mask': m.ref('mask')},  # reduction, .bins, .mask
-        'runs': [{'run': dataset(run=102)}],           # runs, runs[0], runs[0].run
+        'runs': [{'file': dataset(run=102)}],          # runs, runs[0], runs[0].file
     }
 
 The type at a place decides what the request writes there, with ``| None``
@@ -24,7 +24,7 @@ removed (a place of type ``X | None`` also takes ``None``), but for a list:
 ========================================  =====================================
 Type at the place                         The request writes
 ========================================  =====================================
-a file: ``Path``, or a ``NewType`` of it  a reference to a dataset
+a file: ``Path``                          a reference to a dataset
 a group                                   an object of its fields, each a
                                           place, unless one is a data value;
                                           or a reference to an output
@@ -103,7 +103,6 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticSerializationError
 
 from .field_types import (
-    base,
     element,
     has_json_form,
     holds_file,
@@ -240,9 +239,7 @@ def _written(loc: Loc, group: type[BaseModel] | None) -> None:
         )
 
 
-def _written_inside(
-    loc: Loc, group: type[BaseModel] | None, value: Mapping[str, Any]
-) -> None:
+def _written_inside(loc: Loc, group: type[BaseModel], value: Mapping[str, Any]) -> None:
     """
     Refuse a group given by reference only at a place inside ``value``, the
     fields of ``group`` given inline, at any depth. Nothing is validated, so
@@ -250,28 +247,21 @@ def _written_inside(
     works; a value that is not what its place takes is left to validating
     ``group`` whole.
     """
-    if group is None:
-        return
     for name, given in value.items():
-        if name not in group.model_fields or not groups_at(group, name):
+        if name not in group.model_fields or not (groups := groups_at(group, name)):
             continue
-        slot = _Slot(group, name)
-        if not slot.is_list:
-            places = [((*loc, name), slot, given)]
+        (inner,) = groups  # a field of a group is never a union
+        if not is_list(group, name):
+            places = [((*loc, name), given)]
         elif isinstance(given, list):
-            places = [((*loc, name, i), slot.one, v) for i, v in enumerate(given)]
+            places = [((*loc, name, i), v) for i, v in enumerate(given)]
         else:
             continue
-        for at, one, item in places:
+        for at, item in places:
             fields = dict(item) if isinstance(item, BaseModel) else item
-            if not isinstance(fields, Mapping):
-                continue
-            try:
-                inner = _group(at, one, fields)
-            except ParamsError:
-                continue  # validating the group whole names the problem
-            _written(at, inner)
-            _written_inside(at, inner, fields)
+            if isinstance(fields, Mapping):
+                _written(at, inner)
+                _written_inside(at, inner, fields)
 
 
 def _fields(
@@ -303,7 +293,7 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] |
     """
     tp, _ = optional(slot.annotation)
     if is_group(tp):
-        return base(tp)
+        return tp
     if (union := alternatives(slot.annotation, slot.discriminator)) is None:
         return None
     tag, groups = union
@@ -318,7 +308,7 @@ def _group(loc: Loc, slot: _Slot, value: Mapping[str, Any]) -> type[BaseModel] |
     given = value[tag]
     if not isinstance(given, str) or (group := groups.get(given)) is None:
         raise _refused((*loc, tag), f'{given!r} is not a tag, one of {list(groups)}')
-    return base(group)
+    return group
 
 
 def validated(
@@ -386,11 +376,11 @@ def _place(loc: Loc, slot: _Slot, inner: Loc) -> Loc:
             continue
         tp, _ = optional(slot.annotation)
         if is_group(tp):
-            group = base(tp)
+            group = tp
         elif (
             union := alternatives(slot.annotation, slot.discriminator)
         ) is not None and rest[0] in union[1]:
-            group = base(union[1][rest.pop(0)])
+            group = union[1][rest.pop(0)]
         else:
             break
         if not rest or rest[0] not in group.model_fields:
@@ -422,18 +412,17 @@ def alternatives(
 ) -> tuple[str, dict[str, Any]] | None:
     """
     The tag and the alternatives, by the value of their tag, of the union of
-    groups that ``annotation``, possibly optional, is; ``None`` if it is not
-    a union with a group in it, such as ``int | str``. ``discriminator`` is
+    groups that ``annotation``, possibly typed ``X | None``, is; ``None`` if
+    it is not a union with a group in it, such as ``int | str``. ``discriminator`` is
     that of the field, if the annotation does not carry it. An alternative
-    is as declared, without ``Annotated`` metadata: a ``NewType`` of a group
-    stays one. The alternatives are in the order of the union.
+    is as declared, without ``Annotated`` metadata. The alternatives are in
+    the order of the union.
 
     Raises ``ValueError`` for a union that the framework cannot take apart
     by the tag of a value: one with a type that is not a group, without a
     discriminator, or with one that is not the name of a field, such as a
     callable ``Discriminator``; one whose tag field has an alias or is not a
-    ``Literal`` of one string, such as ``Literal['find']``; or one with two
-    alternatives of one tag.
+    ``Literal`` of one string, such as ``Literal['find']``.
     """
     tp = annotation
     while True:
@@ -466,8 +455,8 @@ def alternatives(
         )
     groups: dict[str, Any] = {}
     for member in members:
-        where = f'{base(member).__name__}.{discriminator}'
-        info = base(member).model_fields.get(discriminator)
+        where = f'{member.__name__}.{discriminator}'
+        info = member.model_fields.get(discriminator)
         tags = () if info is None else _tags(info.annotation)
         if len(tags) != 1 or type(tags[0]) is not str:
             raise ValueError(
@@ -479,13 +468,7 @@ def alternatives(
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
             raise ValueError(f'{where}: a tag has no alias')
-        (tag,) = tags
-        if tag in groups:
-            raise ValueError(
-                f'{where}: {tag!r} is the tag of {type_name(groups[tag])} and of '
-                f'{type_name(member)}; each alternative has a tag of its own'
-            )
-        groups[tag] = member
+        groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
     return discriminator, groups
 
 
@@ -503,9 +486,9 @@ def groups_at(model: type[BaseModel], name: str) -> list[type[BaseModel]]:
     slot = _Slot(model, name).one
     tp, _ = optional(slot.annotation)
     if is_group(tp):
-        return [base(tp)]
+        return [tp]
     union = alternatives(slot.annotation, slot.discriminator)
-    return [] if union is None else [base(g) for g in union[1].values()]
+    return [] if union is None else list(union[1].values())
 
 
 @functools.cache
@@ -526,9 +509,11 @@ def unwritten(
         if is_file(tp):
             continue
         if groups := groups_at(group, name):
-            if not any(
-                not holds_file(g) or g in seen or unwritten(g, seen) is None
-                for g in groups
+            (inner,) = groups  # a field of a group is never a union
+            if (
+                holds_file(inner)
+                and inner not in seen
+                and unwritten(inner, seen) is not None
             ):
                 return name
         elif not has_json_form(group, name):

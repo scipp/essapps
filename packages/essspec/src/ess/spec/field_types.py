@@ -8,15 +8,13 @@ needs, it reads from the field types. A field's type is built from a few
 pieces, which these functions take apart::
 
     BeamCentre | None       optional(...)   -> (BeamCentre, True)
-    list[SampleFile]        element(...)    -> SampleFile
+    list[SampleRun]         element(...)    -> SampleRun
     list[BeamCentre | None] value_type(...) -> BeamCentre
-    IofQ                    supertypes(...) -> [IofQ, sc.DataArray]
 
-with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
-``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
-(see :func:`plain`). :func:`fits` says whether data
-of one type can be the value of a field of another, so that an output of one
-spec can feed a parameter of another. :func:`model_of` makes a model of one
+Each function sees through ``Annotated`` metadata, such as a validator:
+``Annotated[X, ...]`` is ``X`` (see :func:`plain`). :func:`fits` says whether
+data of one type can be the value of a field of another, so that an output of
+one spec can feed a parameter of another. :func:`model_of` makes a model of one
 field, which validates a value, or a row of a list, by that field alone:
 :func:`inline` validates a value given inline at one place, and
 :func:`ess.spec.places.validated` a parameter's value whole, in the call
@@ -35,6 +33,7 @@ from typing import (
     Annotated,
     Any,
     NewType,
+    TypeAliasType,
     Union,
     get_args,
     get_origin,
@@ -104,25 +103,57 @@ def value_type(annotation: Any) -> Any:
     return tp
 
 
-def supertypes(tp: Any) -> list[Any]:
-    """``tp`` and the types it is a ``NewType`` of, removed one by one."""
-    chain = [tp]
-    while isinstance(chain[-1], NewType):
-        chain.append(chain[-1].__supertype__)
-    return chain
+def reachable(tp: Any, seen: frozenset[type] = frozenset()) -> Iterator[Any]:
+    """
+    ``tp`` and each type it is made of, at any depth: its type arguments, and
+    the field types of each model, dataclass, or ``TypedDict`` among them.
+    ``seen`` holds the classes looked into already, so that a recursive class
+    ends.
+    """
+    if get_origin(tp) is Annotated:
+        yield from reachable(get_args(tp)[0], seen)  # not the metadata
+        return
+    yield tp
+    if fields := fields_of(tp):
+        if tp not in seen:
+            for field in fields.values():
+                yield from reachable(field, seen | {tp})
+        return
+    for arg in get_args(tp):
+        yield from reachable(arg, seen)
 
 
-def base(tp: Any) -> Any:
-    """``tp`` with its ``NewType``s removed."""
-    return supertypes(tp)[-1]
+def arguments(tp: Any) -> Iterator[Any]:
+    """``tp`` and its type arguments, at any depth, not the fields of a class."""
+    yield tp
+    for arg in get_args(tp):
+        yield from arguments(arg)
+
+
+def is_alias(tp: Any) -> bool:
+    """Whether ``tp`` is a ``NewType`` or a type alias, ``type X = ...``."""
+    return isinstance(tp, NewType | TypeAliasType)
+
+
+def fields_of(tp: Any) -> dict[str, Any]:
+    """
+    The types of the fields of ``tp`` by name, a model, a dataclass, or a
+    ``TypedDict`` class; none of any other type.
+    """
+    if not isinstance(tp, type):
+        return {}
+    if _is_model(tp):
+        return {n: f.annotation for n, f in tp.model_fields.items()}
+    if dataclasses.is_dataclass(tp) or is_typeddict(tp):
+        return get_type_hints(tp)
+    return {}
 
 
 def is_single(tp: Any) -> bool:
     """
     Whether ``tp`` is the type of a single value: any type but a list, a
-    dict, a union, or ``None``, once its ``NewType``s are removed.
+    dict, a union, or ``None``.
     """
-    tp = base(tp)
     return tp not in (NoneType, list, dict) and get_origin(tp) not in (
         list,
         dict,
@@ -132,18 +163,15 @@ def is_single(tp: Any) -> bool:
 
 
 def is_file(tp: Any) -> bool:
-    """Whether ``tp`` is a file: ``Path``, or a ``NewType`` of it."""
-    tp = base(tp)
+    """Whether ``tp`` is a file: ``Path``, or a subclass of it."""
     return isinstance(tp, type) and issubclass(tp, PurePath)
 
 
 def is_group(tp: Any) -> bool:
     """
-    Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one, but
-    not a ``RootModel``, which is written as its root value, not as an object
-    of its fields.
+    Whether ``tp`` is a group: a pydantic model, but not a ``RootModel``,
+    which is written as its root value, not as an object of its fields.
     """
-    tp = base(tp)
     return _is_model(tp) and not issubclass(tp, RootModel)
 
 
@@ -157,18 +185,12 @@ def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     in it, is a file; ``seen`` holds the classes looked into already, so that
     a recursive class ends.
     """
-    tp = base(tp)
     if is_file(tp):
         return True
-    if _is_model(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
+    if fields := fields_of(tp):
         if tp in seen:
             return False
-        fields = (
-            [f.annotation for f in tp.model_fields.values()]
-            if _is_model(tp)
-            else get_type_hints(tp).values()
-        )
-        return any(holds_file(f, seen | {tp}) for f in fields)
+        return any(holds_file(f, seen | {tp}) for f in fields.values())
     return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
@@ -208,14 +230,11 @@ def fits(data: Any, field: Any) -> bool:
     """
     Whether data of type ``data`` can be the value of a field of type ``field``.
 
-    ``| None`` is removed on both sides. Then the data fit when ``data``, with
-    its ``NewType``s removed one by one, reaches ``field`` or a subclass of it;
-    or when ``field``, with its ``NewType``s removed, reaches ``data`` or a
-    superclass of it. Data of one type fit a union when they fit one of its
-    members: a ``BeamCentre`` fits ``BeamCentre | FindCentre``. Other generic
-    aliases, such as ``list[int]``, fit only themselves. So a
-    ``ComputedTransmission`` fits ``FromFile | ComputedTransmission``, and an
-    instance of a subclass of a group fits the group.
+    ``| None`` is removed on both sides. Then the data fit when ``data`` is
+    ``field`` or a subclass of it, and data of one type fit a union when they
+    fit one of its members: a ``ComputedTransmission`` fits
+    ``FromFile | ComputedTransmission``. Other generic aliases, such as
+    ``list[int]``, fit only themselves.
     """
     data, _ = optional(data)
     field, _ = optional(field)
@@ -223,16 +242,9 @@ def fits(data: Any, field: Any) -> bool:
         return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
-    return any(_reaches(d, field) for d in supertypes(data)) or any(
-        _reaches(data, f) for f in supertypes(field)
+    return data is field or (
+        isinstance(data, type) and isinstance(field, type) and issubclass(data, field)
     )
-
-
-def _reaches(sub: Any, sup: Any) -> bool:
-    """Whether ``sub`` is ``sup`` or a subclass of it."""
-    if sub is sup:
-        return True
-    return isinstance(sub, type) and isinstance(sup, type) and issubclass(sub, sup)
 
 
 @functools.cache
@@ -297,12 +309,10 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
       such as of a number that is not finite, which JSON holds as ``null``;
     - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
       without ``name``, that holds a file, which is given by reference to a
-      dataset, or whose JSON form reads back as another value, such as a
-      field of a group whose validator changes a value it has validated
-      already;
-    - ``ValueError`` if its JSON form holds an object with the key
-      ``"@ref"`` at any depth, which reads as a reference (see
-      :func:`ess.spec.refs.positions`).
+      dataset, whose JSON form reads back as another value, such as a field
+      of a group whose validator changes a value it has validated already,
+      or whose JSON form is an object with the key ``"@ref"``, which reads
+      as a reference (see :func:`ess.spec.refs.positions`).
     """
     one = model_of(model, name, whole)
     if isinstance(value, BaseModel):
@@ -323,13 +333,16 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
         ) from None
     if again != made:
         raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
-    if any(isinstance(v, dict) and '@ref' in v for _, v in positions((), stored)):
-        raise ValueError('has a JSON form that reads as a reference')
+    if refs := [
+        loc for loc, v in positions((), stored) if isinstance(v, dict) and '@ref' in v
+    ]:
+        raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
 
 
 _FILE_INLINE = 'a file is given by reference to a dataset, dataset(path=...)'
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'
+_READS_AS_REF = 'has a JSON form that reads as a reference'
 _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
 
 

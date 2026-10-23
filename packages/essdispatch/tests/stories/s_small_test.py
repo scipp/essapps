@@ -31,7 +31,7 @@ from .conftest import (
 def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ, params={'reduction': Reduction(threshold=1.5), 'sample': run}
+        IOFQ, params={'reduction': Reduction(threshold=1.5), 'sample': {'file': run}}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [2.0, 7.0]
@@ -41,7 +41,9 @@ def test_s1_reduce_one_run(client: Client, measure: Measure) -> None:
 
 def test_s2_tune_one_parameter(client: Client, measure: Measure) -> None:
     run = measure(1, counts=[1.0, 2.0, 3.0, 4.0])
-    tune = client.stage(Template(IOFQ, params={'sample': run}, blanks=('reduction',)))
+    tune = client.stage(
+        Template(IOFQ, params={'sample': {'file': run}}, blanks=('reduction',))
+    )
     for bins in (1, 2, 4):
         result = client.compute(
             tune, params={'reduction': Reduction(bins=bins)}, label='tuning'
@@ -58,7 +60,7 @@ def test_s3_look_at_a_value_inside_a_reduction(
 ) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
     result = client.compute(
-        IOFQ, params={'reduction': Reduction(threshold=2.5), 'sample': run}
+        IOFQ, params={'reduction': Reduction(threshold=2.5), 'sample': {'file': run}}
     )
 
     assert client.output(result, 'masked').values.tolist() == [0.0, 0.0, 3.0, 4.0]
@@ -68,7 +70,7 @@ def test_s3_look_at_a_value_inside_a_reduction(
 def test_s4_submit_a_chain_without_waiting(client: Client, measure: Measure) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 6.0])
     parts = client.submit(
-        [Request(CONTRIBUTE, params={'sample': run}) for run in (r611, r612)]
+        [Request(CONTRIBUTE, params={'sample': {'file': run}}) for run in (r611, r612)]
     )
     summed = client.submit(
         PARTS_SUM,
@@ -82,11 +84,15 @@ def test_s5_sum_runs(client: Client, measure: Measure) -> None:
     runs = [measure(1, [1.0, 2.0]), measure(2, [1.0, 2.0]), measure(3, [0.0, 2.0])]
     total = client.compute(
         NORMALIZE,
-        params={'scaling': Scaling(scale=2.0), 'runs': runs},
+        params={'scaling': Scaling(scale=2.0), 'runs': [{'file': r} for r in runs]},
     )
     backgrounds = [measure(4, [1.0, 1.0]), measure(5, [0.0, 1.0])]
     result = client.compute(
-        BACKGROUND, params={'sample_runs': runs, 'background_runs': backgrounds}
+        BACKGROUND,
+        params={
+            'sample_runs': [{'file': r} for r in runs],
+            'background_runs': [{'file': r} for r in backgrounds],
+        },
     )
 
     assert client.output(total, 'normalized').values.tolist() == [0.5, 1.5]
@@ -103,10 +109,15 @@ def test_s7_reduce_each_sample_with_the_can_measured_before_it(
     can_3 = measure(3, [2.0, 2.0], role='can')
     second = measure(4, [6.0, 9.0], role='sample')
     template = Template(IOFQ_CAN, blanks=('sample', 'can'))
-    cans = Lookup(can=LastBefore(Selector(role='can')))
+    cans = Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
 
     requests = apply(
-        template, [first, second], client.datasets, member_field='run', lookup=cans
+        template,
+        [first, second],
+        client.datasets,
+        at=('sample', 'file'),
+        member_field='run',
+        lookup=cans,
     )
     reduced = list(client.compute(requests, label='iofq').values())
 
@@ -124,11 +135,14 @@ def test_s8_trace_a_result_to_raw_data(client: Client, measure: Measure) -> None
     vanadium_run, sample = measure(1, [1.0, 1.0]), measure(2, [4.0, 8.0])
     vanadium = client.compute(
         VANADIUM,
-        params={'scaling': Scaling(scale=2.0), 'vanadium': vanadium_run},
+        params={'scaling': Scaling(scale=2.0), 'vanadium': {'file': vanadium_run}},
     )
     result = client.compute(
         IOFQ,
-        params={'sample': sample, 'normalization': vanadium.ref('normalization')},
+        params={
+            'sample': {'file': sample},
+            'normalization': vanadium.ref('normalization'),
+        },
     )
 
     provenance = client.provenance(result)

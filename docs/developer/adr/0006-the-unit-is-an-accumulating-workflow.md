@@ -57,7 +57,14 @@ Records, checks, pushes, and the forms of apps stay the same for every technique
 
 **Two examples.**
 *One table of groups.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `run: SampleFile` and `transmission: TransmissionFile | None` without a default, `None` for a run reduced without a transmission correction.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`:
+
+```python
+class Sample(BaseModel):
+    file: Path                   # the sample run's file
+    transmission: Path           # the file of its transmission run
+```
+
 In the multi-run spec, each row of the table `sample` is such a group.
 So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
@@ -65,13 +72,13 @@ Two tables of their own could be paired wrongly.
 ```python
 class IofQMultiParams(IofQSettings):     # the settings that IofQParams has too
     sample: list[Sample] = Field(min_length=1)
-    can: list[CanFile] = Field(min_length=1)
+    can: list[Can] = Field(min_length=1)       # Can: a group of the run's file: Path
 
 IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summed runs', description='...',
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'can': cans}, blanks=('sample',)))  # can runs fixed
-iofq.push(sample=[{'run': dataset(run=611), 'transmission': dataset(run=610)}])
-iofq.push(sample=[{'run': dataset(run=613), 'transmission': dataset(run=612)}])
+iofq.push(sample=[{'file': dataset(run=611), 'transmission': dataset(run=610)}])
+iofq.push(sample=[{'file': dataset(run=613), 'transmission': dataset(run=612)}])
 ```
 
 *Two independent tables.*
@@ -85,10 +92,10 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[{'run': dataset(run=611), 'transmission': None}])   # no transmission correction
-iofq.push(can=[dataset(run=614)])
-iofq.push(sample=[{'run': dataset(run=613), 'transmission': None},
-                  {'run': dataset(run=615), 'transmission': None}])    # one push, one state
+iofq.push(sample=[{'file': dataset(run=611), 'transmission': dataset(run=610)}])
+iofq.push(can=[{'file': dataset(run=614)}])
+iofq.push(sample=[{'file': dataset(run=613), 'transmission': dataset(run=612)},
+                  {'file': dataset(run=615), 'transmission': dataset(run=616)}])   # one push, one state
 ```
 
 ## Alternatives considered

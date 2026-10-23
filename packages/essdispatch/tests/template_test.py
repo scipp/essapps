@@ -9,7 +9,7 @@ import math
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, NewType, Self
+from typing import Annotated, Any, Self
 
 import pytest
 from pydantic import AfterValidator, BaseModel, Field, model_validator
@@ -31,9 +31,6 @@ class Amount(BaseModel):
     value: float
 
 
-SampleFile = NewType('SampleFile', Path)
-
-
 class Factor(BaseModel):
     factor: float = 1.0
 
@@ -45,7 +42,7 @@ class Weight(BaseModel):
 class WeightedRun(BaseModel):
     """A run and its weight, if given: a group that holds a file."""
 
-    file: SampleFile
+    file: Path
     weight: Weight | None = None
 
 
@@ -84,7 +81,7 @@ class Made(BaseModel):
 class CheckedParams(BaseModel):
     """Params whose model validator refuses every instance, to show where it runs."""
 
-    sample: list[SampleFile] = Field(min_length=1)
+    sample: list[WeightedRun] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _refused(self) -> Self:
@@ -264,7 +261,9 @@ def test_a_fixed_value_is_checked_by_its_own_field(client: Client) -> None:
 def test_a_misspelt_name_is_refused(client: Client) -> None:
     with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(
-            Template(SCALE, params={'sampel': dataset(run=1)}, blanks=('scaling',))
+            Template(
+                SCALE, params={'sampel': {'file': dataset(run=1)}}, blanks=('scaling',)
+            )
         )
     with pytest.raises(SubmitError, match='sampel: not a parameter of'):
         client.stage(Template(SCALE, blanks=('sampel',)))
@@ -432,7 +431,7 @@ def test_a_referenced_value_that_fails_its_type_s_check_fails_where_it_is_read(
 
 
 def test_the_params_model_s_model_validator_is_never_called(client: Client) -> None:
-    rows = {'sample': [dataset(run=1)]}
+    rows = {'sample': [{'file': dataset(run=1)}]}
     plain = client.compute(CHECKED, params=rows)
     stage = client.stage(Template(CHECKED, blanks=('sample',)))
     acc = client.accumulator(Template(CHECKED, blanks=('sample',)))
