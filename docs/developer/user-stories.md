@@ -14,10 +14,10 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: BeamCentre \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by `normalization.factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| PublishedNormalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`, read from its file if it is published; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: CanFile` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
 | `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
-| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | `Normalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
+| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[RunFile]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list[SampleFile]`, `background_runs: list[BackgroundFile]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
 | `CONTRIBUTE` | `sample: SampleFile` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
@@ -33,24 +33,26 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FIND_CENTRE` | `direct_beam: DirectBeamFile` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
 | `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRun]`, a table; `can: list[CanFile]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
-The type at a place, a parameter or a field of a group at any depth, decides how a request gives its value (README.md):
+The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the row for a dict or a list that may be `None`, at a field of a group):
 
 | The type at a place | In the toy specs | Given as |
 |---|---|---|
 | a file: a `NewType` of `Path` | each `...File` | a dataset reference |
-| a group | `SampleRun`, `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
-| a group that holds a data value | `BeamCentre`, `Normalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
-| a type with a JSON form | `int`, `float`, as in `bins` and `scale` | an inline value |
-| a *data value*: any other type, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
+| a group, no field of which is a data value | `SampleRun`, `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre`, `PublishedNormalization` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
+| a group with a field that is a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
+| a union of groups | `ComputedNormalization \| PublishedNormalization`, by the tag `kind` | an object of one alternative's fields, with its tag, as for a group, or a reference to an output that fits and holds no file |
+| a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element a place of type `X` |
+| any other type with a JSON form | `int`, `float`, as in `bins` and `scale` | an inline value |
+| any other type, a *data value*, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
 
-A list parameter takes its element type's forms, row by row.
 Every field has a type of its own within its spec.
 Each `...File` is a `NewType` of `Path`, such as `SampleFile = NewType('SampleFile', Path)`, and a dataset reference fits each of them.
 An output without a type in the list of toy specs has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
-`BeamCentre`, `Normalization`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `factor`, `fraction`, `counts`, and `curve`.
+`BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
+`ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` a file of it, `file: Path`; each has the tag `kind`.
 `Parts` is a group of two `sc.Variable`s.
 `SampleRun` is a group of `file: SampleFile` and `transmission: Transmission | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
-A reference to an output fits a parameter when the output's type fits the parameter's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
@@ -318,13 +320,13 @@ Actor: spectroscopy user in the web UI. Goal: drag through cuts of a Q-E volume,
 
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
-volume = client.compute(ANGLE, params={'sample': run})                       # stands in for a Q-E volume
-cuts = [client.output(volume, 'volume', select={'q': i}) for i in range(4)]   # dragging a slider
-fit = client.compute(CUT, params={'position': Position(index=2), 'volume': volume.ref('volume')})
+angle = client.compute(ANGLE, params={'sample': run})                        # stands in for a Q-E volume
+cuts = [client.output(angle, 'volume', select={'q': i}) for i in range(4)]    # dragging a slider
+fit = client.compute(CUT, params={'position': Position(index=2), 'volume': angle.ref('volume')})
 
 assert [c.counts.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
 assert client.output(fit, 'cut').value == 3.0
-assert client.records() == [volume, fit]                     # the selections made no record
+assert client.records() == [angle, fit]                      # the selections made no record
 ```
 
 A selection of a group output slices each array field that has the dimension, here `counts`, and copies the other fields whole; so the request of `CUT` refers to the same output that the slider selects from.
@@ -368,7 +370,8 @@ pid = other.publish(vanadium.ref('normalization'), 'scicat')
 published = datasets.add_published(scicat.entries[pid])
 
 sample = measure(2, [4.0, 8.0])
-result = client.compute(IOFQ, params={'sample': sample, 'normalization': dataset(pid=pid)})
+normalization = {'kind': 'published', 'file': dataset(pid=pid)}
+result = client.compute(IOFQ, params={'sample': sample, 'normalization': normalization})
 
 assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]    # [4, 8] / ((1 + 1) * 2)
 assert set(client.provenance(result).datasets()) == {sample, published}
@@ -376,7 +379,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-Gap: a dataset reference fits a file parameter only, and `normalization` is a `Normalization`, a group that holds a data value; loading a dataset as the object a parameter takes is deferred ([params-inline-or-by-reference.md](plans/params-inline-or-by-reference.md), Left for later).
+The published normalization is a file of its factor, and a dataset reference fits a file only, so `normalization` is a choice between ways of obtaining it (ADR 0008): the `ComputedNormalization` that `VANADIUM` outputs, by reference, or a `PublishedNormalization`, whose file a request gives by dataset. The workflow reads the file, as it reads a run.
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -387,8 +390,8 @@ Actor: reflectometry user. Goal: reduce four angles against a reference, stitch 
 reference = measure(10, [2.0, 2.0], role='reference')
 angles = [measure(11, [8.0, 4.0], angle=0.5), measure(12, [2.0, 1.0], angle=1.0),
           measure(13, [4.0, 2.0], angle=2.0), measure(14, [2.0, 0.5], angle=4.0)]
-stitched = client.submit(STITCH, params={'runs': angles, 'reference': reference})
-exported = client.compute(EXPORT, params={'result': stitched.ref('stitched')})
+series = client.submit(STITCH, params={'runs': angles, 'reference': reference})
+exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
 
 assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
 assert set(client.provenance(exported).datasets()) == {reference, *angles}
@@ -554,12 +557,12 @@ for n in range(1, 301):
         measure(5, [1.0, 5.0], scan='17')                      # the file of run 5 arrives again
 
 cuts, pushed = [], []
-volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
+scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
-    volume.push(runs=[run])                                    # added once the previous cut is copied
+    scan.push(runs=[run])                                      # added once the previous cut is copied
     pushed.append(run)
-    cuts.append(client.output(volume, 'volume', select={'q': 0}))   # a copy of the cut; no record
-total = client.freeze(volume, persist=True)                    # the last state, written once
+    cuts.append(client.output(scan, 'volume', select={'q': 0}))     # a copy of the cut; no record
+total = client.freeze(scan, persist=True)                      # the last state, written once
 
 assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
 assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
@@ -597,10 +600,10 @@ measure(2, [1.0, 2.0], role='sample', sample='si')             # arrives again
 loop.step()
 
 user = connect()                                              # any client of the proposal
-curve = user.latest('reflectivity', member='si')
+latest = user.latest('reflectivity', member='si')
 assert len(user.records(label='reflectivity')) == 2           # one per step, not one per arrival
-assert curve.request.params['runs'] == [r2, r3, r4]          # run order, not arrival order
-assert user.output(curve, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+assert latest.request.params['runs'] == [r2, r3, r4]         # run order, not arrival order
+assert user.output(latest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 ```
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
@@ -813,7 +816,7 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 
 Both drivers get a `Centre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the inline value in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
-`IOFQ`'s `beam_centre`, a `BeamCentre`, holds a data value, so it takes a reference only (C1).
+`IOFQ`'s `beam_centre`, a `BeamCentre`, has a field that is a data value, so it takes a reference only (C1).
 
 ### I3. A correction computed for one run and not another
 
@@ -835,7 +838,7 @@ assert client.provenance(total).records() == [t611]
 
 A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
 Run 612 gives `None`: no transmission factor, and its record says so.
-`Transmission` holds a data value, so a transmission takes a reference, or `None` since the field is optional.
+`Transmission` has a field that is a data value, so a transmission takes a reference, or `None`, since it is typed `Transmission | None`.
 
 ## Open
 
@@ -848,4 +851,4 @@ What the design leaves open or defers, with the stories each item affects.
 - **Labels and members** (D1, D2, and every story that calls `apply`): `member_field`, and labels and members on records, are tentative; README.md open question 3.
 - **Grouping** (system story D7): spreading one accumulator over several nodes needs a merge of two drivers; README.md open question 1.
 - **Recomputing in a record's environment** (F2): deferred.
-- **A dataset as a data value** (C2): a dataset reference fits a file parameter only; loading a published output as the object a parameter takes is deferred.
+- **Publishing** (C2): a published output is a file in the catalogue, which a workflow reads as it reads a run; `publish` and SciCat are not implemented.

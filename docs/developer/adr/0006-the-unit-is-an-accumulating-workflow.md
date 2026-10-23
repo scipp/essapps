@@ -57,7 +57,7 @@ Records, checks, pushes, and the forms of apps stay the same for every technique
 
 **Two examples.**
 *One table of groups.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `run: SampleFile` and `transmission: TransmissionFile | None`, `None` for a run without a transmission run of its own.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `run: SampleFile` and `transmission: TransmissionFile | None` without a default, `None` for a run reduced without a transmission correction.
 In the multi-run spec, each row of the table `sample` is such a group.
 So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
@@ -85,9 +85,10 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[{'run': dataset(run=611)}])          # the run alone: the transmission None
+iofq.push(sample=[{'run': dataset(run=611), 'transmission': None}])   # no transmission correction
 iofq.push(can=[dataset(run=614)])
-iofq.push(sample=[{'run': dataset(run=613)}, {'run': dataset(run=615)}])   # one push, one state
+iofq.push(sample=[{'run': dataset(run=613), 'transmission': None},
+                  {'run': dataset(run=615), 'transmission': None}])    # one push, one state
 ```
 
 ## Alternatives considered

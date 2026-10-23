@@ -70,7 +70,7 @@ class IofQ(BaseModel):
     """
     I(Q) of a sample, minus that of its can: one value per Q bin.
 
-    ``intensity`` has no JSON form, so a request gives an ``IofQ`` by
+    ``intensity`` is a data value, so a request gives an ``IofQ`` by
     reference to an output only.
     """
 

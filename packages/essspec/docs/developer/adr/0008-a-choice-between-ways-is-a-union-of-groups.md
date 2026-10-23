@@ -22,7 +22,7 @@ Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
 - A *group* is a pydantic model at a place of a request, written as an object of its fields.
 - A *place* is the value of a parameter, an element of a list, or a field of a group, at any depth.
-- A *data value* is a value of a type without a JSON form that is not a file, such as an `sc.DataArray`. It is a field of a group, which a request gives by reference only, since a reference stands for a group or a file only (ADR 0001).
+- A *data value* is a value of a type that is neither a file, a group, a union of groups, a list, nor a dict, and has no JSON form, such as an `sc.DataArray`. It is a field of a group, which a request gives by reference only, since no request can write a data value inline (ADR 0001).
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
 
@@ -58,9 +58,9 @@ class IofQParams(BaseModel):
     beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
     ...
 
-# the params of two requests; `found` is the record of a request whose output `centre` is a GivenCentre
+# the params of two requests; `finder` is the record of a request whose output `centre` is a GivenCentre
 {'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
-{'beam_centre': found.ref('centre')}
+{'beam_centre': finder.ref('centre')}
 ```
 
 - The tag is a `Literal` of one string, its own, without an alias, and the union is discriminated by the tag's name, not by a callable. The framework walks a value without running code of the spec, so it reads the tag by name.

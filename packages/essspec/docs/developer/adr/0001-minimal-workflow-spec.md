@@ -104,39 +104,50 @@ same value is typed in by one user and computed by another: a beam centre is
 typed in, or found by a first reduction; the time slices of a slicing
 reduction are typed in, or found from a log. A place is the value of a
 parameter, an element of a list, or a field of a group, at any depth, such as
-`sample.run` or `reduction.mask`. The type at the place decides which forms it
-accepts, with `| None` removed. A type has a *JSON form* when it is not a
-file, holds no file, and pydantic makes a JSON schema of it with its model's
-config. A value *round-trips* when its JSON form reads back as the value.
+`sample.run` or `sample.transmission`. The type at the place decides which
+forms it accepts, with `| None` removed. A type has a *JSON form* when it is
+not a file, holds no file, and pydantic makes a JSON schema of it with its
+model's config. A value *round-trips* when its JSON form reads back as the
+value.
 
 | The type at a place | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
-| a group | `Reduction`, `Sample` | an object of its fields, each a place, unless one is a data value | to an output that fits and holds no file |
+| a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | to an output that fits and holds no file |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | no |
-| a data value | `sc.DataArray` | no | no: it is a field of a group |
+| at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
+| any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
+| any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
 
 A file is given by reference to a dataset only, so that the dataset source
 checks access and the record holds the dataset's identity; the binding gets a
 local path. For the same reason, a reference to an output whose type holds a
 file is refused. A *group* is a pydantic model, such as `Reduction` or
 `Sample` below, written as an object of its fields, so a file in it comes from
-a dataset. A `RootModel` is not a group: it is written as its root value. A *data value* is a value of a type without a JSON form that is not a
-file, such as a scipp array.
+a dataset. A `RootModel` is not a group: it is written as its root value. A
+*data value* is a value of a type that is neither a file, a group, a union of
+groups, a list, nor a dict, and has no JSON form, such as a scipp array.
 
 A reference stands for a group or a file only. A number or a scipp array names
 no role: every output of its type fits a place of that type, so a UI that
 offers the outputs that fit a place would list every number, or every array,
 that any record holds. A group names its role by its class. So a value that
 another workflow computes comes as a group, which that workflow outputs, such
-as a found beam centre, and a data value is a field of a group. No request
-writes such a field, so the group has no inline form and is given by
-reference only, as `ComputedTransmission` below. A group that holds a file
-holds no data value: the file makes it given field by field.
+as a found beam centre, and a data value is a field of a group. Such a field
+is a place where nothing is written: no request can write a data value, so the
+group has no inline form and is given by reference only, as
+`ComputedTransmission` below. No field of a group that holds a file is a data
+value: no reference stands for such a group, so a request writes it field by
+field. A group in it that holds no file may have a field that is a data value,
+as in `Sample.transmission: FromFile | ComputedTransmission`.
 
-The contents of a tuple, a set, a dict, a
+A data value that a request may leave out is wrapped as a group typed
+`| None`, such as `mask: PixelMask | None`, with the array a field of
+`PixelMask`. A group with a field `mask: sc.DataArray | None` is given by
+reference only, even where the value is `None`.
+
+The contents of a tuple, a set, a dict, a list that may be `None`, a
 `TypedDict`, or a dataclass are not places: such a value is written whole,
 inline. A parameter, or a field of a group, may be a discriminated union of
 groups, such as a beam centre that is given, `GivenCentre`, or found from a
@@ -156,7 +167,6 @@ class BeamCentre(BaseModel):                      # a group: inline, or a finder
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)
-IofQ = NewType('IofQ', sc.DataArray)
 
 class FromFile(BaseModel):                        # the transmission in the run's file
     kind: Literal['file'] = 'file'
@@ -175,7 +185,10 @@ class IofQParams(BaseModel):
     can: CanFile
     beam_centre: BeamCentre = BeamCentre()        # the nominal centre
 
-class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
+class IofQ(BaseModel, arbitrary_types_allowed=True):  # a group, so another workflow takes it by reference
+    intensity: sc.DataArray
+
+class IofQOutputs(BaseModel):
     iofq: IofQ
 
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs=IofQOutputs)
@@ -197,13 +210,15 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 `WorkflowSpec` checks these rules when it is made:
 
 - The names of params and outputs are distinct.
-- Each parameter's type is a type, possibly optional, or a list of one; not a
-  dict. The type may be a union, such as a union of groups.
+- Each parameter's type is a type, possibly optional, or a list of one; a list
+  parameter is not optional, and no parameter is a dict. The type may be a
+  union, such as a union of groups.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
 - A file is at a place only, possibly optional or in a list: not inside a
   tuple, a dict, or a dataclass, where no dataset can give it.
 - A data value is a field of a group, not a parameter or the element of a
-  list parameter. A group that holds a file holds no data value.
+  list parameter. No field of a group that holds a file is a data value: no
+  reference stands for such a group, so a request writes it field by field.
 - A union of groups is discriminated by the name of its tag field, not by a
   callable. The tag field of each alternative is a `Literal` of one string,
   its own, such as `Literal['find']`, without an alias. A union that holds a
@@ -259,8 +274,9 @@ out, is typed `X | None` with no default, such as
 record says so. The output is I(Q) either way, and the params of its record
 say which corrections were applied. A step whose omission changes what a
 reader of the output must do with it, such as a normalization without which
-I(Q) is in counts, makes another output type, and so another spec. What `None` means, and when a union
-names the ways instead, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
+I(Q) is in counts, makes another output type, and so another spec. What
+`None` means, and when a union names the ways instead, is
+[ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 **References.** A reference names an output of an earlier record (`OutputRef`:
 record, output name, and optionally the key of one element of a list or dict
@@ -268,8 +284,9 @@ output), a dataset the framework did not compute (`DatasetRef`: one identity
 string), or an output of an accumulator (`AccumulatorRef`: accumulator and
 output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
-state. A reference stands for the value at a place whose type is a group or a
-file, such as `sample.run` or `beam_centre`: never for a number, a whole list, a tag of a union, or a position inside a value given
+state. A reference stands for the value at a place whose type is a group, a
+union of groups, or a file, such as `sample.run` or `beam_centre`: never for a
+number, a whole list, a tag of a union, or a position inside a value given
 inline. Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -332,7 +349,7 @@ one, and a reference with a key names one element.
 
 "Outputs can be parameters" is a fit check between an output's type and the
 group at a place. An output that another workflow takes is a group, such as
-`centre: BeamCentre`; one that none takes, such as `iofq: IofQ`, need not be. Where a
+`centre: BeamCentre` or `iofq: IofQ`; one that none takes need not be. Where a
 framework stores an output is not a spec concept. Output *selection* (choosing
 which sciline targets to compute) is not modeled: like parameter slicing, it is
 an implementation notion. Livedata-specific output machinery (`OutputView`,
@@ -410,8 +427,9 @@ announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
 params schema gives each parameter the forms it takes, so that a UI renders a
 form for each group, with a choice to give it by reference, a picker of
-records for each group that holds a data value, and a picker of datasets for
-each file; `SerializedWorkflowSpec` states the forms and the widget of each.
+records for each group with a field that is a data value, and a picker of
+datasets for each file; `SerializedWorkflowSpec` states the forms and the
+widget of each.
 
 There is deliberately no inverse. Validators do not survive JSON Schema, so a
 deserialized spec would be a lie about its own validation. Instead, validation
@@ -467,8 +485,8 @@ such as a motor position, arrives on a stream of its own and is set as a
 *context key* of `StreamProcessor`, never taken from the params; here, such a
 value comes with the run. esslivedata's outputs are
 `sc.DataArray` fields with default-factory templates used for plotter
-selection. Here each output is typed by its data, such as `IofQ`, with no
-template.
+selection. Here each output has a type of its own, such as the group `IofQ`,
+with no template.
 
 The import edge is small: essspec depends only on pydantic, and the esslivedata
 dashboard is decoupled via the serialized-spec announcement, not via imports.
@@ -530,16 +548,15 @@ output, and dims and units of an output for a UI.
 - **A data value as a parameter of a `NewType`**, such as
   `Transmission = NewType('Transmission', sc.DataArray)`, which names the role
   for the fit check. A place typed plain `sc.DataArray` takes every array that
-  any record holds, and the fit check must look through `NewType`s both ways.
-  A group names the role with a class, and costs a binding an adapter that
-  takes the array out.
+  any record holds. A group names the role with a class, and costs a binding
+  an adapter that takes the array out.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **References at a few places only**, the top of a value, of an element of a
   list, and of a field of a group that holds a file, so that `@ref` deeper is
-  plain data. A setting inside a group, such as a mask, could then never be
-  computed by another record. Reserving `@ref` at every depth finds the
-  references without the spec as well.
+  plain data. A group inside a group that holds no file, such as the mask of a
+  reduction, could then never be computed by another record. Reserving `@ref`
+  at every depth finds the references without the spec as well.
 - **A group made from its fields**, each validated alone, without its
   validators. A check such as `stop > start` would then be skipped once a
   request gives one field by reference. Validating the group again from the
