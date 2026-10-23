@@ -78,7 +78,7 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | table, row | a *table* is a list parameter whose *rows* an accumulator takes a push at a time (see Combining runs: tables) |
 | stage | a template the backend keeps for a client, to compute its fixed part once |
 | accumulator | a template whose blanks are tables, kept by the backend for a client |
-| push | one call that gives an accumulator rows of one of its tables |
+| push | one call that gives an accumulator rows of one or more of its tables |
 | driver | the object a binding makes from an accumulator's fixed values, which takes the pushes. The workflow package writes it, and the framework never looks inside it. |
 | added | a push is added once the backend has pushed its rows into the driver, in the order logged |
 | controller | client code that decides over time what to submit, push, and release, such as the trigger loop (see Controllers) |
@@ -187,16 +187,18 @@ A field of a group left out takes its default.
 {'reduction': {'bins': 50}}                       # every field inline: the group's JSON form
 ```
 
-Each parameter is a group, a union of groups, or a list of one, possibly `| None`.
-A file or a number is a field of a group, such as the `file` of a `Sample` or the `bins` of a `Reduction`, so a form shows each parameter as a group of fields:
+Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`.
+A file or a number is a field of a group, such as the `file` of a `Sample` or the `bins` of a `Reduction`:
 
 ```python
 sample: Path                                      # refused by WorkflowSpec: not a group
 bins: int = 100                                   # refused by WorkflowSpec: not a group
 ```
 
+So a UI generated from the params schema shows each parameter as a section of fields ([ADR 0001](../../packages/essspec/docs/developer/adr/0001-minimal-workflow-spec.md)).
+
 No type in the params or the outputs is a `NewType`, at any depth: a class names a role.
-A sample run and a can run both hold a file, and each is a class of its own, `Sample` and `Can`, since a binding keys a parameter by its class.
+A sample run and a can run both hold a file, and each is a class of its own, `Sample` and `Can`, since a `PipelineBinding` keys a parameter by its class.
 `NewType`s, and other sciline keys such as esssans' `Filename[SampleRun]`, live in the workflow package and in the binding (see What a binding provides), never in the spec.
 
 The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
@@ -212,17 +214,17 @@ class GivenCentre(BaseModel):                     # an alternative: the centre, 
 
 class FindCentre(BaseModel):                      # an alternative: settings to find it
     kind: Literal['find'] = 'find'
-    run: Path
+    file: Path                                    # the run to find it in
     tolerance: float = 0.1
 
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
 
-{'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
+{'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
 {'beam_centre': finder.ref('centre')}             # an output of type GivenCentre
 ```
 
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
-A union is never a field of a group: a choice between ways is a parameter of its own, which a form shows as a choice.
+A union is never a field of a group: a choice between ways is a parameter of its own, which a generated UI shows as a choice.
 A correction that some rows of a table have and others lack is a group typed `X | None` in the row, such as the transmission of a `Sample`, and a choice of way for all rows is a parameter.
 
 `X | None` means *without X*: apply no mask, no direct-beam correction.
@@ -231,10 +233,10 @@ A UI shows `X | None` as a toggle, and a union as a choice between its alternati
 
 ```python
 mask: PixelMask | None = None                     # [ ] Mask
-direct_beam: DirectBeam | None                    # [x] Direct beam  Run: [60340]
+direct_beam: DirectBeam | None                    # [x] Direct beam  File: [run 60340]
 
 beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
-# Beam centre: (•) given: x [0.0] y [0.0]  ( ) find: Run [ ] tolerance [0.1]
+# Beam centre: (•) given: x [0.0] y [0.0]  ( ) find: File [ ] tolerance [0.1]
 # not `beam_centre: GivenCentre | None = None  # None: find it`,
 # whose toggle, off, reads as "no beam centre"
 ```
@@ -253,10 +255,10 @@ A request computes every output its spec declares.
 A value *round-trips* when its JSON form reads back as the value.
 `WorkflowSpec` checks these rules when it is made:
 
-- Each parameter is a group, a union of groups, or a list of one, possibly optional; a list parameter is not optional. A value of another type, such as a file, a number, or a data value, is a field of a group.
+- Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`; a list parameter is not typed `X | None`. A value of another type, such as a file, a number, or a data value, is a field of a group.
 - No type in the params or the outputs is a `NewType`, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
-- Each output is a type, possibly optional, or a list or a dict of one.
-- A file is at a place only, possibly optional or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
+- Each output is a type, possibly typed `X | None`, or a list or a dict of one.
+- A file is at a place only, possibly typed `X | None` or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
 - No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission | None`.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
@@ -867,7 +869,7 @@ The spec's groups are named for their role, `Sample` and `Can`, not after esssan
 
 [roles/workflow-authors.ipynb](roles/workflow-authors.ipynb), section 2, shows these routes from a spec's values to such keys, and providers that take the spec's models.
 `binding.keys` gives a tuple of keys for each field, and `keys=` takes the same: `(K,)`, or `()` for a parameter that sets no key, a field that `make_pipeline` uses itself.
-Two parameters of one class, such as two axes of a Q map, each need a class of their own, `class QyAxis(Axis): ...`, or `keys=` naming a key for one.
+Two parameters of one class need distinct keys: one gets a subclass, `class QyAxis(Axis): ...`, or `keys=` names a key for it.
 An output typed `sc.DataArray` is computed at the key `sc.DataArray` unless `keys=` names another, so two such outputs need `keys=`.
 No two fields, parameters or outputs, share a key, over all alternatives of a union: an output computed at a parameter's key would be the value the binding was given, which an output must not share memory with.
 An output that reports the centre given or found has a key of its own, such as `UsedCentre`, computed by a provider from `GivenCentre`.
@@ -897,9 +899,9 @@ Each value of a union sets one key, but `None` has no key to set: setting `X` to
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     pipeline = sciline.Pipeline(providers)
     if fixed['direct_beam'] is None:
-        pipeline[DirectBeam] = None     # esssans' providers take None: no correction
+        pipeline[sans.DirectBeam] = None       # esssans' key; its providers take None: no correction
     else:
-        pipeline[DirectBeamFilename] = fixed['direct_beam'].file
+        pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
     return pipeline
 
 PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
@@ -953,7 +955,7 @@ The driver promises, and the backend does not check:
 - Within a table, the rows keep the order in which they were pushed.
 - `push` does not modify a value it is given. A driver that adds in place copies the first contribution, so that adding never changes a value that another record returned.
 - `outputs()` may share memory with the driver's state; the caller reads them before the next push.
-- An output that the spec declares optional may be `None`.
+- An output that the spec types `X | None` may be `None`.
 - A driver may refuse a state, such as one with no sample row yet, by raising in `outputs()`. The read fails, and later pushes may make the state valid.
 - A failing `push` stops the accumulator.
 
@@ -1007,7 +1009,8 @@ for run in client.datasets.watch(Selector(role='sample')):
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
 `apply` fills a template once per dataset: the dataset is the value at the place `at`, a file field of the template's blank, such as `('sample', 'file')`, and `fields` gives the blank's other fields, the same for each dataset, or they take their defaults.
-A *lookup* fills further blanks, each at a file field, such as the latest can run before each sample run at `('can', 'file')`.
+A *lookup* fills further blanks, each at a field of its blank, such as the latest can run before each sample run at `('can', 'file')`.
+The lookup's `fields` gives the other fields of each blank it fills, by blank, as `apply` takes them: `Lookup(rules, fields={'can': {...}})`.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
@@ -1018,14 +1021,15 @@ requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datas
 client.submit(requests, label='iofq', persist=True)
 ```
 
-A *rule* is plain data: a name, a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a lookup, a series, and the outputs it persists.
+A *rule* is plain data: a name, a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists.
 The *trigger loop* is a controller that fills the template for each new dataset the selector matches, and submits it under the label, persisted.
 A dataset is new to a rule until a record under its label holds it at the place `at`.
 With a *series*, one request takes all matching datasets so far with the same value of a metadata field, as the rows of the template's blank table, each at the place `at` in its row, such as `('runs', 'file')`.
-An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`:
+An example is all angles of one sample at ESTIA, which the toy spec `STITCH` stitches, over its table `runs`, each divided by the reference run of its parameter `reference`, a group of the run's `file`:
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
+reference = dataset(run=500)                # the reference run
+rule = Rule('reflectivity', Template(STITCH, params={'reference': {'file': reference}}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', at=('runs', 'file'), label='reflectivity')
 TriggerLoop(client, rules=[rule]).run()
 ```

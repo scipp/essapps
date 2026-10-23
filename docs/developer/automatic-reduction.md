@@ -22,6 +22,7 @@ Each dataset fills the one blank the lookup leaves, at the place `at`: the datas
 Every parameter is a group, so `at` names the blank and the fields down to a file, such as `('sample', 'file')` for the file of the group `sample: Sample`.
 `fields` gives the group's other fields, the same for each dataset, such as `{'transmission': None}` for a `Sample` reduced without a transmission correction; a field left out takes its default, and a field without a default makes the backend refuse the requests, naming the field.
 A lookup names its place the same way, such as `('can', 'file')` for the file of the group `can: Can`, one place per blank.
+Its `fields` gives the other fields of each blank it fills, by blank, as `apply` takes them, such as `Lookup({('can', 'file'): LastBefore(...)}, fields={'can': {...}})`; a field left out takes its default.
 So each dataset that a rule or a lookup finds needs a parameter of its own in the spec, such as `sample` and `can`.
 A batch whose parameters differ per dataset, such as the thickness of each sample, is a list of requests, each with its own params.
 
@@ -33,7 +34,7 @@ requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datas
 
 ## Rules
 
-A rule is plain data: a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a lookup, a series, and the outputs it persists, every output by default.
+A rule is plain data: a name, a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists, every output by default.
 A record that the template references, such as a beam centre, must be persisted, since the trigger loop's client reads it.
 
 ```python
@@ -47,7 +48,8 @@ The template's blank `runs` is a table with a row for each dataset, and the look
 Each arrival of an angle submits one plain request that stitches all angles of that sample so far.
 
 ```python
-rule = Rule('reflectivity', Template(STITCH, params={'reference': reference}, blanks=('runs',)),
+reference = dataset(run=500)                # the reference run, which divides each angle
+rule = Rule('reflectivity', Template(STITCH, params={'reference': {'file': reference}}, blanks=('runs',)),
             selector=Selector(role='sample'), series='sample', at=('runs', 'file'), label='reflectivity')
 ```
 

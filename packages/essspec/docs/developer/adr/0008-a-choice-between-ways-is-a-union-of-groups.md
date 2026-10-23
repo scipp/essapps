@@ -51,7 +51,7 @@ class GivenCentre(BaseModel):
 
 class FindCentre(BaseModel):
     kind: Literal['find'] = 'find'
-    run: Path
+    file: Path
     tolerance: float = 0.1
 
 class IofQParams(BaseModel):
@@ -59,7 +59,7 @@ class IofQParams(BaseModel):
     ...
 
 # the params of two requests; `finder` is the record of a request whose output `centre` is a GivenCentre
-{'beam_centre': {'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}}
+{'beam_centre': {'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}}
 {'beam_centre': finder.ref('centre')}
 ```
 
@@ -88,7 +88,7 @@ A UI shows a union as a choice between its alternatives, and a type `X | None` a
 
 ```
 Transmission: (•) From the sample's file  ( ) Given: [0.75]  [or from a record ▾]
-[x] Direct beam  Run: [60340]
+[x] Direct beam  File: [60340]
 [ ] Mask
 ```
 
@@ -124,7 +124,7 @@ A union parameter has a key for each alternative, the alternative's class: `bind
 The binding sets the key of the alternative that the value's tag names, so sciline picks the providers:
 
 ```python
-def find_centre(settings: FindCentre) -> GivenCentre: ...   # reads settings.run
+def find_centre(settings: FindCentre) -> GivenCentre: ...   # reads settings.file
 
 PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
 # tag 'given' -> pipeline[GivenCentre] = value   (replaces find_centre)

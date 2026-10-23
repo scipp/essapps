@@ -78,7 +78,8 @@ framework: what the framework needs, it reads from the field types (see
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly
   typed ``X | None``; a value of another type, such as a file or a number, is
-  a field of a group. So a form shows a parameter as a group of fields, and
+  a field of a group. So a generated UI shows a parameter as a group of
+  fields, and
   a ``PipelineBinding`` keys it by its class.
 - No type in the params or the outputs is a ``NewType``: a spec names a
   role by a class, and a binding maps it to a key of its own.
@@ -348,8 +349,8 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     Plain-data form of a workflow spec, safe to send across process boundaries.
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A
-    form reads the widget at each place from the forms the params schema
-    gives it. A schema with ``dataType`` is a reference, of the kinds that
+    UI generated from it reads the widget at each place from the forms the
+    params schema gives it. A schema with ``dataType`` is a reference, of the kinds that
     the ``@ref`` const of each object it allows names:
 
     ==================================  =================================

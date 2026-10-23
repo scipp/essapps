@@ -152,9 +152,9 @@ The contents of a tuple, a set, a dict, a list that may be `None`, a
 inline.
 
 Each parameter is a group, a union of groups, or a list of one, possibly
-typed `X | None`; a file or a number is a field of a group. So a *form*, the
-input a generic UI builds from the params schema, shows each parameter as a
-section of fields, and a `PipelineBinding` keys each parameter by its class.
+typed `X | None`; a file or a number is a field of a group. So a UI
+generated from the params schema shows each parameter as a section of
+fields, and a `PipelineBinding` keys each parameter by its class.
 No type in the params or the outputs is a `NewType`. A class names a role. A
 `NewType` of a shared type would name one only if the fit check looked
 through it. A `NewType` that a sciline graph needs as a key belongs to the
@@ -164,9 +164,10 @@ A parameter may be a discriminated union of groups, such as a beam centre
 that is given, `GivenCentre`, or found from a run with a tolerance,
 `FindCentre`; the request writes the fields of one alternative with its tag,
 inline, which says what each of the other fields takes:
-`{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`. A union is
+`{'kind': 'find', 'file': dataset(run=60339), 'tolerance': 0.05}`. A union is
 a parameter, or the element of a list parameter, never a field of a group:
-a choice between ways is a parameter of its own, which a form shows as a
+a choice between ways is a parameter of its own, which a generated UI shows
+as a
 choice at the top of its section. Why a choice is a union, and what `X | None`
 means, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
@@ -441,8 +442,8 @@ validators. `spec.serialize()` projects onto `SerializedWorkflowSpec`, a
 plain-data pydantic model that round-trips through JSON and is what a service
 announces to remote consumers. It holds a schema of the params
 (`params_schema`), one of the outputs (`outputs_schema`), and the tables. The
-params schema gives each parameter the forms it takes, so that a UI renders a
-form for each group, with a choice to give it by reference, a picker of
+params schema gives each parameter the forms it takes, so that a UI renders
+the fields of each group, with a choice to give it by reference, a picker of
 records for each group with a field that is a data value, and a picker of
 datasets for each file; `SerializedWorkflowSpec` states the forms and the
 widget of each.
@@ -572,11 +573,11 @@ output, and dims and units of an output for a UI.
   takes the value out of the group.
 - **Parameters of any type**, such as `sample: Path` or `bins: int` at the top
   level. Two files of one type then need `keys=` for distinct sciline keys,
-  and a form shows a parameter that is not a group outside the tabs of the
-  groups.
+  and a generated UI shows a parameter that is not a group outside the
+  sections of the groups.
 - **A union inside a group**, such as a transmission that is taken from each
-  run's file or computed, for one field of a row of a table. A form would
-  show a choice inside a section; a correction that some rows have is a
+  run's file or computed, for one field of a row of a table. A generated UI
+  would show a choice inside a section; a correction that some rows have is a
   group typed `X | None` instead, and a choice of way for all rows a
   parameter.
 - **A reference to a whole list** filling a list parameter. The table rules,

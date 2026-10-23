@@ -57,7 +57,14 @@ Records, checks, pushes, and the forms of apps stay the same for every technique
 
 **Two examples.**
 *One table of groups.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `file: Path`, the sample run's file, and `transmission: Path | None` without a default, the file of its transmission run, or `None` for a run reduced without a transmission correction.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`:
+
+```python
+class Sample(BaseModel):
+    file: Path                   # the sample run's file
+    transmission: Path | None    # the file of its transmission run; None: no transmission correction
+```
+
 In the multi-run spec, each row of the table `sample` is such a group.
 So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
