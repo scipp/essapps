@@ -50,14 +50,14 @@ So no later submission can reference it ([ADR 0002](0002-a-value-lives-while-som
 This is why no wait goes round in a circle ([ADR 0003](0003-accumulators-add-in-place.md)).
 
 **What the framework sees is flat.**
-A row is what the reduction repeats per run: a run, or a group given field by field that holds a run and the values given next to it, such as that run's own transmission run.
+A row is what the reduction repeats per run: a run, or a group that holds a run and the values given next to it, such as that run's own transmission run.
 Structure below a row, such as detector banks, belongs to the driver, so that the per-run work runs once per row, not once per bank.
 The framework cannot tell a bank index from a per-run value, so nothing checks this rule for workflow authors.
 Records, checks, pushes, and the forms of apps stay the same for every technique.
 
 **Two examples.**
 *One table of groups.*
-Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `run: SampleFile` and `transmission: TransmissionFile | None`.
+Suppose each sample run had its own transmission run, unlike in esssans, given to `IOFQ` with the parameter `sample: Sample`, a group with the fields `run: SampleFile` and `transmission: TransmissionFile | None`, `None` for a run without a transmission run of its own.
 In the multi-run spec, each row of the table `sample` is such a group.
 So the two are in one row, and one push gives both to the driver.
 Two tables of their own could be paired wrongly.
@@ -85,9 +85,9 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[dataset(run=611)])           # the run alone: the transmission None
+iofq.push(sample=[{'run': dataset(run=611)}])          # the run alone: the transmission None
 iofq.push(can=[dataset(run=614)])
-iofq.push(sample=[dataset(run=613), dataset(run=615)])   # one push, one state
+iofq.push(sample=[{'run': dataset(run=613)}, {'run': dataset(run=615)}])   # one push, one state
 ```
 
 ## Alternatives considered

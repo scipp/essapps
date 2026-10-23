@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 from pathlib import Path, PosixPath
-from typing import Annotated, Any, NewType
+from typing import Annotated, Any, Literal, NewType
 
 import pytest
 import scipp as sc
@@ -33,6 +33,16 @@ class Parts(BaseModel, arbitrary_types_allowed=True):
 
 SampleParts = NewType('SampleParts', Parts)
 CanParts = NewType('CanParts', Parts)
+
+
+class BeamCentre(BaseModel):
+    kind: Literal['given'] = 'given'
+    x: float = 0.0
+
+
+class FindCentre(BaseModel):
+    kind: Literal['find'] = 'find'
+    run: SampleFile
 
 
 def test_optional_removes_none_and_says_whether_it_was_there() -> None:
@@ -119,6 +129,7 @@ def test_a_file_is_a_path_or_a_newtype_of_it() -> None:
 def test_type_name_is_the_name_of_the_newtype() -> None:
     assert type_name(IofQ) == 'IofQ'
     assert type_name(sc.DataArray) == 'DataArray'
+    assert type_name(BeamCentre | FindCentre) == 'BeamCentre | FindCentre'
 
 
 @pytest.mark.parametrize(
@@ -135,6 +146,9 @@ def test_type_name_is_the_name_of_the_newtype() -> None:
         (IofQ | None, sc.DataArray),
         (IofQ, sc.DataArray | None),
         (list[int], list[int]),
+        (BeamCentre, BeamCentre | FindCentre),  # data fit one alternative
+        (BeamCentre, BeamCentre | FindCentre | None),
+        (ScaledIofQ, Transmission | IofQ),
     ],
 )
 def test_fits(data: Any, field: Any) -> None:
@@ -152,6 +166,8 @@ def test_fits(data: Any, field: Any) -> None:
         (list[int], list),
         (list[IofQ], list[sc.DataArray]),  # generic aliases fit only themselves
         (IofQ, list[IofQ]),
+        (IofQ, Transmission | sc.Variable),
+        (BeamCentre | FindCentre, BeamCentre),
     ],
 )
 def test_does_not_fit(data: Any, field: Any) -> None:

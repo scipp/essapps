@@ -23,7 +23,7 @@ notebooks import them from here.
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, NewType, TypeVar
+from typing import Annotated, Any, Literal, NewType, TypeVar
 
 import numpy as np
 import sciline
@@ -52,17 +52,26 @@ class BeamCentre(BaseModel):
     y: float = 0.0
 
 
+class FromFile(BaseModel):
+    """The transmission in the sample run's file."""
+
+    kind: Literal['file'] = 'file'
+
+
 class TransmissionFraction(BaseModel):
+    """A transmission, typed in or computed by ``TRANSMISSION``."""
+
+    kind: Literal['given'] = 'given'
     value: float = Field(gt=0, le=1)
 
 
 class Sample(BaseModel):
-    """A sample run, and the transmission given next to it."""
+    """A sample run, and its transmission."""
 
     run: SampleFile
-    transmission: TransmissionFraction | None = Field(
-        default=None, description="The sample's; None takes the one in its file."
-    )
+    transmission: Annotated[
+        FromFile | TransmissionFraction, Field(discriminator='kind')
+    ] = FromFile()
 
 
 class IofQSettings(BaseModel):
@@ -255,7 +264,7 @@ def sample_denominator(
     data: RunData[SampleRun], sample: Sample
 ) -> Denominator[SampleRun]:
     given = sample.transmission
-    value = data['transmission'] if given is None else given.value
+    value = data['transmission'] if given.kind == 'file' else given.value
     return Denominator[SampleRun](sc.scalar(data['monitor'] * value, unit='counts'))
 
 
@@ -310,7 +319,7 @@ class IofQDriver:
         self._contribute = {
             table: sciline.Stage(
                 workflow,
-                inputs=[single.keys[table]],
+                inputs=single.keys[table],
                 outputs=(Numerator[run], Denominator[run]),
             )
             for table, run in (('sample', SampleRun), ('can', CanRun))
@@ -323,8 +332,9 @@ class IofQDriver:
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
         stage = self._contribute[table]
+        (key,) = single.keys[table]
         for row in rows:
-            parts = stage.compute({single.keys[table]: row})
+            parts = stage.compute({key: row})
             old = self._sums.get(table)
             self._sums[table] = (
                 parts if old is None else {k: old[k] + v for k, v in parts.items()}

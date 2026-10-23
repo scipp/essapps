@@ -176,22 +176,21 @@ class Accumulator:
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
 
-            acc.push(sample=[dataset(run=611), dataset(run=612)])
+            acc.push(sample=[{'run': dataset(run=611)}, {'run': dataset(run=612)}])
             acc.push(sample=[{'run': dataset(run=613), 'transmission': t.ref('t')}])
-            acc.push(sample=[dataset(run=615)], can=[dataset(run=614)])
+            acc.push(sample=[{'run': dataset(run=615)}], can=[dataset(run=614)])
 
-        Each row is given inline, such as a group as a model or a dict, or
-        by reference, as its type allows; a group that holds a file field by
-        field, or as a reference to a dataset for its one required file. A
-        push gives rows of one or more tables, side by side as in a request,
-        never paired: rows of different tables have nothing to do with each
-        other. A table the template fixes is refused, and so are a row the
-        table holds already or that the push repeats, and a push of no rows
-        into a table. Rows are compared as the record holds them: a
+        Each row is given inline, such as a group as a model or a dict, or by
+        reference, as its type allows, and so is each place in it, such as a
+        field of a group. A push gives rows of one or more tables, side by side
+        as in a request, never paired: rows of different tables have nothing to
+        do with each other. A table the template fixes is refused, and so are a
+        row the table holds already or that the push repeats, and a push of no
+        rows into a table. Rows are compared as the record holds them: a
         dataset by its identity, a reference to an output by record, output,
-        and key, an inline value by its JSON form, and a group given field by
-        field by each field so; for a table whose element type has a JSON
-        form, also by the rows read, before the driver gets them.
+        and key, and an inline value by its JSON form, each at its place; for a
+        table whose element type has a JSON form, also by the rows read, before
+        the driver gets them.
 
         A push is one push into the binding's driver per table, in the
         order given, and one state. A push references
@@ -313,14 +312,15 @@ class Client:
         Submit a spec or a stage with values, or requests.
 
         A spec takes its params, a dict by name or an instance of its params
-        model if every value is given inline. Each value, or each row of a
-        list parameter, is given inline or by reference, as its type allows: a
-        type with a JSON form takes an inline value, such as a group as a model
-        or a dict, a file a reference to a dataset, and any other type a
-        reference to an output that fits::
+        model if every value is given inline. The value at each place, a
+        parameter, an element of a list, or a field of a group, is given
+        inline or by reference, as its type allows: a group as a model or a
+        dict of its fields, a file a reference to a dataset, any other type
+        with a JSON form an inline value, and any type but a file a reference
+        to an output that fits and holds no file::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
-                                        'sample': dataset(run=60339)})
+                                        'sample': {'run': dataset(run=60339)}})
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape

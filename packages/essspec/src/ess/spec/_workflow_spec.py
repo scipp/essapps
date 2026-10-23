@@ -17,43 +17,49 @@ outputs  results                        (none)           the data the workflow
                                                          returns
 =======  =============================  ===============  ==========================
 
-A request gives each value inline or by reference, and each row of a
-list parameter. A parameter's type decides which of the two it takes, with
-``| None`` removed and, for a list parameter, its element type taken (see
-:meth:`WorkflowSpec.takes_inline`):
+A request gives the value at each *place* inline or by reference: the value
+of each parameter, each element of a list, and each field of a group, at any
+depth (see :mod:`ess.spec.places`). The type at a place decides which of the
+two it takes, with ``| None`` removed:
 
 =====================================  ==========  ===========================
-A parameter's type                     Inline      By reference
+The type at a place                    Inline      By reference
 =====================================  ==========  ===========================
 a file: ``Path``, or a ``NewType``     no          to a dataset
 of it
-has a *JSON form*: pydantic makes a    yes         to an output that fits
-JSON schema of it, with the params
-model's config, and it holds no file
-a group that holds a file              field by    to a dataset, for its one
-                                       field       required file
+a group, or a union of groups          its fields  to an output that fits and
+                                                   holds no file
+a list, ``list[X]``                    each        no
+                                       element a
+                                       place
+has a *JSON form*: pydantic makes a    yes         to an output that fits;
+JSON schema of it, with the config of              none for a list that may
+its model, and it holds no file                    be ``None`` or a dict
 anything else, such as a scipp array   no          to an output that fits
 =====================================  ==========  ===========================
 
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
-as ``Reduction``. A group that holds a file, such as a run and the values
-given next to it, is given *field by field*: each of its fields inline or by
-reference, as a parameter is, so the file comes from a dataset::
+as ``Reduction``, written as an object of its fields, each a place, so a
+file in it comes from a dataset; a ``RootModel`` is not a group, but a type
+written as its root value::
 
     class Sample(BaseModel):
         run: SampleFile
-        transmission: TransmissionFraction | None = None
+        mask: PixelMask | None = None  # None: no pixels masked
 
-    {'sample': {'run': dataset(run=101), 'transmission': t.ref('transmission')}}
-    {'sample': dataset(run=101)}  # the one required file; defaults for the rest
+    {'sample': {'run': dataset(run=101), 'mask': m.ref('mask')}}
+    {'sample': {'run': dataset(run=101)}}  # defaults for the rest
 
-Like the params model, such a group is never validated whole. A request
-lives in two phases. In the
-*request phase*, before any data is read, a value given by reference is a
-reference; in the *call phase*, the backend reads the data each reference
-names and builds the params instance from the values and the data, so every
-field of it holds the type it declares.
+A request lives in two phases. In the *request phase*, before any data is
+read, a value given by reference is a reference, and each place given
+inline is validated alone. A group without a reference inside is a value
+given inline: it is validated whole, and the record holds it as validated.
+Of a group with a reference inside, each field given inline is validated
+alone. In the *call phase*, the backend reads the data each reference names
+and validates each parameter's value once, whole, so every validator of
+every group runs with all its fields at hand, and every field holds the
+type it declares.
 
 The models are ordinary pydantic models and carry no annotations for the
 framework: what the framework needs, it reads from the field types (see
@@ -61,14 +67,34 @@ framework: what the framework needs, it reads from the field types (see
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not
-  a dict or a union of two types.
-- A group that holds a file holds it as a field, a file, possibly
-  optional; it follows the rules of the params model below, and a field
-  of it that is a list or a dict has a JSON form, since no reference stands
-  for a list.
-- A default is a value, never a reference: of a type with a JSON form, a
-  value whose JSON form reads back as the value and is not a reference; of
-  any other type, ``None`` or an empty list.
+  a dict. A type may be a union, such as a union of groups.
+- A file is at a place only, possibly optional or in a list: not inside a
+  tuple, a dict, or a dataclass, whose contents are not places, so no
+  dataset can give it.
+- A union of groups, a parameter or inside a group, is discriminated by the
+  name of its tag field, not by a callable, so that the tag of a value tells
+  its alternative. The tag field of each alternative is a ``Literal`` of one
+  string, its own, such as ``Literal['find']``, without an alias. A union
+  that holds a group holds groups only, not ``GivenCentre | float``: a value
+  of a type that is not a group has no tag. A field of a group that
+  is a dict, or a list that may be ``None``, has a JSON form, since its
+  contents are not places and no reference stands for a whole one.
+- A group has no serializers, computed fields, or aliases: the record holds
+  a group as the object of its places, each in the JSON form of its own
+  type, and these would make the group's own JSON form differ from it. It
+  may have field and model validators of any mode, which run when the group
+  is validated whole: in the request phase if it has no reference inside,
+  else in the call phase only. So a validator that widens what a field
+  accepts works only for a group written without references. It is not at
+  a place inside itself, at any depth, such as a tree with
+  ``children: list[Node]``, since the schema of the forms at its places
+  would not end; a tree is written whole, ``children: list[Node] | None``.
+- A default is a value, never a reference: what a request may write at the
+  place, in a JSON form that reads back as the value, with no ``@ref``
+  object at any depth; of a type without a JSON form, ``None`` or an empty
+  list. It is the value that validating it gives, since pydantic does not
+  validate a default: a group's default is an instance, not the object of
+  its fields, and a tuple's a tuple, not a list.
 - No parameter sees another: each is validated alone, in every phase. So
   the params model has no field validators, serializers, computed fields, or
   aliases, and no ``default_factory`` that takes the other values. A list
@@ -86,8 +112,8 @@ instance. A binding may run it, ``IofQParams.model_validate(dict(params))``.
 
 A *table* is a list parameter whose *rows* an accumulator takes a push at a
 time, such as the sample runs; its rows are distinct. A row with more than
-one value, such as a run and the values given next to it, is a group given
-field by field. ``tables`` names the tables. A list parameter is a table
+one value, such as a run and the values given next to it, is a group.
+``tables`` names the tables. A list parameter is a table
 only where ``tables`` names it. A request gives every table, ``[]`` for one
 without rows, so that no request leaves out a table by mistake.
 
@@ -114,21 +140,17 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationError,
     create_model,
     model_validator,
 )
 from pydantic.fields import FieldInfo
-from pydantic_core import PydanticSerializationError
+from pydantic_core import PydanticUndefined
 
 from .field_types import (
     base,
-    by_field,
     element,
-    file_field,
     has_json_form,
     holds_file,
-    inline,
     is_file,
     is_group,
     is_list,
@@ -137,7 +159,8 @@ from .field_types import (
     type_name,
     value_type,
 )
-from .refs import AccumulatorRef, DatasetRef, OutputRef
+from .places import alternatives, file_off_place, groups_at, held, validated
+from .refs import AccumulatorRef, DatasetRef, Loc, OutputRef, ParamsError, Ref
 
 
 class NoParams(BaseModel):
@@ -248,17 +271,6 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
             raise ValueError(f'{self.name}: {"; ".join(problems)}')
         return self
 
-    def takes_inline(self, name: str) -> bool:
-        """
-        Whether a request may give the parameter ``name``, or each row of it
-        if it is a list parameter, inline: its type, with ``| None`` removed
-        and for a list parameter its element type taken, has a JSON form, or
-        is a group given field by field (see
-        :func:`ess.spec.field_types.by_field`).
-        """
-        tp = value_type(self.params.model_fields[name].annotation)
-        return has_json_form(self.params, name) or by_field(tp)
-
     def has_json_form(self, name: str) -> bool:
         """
         Whether the type of the parameter ``name``, with ``| None`` removed
@@ -271,11 +283,12 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         """
         Project to the plain-data form.
 
-        The params schema has each value, or each row of a list parameter,
-        in the forms it takes: ``anyOf`` its JSON schema and a reference if it
-        takes an inline value, else a reference. A reference's schema is the
-        ``@ref`` object of each kind it may be, with the name of the data type
-        it must fit in ``dataType``, as the outputs schema has each output.
+        The params schema has the value at each place in the forms it takes:
+        ``anyOf`` its JSON schema and a reference if it takes an inline value,
+        else a reference; a group as the object of its fields, each so. A
+        reference's schema is the ``@ref`` object of each kind it may be, with
+        the name of the data type it must fit in ``dataType``, as the outputs
+        schema has each output.
         The projection is one-way: pydantic validators do not survive it, so
         a consumer of the serialized form can validate only optimistically.
         """
@@ -297,10 +310,9 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
     Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON. A form
     shows the params schema: a group by its fields, with a choice to give it
-    by reference, and a picker for each parameter that takes a reference
-    only, which names the type of the data it takes in ``dataType``; a list
-    parameter as an array of these, an optional one with ``null`` in
-    ``anyOf``.
+    by reference, and a picker at each place that takes a reference only,
+    which names the type of the data it takes in ``dataType``; a list as an
+    array of these, an optional one with ``null`` in ``anyOf``.
     """
 
     params_schema: dict[str, Any] = Field(
@@ -328,23 +340,23 @@ def _one_or_list(annotation: Any) -> bool:
     return element(tp) is None or (get_origin(tp) is list and not is_optional)
 
 
+def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[str]]:
+    """The decorators of ``model`` itself of each of ``kinds``, by kind."""
+    decorators = model.__pydantic_decorators__
+    return {
+        kind: sorted(getattr(decorators, kind))
+        for kind in kinds
+        if getattr(decorators, kind)
+    }
+
+
 def _model_validators_only(model: type[BaseModel]) -> list[str]:
     """
     Refuse a decorator of the params model itself but a model validator: a
     field validator, a field or model serializer, or a computed field.
     """
-    decorators = model.__pydantic_decorators__
-    if found := {
-        kind: sorted(getattr(decorators, kind))
-        for kind in (
-            'validators',
-            'field_validators',
-            'field_serializers',
-            'model_serializers',
-            'computed_fields',
-        )
-        if getattr(decorators, kind)
-    }:
+    kinds = ('validators', 'field_validators', *_SERIALIZERS)
+    if found := _decorators(model, kinds):
         return [
             f'{model.__name__}: no decorators but model validators, {found}; '
             "the check or the JSON form of one value belongs to the value's type"
@@ -352,22 +364,21 @@ def _model_validators_only(model: type[BaseModel]) -> list[str]:
     return []
 
 
+_SERIALIZERS = ('field_serializers', 'model_serializers', 'computed_fields')
+
+
 def _params_problems(model: type[BaseModel]) -> list[str]:
     problems = _model_validators_only(model)
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
-        if not (_one_or_list(field.annotation) and is_single(tp)):
-            union = get_origin(tp) in (Union, UnionType)
+        union = get_origin(tp) in (Union, UnionType)
+        if not (_one_or_list(field.annotation) and (is_single(tp) or union)):
             problems.append(
                 f'{where}: a parameter is a type, possibly optional, or a list of one'
-                + ('; a group may hold a union as one of its fields' if union else '')
             )
             continue
-        if any(
-            getattr(field, a) is not None
-            for a in ('alias', 'validation_alias', 'serialization_alias')
-        ):
+        if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
         if get_origin(optional(field.annotation)[0]) is list and (
             other := [m for m in field.metadata if not isinstance(m, MinLen | MaxLen)]
@@ -376,8 +387,8 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: a list parameter carries only length constraints, '
                 f'not {other}; a check of one row belongs to the element type'
             )
-        if by_field(tp) and (group := _group_problems(base(tp))):
-            problems.extend(f'{where}: {problem}' for problem in group)
+        if place := _place_problems(model, name, (), set()):
+            problems.extend(f'{where}: {problem}' for problem in place)
         elif field.default_factory_takes_validated_data:
             problems.append(
                 f'{where}: the default_factory of a parameter takes no other values'
@@ -387,67 +398,115 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     return problems
 
 
-def _group_problems(group: type[BaseModel]) -> list[str]:
+def _has_alias(field: FieldInfo) -> bool:
+    return any(
+        getattr(field, a) is not None
+        for a in ('alias', 'validation_alias', 'serialization_alias')
+    )
+
+
+def _place_problems(
+    model: type[BaseModel],
+    name: str,
+    path: tuple[type[BaseModel], ...],
+    seen: set[type[BaseModel]],
+) -> list[str]:
     """
-    Refuse a group given field by field whose fields a request cannot give
-    each inline or by reference, as the params model's: a decorator but a
-    model validator, which the framework never calls, a field with an alias,
-    a file deeper than a field, a list or a dict without a JSON form, which no
-    reference stands for, and a default that is not a value, since a field
-    left out holds its default.
+    Refuse a field of ``model`` whose places a request cannot write: a file
+    at a position that is not a place, a union that the framework cannot
+    take apart by a value's tag, a group at a place inside itself, and the problems
+    of each group at its places, each named by its group (see
+    :func:`_group_problems`). ``path`` holds the groups that hold the field,
+    and ``seen`` the groups checked already, so that a group at several
+    places is checked once.
     """
-    problems = _model_validators_only(group)
+    try:
+        groups = groups_at(model, name)
+    except ValueError as error:
+        return [str(error)]
+    if file_off_place(model, name):
+        return [
+            'a file is at a place only, possibly optional or in a list: not in '
+            'a tuple, a dict, or a dataclass, where no dataset gives it'
+        ]
+    problems = []
+    for group in groups:
+        if group in path:
+            problems.append(
+                f'{group.__name__}: a group is not at a place inside itself'
+            )
+        elif group not in seen:
+            seen.add(group)
+            problems.extend(_group_problems(group, (*path, group), seen))
+    return problems
+
+
+def _group_problems(
+    group: type[BaseModel],
+    path: tuple[type[BaseModel], ...],
+    seen: set[type[BaseModel]],
+) -> list[str]:
+    """
+    Refuse a group whose fields a request cannot write each at its place: a
+    serializer or a computed field, which would make the group's JSON form
+    differ from the object of its places, a field with an alias, a dict or a
+    list that may be ``None`` without a JSON form, whose contents are not
+    places, the problems of the places of its fields, and a default that is
+    not a value, since a field left out holds its default. Field and model
+    validators of any mode are allowed: they run whenever the group is
+    validated whole (see :mod:`ess.spec.places`). ``path`` holds the groups
+    that hold ``group`` and itself.
+    """
+    problems = []
+    if found := _decorators(group, _SERIALIZERS):
+        problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
     for name, field in group.model_fields.items():
         where = f'{group.__name__}.{name}'
         tp, _ = optional(field.annotation)
-        if any(
-            getattr(field, a) is not None
-            for a in ('alias', 'validation_alias', 'serialization_alias')
-        ):
+        if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
-        elif holds_file(tp) and not is_file(tp):
-            problems.append(
-                f'{where}: a field of a group holds a file only as a file, '
-                'possibly optional, given by reference to a dataset'
-            )
-        elif element(tp) is not None and not has_json_form(group, name):
-            problems.append(
-                f'{where}: a field of a group that is a list or a dict has a '
-                'JSON form; no reference stands for a list'
-            )
-        elif not field.is_required() and (
-            problem := _default_problem(group, name, whole=True)
+        elif place := _place_problems(group, name, path, seen):
+            problems.extend(f'{where}: {problem}' for problem in place)
+        elif (
+            not is_list(group, name)
+            and element(tp) is not None
+            and not has_json_form(group, name)
         ):
+            problems.append(
+                f'{where}: a field of a group that is a dict, or a list that may '
+                'be None, has a JSON form; its contents are not places'
+            )
+        elif field.default_factory_takes_validated_data:
+            problems.append(
+                f'{where}: the default_factory of a field of a group takes no other '
+                'values'
+            )
+        elif not field.is_required() and (problem := _default_problem(group, name)):
             problems.append(f'{where}: {problem}')
     return problems
 
 
-def _default_problem(
-    model: type[BaseModel], name: str, whole: bool = False
-) -> str | None:
+def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
     Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: of a type with a JSON form, an inline value (see
-    :func:`ess.spec.field_types.inline`), each row of a list unless
-    ``whole``, as for a field of a group; of any other type, ``None`` or an
-    empty list.
+    ``None``: what a request may write at the place, with no reference (see
+    :func:`ess.spec.places.held`), and the value that validating it gives,
+    since pydantic does not validate a default, and a binding gets it as it
+    is. So a group's default is an instance, not the object of its fields.
     """
     default = model.model_fields[name].get_default(call_default_factory=True)
-    if not has_json_form(model, name):
-        if default is None or (isinstance(default, list) and not default):
-            return None
-        return 'the default of a type without a JSON form is None or an empty list'
-    rows = is_list(model, name) and not whole
-    if rows and not isinstance(default, list):
-        return 'the default of a list parameter is a list'
     try:
-        for value in default if rows else [default]:
-            inline(model, name, value, whole)
-    except (PydanticSerializationError, ValidationError):
-        return 'the default has no JSON form that reads back as the value'
-    except ValueError as error:
-        return f'the default {error}'
+        held(model, name, default, _no_ref)
+        made = validated(model, name, default)
+    except ParamsError as error:
+        return f'the default is not a value a request may write: {error}'
+    if made != default:
+        return f'the default {default!r} is not the value validating it gives, {made!r}'
     return None
+
+
+def _no_ref(loc: Loc, ref: Ref, tp: Any) -> Any:
+    raise ParamsError([(loc, f'{ref} is a reference; a default is a value')])
 
 
 def _outputs_problems(model: type[BaseModel]) -> list[str]:
@@ -480,25 +539,18 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
     The JSON Schema of the params: that of a model of the same fields, each
     with its title, description, default, and length constraints, and with
-    its type replaced by the forms it takes (see :func:`_forms`). As the
-    backend does, it refuses a field that a model lacks.
+    the type at each place replaced by the forms it takes (see
+    :func:`_field_forms`). As the backend does, it refuses a field that a
+    model lacks.
     """
     model: type[BaseModel] = spec.params
     fields: dict[str, Any] = {}
     for name, info in model.model_fields.items():
-        tp = value_type(info.annotation)
-        if not by_field(tp):
-            ref = _ref_form(tp)
-        elif file := file_field(base(tp)):
-            ref = _ref_form(base(tp).model_fields[file].annotation)
-        else:
-            ref = None
         fields[name] = (
-            _forms(info.annotation, info.metadata, ref, spec.takes_inline(name)),
+            _field_forms(model, name),
             Field(
                 # Undefined, and so required, if the field is.
                 default=info.get_default(call_default_factory=True),
-                # pydantic leaves out the title of a field that is a $ref only
                 title=info.title or name.replace('_', ' ').title(),
                 description=info.description,
             ),
@@ -506,6 +558,10 @@ def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     schema: dict[str, Any] = create_model(
         model.__name__, __config__=model.model_config, **fields
     ).model_json_schema()
+    for name, prop in schema.get('properties', {}).items():
+        # pydantic leaves out the title of a field that is a $ref, if it is
+        # the one it would make of the name.
+        prop.setdefault('title', fields[name][1].title)
     for group in [schema, *schema.get('$defs', {}).values()]:
         if 'properties' in group:
             group['additionalProperties'] = False
@@ -525,78 +581,97 @@ def _ref_form(tp: Any) -> Any:
     ]
 
 
-def _forms(
-    tp: Any,
-    metadata: Sequence[Any],
-    ref: Any,
-    takes_inline: bool,
-    fields: bool = True,
-) -> Any:
+def _field_forms(model: type[BaseModel], name: str) -> Any:
     """
-    ``tp`` with its value type ``X`` replaced by ``X | ref`` if
-    ``takes_inline``, else by ``ref``, so that each value, or each row of a
-    list, takes the forms of ``X``; ``ref`` ``None`` takes no reference. A
-    group ``X`` given inline, if ``fields``, has each field replaced by the
-    forms it takes (see :func:`_group_forms`). ``metadata``, the constraints
-    of the field, goes to the list if ``tp`` is one, else to ``X``, so that a
+    The type of the field ``name`` of ``model`` with the type at each of its
+    places replaced by the forms it takes (see :func:`_forms`).
+    """
+    info = model.model_fields[name]
+    metadata = list(info.metadata)
+    if info.discriminator is not None:
+        metadata.append(Field(discriminator=info.discriminator))
+    return _forms(
+        info.annotation, metadata, has_json_form(model, name), is_list(model, name)
+    )
+
+
+def _forms(tp: Any, metadata: Sequence[Any], json: bool, rows: bool) -> Any:
+    """
+    ``tp``, the type at a place, replaced by the forms it takes: a file by a
+    reference to a dataset; a group by the forms of its fields (see
+    :func:`_group_forms`), a union of groups by those of its alternatives;
+    any other type by itself if ``json``, it has a JSON form; and each but a
+    file also by a reference to an output, unless it holds a file, or for a
+    union of groups, unless each alternative holds one. The elements of a
+    list are places if ``rows``; the contents of any other list or dict are
+    not, so it is given inline only. ``metadata``, the constraints of the
+    field, goes to the list if ``tp`` is one, else to the value, so that a
     constraint of a number, say, is not put on a reference.
     """
     origin, args = get_origin(tp), get_args(tp)
     if origin is Annotated:
-        meta = [*metadata, *tp.__metadata__]
-        return _forms(args[0], meta, ref, takes_inline, fields)
-    if origin is list:
-        row = _forms(args[0], [], ref, takes_inline, fields)
-        rows: Any = list[row]  # type: ignore[valid-type]
-        return Annotated[rows, *metadata] if metadata else rows
-    if origin in (Union, UnionType):
-        return Union[  # noqa: UP007
-            tuple(
-                arg
-                if arg is NoneType
-                else _forms(arg, metadata, ref, takes_inline, fields)
-                for arg in args
-            )
-        ]
-    if not takes_inline:
-        return ref
-    if not is_group(tp):
-        value = Annotated[tp, *metadata] if metadata else tp
-    else:
+        return _forms(args[0], [*metadata, *tp.__metadata__], json, rows)
+    if origin is list and rows:
+        row = _forms(args[0], [], json, rows=False)
+        listed: Any = list[row]  # type: ignore[valid-type]
+        return Annotated[listed, *metadata] if metadata else listed
+    if origin in (Union, UnionType) and NoneType in args:
+        rest = tuple(arg for arg in args if arg is not NoneType)
+        inner = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
+        return Union[_forms(inner, metadata, json, rows), None]  # noqa: UP007
+    value = Annotated[tp, *metadata] if metadata else tp
+    if element(tp) is not None:
+        return value
+    if is_file(tp):
+        return _ref_form(tp)
+    ref = None if holds_file(tp) else _ref_form(tp)
+    if is_group(tp):
+        group = _group_forms(base(tp))
+        value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
+    elif (union := alternatives(value)) is not None:
+        tag, groups = union
+        members = tuple(groups.values())
+        forms = tuple(_group_forms(base(m), tag) for m in members)
+        # An output fits the union if it fits an alternative without a file.
+        if fileless := tuple(m for m in members if not holds_file(m)):
+            ref = _ref_form(Union[fileless])  # noqa: UP007
         # Only an object reads as a reference; JSON Schema's ``required``
         # holds for any other value, so ``not`` would refuse it.
-        group = _group_forms(base(tp)) if fields and by_field(tp) else tp
-        value = Annotated[group, *metadata, Field(json_schema_extra=_not_a_ref)]
+        value = Annotated[
+            Union[forms],  # noqa: UP007
+            *metadata,
+            Field(json_schema_extra=_not_a_ref),
+        ]
+    elif not json:
+        return ref
     return value if ref is None else Union[value, ref]  # noqa: UP007
 
 
 @functools.cache
-def _group_forms(group: type[BaseModel]) -> type[BaseModel]:
+def _group_forms(group: type[BaseModel], tag: str | None = None) -> Any:
     """
-    A model of the fields of a group given field by field, each replaced by
-    the forms it takes: a file by a reference to a dataset, a list or a dict
-    by itself, inline only, and any other type by itself, if it has a JSON
-    form, or a reference to an output that fits. A group in a field is given
-    inline as its own JSON form, never field by field.
+    A model of the fields of a group, each replaced by the forms it takes
+    (see :func:`_field_forms`); the tag field ``tag`` of an alternative of a
+    union by itself, since a tag is written inline only, and required, since
+    a request always writes it. The title of a tag labels its alternative,
+    so a tag without one is titled by its value, as a parameter is by its
+    name; pydantic's title, made of the name of the field, would be that of
+    every alternative.
     """
     fields: dict[str, Any] = {}
     for name, info in group.model_fields.items():
-        tp, _ = optional(info.annotation)
-        if element(tp) is not None:
-            forms = Annotated[info.annotation, *info.metadata]
-        else:
-            json = has_json_form(group, name)
-            forms = _forms(
-                info.annotation, info.metadata, _ref_form(tp), json, fields=False
-            )
+        title = info.title
+        if name == tag and title is None:
+            title = get_args(info.annotation)[0].replace('_', ' ').title()
         fields[name] = (
-            forms,
+            info.annotation if name == tag else _field_forms(group, name),
             Field(
-                default=info.get_default(call_default_factory=True),
-                title=info.title,
+                default=PydanticUndefined
+                if name == tag
+                else info.get_default(call_default_factory=True),
+                title=title,
                 description=info.description,
                 examples=info.examples,
-                # A reference's dataType is its json_schema_extra.
                 **(
                     {}
                     if info.json_schema_extra is None

@@ -1,13 +1,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A value, or a row, given inline or by reference, as the request chooses."""
+"""The value at each place given inline or by reference, as the request chooses."""
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, Literal, NewType
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic.dataclasses import dataclass
 
 from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
@@ -47,12 +56,29 @@ class LoadParams(BaseModel):
     sample: SampleFile
 
 
+class Run(BaseModel, arbitrary_types_allowed=True):
+    """A run and what is given next to it: a group that holds a file."""
+
+    file: SampleFile
+    shift: Shift = Field(default_factory=Shift)
+    offset: Offset | None = None
+    weights: list[float] = Field(default_factory=list, max_length=3)
+    transmission: Blob | None = None
+
+    @model_validator(mode='after')
+    def _offset_not_negative(self) -> 'Run':
+        if self.offset is not None and self.offset < 0:
+            raise ValueError('a negative offset')
+        return self
+
+
 class LoadOutputs(BaseModel, arbitrary_types_allowed=True):
     value: float
     shift: Shift
     labelled: LabelledShift
     blob: Blob
     values: list[float]
+    run: Run
 
 
 class AddParams(BaseModel):
@@ -76,21 +102,6 @@ class ShiftsParams(BaseModel):
 
 class Value(BaseModel):
     value: float
-
-
-class Run(BaseModel):
-    """A run and what is given next to it: a group that holds a file."""
-
-    file: SampleFile
-    shift: Shift = Field(default_factory=Shift)
-    offset: Offset | None = None
-    weights: list[float] = Field(default_factory=list, max_length=3)
-
-    @model_validator(mode='after')
-    def _offset_not_negative(self) -> 'Run':
-        if self.offset is not None and self.offset < 0:
-            raise ValueError('a negative offset')
-        return self
 
 
 RunAlias = NewType('RunAlias', Run)
@@ -123,6 +134,136 @@ SHIFTS = _spec('shifts', ShiftsParams, Value, tables=('shifts',))
 RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
 
 
+class Reduction(BaseModel, arbitrary_types_allowed=True):
+    bins: int = 1
+    mask: Blob | None = None
+    limits: tuple[float, float] = (0.0, 1.0)
+
+
+class ByRun(BaseModel):
+    kind: Literal['run'] = 'run'
+    run: SampleFile
+
+
+class Given(BaseModel):
+    kind: Literal['given'] = 'given'
+    x: float = 0.0
+
+
+class Centre(BaseModel):
+    """A group that holds a union, an alternative of which holds a file."""
+
+    by: ByRun | Given = Field(Given(), discriminator='kind')
+
+
+class DeepParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    centre: Centre = Field(default_factory=Centre)
+
+
+class Range(BaseModel):
+    start: float
+    stop: float
+
+    @field_validator('stop')
+    @classmethod
+    def _after_start(cls, stop: float, info: ValidationInfo) -> float:
+        if stop <= info.data.get('start', stop - 1):
+            raise ValueError('stop must be greater than start')
+        return stop
+
+
+class RangeParams(BaseModel):
+    range: Range
+
+
+class Edges(BaseModel):
+    """Edges given as a list or as a string of numbers, held sorted."""
+
+    values: list[float]
+
+    @field_validator('values', mode='before')
+    @classmethod
+    def _parse(cls, values: Any) -> Any:
+        return (
+            [float(v) for v in values.split(',')] if isinstance(values, str) else values
+        )
+
+    @field_validator('values')
+    @classmethod
+    def _sorted(cls, values: list[float]) -> list[float]:
+        return sorted(values)
+
+
+class EdgesParams(BaseModel):
+    edges: list[Edges] = Field(min_length=1)
+
+
+class Millimetres(BaseModel):
+    """A length given in millimetres, held in metres."""
+
+    value: float
+
+    @field_validator('value')
+    @classmethod
+    def _to_metres(cls, value: float) -> float:
+        return value / 1000
+
+
+class AnnotatedMillimetres(BaseModel):
+    value: Annotated[float, AfterValidator(lambda value: value / 1000)]
+
+
+class Steps(RootModel[list[float]]):
+    """Not a group: written as its root value."""
+
+
+class StepsParams(BaseModel):
+    steps: Steps
+
+
+class LengthParams(BaseModel):
+    by_decorator: Millimetres | None = None
+    by_type: AnnotatedMillimetres | None = None
+
+
+class BeamCentre(BaseModel):
+    kind: Literal['given'] = 'given'
+    x: float = 0.0
+
+
+class FindCentre(BaseModel):
+    kind: Literal['find'] = 'find'
+    run: SampleFile | None = None
+    tolerance: float = 0.5
+
+    @field_validator('tolerance')
+    @classmethod
+    def _below_one(cls, tolerance: float) -> float:
+        if not 0 < tolerance < 1:
+            raise ValueError('tolerance must be between 0 and 1')
+        return tolerance
+
+
+class CentredParams(BaseModel):
+    beam_centre: Annotated[BeamCentre | FindCentre, Field(discriminator='kind')] = (
+        BeamCentre()
+    )
+
+
+class CentreOutputs(BaseModel):
+    centre: BeamCentre
+
+
+DEEP = _spec('deep', DeepParams, Value)
+RANGE = _spec('range', RangeParams, Value)
+EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
+LENGTH = _spec('length', LengthParams, Value)
+STEPS = _spec('steps', StepsParams, Value)
+CENTRED = _spec('centred', CentredParams, Value)
+FIND = _spec('find', LoadParams, CentreOutputs)
+
+
 def load(params: LoadParams) -> LoadOutputs:
     value = read_dataset(params.sample)
     return LoadOutputs(
@@ -131,6 +272,7 @@ def load(params: LoadParams) -> LoadOutputs:
         labelled=LabelledShift(offset=value, label='first'),
         blob=Blob(value),
         values=[value, 2.0],
+        run=Run(file=params.sample),
     )
 
 
@@ -148,7 +290,10 @@ def runs(params: RunsParams) -> Value:
     rows = [*params.runs, *([] if params.extra is None else [params.extra])]
     return Value(
         value=sum(
-            read_dataset(run.file) + run.shift.offset + (run.offset or 0.0)
+            read_dataset(run.file)
+            + run.shift.offset
+            + (run.offset or 0.0)
+            + (0.0 if run.transmission is None else run.transmission.value)
             for run in rows
         )
     )
@@ -156,6 +301,27 @@ def runs(params: RunsParams) -> Value:
 
 def total(params: Any) -> Value:
     return Value(value=sum(params.part))
+
+
+def deep(params: DeepParams) -> Value:
+    by = params.centre.by
+    centre = read_dataset(by.run) if isinstance(by, ByRun) else by.x
+    mask = params.reduction.mask
+    return Value(
+        value=params.reduction.bins + centre + (0.0 if mask is None else mask.value)
+    )
+
+
+def centred(params: CentredParams) -> Value:
+    centre = params.beam_centre
+    if isinstance(centre, BeamCentre):
+        return Value(value=centre.x)
+    run = 0.0 if centre.run is None else read_dataset(centre.run)
+    return Value(value=run * centre.tolerance)
+
+
+def find(params: LoadParams) -> CentreOutputs:
+    return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample)))
 
 
 @pytest.fixture
@@ -174,6 +340,13 @@ def client(tmp_path: Path) -> Iterator[Client]:
                 SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
             ),
             function_binding(RUNS, runs),
+            function_binding(DEEP, deep),
+            function_binding(RANGE, lambda p: Value(value=p.range.stop)),
+            function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
+            function_binding(LENGTH, lambda p: Value(value=0.0)),
+            function_binding(STEPS, lambda p: Value(value=sum(p.steps.root))),
+            function_binding(CENTRED, centred),
+            function_binding(FIND, find),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -235,11 +408,14 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
 @pytest.mark.parametrize(
     ('row', 'reason'),
     [
-        ({'offset': 1.0}, r'runs\[0\]\.file: a required field, not given'),
-        ({'file': 'a.nxs'}, r"runs\[0\]\.file: 'a.nxs' is not a reference"),
+        ({'offset': 1.0}, r'runs\[0\]\.file: Field required'),
+        (
+            {'file': 'a.nxs'},
+            r'runs\[0\]\.file: a file is given by reference to a dataset',
+        ),
         (
             {'file': dataset_ref(run=1), 'label': 'x'},
-            r"runs\[0\]: \['label'\]: not fields of Run",
+            r'runs\[0\]\.label: Extra inputs are not permitted',
         ),
         (
             {'file': dataset_ref(run=1), 'shift': {'offset': dataset_ref(run=1)}},
@@ -247,7 +423,7 @@ def test_each_field_of_a_group_is_given_inline_or_by_reference(
         ),
     ],
 )
-def test_a_group_given_field_by_field_is_refused(
+def test_a_group_with_a_field_at_fault_is_refused(
     client: Client, row: dict[str, Any], reason: str
 ) -> None:
     with pytest.raises(SubmitError, match=reason):
@@ -272,18 +448,25 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     assert [e.loc for e in raised.value.errors] == [('runs', 1, 'file')]
 
 
-def test_no_reference_stands_for_a_whole_group_that_holds_a_file(
+def test_a_reference_to_an_output_that_holds_a_file_is_refused(
     client: Client, loaded: Record
 ) -> None:
-    with pytest.raises(SubmitError, match=r'runs\[0\]: .* names the whole of Run'):
-        client.submit(RUNS, params={'runs': [loaded.ref('shift')]})
+    # The file in the output has passed no dataset check.
+    with pytest.raises(
+        SubmitError, match=r'^runs\[0\]: .*, of type Run, holds a file; a file is'
+    ):
+        client.submit(RUNS, params={'runs': [loaded.ref('run')]})
 
 
-def test_a_dataset_stands_for_a_group_with_its_one_required_file(
+def test_a_group_given_its_file_alone_holds_defaults_for_the_rest(
     client: Client,
 ) -> None:
     computed = client.compute(
-        RUNS, params={'runs': [dataset_ref(run=1)], 'extra': dataset_ref(run=2)}
+        RUNS,
+        params={
+            'runs': [{'file': dataset_ref(run=1)}],
+            'extra': {'file': dataset_ref(run=2)},
+        },
     )
 
     assert client.output(computed, 'value') == 3.0
@@ -292,28 +475,302 @@ def test_a_dataset_stands_for_a_group_with_its_one_required_file(
     assert row['shift'] == {'offset': 0.0}
 
 
-def test_the_framework_never_validates_a_group_given_field_by_field_whole(
-    client: Client,
+@pytest.mark.parametrize(
+    ('params', 'place'),
+    [
+        ({'runs': [dataset_ref(run=1)]}, r'runs\[0\]'),
+        (
+            {'runs': [{'file': dataset_ref(run=1)}], 'extra': dataset_ref(run=2)},
+            'extra',
+        ),
+    ],
+)
+def test_a_dataset_for_a_whole_group_is_refused(
+    client: Client, params: dict[str, Any], place: str
 ) -> None:
-    # Run's model validator refuses a negative offset; like the params model's,
-    # it is the binding's to run.
-    computed = client.compute(
+    with pytest.raises(
+        SubmitError,
+        match=rf'^{place}: dataset run:\d does not fit Run\w*, which is not a file',
+    ):
+        client.submit(RUNS, params=params)
+
+
+def test_a_group_is_validated_whole_in_the_call_phase(client: Client) -> None:
+    # Run's model validator refuses a negative offset; the file is given by
+    # reference, so the group is validated whole once the dataset is read.
+    computed = client.submit(
         RUNS, params={'runs': [{'file': dataset_ref(run=1), 'offset': -1.0}]}
     )
 
-    assert client.output(computed, 'value') == 0.0
+    assert 'a negative offset' in _failed(client, computed)
+
+
+@pytest.mark.parametrize(
+    ('params', 'place'),
+    [
+        ({'runs': [None]}, ('runs', 0)),
+        ({'runs': ['a.nxs']}, ('runs', 0)),
+        ({'runs': [{'file': dataset_ref(run=1), 'shift': 1.0}]}, ('runs', 0, 'shift')),
+    ],
+)
+def test_a_value_at_a_group_that_is_not_an_object_is_refused(
+    client: Client, params: dict[str, Any], place: tuple[str | int, ...]
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RUNS, params=params)
+    (error,) = raised.value.errors
+    assert error.loc == place
+    assert error.msg.endswith(
+        'is not an object; a group is written as an object of its fields'
+    )
+
+
+def test_a_reference_is_allowed_at_any_place(client: Client, loaded: Record) -> None:
+    computed = client.compute(
+        DEEP,
+        params={
+            'reduction': {'bins': 2, 'mask': loaded.ref('blob')},
+            'centre': {'by': {'kind': 'run', 'run': dataset_ref(run=2)}},
+        },
+    )
+
+    assert client.output(computed, 'value') == 2 + 1.0 + 2.0
+    params = computed.request.params
+    assert params['reduction'] == {
+        'bins': 2,
+        'mask': loaded.ref('blob'),
+        'limits': [0.0, 1.0],
+    }
+    (run,) = computed.request.datasets()
+    assert params['centre'] == {'by': {'kind': 'run', 'run': run}}
+
+
+def test_a_reference_is_allowed_at_a_field_of_a_row(
+    client: Client, loaded: Record
+) -> None:
+    file = {'file': dataset_ref(run=1)}
+    computed = client.compute(
+        RUNS,
+        params={
+            'runs': [
+                file,
+                {**file, 'offset': 1.0},
+                {
+                    **file,
+                    'shift': {'offset': loaded.ref('value')},
+                    'transmission': loaded.ref('blob'),
+                },
+            ]
+        },
+    )
+
+    assert client.output(computed, 'value') == 1.0 + 2.0 + 3.0
+    row = computed.request.params['runs'][2]
+    assert row['shift'] == {'offset': loaded.ref('value')}
+    assert row['transmission'] == loaded.ref('blob')
+
+
+def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None:
+    centre = {'by': {'kind': loaded.ref('value'), 'run': dataset_ref(run=1)}}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': centre})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre', 'by', 'kind')
+    assert error.msg.endswith('a tag is written inline, never as a reference')
+
+
+@pytest.mark.parametrize('tag', [['run'], {'kind': 'run'}, 1, 'other'])
+def test_a_value_that_is_no_tag_is_refused_at_the_tag(client: Client, tag: Any) -> None:
+    centre = {'by': {'kind': tag, 'run': dataset_ref(run=1)}}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': centre})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre', 'by', 'kind')
+    assert error.msg == f"{tag!r} is not a tag, one of ['run', 'given']"
+
+
+def test_a_reference_in_an_alternative_fits_its_field(
+    client: Client, loaded: Record
+) -> None:
+    given = client.compute(
+        DEEP, params={'centre': {'by': {'kind': 'given', 'x': loaded.ref('value')}}}
+    )
+
+    assert client.output(given, 'value') == 1 + 1.0
+    with pytest.raises(
+        SubmitError, match=r'^centre\.by\.x: .* of type Blob, does not fit float$'
+    ):
+        client.submit(
+            DEEP, params={'centre': {'by': {'kind': 'given', 'x': loaded.ref('blob')}}}
+        )
+
+
+def test_a_reference_inside_an_inline_value_at_depth_is_refused(
+    client: Client, loaded: Record
+) -> None:
+    reduction = {'limits': [0.0, loaded.ref('value')]}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'reduction': reduction})
+    (error,) = raised.value.errors
+    assert error.loc == ('reduction', 'limits', 1)
+    assert 'is inside a value of tuple, given inline, whole' in error.msg
+
+
+def test_a_group_without_a_reference_is_validated_whole_when_submitted(
+    client: Client,
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RANGE, params={'range': {'start': 10.0, 'stop': 5.0}})
+    (error,) = raised.value.errors
+    assert error.loc == ('range', 'stop')
+    assert 'stop must be greater than start' in error.msg
+
+
+def test_a_group_without_a_reference_is_held_as_validated(client: Client) -> None:
+    by_fields = client.compute(EDGES, params={'edges': [{'values': [3.0, 1.0]}]})
+    by_instance = client.compute(EDGES, params={'edges': [Edges(values=[3.0, 1.0])]})
+    by_string = client.compute(EDGES, params={'edges': [{'values': '3, 1'}]})
+
+    assert by_fields.request == by_instance.request == by_string.request
+    assert by_fields.request.params == {'edges': [{'values': [1.0, 3.0]}]}
+    assert client.output(by_fields, 'value') == 1.0
+
+
+def test_rows_without_a_reference_are_compared_as_validated(client: Client) -> None:
+    with pytest.raises(SubmitError, match=r'^edges\[1\]: repeats edges\[0\]'):
+        client.submit(EDGES, params={'edges': [{'values': [1, 3]}, {'values': '3,1'}]})
+
+
+@pytest.mark.parametrize(
+    ('name', 'group'),
+    [('by_decorator', Millimetres), ('by_type', AnnotatedMillimetres)],
+)
+@pytest.mark.parametrize('as_instance', [False, True])
+def test_a_group_whose_validator_changes_a_validated_value_is_refused(
+    client: Client, name: str, group: type[BaseModel], as_instance: bool
+) -> None:
+    value = group(value=5000.0) if as_instance else {'value': 5000.0}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(LENGTH, params={name: value})
+    (error,) = raised.value.errors
+    assert error.loc == (name, 'value')
+    assert error.msg == 'has no JSON form that reads back as the value'
+
+
+def test_a_file_in_a_group_given_inline_is_refused(client: Client) -> None:
+    centre = {'by': {'kind': 'run', 'run': '/data/run1.nxs'}}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': centre})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre', 'by', 'run')
+    assert error.msg.startswith('a file is given by reference to a dataset')
+
+
+def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
+    client: Client, loaded: Record
+) -> None:
+    after = client.compute(
+        RANGE, params={'range': {'start': 0.0, 'stop': loaded.ref('value')}}
+    )
+    before = client.submit(
+        RANGE, params={'range': {'start': 10.0, 'stop': loaded.ref('value')}}
+    )
+
+    assert client.output(after, 'value') == 1.0
+    assert _failed(client, before) == (
+        'range.stop: Value error, stop must be greater than start'
+    )
+
+
+def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
+    find = {'kind': 'find', 'run': dataset_ref(run=2), 'tolerance': 0.5}
+    found = client.compute(CENTRED, params={'beam_centre': find})
+    given = client.compute(CENTRED, params={'beam_centre': {'kind': 'given', 'x': 3.0}})
+    default = client.compute(CENTRED, params={})
+
+    assert [client.output(r, 'value') for r in (found, given, default)] == [
+        1.0,
+        3.0,
+        0.0,
+    ]
+    (run,) = found.request.datasets()
+    assert found.request.params['beam_centre'] == {**find, 'run': run}
+
+
+def test_an_output_that_fits_an_alternative_feeds_a_union(
+    client: Client, loaded: Record
+) -> None:
+    centre = client.compute(FIND, params={'sample': dataset_ref(run=2)})
+    computed = client.compute(CENTRED, params={'beam_centre': centre.ref('centre')})
+
+    assert client.output(computed, 'value') == 2.0
+    with pytest.raises(
+        SubmitError,
+        match=r'^beam_centre: .* of type float, does not fit BeamCentre \| FindCentre$',
+    ):
+        client.submit(CENTRED, params={'beam_centre': loaded.ref('value')})
+
+
+def test_an_error_inside_a_union_names_its_place_without_the_tag(
+    client: Client,
+) -> None:
+    # Without a reference inside, the alternative is validated whole when
+    # submitted; with the run given by reference, once the run is read.
+    find = {'kind': 'find', 'tolerance': 2.0}
+    with pytest.raises(SubmitError) as raised:
+        client.submit(CENTRED, params={'beam_centre': find})
+    (error,) = raised.value.errors
+    assert error.loc == ('beam_centre', 'tolerance')
+
+    computed = client.submit(
+        CENTRED, params={'beam_centre': {**find, 'run': dataset_ref(run=1)}}
+    )
+    assert _failed(client, computed) == (
+        'beam_centre.tolerance: Value error, tolerance must be between 0 and 1'
+    )
+
+
+def test_the_schema_of_a_union_offers_a_reference_to_an_alternative() -> None:
+    # FindCentre holds a file, so no output of it may be referenced.
+    centre = CENTRED.serialize().params_schema['properties']['beam_centre']
+    inline, ref = centre['anyOf']
+
+    assert inline['discriminator']['propertyName'] == 'kind'
+    assert ref['dataType'] == 'BeamCentre'
+
+
+def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
+    schema = CENTRED.serialize().params_schema
+    inline, _ = schema['properties']['beam_centre']['anyOf']
+
+    for alternative in inline['oneOf']:
+        form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
+        assert 'kind' in form['required']
+        assert 'default' not in form['properties']['kind']
+
+
+def test_a_root_model_is_written_as_its_root_value(client: Client) -> None:
+    schema = STEPS.serialize().params_schema
+    inline, _ = schema['properties']['steps']['anyOf']
+    assert schema['$defs'][inline['$ref'].rsplit('/', 1)[1]]['type'] == 'array'
+
+    computed = client.compute(STEPS, params={'steps': [1.0, 2.0]})
+    assert computed.request.params == {'steps': [1.0, 2.0]}
+    assert client.output(computed, 'value') == 3.0
+    with pytest.raises(SubmitError, match=r'^steps: Input should be a valid array'):
+        client.submit(STEPS, params={'steps': {'root': [1.0, 2.0]}})
 
 
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
     schema = RUNS.serialize().params_schema
     row, run = schema['properties']['runs']['items'], schema['$defs']['Run']
 
-    assert row == {
-        'anyOf': [
-            {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}},
-            {'$ref': '#/$defs/DatasetRef', 'dataType': 'SampleFile'},
-        ]
-    }
+    assert row == {'$ref': '#/$defs/Run', 'not': {'required': ['@ref']}}
     assert run['properties']['file'] == {
         '$ref': '#/$defs/DatasetRef',
         'dataType': 'SampleFile',
@@ -375,7 +832,7 @@ def test_a_dataset_fits_a_file_only(client: Client) -> None:
 
 
 def test_a_reference_inside_a_value_is_refused(client: Client, loaded: Record) -> None:
-    with pytest.raises(SubmitError, match=r'^pair\[1\]: .* is a reference inside'):
+    with pytest.raises(SubmitError, match=r'^pair\[1\]: .* is inside a value of tuple'):
         client.submit(ADD, params={'pair': [1.0, loaded.ref('value')]})
 
 
@@ -386,7 +843,7 @@ def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) 
         client.submit(SUM, params={'part': loaded.ref('values')})
 
 
-def _failed(client: Client, record: Record) -> str | None:
+def _failed(client: Client, record: Record) -> str:
     assert client.wait(record) is Status.FAILED
     return client.failure(record)
 

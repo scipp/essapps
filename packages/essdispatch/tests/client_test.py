@@ -15,13 +15,11 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NewType, Self
 
 import numpy as np
-import pydantic
 import pytest
 import scipp as sc
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Discriminator,
     Field,
     field_validator,
     model_validator,
@@ -269,26 +267,10 @@ class Stops(BaseModel):
 class NormalizedParams(BaseModel):
     normalization: Normalization = Field(default_factory=Normalization)
     stops: Stops | None = None
-
-
-def _tag_of(value: Any) -> str:
-    return value['mode'] if isinstance(value, dict) else value.mode
-
-
-class CallableGroup(BaseModel):
-    by: Annotated[
-        Annotated[ByMonitor, pydantic.Tag('monitor')]
-        | Annotated[ByTime, pydantic.Tag('time')],
-        Discriminator(_tag_of),
-    ] = ByMonitor()
-
-
-class CallableParams(BaseModel):
-    group: CallableGroup = Field(default_factory=CallableGroup)
+    stop: Annotated[ByMonitor | ByTime, Field(discriminator='mode')] = ByMonitor()
 
 
 NORMALIZED = _spec('normalized', params=NormalizedParams)
-CALLABLE = _spec('callable', params=CallableParams)
 
 
 def load_run(params: Sample) -> LoadOutputs:
@@ -804,6 +786,16 @@ def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
     }
 
 
+@pytest.mark.parametrize('stop', [ByMonitor(), ByTime(seconds=1.0)])
+def test_a_discriminator_of_a_union_parameter_is_kept(
+    stop: ByMonitor | ByTime,
+) -> None:
+    by_model = Request(NORMALIZED, params=NormalizedParams(stop=stop))
+    by_dict = Request(NORMALIZED, params={'stop': stop})
+
+    assert by_model.params == by_dict.params == {'stop': stop.model_dump()}
+
+
 def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
     request = Request(
         NORMALIZED,
@@ -811,22 +803,6 @@ def test_other_defaults_are_left_out_beside_a_discriminator() -> None:
     )
 
     assert request.params == {'normalization': {'by': {'mode': 'time', 'seconds': 1.0}}}
-
-
-def test_a_callable_discriminator_keyed_on_a_tag_works(datasets: FakeDatasets) -> None:
-    def describe(params: CallableParams) -> Value:
-        return Value(value=params.group.by.seconds)
-
-    with local(
-        proposal='p1',
-        datasets=datasets,
-        bind=[function_binding(CALLABLE, describe)],
-    ) as client:
-        record = client.compute(
-            CALLABLE, params={'group': CallableGroup(by=ByTime(seconds=3.0))}
-        )
-
-        assert client.output(record, 'value') == 3.0
 
 
 def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> None:
@@ -1172,7 +1148,8 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     threading.Timer(0.05, loading.set).start()
     fixed = {'offset': offset.ref('value')}  # and the default scale and labels
     total = client.accumulator(Template(SUM, params=fixed, blanks=('runs',)))
-    runs = [dataset(run=n) for n in (1, 2)]
+    files = [dataset(run=n) for n in (1, 2)]
+    runs = [{'file': file} for file in files]
     for run in runs:
         total.push(runs=[run])
     read = client.compute(_read(total))
@@ -1185,7 +1162,7 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     state = _state(client, read)
     assert state.request == plain.request
     assert client.provenance(read).records() == [state, offset]
-    resolved = {datasets.resolve(run) for run in runs}
+    resolved = {datasets.resolve(file) for file in files}
     assert set(client.provenance(read).datasets()) == resolved  # offset's run too
     provenance = client.provenance(total)  # of the state after the pushes so far
     assert provenance == client.provenance(plain)

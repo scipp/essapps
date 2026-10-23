@@ -17,25 +17,36 @@ with ``IofQ = NewType('IofQ', sc.DataArray)``. Each function sees through
 (see :func:`plain`). :func:`fits` says whether data
 of one type can be the value of a field of another, so that an output of one
 spec can feed a parameter of another. :func:`model_of` makes a model of one
-field, which validates a value, or a row of a list, by that field alone, as
-:func:`validated` does in the call phase and :func:`inline` for a value
-given inline.
+field, which validates a value, or a row of a list, by that field alone:
+:func:`inline` validates a value given inline at one place, and
+:func:`ess.spec.places.validated` a parameter's value whole, in the call
+phase.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import operator
-from collections.abc import Callable, Mapping
+from collections.abc import Iterable, Iterator
 from pathlib import PurePath
 from types import NoneType, UnionType
-from typing import Annotated, Any, NewType, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    NewType,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+    is_typeddict,
+)
 
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, Field, RootModel, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
-from pydantic_core import from_json, to_json
+from pydantic_core import PydanticCustomError, from_json, to_json
 
-from .refs import Ref, places
+from .refs import Loc, ParamsError, positions
 
 
 def plain(tp: Any) -> Any:
@@ -127,25 +138,37 @@ def is_file(tp: Any) -> bool:
 
 
 def is_group(tp: Any) -> bool:
-    """Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one."""
+    """
+    Whether ``tp`` is a group: a pydantic model, or a ``NewType`` of one, but
+    not a ``RootModel``, which is written as its root value, not as an object
+    of its fields.
+    """
     tp = base(tp)
+    return _is_model(tp) and not issubclass(tp, RootModel)
+
+
+def _is_model(tp: Any) -> bool:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
-def holds_file(tp: Any, seen: frozenset[type[BaseModel]] = frozenset()) -> bool:
+def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     """
-    Whether a type, or a field of a model in it, is a file; ``seen`` holds the
-    models looked into already, so that a recursive model ends.
+    Whether a type, or a field of a model, a dataclass, or a ``TypedDict``
+    in it, is a file; ``seen`` holds the classes looked into already, so that
+    a recursive class ends.
     """
     tp = base(tp)
     if is_file(tp):
         return True
-    if is_group(tp):
+    if _is_model(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
         if tp in seen:
             return False
-        return any(
-            holds_file(f.annotation, seen | {tp}) for f in tp.model_fields.values()
+        fields = (
+            [f.annotation for f in tp.model_fields.values()]
+            if _is_model(tp)
+            else get_type_hints(tp).values()
         )
+        return any(holds_file(f, seen | {tp}) for f in fields)
     return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
@@ -172,7 +195,12 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
 
 
 def type_name(tp: Any) -> str:
-    """The name of a type, as a serialized spec shows it."""
+    """
+    The name of a type, as a serialized spec shows it; of a union, the names
+    of its members, ``BeamCentre | FindCentre``.
+    """
+    if get_origin(tp) in (Union, UnionType):
+        return ' | '.join(map(type_name, get_args(tp)))
     return getattr(tp, '__name__', None) or repr(tp)
 
 
@@ -183,14 +211,17 @@ def fits(data: Any, field: Any) -> bool:
     ``| None`` is removed on both sides. Then the data fit when ``data``, with
     its ``NewType``s removed one by one, reaches ``field`` or a subclass of it;
     or when ``field``, with its ``NewType``s removed, reaches ``data`` or a
-    superclass of it. Generic aliases, such as ``list[int]``, fit only
-    themselves. So with ``IofQ`` and ``Transmission`` ``NewType``s of
-    ``sc.DataArray``, an ``IofQ`` fits ``sc.DataArray``, a plain
-    ``sc.DataArray`` fits ``Transmission`` (a role narrows a general output),
-    and an ``IofQ`` does not fit ``Transmission``.
+    superclass of it. Data of one type fit a union when they fit one of its
+    members: a ``BeamCentre`` fits ``BeamCentre | FindCentre``. Other generic
+    aliases, such as ``list[int]``, fit only themselves. So with ``IofQ`` and
+    ``Transmission`` ``NewType``s of ``sc.DataArray``, an ``IofQ`` fits
+    ``sc.DataArray``, a plain ``sc.DataArray`` fits ``Transmission`` (a role
+    narrows a general output), and an ``IofQ`` does not fit ``Transmission``.
     """
     data, _ = optional(data)
     field, _ = optional(field)
+    if get_origin(data) is None and get_origin(field) in (Union, UnionType):
+        return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
     return any(_reaches(d, field) for d in supertypes(data)) or any(
@@ -209,10 +240,13 @@ def _reaches(sub: Any, sup: Any) -> bool:
 def model_of(model: type[BaseModel], name: str, whole: bool = False) -> type[BaseModel]:
     """
     A model of one value of the field ``name`` of ``model`` alone, with its
-    config and without its validators: it validates one value by its own
-    field, as every value of a request is validated, in both phases. The
-    params model has no decorators but model validators, which the framework
-    never calls; a check of one value belongs to the value's type.
+    config and without the decorators of ``model``: it validates one value by
+    its own field. The params model has no decorators but model validators,
+    which the framework never calls; a check of one value belongs to the
+    value's type. A field of a group is validated so only in the request
+    phase, at a place given inline in a group with a reference inside; the
+    group's validators run when the group is validated whole (see
+    :mod:`ess.spec.places`).
 
     For a list field, the model validates one row: by its element type alone,
     with that type's metadata, without the field's length constraints, which
@@ -234,72 +268,6 @@ def is_list(model: type[BaseModel], name: str) -> bool:
     return get_origin(model.model_fields[name].annotation) is list
 
 
-def validated(
-    model: type[BaseModel],
-    name: str,
-    value: Any,
-    read: Callable[[Ref], Any] | None = None,
-    *,
-    whole: bool = False,
-) -> Any:
-    """
-    ``value`` of the field ``name`` of ``model``, validated alone (see
-    :func:`model_of`): each row of a list field by its element type, unless
-    ``whole``.
-
-    With ``read`` ``None``, ``value`` is as a binding takes it, data. Else it
-    is as a record holds it: each value, or row, a reference or an inline
-    value in its JSON form. A reference is replaced by the data ``read`` gives
-    for it, validated from the object, and an inline value is validated from
-    its JSON form, as the request phase validated it (see :func:`inline`), so
-    that both phases see the same value: a strict enum takes its string only
-    from JSON. A group given field by field (see :func:`by_field`), as a
-    mapping, is made from its fields, each validated so: like the params
-    model, it is never validated whole.
-    """
-    one = model_of(model, name, whole)
-    tp = value_type(model.model_fields[name].annotation)
-
-    def check(v: Any) -> Any:
-        if by_field(tp) and isinstance(v, Mapping):
-            group = base(tp)
-            fields = {f: validated(group, f, x, read, whole=True) for f, x in v.items()}
-            return group.model_construct(**fields)
-        if read is None:
-            made = one.model_validate({name: v})
-        elif isinstance(v, Ref):
-            made = one.model_validate({name: read(v)})
-        else:
-            made = one.model_validate_json(to_json({name: v}))
-        return getattr(made, name)
-
-    if is_list(model, name) and not whole:
-        return [check(v) for v in value]
-    return check(value)
-
-
-def by_field(tp: Any) -> bool:
-    """
-    Whether a value of type ``tp`` is given field by field: a group that holds
-    a file, such as a run and what is given next to it. Each of its fields is
-    given inline or by reference, as a parameter is.
-    """
-    return is_group(tp) and holds_file(tp)
-
-
-def file_field(group: type[BaseModel]) -> str | None:
-    """
-    The one required file field of a group given field by field, which a
-    reference to a dataset stands for, or ``None`` if it has none or several.
-    """
-    files = [
-        name
-        for name, info in group.model_fields.items()
-        if info.is_required() and is_file(optional(info.annotation)[0])
-    ]
-    return files[0] if len(files) == 1 else None
-
-
 def json_form(
     model: type[BaseModel], name: str, value: Any, whole: bool = False
 ) -> Any:
@@ -318,33 +286,83 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
     """
     The JSON form of ``value``, given inline for the field ``name`` of
     ``model``, or a row of it unless ``whole`` (see :func:`model_of`), as the
-    framework holds it.
+    framework holds it: of a group, the JSON form of the group validated.
 
-    ``value`` is validated from its JSON form, with a field that a model lacks
-    refused at any depth, since validating would drop it silently. Raises
-    ``PydanticSerializationError`` if it has no JSON form, ``ValidationError``
-    if it is not valid, and ``ValueError`` if its JSON form does not read back
-    as the value, such as a number that is not finite, which JSON holds as
-    ``null``, or reads as a reference at a place where a request may hold one
-    (see :func:`ess.spec.refs.places`): for a field of a group, ``whole``,
-    the field itself.
+    ``value``, an instance of a group by its dump, is validated from its JSON
+    form, with a field that a model lacks refused at any depth, since
+    validating would drop it silently. Its JSON form must read back as the
+    value. Raises:
+
+    - ``PydanticSerializationError`` if it has no JSON form;
+    - ``ValidationError`` if it is not valid, or if its JSON form is not,
+      such as of a number that is not finite, which JSON holds as ``null``;
+    - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
+      without ``name``, that holds a file, which is given by reference to a
+      dataset, or whose JSON form reads back as another value, such as a
+      field of a group whose validator changes a value it has validated
+      already;
+    - ``ValueError`` if its JSON form holds an object with the key
+      ``"@ref"`` at any depth, which reads as a reference (see
+      :func:`ess.spec.refs.positions`).
     """
     one = model_of(model, name, whole)
+    if isinstance(value, BaseModel):
+        # Its own serializer would write a number that is not finite as null.
+        value = value.model_dump()
     given = to_json({name: value}, inf_nan_mode='constants')
     made = getattr(one.model_validate_json(given, extra='forbid'), name)
+    if files := list(_files((), made)):
+        raise ParamsError((loc, _FILE_INLINE) for loc in files)
     stored = json_form(model, name, made, whole)
     try:
-        again = one.model_validate_json(to_json({name: stored}))
-        reads_back = getattr(again, name) == made
-    except ValidationError:
-        reads_back = False
-    if not reads_back:
-        raise ValueError('has no JSON form that reads back as the value')
-    if whole:
-        items = [stored]
-    else:
-        rows = [stored] if is_list(model, name) else stored
-        items = [item for _, _, item in places(name, rows)]
-    if any(isinstance(item, dict) and '@ref' in item for item in items):
+        again = getattr(one.model_validate_json(to_json({name: stored})), name)
+    except ValidationError as error:
+        (first, *_) = error.errors()
+        raise ValidationError.from_exception_data(
+            one.__name__,
+            [{'type': _NO_JSON_FORM_ERROR, 'loc': first['loc'], 'input': None}],
+        ) from None
+    if again != made:
+        raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
+    if any(isinstance(v, dict) and '@ref' in v for _, v in positions((), stored)):
         raise ValueError('has a JSON form that reads as a reference')
     return stored
+
+
+_FILE_INLINE = 'a file is given by reference to a dataset, dataset(path=...)'
+_NO_JSON_FORM = 'has no JSON form that reads back as the value'
+_NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
+
+
+def _differs(loc: Loc, a: Any, b: Any) -> Loc:
+    """
+    The first position at which ``a`` and ``b``, two values at ``loc``,
+    differ: a field of a group or an element of a list, at any depth.
+    """
+    if isinstance(a, BaseModel) and type(a) is type(b):
+        pairs: Iterable[tuple[str | int, Any, Any]] = (
+            (n, getattr(a, n), getattr(b, n)) for n in type(a).model_fields
+        )
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        pairs = ((i, x, y) for i, (x, y) in enumerate(zip(a, b, strict=True)))
+    else:
+        return loc
+    for at, x, y in pairs:
+        if x != y:
+            return _differs((*loc, at), x, y)
+    return loc
+
+
+def _files(loc: Loc, value: Any) -> Iterator[Loc]:
+    """
+    The position of each file in ``value``, a validated value at ``loc``:
+    the value, a field of a group, or an element of a list, at any depth.
+    """
+    if isinstance(value, PurePath):
+        yield loc
+    elif isinstance(value, BaseModel):
+        for name in type(value).model_fields:
+            yield from _files((*loc, name), getattr(value, name))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            yield from _files((*loc, i), item)

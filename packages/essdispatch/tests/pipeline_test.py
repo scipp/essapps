@@ -116,7 +116,7 @@ def client(
 ) -> Iterator[Client]:
     bind = [
         PipelineBinding(SHIFT, make_pipeline),
-        PipelineBinding(TOTAL, make_pipeline, keys={'offsets': Offsets}),
+        PipelineBinding(TOTAL, make_pipeline, keys={'offsets': (Offsets,)}),
     ]
     backend = Backend(datasets, bind)
     yield Client(backend, proposal='p1', submitter='anna')
@@ -170,7 +170,7 @@ def test_a_field_without_a_key_cannot_be_a_blank(
     datasets: FakeDatasets,
     make_pipeline: Callable[[Mapping[str, Any]], sciline.Pipeline],
 ) -> None:
-    binding = PipelineBinding(SHIFT, make_pipeline, keys={'annotation': None})
+    binding = PipelineBinding(SHIFT, make_pipeline, keys={'annotation': ()})
     backend = Backend(datasets, [binding])
     client = Client(backend, proposal='p1', submitter='anna')
     annotate = client.stage(

@@ -99,54 +99,70 @@ binding gets that instance: `compute(params) -> outputs`.
 | params | everything the workflow takes: settings, files, data | each value given inline or by reference | the values, and the data the references name |
 | outputs | results | (none) | the data the workflow returns |
 
-Which form a value takes is the request's choice, per value, since the same
-value is typed in by one user and computed by another: a beam centre is typed
-in, or found by a first reduction; the time slices of a slicing reduction are
-typed in, or found from a log. The parameter's type decides which forms it
-accepts, with `| None` removed and, for a list parameter, its element type
-taken. A type has a *JSON form* when it is not a file, holds no file, and
-pydantic makes a JSON schema of it with the params model's config. A value
-*round-trips* when its JSON form reads back as the value.
+Which form a value takes is the request's choice, at each *place*, since the
+same value is typed in by one user and computed by another: a beam centre is
+typed in, or found by a first reduction; the time slices of a slicing
+reduction are typed in, or found from a log. A place is the value of a
+parameter, an element of a list, or a field of a group, at any depth, such as
+`sample.run` or `reduction.mask`. The type at the place decides which forms it
+accepts, with `| None` removed. A type has a *JSON form* when it is not a
+file, holds no file, and pydantic makes a JSON schema of it with its model's
+config. A value *round-trips* when its JSON form reads back as the value.
 
-| A parameter's type | Example | Inline | By reference |
+| The type at a place | Example | Inline | By reference |
 |---|---|---|---|
 | a file: `Path` or a `NewType` of it | `SampleFile` | no | to a dataset |
-| has a JSON form | `Reduction`, `BeamCentre` | yes | to an output that fits |
-| a group that holds a file | `Sample` | field by field | to a dataset, for its one required file |
+| a group | `Reduction`, `Sample` | an object of its fields, each a place | to an output that fits and holds no file |
+| a union of groups | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag | to an output that fits and holds no file |
+| a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
+| any other type with a JSON form | `int`, an enum, `tuple[float, float]` | yes | to an output that fits |
 | anything else | `Transmission = NewType('Transmission', sc.DataArray)` | no | to an output that fits |
 
 A file is given by reference to a dataset only, so that the dataset source
 checks access and the record holds the dataset's identity; the binding gets a
-local path. A *group* is a pydantic model, such as `Reduction`: the usual
-type of a parameter given inline. A group that holds a file, such as `Sample`
-below, is given *field by field*: each of its fields inline or by reference,
-as a parameter is, so its file comes from a dataset. A reference to a dataset
-stands for the whole group: its one required file, and its other fields at
-their defaults. A *data value* is a value of a type without a JSON form: a
-file, or an object such as a scipp array.
+local path. For the same reason, a reference to an output whose type holds a
+file is refused. A *group* is a pydantic model, such as `Reduction` or
+`Sample` below, written as an object of its fields, so a file in it comes from
+a dataset. A `RootModel` is not a group: it is written as its root value. A *data value* is a value of a type without a JSON form: a file,
+or an object such as a scipp array. The contents of a tuple, a set, a dict, a
+`TypedDict`, or a dataclass are not places: such a value is written whole,
+inline. A parameter, or a field of a group, may be a discriminated union of
+groups, such as a beam centre that is given, `GivenCentre`, or found from a
+run with a tolerance, `FindCentre`; the request writes the fields of one
+alternative with its tag, inline, which says what each of the other fields
+takes: `{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`.
+Why a choice is a union, and what `X | None` means, is
+[ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 ```python
 class Reduction(BaseModel):                       # a group
     bins: int = 2
 
 class BeamCentre(BaseModel):                      # a group: inline, or a finder's output
-    x: float
-    y: float
+    x: float = 0.0
+    y: float = 0.0
 
 SampleFile = NewType('SampleFile', Path)          # a NeXus file of a sample run
 CanFile = NewType('CanFile', Path)
 Transmission = NewType('Transmission', sc.DataArray)
 IofQ = NewType('IofQ', sc.DataArray)
 
+class FromFile(BaseModel):                        # the transmission in the run's file
+    kind: Literal['file'] = 'file'
+
+class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a transmission reduction
+    kind: Literal['computed'] = 'computed'
+    value: Transmission
+
 class Sample(BaseModel):                          # a group that holds a file
     run: SampleFile
-    transmission: Transmission | None = None
+    transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
 
 class IofQParams(BaseModel):
     reduction: Reduction = Field(default_factory=Reduction)
     sample: Sample
     can: CanFile
-    beam_centre: BeamCentre | None = None
+    beam_centre: BeamCentre = BeamCentre()        # the nominal centre
 
 class IofQOutputs(BaseModel, arbitrary_types_allowed=True):
     iofq: IofQ
@@ -159,9 +175,9 @@ Two requests, written with essdispatch: `client` connects to a backend,
 finds the beam centre, so `finder.ref('centre')` names its output `centre`:
 
 ```python
-client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                             'beam_centre': BeamCentre(x=0.012, y=-0.003)})   # inline
-client.submit(IOFQ, params={'sample': dataset(run=60339), 'can': dataset(run=60338),
+client.submit(IOFQ, params={'sample': {'run': dataset(run=60339)}, 'can': dataset(run=60338),
                             'beam_centre': finder.ref('centre')})            # a reference
 ```
 
@@ -171,38 +187,67 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 
 - The names of params and outputs are distinct.
 - Each parameter's type is a type, possibly optional, or a list of one; not a
-  dict or a union of two types.
+  dict. The type may be a union, such as a union of groups.
 - Each output's type is a type, possibly optional, or a list or a dict of one.
-- A group holds a file only as one of its fields, typed as a file, possibly
-  optional. Such a group follows the rules on defaults and on the params model
-  below. A field of it that is a list or a dict has a JSON form, since no
-  reference stands for a list.
-- A default is a value, never a reference: of a type with a JSON form, a value
-  that round-trips and whose JSON form is neither an `@ref` object nor a list
-  holding one; of any other type, `None` or `[]`.
+- A file is at a place only, possibly optional or in a list: not inside a
+  tuple, a dict, or a dataclass, where no dataset can give it.
+- A union of groups is discriminated by the name of its tag field, not by a
+  callable. The tag field of each alternative is a `Literal` of one string,
+  its own, such as `Literal['find']`, without an alias. A union that holds a
+  group holds groups only: a value of a type that is not a group has no tag.
+- A group has no serializers, computed fields, or aliases: the record holds a
+  group as the object of its places, each in the JSON form of its own type,
+  and these would make the group's own JSON form differ from it. It may have
+  field and model validators of any mode, which run when the group is
+  validated whole. It is not at a place inside itself, at any depth, such as
+  a tree with `children: list[Node]`; a tree is written whole,
+  `children: list[Node] | None`.
+- A default is a value, never a reference: what a request may write at the
+  place, which round-trips and holds no `@ref` object at any depth; of a type
+  without a JSON form, `None` or `[]`. It is the value that validating it
+  gives, since pydantic does not validate a default: a group's default is an
+  instance, not the object of its fields.
 - A table has no default (see the multi-run spec below).
 - The params model has no field validators, serializers, computed fields, or
   aliases, and no `default_factory` that takes the other values. A list
   parameter carries only length constraints, such as `Field(min_length=2)`. The
   params model may have model validators, but the framework never calls them.
 
-Each parameter is validated alone, in every phase: a template, a stage call,
-or a push gives some values only, so a check that read several parameters
-would hold for some requests of a spec and not for others. Like the params
-model, a group given field by field is never validated whole. A check of one
-value belongs to the value's type, as `EdgesModel` checks its edges, and so
-does the JSON form of a value, which the framework stores and reads back. A
-check across parameters, such as a transmission mode that requires a
-transmission run, is the binding's or the driver's, and fails when the request
+Each parameter is validated alone: a template, a stage call, or a push gives
+some values only, so a check that read several parameters would hold for some
+requests of a spec and not for others. A check of one value belongs to the
+value's type, as `EdgesModel` checks its edges, and so does the JSON form of a
+value, which the framework stores and reads back. In the request phase, each
+place given inline is validated alone, from its JSON form. A group with no
+reference inside is a value given inline: it is validated whole, and the record
+holds the JSON form of the validated group, which must read back as it. Of a
+group with a reference inside, each field given inline is validated alone, by
+its own type and constraints. In the call phase, each parameter's value is
+validated once, whole, from the JSON form the record holds with the data read
+in place of each reference, so that every validator of every group runs with
+all its fields at hand, as `EdgesModel`'s check of `stop` against `start`
+needs. So a validator that widens what a field accepts, such as a `before`
+validator that parses a string, works only for a group written without
+references, and a value that only a validator of a group with a reference
+inside refuses fails the record, or the push, in the call phase. A
+check across parameters, such as a Q range that the wavelength band and the
+detector can reach, is the binding's or the driver's, and fails when the request
 runs. A binding may run the model validators,
 `IofQParams.model_validate(dict(params))`, where it has the whole instance.
 
-A default never changes which quantity an output is. The default of
-`reduction` is a setting, and the transmission `None` of a `Sample` takes the
-one in the run's file: the output is I(Q) either way. The can run has no
-default. I(Q) without the can subtracted is another quantity, so it is another
-spec, not `IOFQ` with `can=None`, and a request or a template that leaves out
-the can is refused instead of computing the other quantity.
+A request that leaves out a parameter, or a field of a group, never leaves out
+a correction that a correct reduction needs. The default of `reduction` is a
+setting, and the default transmission of a `Sample`, `FromFile()`, takes the
+one in the run's file. The can run
+has no default, so a request or a template that leaves it out is refused. A
+correction that a correct reduction needs, but that a request may still leave
+out, is typed `X | None` with no default, such as
+`direct_beam: DirectBeamFile | None`: the request writes `None`, and its
+record says so. The output is I(Q) either way, and the params of its record
+say which corrections were applied. A step whose omission changes what a
+reader of the output must do with it, such as a normalization without which
+I(Q) is in counts, makes another output type, and so another spec. What `None` means, and when a union
+names the ways instead, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 **References.** A reference names an output of an earlier record (`OutputRef`:
 record, output name, and optionally the key of one element of a list or dict
@@ -210,27 +255,21 @@ output), a dataset the framework did not compute (`DatasetRef`: one identity
 string), or an output of an accumulator (`AccumulatorRef`: accumulator and
 output name). Only a request holds an `AccumulatorRef`: the framework replaces
 it, when it accepts the request, by an output of a record of the accumulator's
-state. A reference stands for a value, for one row of a list parameter, or
-for one field of a group given field by field, such as `sample.run`: never
-for a whole list, and never for part of any other group. Its JSON form is an
-object with the key `@ref`, which names its kind:
+state. A reference stands for the value at a place, such as `sample.run`:
+never for a whole list, a tag of a union, or a position inside a value given
+inline. Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
 {"@ref": "dataset", "dataset": "run:loki/60339"}
 {"@ref": "output", "record": "r17", "output": "slices", "key": "2"}
 ```
 
-The framework looks for references at three places only: the top of each
-value, the top of each element of a value that is a JSON array, and each field
-of an object at one of these two places, such as `sample.run` or
-`sample[2].transmission`. At these places it refuses an `@ref` object that the
-spec does not allow as a reference: an element of a parameter that is not a
-list, such as a `tuple` of groups, whose JSON is an array; a field of a group
-given inline whole, such as `reduction.bins`; or the JSON form of an inline
-value, such as a group with extra fields that holds the key `@ref`. Deeper
-inside a value, `@ref` is plain data. So a framework finds the references of a request without the spec, as a
-remote client that holds only the serialized spec must, and an inline value
-never reads as a reference.
+The key `@ref` is reserved at every depth: an object with it is a reference.
+So a framework finds the references of a request without the spec, in every
+array and every object, as a remote client that holds only the serialized
+spec must, and an inline value never reads as a reference. With the spec, the
+framework refuses an `@ref` object that is not at a place, such as an element
+of a `tuple`, and an inline value or a default whose JSON form holds the key.
 
 The identity string of a `DatasetRef` is opaque to the spec and interpreted
 only by the framework that minted it, which makes it self-describing where it
@@ -241,9 +280,10 @@ framework normalizes it before a reference enters a record.
 **Fit.** A reference *fits* a parameter when the type of the data it names can
 be the parameter's value: an `IofQ` output fits a parameter typed
 `sc.DataArray`, and does not fit a `Transmission` parameter, another `NewType`
-of `sc.DataArray`. A dataset reference fits a file only. A framework
-checks fit in the request phase, so that a chain of requests is refused before
-anything runs. `ess.spec.field_types.fits` states the rule.
+of `sc.DataArray`. Data fit a union of groups when they fit one alternative.
+A dataset reference fits a file only. A framework checks fit in the request
+phase, so that a chain of requests is refused before anything runs.
+`ess.spec.field_types.fits` states the rule.
 
 ### One params model per workflow
 
@@ -329,7 +369,7 @@ of counts over the runs of a scan, is written the same way:
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
 lacks or has wrong is given next to the run, as a field of the row's group,
-given field by field, so the request and its record hold it. Such a field takes
+so the request and its record hold it. Such a field takes
 an inline value in one row and a reference to a computed value in another, as a
 transmission computed for one run and not another. A blank of a template is a
 whole parameter, and a group is one key of a sciline pipeline. So a stage of
@@ -470,6 +510,16 @@ output, and dims and units of an output for a UI.
   an example, would be read as one.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
+- **References at a few places only**, the top of a value, of an element of a
+  list, and of a field of a group that holds a file, so that `@ref` deeper is
+  plain data. A setting inside a group, such as a mask, could then never be
+  computed by another record. Reserving `@ref` at every depth finds the
+  references without the spec as well.
+- **A group made from its fields**, each validated alone, without its
+  validators. A check such as `stop > start` would then be skipped once a
+  request gives one field by reference. Validating the group again from the
+  typed values instead runs a validator on its own output, which a
+  `BeforeValidator` that parses a string cannot take.
 - **The framework running model validators of the params model.** A stage and a
   driver never make a whole params instance, so such a check would hold for
   some requests of a spec and not for others.
@@ -487,8 +537,7 @@ output, and dims and units of an output for a UI.
   run. The values of one run are then spread over several lists and paired by
   position; a blank, a push, and a driver name a table by its index, a name
   that stands for several parameters; and a column left out of a push needs a
-  value to fill it. A group given field by field holds the values of one run
-  in one row.
+  value to fill it. A group holds the values of one run in one row.
 - **Tables named apart from their parameters.** A second namespace, which
   blanks, pushes, and the driver would mix with the names of parameters. The
   parameter names its table instead.

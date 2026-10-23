@@ -11,6 +11,7 @@ from pydantic import (
     AfterValidator,
     BaseModel,
     Field,
+    RootModel,
     computed_field,
     field_serializer,
     field_validator,
@@ -62,6 +63,26 @@ class Node(BaseModel):
     children: list['Node'] = []
 
 
+class WholeTree(BaseModel):
+    """A recursive group whose children are not places: written whole."""
+
+    name: str
+    children: list['WholeTree'] | None = None
+
+
+class Tree(BaseModel):
+    """A group that holds itself through another group."""
+
+    branch: 'Branch | None' = None
+
+
+class Branch(BaseModel):
+    tree: Tree | None = None
+
+
+Tree.model_rebuild()
+
+
 ReductionOfCan = NewType('ReductionOfCan', Reduction)
 
 
@@ -84,6 +105,39 @@ class Normalization(BaseModel):
     """A group that holds a discriminated union of groups."""
 
     by: ByMonitor | ByTime = Field(ByMonitor(mode='monitor'), discriminator='mode')
+
+
+By = Annotated[ByMonitor | ByTime, Field(discriminator='mode')]
+
+
+class ByRun(BaseModel):
+    mode: Literal['run'] = 'run'
+    run: SampleFile
+
+
+@pydantic.dataclasses.dataclass
+class RunFiles:
+    """A dataclass, whose fields are not places."""
+
+    sample: SampleFile
+
+
+class RunPaths(TypedDict):
+    """A TypedDict, whose fields are not places."""
+
+    sample: SampleFile
+
+
+SlowTime = NewType('SlowTime', ByTime)
+FastTime = NewType('FastTime', ByTime)
+
+
+class AliasedA(BaseModel):
+    mode: Literal['a'] = Field('a', alias='m')
+
+
+class AliasedB(BaseModel):
+    mode: Literal['b'] = Field('b', alias='m')
 
 
 class Mode(Enum):
@@ -227,12 +281,12 @@ class TestMetadata:
             IOFQ.title = 'Other'
 
     def test_a_type_with_a_json_form_takes_an_inline_value(self) -> None:
-        assert [n for n in IofQParams.model_fields if IOFQ.takes_inline(n)] == [
+        assert [n for n in IofQParams.model_fields if _takes_inline(IOFQ, n)] == [
             'reduction',
             'sample_geometry',
             'time_range',
         ]
-        assert not IOFQ_MULTI.takes_inline('sample')
+        assert not _takes_inline(IOFQ_MULTI, 'sample')
 
     @pytest.mark.parametrize(
         'tp',
@@ -247,11 +301,34 @@ class TestMetadata:
         ],
     )
     def test_a_number_an_enum_or_a_tuple_takes_an_inline_value(self, tp: Any) -> None:
-        assert spec(params=model('P', value=(tp, ...))).takes_inline('value')
+        assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
+
+    @pytest.mark.parametrize(
+        'tp', [By, list[By], Annotated[ByRun | ByTime, Field(discriminator='mode')]]
+    )
+    def test_a_union_of_groups_takes_an_inline_value(self, tp: Any) -> None:
+        assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
     @pytest.mark.parametrize('tp', [CentreArray, SampleFile, list[SampleFile | None]])
     def test_a_file_or_an_object_takes_no_inline_value(self, tp: Any) -> None:
-        assert not spec(params=model('P', value=(tp, ...))).takes_inline('value')
+        assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
+
+
+def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
+    """
+    Whether the params schema offers an inline form for the parameter
+    ``name``, or each row of it: a form that is not a reference, which names
+    its type in ``dataType``, or ``null``.
+    """
+    prop = spec.serialize().params_schema['properties'][name]
+    prop = prop.get('items', prop)
+    if 'dataType' in prop:
+        return False
+    forms = prop.get('anyOf', [prop])
+    return any('dataType' not in f and f.get('type') != 'null' for f in forms)
+
+
+NOT_A_VALUE = 'the default is not a value a request may write'
 
 
 class TestModelRules:
@@ -298,13 +375,55 @@ class TestModelRules:
             {'outputs': model('O', path=(Path | None, None))},
             {'params': model('P', reduction=(ReductionOfCan, ...))},
             {'params': model('P', bins=(int, 2), mode=(Mode, Mode.fast))},
-            {'params': model('P', tree=(Node, ...))},
+            {
+                'params': model(
+                    'P',
+                    reduction=(Reduction, Reduction()),
+                    both=(model('Both', a=(Reduction, ...), b=(Reduction, ...)), ...),
+                )
+            },
             {
                 'params': model(
                     'P', scale=(Scale, ...), normalization=(Normalization, ...)
                 )
             },
+            {'params': model('P', by=(By, ByMonitor(mode='monitor')))},
+            {
+                'params': model(
+                    'P',
+                    by=(ByMonitor | ByTime, Field(discriminator='mode')),
+                    run=(Annotated[ByRun | ByTime, Field(discriminator='mode')], ...),
+                )
+            },
+            {'params': model('P', by=(By | None, None), each=(list[By], []))},
+            {'params': model('P', factor=(int | float, 1))},
             {'params': model('P', centre=(validated('Centre', x=(float, ...)), ...))},
+            {'params': model('P', run=(validated('Run', path=(Path, ...)), ...))},
+            {'params': model('P', runs=(model('Runs', paths=(list[Path], [])), ...))},
+            {
+                'params': model(
+                    'P',
+                    run=(
+                        model('Run', geometry=(model('G', path=(Path, ...)), ...)),
+                        ...,
+                    ),
+                )
+            },
+            {
+                'params': model(
+                    'P',
+                    run=(
+                        model('Run', path=(Path, ...), shifts=(list[CentreArray], [])),
+                        ...,
+                    ),
+                )
+            },
+            {
+                'params': model(
+                    'P', reduction=(model('R', mask=(CentreArray | None, None)), ...)
+                )
+            },
+            {'params': model('P', tree=(WholeTree, ...))},
         ],
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
@@ -325,8 +444,8 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', centre=(CentreArray, sc.scalar(1.0)))},
-                'P.centre: the default of a type without a JSON form is None or '
-                'an empty list',
+                f'P.centre: {NOT_A_VALUE}: centre: .* is not a reference; '
+                'CentreArray has no JSON form',
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
@@ -337,48 +456,167 @@ class TestModelRules:
                 'P.reduction: a parameter is a type',
             ),
             (
-                {'params': model('P', factor=(int | float, 1))},
-                'P.factor: a parameter is a type, possibly optional, or a list of one; '
-                'a group may hold a union as one of its fields',
-            ),
-            (
                 {'params': model('P', by=(list[ByMonitor | ByTime], []))},
-                'P.by: .*; a group may hold a union',
+                'P.by: a union of groups has a discriminator',
+            ),
+            (
+                {'params': model('P', by=(ByMonitor | ByTime, ...))},
+                'P.by: a union of groups has a discriminator',
+            ),
+            (
+                {'params': model('P', by=(ByMonitor | float, ...))},
+                'P.by: a union holds groups only, or no group',
+            ),
+            (
+                {'params': model('P', by=(dict[str, By], {}))},
+                'P.by: a parameter is a type, possibly optional, or a list',
+            ),
+            (
+                {'params': model('P', tree=(Node, ...))},
+                'P.tree: Node.children: Node: a group is not at a place inside itself',
+            ),
+            (
+                {'params': model('P', tree=(Tree, Tree()))},
+                'P.tree: Tree.branch: Branch.tree: Tree: a group is not at a place '
+                'inside itself',
+            ),
+            (
+                {'params': model('P', pair=(tuple[SampleFile, CanFile], ...))},
+                'P.pair: a file is at a place only',
+            ),
+            (
+                {'params': model('P', runs=(RunFiles, ...))},
+                'P.runs: a file is at a place only',
+            ),
+            (
+                {'params': model('P', runs=(RootModel[list[SampleFile]], ...))},
+                'P.runs: a file is at a place only',
+            ),
+            (
+                {'params': model('P', run=(model('Run', files=(RunPaths, ...)), ...))},
+                'P.run: Run.files: a file is at a place only',
             ),
             (
                 {
                     'params': model(
-                        'P', runs=(model('Runs', paths=(list[Path], [])), ...)
+                        'P', run=(model('Run', file=(tuple[Path, float], ...)), ...)
                     )
                 },
-                'P.runs: Runs.paths: a field of a group holds a file only as a file',
+                'P.run: Run.file: a file is at a place only',
             ),
             (
                 {
                     'params': model(
                         'P',
-                        run=(
-                            model('Run', geometry=(model('G', path=(Path, ...)), ...)),
-                            ...,
-                        ),
+                        run=(model('Run', files=(dict[str, Path] | None, None)), ...),
                     )
                 },
-                'P.run: Run.geometry: a field of a group holds a file only as a file',
+                'P.run: Run.files: a file is at a place only',
             ),
             (
                 {
                     'params': model(
                         'P',
-                        run=(
+                        run=(model('Run', shifts=(dict[str, CentreArray], {})), ...),
+                    )
+                },
+                'P.run: Run.shifts: a field of a group that is a dict, or a list '
+                'that may be None, has a JSON form',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', n=(model('N', by=(ByMonitor | ByTime, ...)), ...)
+                    )
+                },
+                'P.n: N.by: a union of groups has a discriminator',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', n=(model('N', by=(ByMonitor | float, ...)), ...)
+                    )
+                },
+                'P.n: N.by: a union holds groups only, or no group',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        n=(
                             model(
-                                'Run', path=(Path, ...), shifts=(list[CentreArray], [])
+                                'N',
+                                by=(
+                                    Annotated[
+                                        Annotated[ByMonitor, pydantic.Tag('m')]
+                                        | Annotated[ByTime, pydantic.Tag('t')],
+                                        pydantic.Discriminator(lambda v: 'm'),
+                                    ],
+                                    ...,
+                                ),
                             ),
                             ...,
                         ),
                     )
                 },
-                'P.run: Run.shifts: a field of a group that is a list or a dict has a '
-                'JSON form',
+                'P.n: N.by: a union of groups has a discriminator, the name of its tag',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        n=(
+                            model(
+                                'N',
+                                by=(
+                                    AliasedA | AliasedB,
+                                    Field(discriminator='mode'),
+                                ),
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.n: N.by: AliasedA.mode: a tag has no alias',
+            ),
+            *(
+                (
+                    {
+                        'params': model(
+                            'P',
+                            by=(
+                                Annotated[
+                                    model('A', mode=(tag, ...)) | ByTime,
+                                    Field(discriminator='mode'),
+                                ],
+                                ...,
+                            ),
+                        )
+                    },
+                    'P.by: A.mode: the tag of a union is a Literal of one string',
+                )
+                for tag in (Literal['a', 'b'], Literal[Mode.fast], Literal[1])
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        by=(
+                            Annotated[SlowTime | FastTime, Field(discriminator='mode')],
+                            ...,
+                        ),
+                    )
+                },
+                "P.by: ByTime.mode: 'time' is the tag of SlowTime and of FastTime",
+            ),
+            (
+                {
+                    'params': model(
+                        'P', outer=(model('Outer', inner=(SerializedParams, ...)), ...)
+                    )
+                },
+                r"P.outer: Outer.inner: SerializedParams: no serializers or "
+                r"computed fields, {'field_serializers': \['_bins'\]}",
             ),
             (
                 {
@@ -400,11 +638,6 @@ class TestModelRules:
                 r"\['_check'\]}",
             ),
             (
-                {'params': model('P', run=(validated('Run', path=(Path, ...)), ...))},
-                r"P.run: Run: no decorators but model validators, "
-                r"{'field_validators': \['_check'\]}",
-            ),
-            (
                 {'params': SerializedParams},
                 r"SerializedParams: no decorators but model validators, "
                 r"{'field_serializers': \['_bins'\]}",
@@ -419,6 +652,27 @@ class TestModelRules:
                 'P.reduction: a parameter has no alias',
             ),
             (
+                {'params': model('P', reduction=(Reduction, {'bins': 3}))},
+                r"P.reduction: the default {'bins': 3} is not the value validating "
+                r'it gives, Reduction\(bins=3\)',
+            ),
+            (
+                {'params': model('P', by=(By, {'mode': 'monitor'}))},
+                r"P.by: the default {'mode': 'monitor'} is not the value validating",
+            ),
+            (
+                {'params': model('P', limits=(tuple[float, float], [0.0, 1.0]))},
+                r'P.limits: the default \[0.0, 1.0\] is not the value validating',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', n=(model('N', by=(By, {'mode': 'monitor'})), ...)
+                    )
+                },
+                r"P.n: N.by: the default {'mode': 'monitor'} is not the value",
+            ),
+            (
                 {
                     'params': model(
                         'P',
@@ -429,6 +683,25 @@ class TestModelRules:
                     )
                 },
                 'P.reduction: the default_factory of a parameter takes no other',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
+                        r=(
+                            model(
+                                'R',
+                                bins=(int, 1),
+                                twice=(
+                                    int,
+                                    Field(default_factory=lambda d: 2 * d['bins']),
+                                ),
+                            ),
+                            ...,
+                        ),
+                    )
+                },
+                'P.r: R.twice: the default_factory of a field of a group takes no',
             ),
             (
                 {
@@ -450,7 +723,8 @@ class TestModelRules:
                         time_range=(TimeRange, TimeRange(start=float('nan'), stop=1)),
                     )
                 },
-                'P.time_range: the default has no JSON form that reads back',
+                f'P.time_range: {NOT_A_VALUE}: time_range.start: has no JSON form '
+                'that reads back',
             ),
             (
                 {
@@ -458,19 +732,21 @@ class TestModelRules:
                         'P', loose=(Loose, Loose(**{'@ref': 'dataset', 'dataset': 'a'}))
                     )
                 },
-                'P.loose: the default has no JSON form that reads back',
+                rf'P.loose: {NOT_A_VALUE}: loose.@ref: '
+                'Extra inputs are not permitted',
             ),
             (
                 {'params': model('P', kind=(Kind, {'@ref': 'dataset'}))},
-                'P.kind: the default has a JSON form that reads as a reference',
+                f'P.kind: {NOT_A_VALUE}: kind: .*not a reference to dataset',
             ),
             (
                 {'params': model('P', kind=(list[Kind], [{'@ref': 'output'}]))},
-                'P.kind: the default has a JSON form that reads as a reference',
+                rf'P.kind: {NOT_A_VALUE}: kind\[0\]: .*not a reference to output',
             ),
             (
                 {'params': model('P', kinds=(tuple[Kind, Kind], ({'@ref': 'a'},) * 2))},
-                'P.kinds: the default has a JSON form that reads as a reference',
+                f'P.kinds: {NOT_A_VALUE}: kinds: has a JSON form that reads as a '
+                'reference',
             ),
             (
                 {
@@ -482,11 +758,11 @@ class TestModelRules:
                         ),
                     )
                 },
-                'P.run: Run.kind: the default has a JSON form that reads as a',
+                f'P.run: Run.kind: {NOT_A_VALUE}: kind: .*is not a kind of reference',
             ),
             (
                 {'params': model('P', steps=(list[TimeRange], None))},
-                'P.steps: the default of a list parameter is a list',
+                f'P.steps: {NOT_A_VALUE}: steps: None is not a list',
             ),
             (
                 {'params': model('P', runs=(dict[str, SampleFile], {}))},
@@ -494,7 +770,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleFile | CanFile, ...))},
-                'P.sample: a parameter is a type',
+                'P.sample: a file is at a place only',
             ),
             (
                 {'params': model('P', runs=(list[list[SampleFile]], []))},
@@ -510,11 +786,11 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', sample=(SampleFile, Path('run.nxs')))},
-                'P.sample: the default of a type without a JSON form is None',
+                f'P.sample: {NOT_A_VALUE}: sample: .* is not a reference',
             ),
             (
                 {'params': model('P', runs=(list[SampleFile], [Path('run.nxs')]))},
-                'P.runs: the default of a type without a JSON form is None',
+                rf'P.runs: {NOT_A_VALUE}: runs\[0\]: .* is not a reference',
             ),
             (
                 {'outputs': model('O', iofq=(IofQ | Banks, ...))},
@@ -591,8 +867,8 @@ class TestTables:
         with pytest.raises(ValueError, match=reason):
             spec(params=model('P', **params), tables=tables)
 
-    def test_a_table_may_be_of_groups_given_field_by_field(self) -> None:
-        assert RUNS.takes_inline('sample')
+    def test_a_table_may_be_of_groups_that_hold_a_file(self) -> None:
+        assert _takes_inline(RUNS, 'sample')
         params = RUNS.params(
             sample=[
                 {'file': Path('a.nxs')},
@@ -658,7 +934,7 @@ class ScaledParams(BaseModel):
 
 
 class TestSerialization:
-    def test_a_group_is_its_json_schema_or_a_reference(self) -> None:
+    def test_a_group_is_its_fields_or_a_reference(self) -> None:
         schema = IOFQ.serialize().params_schema
         assert schema['title'] == 'IofQParams'
         assert list(schema['properties']) == list(IofQParams.model_fields)
@@ -668,7 +944,15 @@ class TestSerialization:
             'title': 'Reduction',
         }
         assert schema['$defs']['Reduction'] == {
-            **Reduction.model_json_schema(),
+            'title': 'Reduction',
+            'type': 'object',
+            'properties': {
+                'bins': {
+                    'anyOf': [{'type': 'integer'}, data_ref('int')],
+                    'default': 2,
+                    'title': 'Bins',
+                }
+            },
             'additionalProperties': False,
         }
         assert schema['required'] == ['sample', 'can']
@@ -697,6 +981,28 @@ class TestSerialization:
                 'default': 'fast',
                 'title': 'Mode',
             },
+        }
+
+    def test_the_tag_of_an_alternative_is_titled_by_its_value_unless_given(
+        self,
+    ) -> None:
+        class ByCount(BaseModel):
+            mode: Literal['by_count'] = Field(
+                title='Per count', description='By the counts of the run.'
+            )
+
+        by = (Annotated[ByCount | ByTime, Field(discriminator='mode')], ...)
+        defs = spec(params=model('P', by=by)).serialize().params_schema['$defs']
+        assert defs['ByCount']['properties']['mode'] == {
+            'const': 'by_count',
+            'type': 'string',
+            'title': 'Per count',
+            'description': 'By the counts of the run.',
+        }
+        assert defs['ByTime']['properties']['mode'] == {
+            'const': 'time',
+            'type': 'string',
+            'title': 'Time',
         }
 
     def test_a_file_or_a_scipp_type_is_a_reference_to_its_type(self) -> None:
@@ -813,18 +1119,56 @@ class TestSerialization:
                 to_jsonable_python({**CAN, **params}), IOFQ.serialize().params_schema
             )
 
-    def test_the_schema_of_tables_takes_rows_of_both_forms(self) -> None:
+    def test_the_schema_takes_a_reference_at_any_place(self) -> None:
+        jsonschema = pytest.importorskip('jsonschema')
+        run = model(
+            'Run', file=(SampleFile, ...), geometry=(SampleGeometry | None, None)
+        )
+        params = model(
+            'P',
+            reduction=(Reduction, Reduction()),
+            normalization=(Normalization, ...),
+            sample=(run, ...),
+        )
+        schema = spec(params=params).serialize().params_schema
+        jsonschema.Draft202012Validator.check_schema(schema)
+        ref = OutputRef(record='r1', output='x')
+        request = {
+            'reduction': {'bins': ref},
+            'normalization': {'by': {'mode': 'time', 'seconds': ref}},
+            'sample': {
+                'file': DatasetRef(dataset='run:loki/1'),
+                'geometry': {'thickness': ref},
+            },
+        }
+        jsonschema.validate(to_jsonable_python(request), schema)
+        for refused in (
+            {'normalization': {'by': {'mode': ref, 'seconds': 1.0}}},  # at a tag
+            {'normalization': {'by': {'mode': 'time', 'seconds': {'@ref': 'x'}}}},
+            {'sample': {'file': ref}},  # a file is given by a dataset only
+            {'sample': ref},  # an output of a group that holds a file
+        ):
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate(to_jsonable_python({**request, **refused}), schema)
+        assert schema['properties']['sample'] == {
+            **inline({'$ref': '#/$defs/Run'}),
+            'title': 'Sample',
+        }
+
+    def test_the_schema_of_tables_takes_rows_of_groups(self) -> None:
         jsonschema = pytest.importorskip('jsonschema')
         schema = RUNS.serialize().params_schema
         file = DatasetRef(dataset='run:loki/1')
         rows = [
-            file,
+            {'file': file},
             {'file': file, 'geometry': SampleGeometry(thickness=0.1)},
             {'file': file, 'geometry': OutputRef(record='r1', output='geometry')},
         ]
         jsonschema.validate(to_jsonable_python({'sample': rows}), schema)
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({'sample': []}, schema)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(to_jsonable_python({'sample': [file]}), schema)
 
     def test_metadata_is_kept(self) -> None:
         serialized = spec(version=2, code_revision='abc123').serialize()
