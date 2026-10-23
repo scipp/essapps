@@ -14,19 +14,19 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: CentreArray \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre`; divided by `normalization`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleFile`, `beam_centre: BeamCentre \| None`, `normalization: Normalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by `normalization.factor`; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
 | `IOFQ_CAN` | the params of `IOFQ`, and `can: CanFile` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
-| `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: CentreArray` | the mean of the counts | beam-centre finding |
-| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | the sum of the counts times `scale` | vanadium processing |
+| `BEAM_CENTRE` | `direct_beam: DirectBeamFile` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
+| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumFile` | `normalization: Normalization` | `Normalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
 | `NORMALIZE` | `scaling: Scaling`, `runs: list[RunFile]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
 | `BACKGROUND` | `sample_runs: list[SampleFile]`, `background_runs: list[BackgroundFile]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `sample: SampleFile` | `parts: Parts` (`numerator`, `denominator`), `transmission: TransmissionArray` | a copy of the counts and their total; the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `CONTRIBUTE` | `sample: SampleFile` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts: list[Parts]` | `numerator`, `denominator` | each field of `Parts` summed over the list | a sum of outputs of other records |
-| `ANGLE` | `sample: SampleFile` | `counts: Volume` | a copy of the counts | a reduction of one run into a volume |
-| `CUT` | `position: Position` (`index`), `volume: Volume` | `cut` | the value at `index` | a cut through a volume, from another package |
-| `VOLUME` | `runs: list[RunFile]`, a table | `counts: Volume` | the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
-| `STITCH` | `runs: list[AngleFile]`, a table; `reference: ReferenceFile` | `stitched` | each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
-| `EXPORT` | `result: sc.Variable` | `text: str` | the values, separated by commas | writing a file for another program |
+| `ANGLE` | `sample: SampleFile` | `volume: Volume` | `Volume(counts=...)`, with a copy of the counts | a reduction of one run into a volume |
+| `CUT` | `position: Position` (`index`), `volume: Volume` | `cut` | the value of `volume.counts` at `index` | a cut through a volume, from another package |
+| `VOLUME` | `runs: list[RunFile]`, a table | `volume: Volume` | `Volume(counts=...)`, with the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
+| `STITCH` | `runs: list[RunFile]`, a table; `reference: ReferenceFile` | `stitched: Reflectivity` | `Reflectivity(curve=...)`, with each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
+| `EXPORT` | `result: Reflectivity` | `text: str` | the values of `result.curve`, separated by commas | writing a file for another program |
 | `IOFQ_V2` | `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`), the others as `IOFQ` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
 | `SLICER` | `log: RunFile` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: SampleFile`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
@@ -39,15 +39,18 @@ The type at a place, a parameter or a field of a group at any depth, decides how
 |---|---|---|
 | a file: a `NewType` of `Path` | each `...File` | a dataset reference |
 | a group | `SampleRun`, `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
-| any other type | `CentreArray`, `Normalization`, `TransmissionArray`, `Parts`, `sc.Variable` | a reference to an output that fits |
+| a group that holds a data value | `BeamCentre`, `Normalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
+| a type with a JSON form | `int`, `float`, as in `bins` and `scale` | an inline value |
+| a *data value*: any other type, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
 
 A list parameter takes its element type's forms, row by row.
 Every field has a type of its own within its spec.
 Each `...File` is a `NewType` of `Path`, such as `SampleFile = NewType('SampleFile', Path)`, and a dataset reference fits each of them.
 An output without a type in the list of toy specs has a `NewType` of `sc.Variable` of its own, such as `IofQ` for `iofq`.
-`Parts` is a model of two `sc.Variable`s.
-`SampleRun` is a group of `file: SampleFile` and `transmission: TransmissionArray | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
-A reference to an output fits a parameter when the output's type fits the parameter's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, and every curve fits `EXPORT`'s `result: sc.Variable`.
+`BeamCentre`, `Normalization`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `factor`, `fraction`, `counts`, and `curve`.
+`Parts` is a group of two `sc.Variable`s.
+`SampleRun` is a group of `file: SampleFile` and `transmission: Transmission | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
+A reference to an output fits a parameter when the output's type fits the parameter's type (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[RunFile] = Field(min_length=1)`.
@@ -316,14 +319,15 @@ Actor: spectroscopy user in the web UI. Goal: drag through cuts of a Q-E volume,
 ```python
 run = measure(1, [1.0, 2.0, 3.0, 4.0])
 volume = client.compute(ANGLE, params={'sample': run})                       # stands in for a Q-E volume
-cuts = [client.output(volume, 'counts', select={'q': i}) for i in range(4)]   # dragging a slider
-fit = client.compute(CUT, params={'position': Position(index=2), 'volume': volume.ref('counts')})
+cuts = [client.output(volume, 'volume', select={'q': i}) for i in range(4)]   # dragging a slider
+fit = client.compute(CUT, params={'position': Position(index=2), 'volume': volume.ref('volume')})
 
-assert [c.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
+assert [c.counts.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
 assert client.output(fit, 'cut').value == 3.0
 assert client.records() == [volume, fit]                     # the selections made no record
 ```
 
+A selection of a group output slices each array field that has the dimension, here `counts`, and copies the other fields whole; so the request of `CUT` refers to the same output that the slider selects from.
 The chosen cut is a parameter of the next request. How fast a selection comes back is system story B4.
 Gap: a selection only indexes; a look that computes, such as a projection, waits for the plotting work (README.md open question 4).
 
@@ -372,7 +376,7 @@ assert client.records() == [result]              # the vanadium record is on the
 ```
 
 Provenance stops at the published dataset, since what lies behind a dataset belongs to its source. How the backend reads the published output is system story C2.
-Gap: a dataset reference fits a file parameter only, and `normalization` is a data value, an `sc.Variable`; loading a dataset as the object a parameter takes is deferred ([params-inline-or-by-reference.md](plans/params-inline-or-by-reference.md), Left for later).
+Gap: a dataset reference fits a file parameter only, and `normalization` is a `Normalization`, a group that holds a data value; loading a dataset as the object a parameter takes is deferred ([params-inline-or-by-reference.md](plans/params-inline-or-by-reference.md), Left for later).
 A result of another proposal, such as a direct-beam function an instrument scientist prepared for the users of later proposals, is read the same way, never through the other proposal's records (G5).
 
 ### C4. Reflectometry angle series
@@ -554,11 +558,11 @@ volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
 for run in islice(client.datasets.watch(Selector(scan='17')), 300):
     volume.push(runs=[run])                                    # added once the previous cut is copied
     pushed.append(run)
-    cuts.append(client.output(volume, 'counts', select={'q': 0}))   # a copy of the cut; no record
+    cuts.append(client.output(volume, 'volume', select={'q': 0}))   # a copy of the cut; no record
 total = client.freeze(volume, persist=True)                    # the last state, written once
 
-assert [c.value for c in cuts] == [float(k) for k in range(1, 301)]
-assert client.output(total, 'counts').values.tolist() == [300.0, 45150.0]
+assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
+assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
 assert total.request == Request(VOLUME, params={'runs': pushed})   # push order
 assert client.records() == [total]                             # the cuts made no record
 assert len(client.provenance(total).datasets()) == 300         # run 5, measured again, once
@@ -596,7 +600,7 @@ user = connect()                                              # any client of th
 curve = user.latest('reflectivity', member='si')
 assert len(user.records(label='reflectivity')) == 2           # one per step, not one per arrival
 assert curve.request.params['runs'] == [r2, r3, r4]          # run order, not arrival order
-assert user.output(curve, 'stitched').values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
+assert user.output(curve, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 ```
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether a rule pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
@@ -809,7 +813,7 @@ assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 
 Both drivers get a `Centre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the inline value in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
-`IOFQ`'s `beam_centre`, a `NewType` of `sc.Variable`, has no JSON form, so it takes a reference only (C1).
+`IOFQ`'s `beam_centre`, a `BeamCentre`, holds a data value, so it takes a reference only (C1).
 
 ### I3. A correction computed for one run and not another
 
@@ -831,7 +835,7 @@ assert client.provenance(total).records() == [t611]
 
 A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
 Run 612 gives `None`: no transmission factor, and its record says so.
-`TransmissionArray` has no JSON form, so a transmission takes a reference, or `None` since the field is optional.
+`Transmission` holds a data value, so a transmission takes a reference, or `None` since the field is optional.
 
 ## Open
 

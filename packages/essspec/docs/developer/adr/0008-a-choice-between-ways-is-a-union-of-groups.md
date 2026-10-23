@@ -22,7 +22,7 @@ Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
 
 - A *group* is a pydantic model at a place of a request, written as an object of its fields.
 - A *place* is the value of a parameter, an element of a list, or a field of a group, at any depth.
-- A *data value* is a value of a type without a JSON form, such as an `sc.DataArray`: a request gives it by reference only.
+- A *data value* is a value of a type without a JSON form that is not a file, such as an `sc.DataArray`. It is a field of a group, which a request gives by reference only, since a reference stands for a group or a file only (ADR 0001).
 - A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
 - A *stage* is a template that the backend keeps: it computes what does not depend on the blanks once, and the rest at each call.
 
@@ -98,15 +98,14 @@ A toggle that is off reads as "without X", so `None` must mean that.
 A type `U | None`, for a union `U`, is a toggle with a choice inside.
 This is a guideline, not a rule the framework checks.
 It has no exception for data values.
-A data value obtained in one of several ways is a field of an alternative, since a union holds groups only.
-The workflow that computes it outputs the alternative, so that a reference to the output fits the union without a level in between:
+A data value obtained in one of several ways is a field of an alternative.
+The workflow that computes it outputs the alternative, so that a reference to the output fits the union without a level in between.
+The alternative is given by reference only, so a UI offers a record for it, `( ) From a record ▾`, and no fields:
 
 ```python
-Transmission = NewType('Transmission', sc.DataArray)
-
 class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):
     kind: Literal['computed'] = 'computed'
-    value: Transmission
+    transmission: sc.DataArray
 
 transmission: Annotated[FromFile | ComputedTransmission, Field(discriminator='kind')] = FromFile()
 
@@ -181,7 +180,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 - **A selector field next to the fields of every mode**, `enabled: bool` or `mode: Literal[...]`, as esslivedata's detector and monitor views do. A request can then hold values that mean nothing, `{'enabled': False, 'tolerance': 0.05}`, and a required field must be given even for a mode that does not use it: a group that holds a run cannot be disabled without naming a run. An output of one mode's type does not fit.
 - **A union held by a wrapper group.** The binding sets the wrapper's key, so a provider takes the union apart instead of sciline choosing providers by key.
 - **An exception for data values**, whose `None` could mean something else when the field's description says what. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach. The alternative that holds the data value costs no level in a request when the workflow that computes it outputs the alternative.
-- **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. An optional data value would need a wrapper group in every request, and so would a field of a group, such as a transmission computed for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
+- **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every place that may go without a value would be a union, and a request that goes without it would write a tagged object, also at a field of a group, such as a transmission computed for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.
 - **A framework `NotSet` type as an alternative.** One type for many parameters would be one key for all of them, which `PipelineBinding` refuses; a generic `NotSet[Mask]` is an empty alternative such as `NoMask`, written by the author with no new type.
