@@ -26,11 +26,12 @@ request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
 for an accumulator. A plain request passes an instance of the params model,
 ``compute(params) -> outputs``. A stage or an accumulator is made from some
 values only, so these pass by name, each as its type, whether given inline
-or by reference: a group as the model, a file as a local path, any other value
-as the object, and a table as the list of its rows::
+or by reference: a group as the model, with a file in it as a local path and a
+data value as the object, and a table as the list of its rows::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,
-     'sample': [Sample(run=path_611), Sample(run=path_612, transmission=t)]}
+     'sample': [Sample(file=path_611, transmission=None),
+                Sample(file=path_612, transmission=t)]}
 
 Blanks name parameters, a table among them. An output that the spec declares
 optional is left out by being ``None``.

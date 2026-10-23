@@ -152,12 +152,13 @@ The contents of a tuple, a set, a dict, a list that may be `None`, a
 inline.
 
 Each parameter is a group, a union of groups, or a list of one, possibly
-`| None`; a file or a number is a field of a group. So a form shows each
-parameter as a group of fields, and a sciline binding keys each by its
-class. No type in the params or the outputs is a `NewType`: a class names a
-role, which a `NewType` of a shared type cannot do without the fit check
-looking through it, and a `NewType` that a sciline graph needs as a key
-belongs to the binding (`keys=`).
+typed `X | None`; a file or a number is a field of a group. So a *form*, the
+input a generic UI builds from the params schema, shows each parameter as a
+section of fields, and a `PipelineBinding` keys each parameter by its class.
+No type in the params or the outputs is a `NewType`. A class names a role. A
+`NewType` of a shared type would name one only if the fit check looked
+through it. A `NewType` that a sciline graph needs as a key belongs to the
+binding (`keys=`, or a provider that takes the value out of the group).
 
 A parameter may be a discriminated union of groups, such as a beam centre
 that is given, `GivenCentre`, or found from a run with a tolerance,
@@ -166,7 +167,7 @@ inline, which says what each of the other fields takes:
 `{'kind': 'find', 'run': dataset(run=60339), 'tolerance': 0.05}`. A union is
 a parameter, or the element of a list parameter, never a field of a group:
 a choice between ways is a parameter of its own, which a form shows as a
-choice at the top of its tab. Why a choice is a union, and what `X | None`
+choice at the top of its section. Why a choice is a union, and what `X | None`
 means, is [ADR 0008](0008-a-choice-between-ways-is-a-union-of-groups.md).
 
 ```python
@@ -220,19 +221,21 @@ framework needs, it reads from the field types (`ess.spec.field_types`).
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly
-  optional; a list parameter is not optional. A file or a number is a field
-  of a group.
+  typed `X | None`; a list parameter is not typed `X | None`. A file or a
+  number is a field of a group.
 - No type in the params or the outputs is a `NewType`, at any depth.
-- Each output's type is a type, possibly optional, or a list or a dict of one.
-- A file is at a place only, possibly optional or in a list: not inside a
-  tuple, a dict, or a dataclass, where no dataset can give it.
+- Each output's type is a type, possibly typed `X | None`, or a list or a dict
+  of one.
+- A file is at a place only, possibly typed `X | None` or in a list: not
+  inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A data value is a field of a group, not a parameter or the element of a
   list parameter. No field of a group that holds a file is a data value: no
   reference stands for such a group, so a request writes it field by field.
 - A union of groups is a parameter, or the element of a list parameter,
-  never a field of a group. It is discriminated by the name of its tag
-  field, not by a callable. The tag field of each alternative is a `Literal` of one string,
-  its own, such as `Literal['find']`, without an alias. A union that holds a
+  never a field of a group, at any depth. It is discriminated by the name of
+  its tag field, not by a callable. The tag field of each alternative is a
+  `Literal` of one string, its own, such as `Literal['find']`, without an
+  alias. A union that holds a
   group holds groups only: a value of a type that is not a group has no tag.
 - A group has no serializers, computed fields, or aliases: the record holds a
   group as the object of its places, each in the JSON form of its own type,
@@ -320,7 +323,9 @@ framework normalizes it before a reference enters a record.
 the value there: its type is the place's class or a subclass of it. A
 `BeamCentre` output fits a place typed `BeamCentre`, and a `GivenCentre`
 output fits the union `GivenCentre | FindCentre`, since data fit a union of
-groups when they fit one alternative.
+groups when they fit one alternative. A subclass that names a role fits a
+place typed by its base class too, so a place that takes one role only is
+typed by that role's class.
 A dataset reference fits a file only. A framework checks fit in the request
 phase, so that a chain of requests is refused before anything runs.
 `ess.spec.field_types.fits` states the rule.
@@ -570,9 +575,10 @@ output, and dims and units of an output for a UI.
   and a form shows a parameter that is not a group outside the tabs of the
   groups.
 - **A union inside a group**, such as a transmission that is taken from each
-  run's file or computed, per row of a table. A form would show a choice
-  inside a tab, and a table a choice per row; a per-row correction is a group
-  typed `X | None` instead, and a choice of way for all rows a parameter.
+  run's file or computed, for one field of a row of a table. A form would
+  show a choice inside a section; a correction that some rows have is a
+  group typed `X | None` instead, and a choice of way for all rows a
+  parameter.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **References at a few places only**, the top of a value, of an element of a

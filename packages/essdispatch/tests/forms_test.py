@@ -101,7 +101,10 @@ class LoadOutputs(BaseModel):
 
 
 class Terms(BaseModel):
-    """Numbers added to a shift: values of types that take no reference."""
+    """
+    Fields of types that take no reference: numbers added to a shift, and
+    ``kind``, whose JSON form holds the key ``@ref``.
+    """
 
     offset: float | None = None
     pair: tuple[float, float] = (0.0, 0.0)
@@ -171,6 +174,7 @@ class Given(BaseModel):
     kind: Literal['given'] = 'given'
     x: float = 0.0
     shift: Shift = Field(default_factory=Shift)
+    transmission: MeasuredTransmission | None = None
 
 
 class DeepParams(BaseModel):
@@ -571,7 +575,7 @@ def test_a_dataset_for_a_whole_group_is_refused(
 ) -> None:
     with pytest.raises(
         SubmitError,
-        match=rf'^{place}: dataset run:\d does not fit Run\w*, which is not a file',
+        match=rf'^{place}: dataset run:\d does not fit Run, which is not a file',
     ):
         client.submit(RUNS, params=params)
 
@@ -661,6 +665,14 @@ def test_a_reference_at_a_tag_is_refused(client: Client, loaded: Record) -> None
     (error,) = raised.value.errors
     assert error.loc == ('centre', 'kind')
     assert error.msg.endswith('a tag is written inline, never as a reference')
+
+
+def test_a_union_value_without_its_tag_is_refused(client: Client) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(DEEP, params={'centre': {'run': dataset_ref(run=1)}})
+    (error,) = raised.value.errors
+    assert error.loc == ('centre',)
+    assert error.msg == "the tag 'kind' is not given; it is one of ['run', 'given']"
 
 
 @pytest.mark.parametrize('tag', [['run'], {'kind': 'run'}, 1, 'other'])
@@ -753,6 +765,21 @@ def test_a_file_in_a_group_given_inline_is_refused(client: Client) -> None:
     (error,) = raised.value.errors
     assert error.loc == ('centre', 'run')
     assert error.msg.startswith('a file is given by reference to a dataset')
+
+
+def test_a_file_given_inline_next_to_a_reference_is_refused(
+    client: Client, loaded: Record
+) -> None:
+    # With a reference in the group, each field is validated alone.
+    row = {'file': '/data/run1.nxs', 'shift': loaded.ref('shift')}
+
+    with pytest.raises(SubmitError) as raised:
+        client.submit(RUNS, params={'runs': [row]})
+    (error,) = raised.value.errors
+    assert error.loc == ('runs', 0, 'file')
+    assert error.msg == (
+        "'/data/run1.nxs' is not a dataset; a file is given as dataset(path=...)"
+    )
 
 
 def test_a_group_with_a_reference_is_validated_whole_in_the_call_phase(
@@ -886,7 +913,7 @@ def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
     client: Client,
 ) -> None:
     with pytest.raises(
-        SubmitError, match=r'^terms: has a JSON form that reads as a reference$'
+        SubmitError, match=r'^terms\.kind: has a JSON form that reads as a reference$'
     ):
         client.submit(ADD, params={'terms': {'kind': Kind(kind='output')}})
 
@@ -920,6 +947,11 @@ def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
             CORRECTION,
             lambda t: {'correction': {'bands': [t]}},
             ('correction', 'bands', 0),
+        ),
+        (
+            DEEP,
+            lambda t: {'centre': {'kind': 'given', 'transmission': t}},
+            ('centre', 'transmission'),
         ),
     ],
 )

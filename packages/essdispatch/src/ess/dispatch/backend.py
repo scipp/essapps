@@ -319,7 +319,7 @@ def _selected(value: Any, select: Selection) -> Any:
 
 
 def _is_array(tp: Any) -> bool:
-    """Whether ``tp``, possibly optional, is a type with named dimensions."""
+    """Whether ``tp``, possibly typed ``X | None``, has named dimensions."""
     tp = optional(tp)[0]
     return isinstance(tp, type) and hasattr(tp, 'dims')
 

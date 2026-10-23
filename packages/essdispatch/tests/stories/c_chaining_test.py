@@ -109,9 +109,8 @@ def test_c4_angle_series_accumulated_reads_as_the_plain_request(
     )
     reads, plains = [], []
     for n, run in enumerate(runs, start=1):
-        series.push(
-            runs=[{'file': run}]
-        )  # STITCH keeps the rows and stitches at each read
+        # STITCH keeps the rows and stitches at each read
+        series.push(runs=[{'file': run}])
         plain = client.compute(
             STITCH,
             params={

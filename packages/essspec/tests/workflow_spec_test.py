@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, NewType, TypedDict
@@ -47,12 +48,6 @@ class SampleGeometry(BaseModel):
 class TimeRange(BaseModel):
     start: float
     stop: float
-
-
-SampleFile = NewType('SampleFile', Path)
-ReductionOfCan = NewType('ReductionOfCan', Reduction)
-IofQ = NewType('IofQ', sc.DataArray)
-"""``NewType``s, which a spec refuses: it names a role by a class."""
 
 
 class SampleRun(BaseModel):
@@ -127,6 +122,35 @@ class ByWindow(BaseModel):
 
     mode: Literal['window'] = 'window'
     window: TimeRange
+
+
+# A spec refuses a NewType and a type alias: it names a role by a class.
+SampleFile = NewType('SampleFile', Path)
+ReductionOfCan = NewType('ReductionOfCan', Reduction)
+TimeOfCan = NewType('TimeOfCan', ByTime)
+IofQ = NewType('IofQ', sc.DataArray)
+Seconds = NewType('Seconds', float)
+type RunFile = Path
+
+
+class RoleRun(BaseModel):
+    """A group with a field typed as a NewType."""
+
+    file: SampleFile
+
+
+@pydantic.dataclasses.dataclass
+class Exposure:
+    """A dataclass with a field typed as a NewType."""
+
+    seconds: Seconds
+
+
+class CentredRun(BaseModel, arbitrary_types_allowed=True):
+    """A group that holds a file and a data value, which no request writes."""
+
+    file: Path
+    centre: sc.Variable
 
 
 @pydantic.dataclasses.dataclass
@@ -324,7 +348,7 @@ class TestMetadata:
         'tp',
         [float, Mode, list[float], tuple[Reduction, Reduction], Reduction | None],
     )
-    def test_a_group_of_a_number_an_enum_or_a_tuple_takes_an_inline_value(
+    def test_a_group_with_a_number_an_enum_or_a_tuple_field_takes_an_inline_value(
         self, tp: Any
     ) -> None:
         group = model('Group', value=(tp, ...))
@@ -358,6 +382,13 @@ def _takes_inline(spec: WorkflowSpec[Any, Any], name: str) -> bool:
 
 
 NOT_A_VALUE = 'the default is not a value a request may write'
+NOT_A_PARAMETER = re.escape(
+    'a parameter is a group, a union of groups, or a list of one, possibly typed '
+    'X | None'
+)
+NOT_AN_OUTPUT = re.escape(
+    'an output is a type, possibly typed X | None, or a list or a dict of one'
+)
 
 
 class TestModelRules:
@@ -549,7 +580,61 @@ class TestModelRules:
                         'P.both: Both.a',
                         'ReductionOfCan',
                     ),
+                    (
+                        {
+                            'params': model(
+                                'P',
+                                by=(
+                                    Annotated[
+                                        ByMonitor | TimeOfCan,
+                                        Field(discriminator='mode'),
+                                    ],
+                                    ...,
+                                ),
+                            )
+                        },
+                        'P.by',
+                        'TimeOfCan',
+                    ),
+                    (
+                        {
+                            'params': model(
+                                'P',
+                                run=(
+                                    model(
+                                        'Run',
+                                        parts=(
+                                            list[model('Inner', file=(SampleFile, ...))]
+                                            | None,
+                                            None,
+                                        ),
+                                    ),
+                                    ...,
+                                ),
+                            )
+                        },
+                        'P.run: Inner.file',
+                        'SampleFile',
+                    ),
+                    (
+                        {
+                            'params': model(
+                                'P', run=(model('Run', exposure=(Exposure, ...)), ...)
+                            )
+                        },
+                        'P.run: Exposure.seconds',
+                        'Seconds',
+                    ),
                     ({'outputs': model('O', iofq=(IofQ, ...))}, 'O.iofq', 'IofQ'),
+                    (
+                        {
+                            'outputs': model(
+                                'O', result=(model('Result', iofq=(IofQ, ...)), ...)
+                            )
+                        },
+                        'O.result: Result.iofq',
+                        'IofQ',
+                    ),
                     (
                         {'outputs': model('O', banks=(dict[str, IofQ] | None, None))},
                         'O.banks',
@@ -558,15 +643,32 @@ class TestModelRules:
                 )
             ),
             (
+                {'params': model('P', run=(model('Run', file=(RunFile, ...)), ...))},
+                'P.run: Run.file: RunFile is a type alias; a spec names a role by a '
+                'class',
+            ),
+            (
+                {'params': model('P', a=(RoleRun, ...), b=(RoleRun, ...))},
+                'P.a: RoleRun.file: SampleFile is a NewType.*; '
+                'P.b: RoleRun.file: SampleFile is a NewType',
+            ),
+            (
+                {'params': model('P', a=(CentredRun, ...), b=(CentredRun, ...))},
+                'P.a: CentredRun.centre: no request writes it.*; '
+                'P.b: CentredRun.centre: no request writes it',
+            ),
+            (
                 {
                     'params': model(
                         'P',
-                        a=(model('Run', file=(SampleFile, ...)), ...),
-                        b=(model('Run', file=(SampleFile, ...)), ...),
+                        both=(
+                            model('Both', a=(CentredRun, ...), b=(CentredRun, ...)),
+                            ...,
+                        ),
                     )
                 },
-                'P.a: Run.file: SampleFile is a NewType.*; '
-                'P.b: Run.file: SampleFile is a NewType',
+                'P.both: Both.a: CentredRun.centre: no request writes it.*; '
+                'P.both: Both.b: CentredRun.centre: no request writes it',
             ),
             *(
                 (
@@ -578,6 +680,8 @@ class TestModelRules:
                     (By, ...),
                     (By | None, None),
                     (list[By], []),
+                    (list[By] | None, None),
+                    (dict[str, By], {}),
                     (Annotated[ByRun | ByTime, Field(discriminator='mode')], ...),
                 )
             ),
@@ -655,11 +759,11 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', reduction=(dict[str, Reduction], {}))},
-                'P.reduction: a parameter is a type, possibly optional, or a list',
+                f'P.reduction: {NOT_A_PARAMETER}',
             ),
             (
                 {'params': model('P', reduction=(list[Reduction] | None, None))},
-                'P.reduction: a parameter is a type',
+                f'P.reduction: {NOT_A_PARAMETER}',
             ),
             (
                 {'params': model('P', by=(list[ByMonitor | ByTime], []))},
@@ -699,7 +803,7 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', by=(dict[str, By], {}))},
-                'P.by: a parameter is a type, possibly optional, or a list',
+                f'P.by: {NOT_A_PARAMETER}',
             ),
             (
                 {'params': model('P', tree=(Node, ...))},
@@ -933,8 +1037,8 @@ class TestModelRules:
                         ),
                     )
                 },
-                f'P.r: R.kinds: {NOT_A_VALUE}: kinds: has a JSON form that reads as '
-                'a reference',
+                rf'P.r: R.kinds: {NOT_A_VALUE}: kinds\[0\]: has a JSON form that '
+                r'reads as a reference; kinds\[1\]: has a JSON form',
             ),
             (
                 {
@@ -954,15 +1058,15 @@ class TestModelRules:
             ),
             (
                 {'params': model('P', runs=(list[list[SampleRun]], []))},
-                'P.runs: a parameter is a type',
+                f'P.runs: {NOT_A_PARAMETER}',
             ),
             (
                 {'params': model('P', runs=(list[SampleRun] | None, None))},
-                'P.runs: a parameter is a type',
+                f'P.runs: {NOT_A_PARAMETER}',
             ),
             (
                 {'params': model('P', runs=(list, []))},
-                'P.runs: a parameter is a type',
+                f'P.runs: {NOT_A_PARAMETER}',
             ),
             (
                 {
@@ -983,11 +1087,11 @@ class TestModelRules:
             ),
             (
                 {'outputs': model('O', iofq=(sc.DataArray | sc.Variable, ...))},
-                'O.iofq: an output is a type, possibly optional',
+                f'O.iofq: {NOT_AN_OUTPUT}',
             ),
             (
                 {'outputs': model('O', iofq=(list[list[sc.DataArray]], ...))},
-                'O.iofq: an output is a type, possibly optional',
+                f'O.iofq: {NOT_AN_OUTPUT}',
             ),
         ],
     )

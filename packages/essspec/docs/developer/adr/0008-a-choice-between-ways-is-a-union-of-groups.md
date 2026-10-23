@@ -144,9 +144,9 @@ So `keys=` gives such a parameter `()`, and the binding refuses it otherwise, wi
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     pipeline = sciline.Pipeline(providers)     # made for this call, never one it keeps
     if fixed['direct_beam'] is None:
-        pipeline[DirectBeam] = None            # esssans' providers take None: no correction
+        pipeline[sans.DirectBeam] = None       # esssans' key; its providers take None: no correction
     else:
-        pipeline[DirectBeamFilename] = fixed['direct_beam'].file
+        pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
     return pipeline
 
 PipelineBinding(IOFQ, make_pipeline, keys={'direct_beam': ()})
@@ -169,12 +169,12 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 ## Consequences
 
 - A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`. A toggle is the choice between two alternatives, one of them empty.
-- An output whose type is an alternative carries the tag, such as `TRANSMISSION`'s `TransmissionFraction`, so that it fits the union.
+- An output whose type is an alternative carries the tag, such as a `ComputedTransmission` output, so that it fits the union.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces it with a provider, `pipeline.insert(adapter)`, such as an adapter from `GivenCentre` to esssans' `BeamCenter`. Mapping the alternatives to other keys with `keys=` does not help while the held value stays further down the graph.
 - An author tests that each alternative has its effect, and that a request with `None` after one with a value gives the result without X. The second fails if `make_pipeline` sets the value in a pipeline it keeps.
 - A spec that tunes a value in a stage, such as a scan of the beam centre, types that parameter as a plain group, or its client submits plain requests.
 - A table whose single-run parameter is a union has a key per alternative, so the driver of the multi-run spec cannot cut the single-run graph at one key for its rows.
-- A choice per row of a table is not a union, since a union is never a field of a group: a correction that some rows have is a group typed `X | None` in the row, and a choice of way for all rows is a parameter.
+- A choice for one field of a row of a table is not a union, since a union is never a field of a group: a correction that some rows have is a group typed `X | None` in the row, and a choice of way for all rows is a parameter. A table whose rows are a union, `list[A | B]`, gives each row the choice of its alternative.
 
 ## Alternatives considered
 

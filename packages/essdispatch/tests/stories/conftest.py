@@ -95,27 +95,27 @@ class Run(BaseModel):
     file: Path
 
 
-class SampleRun(Run):
+class Sample(Run):
     """A run of the sample."""
 
 
-class CanRun(Run):
+class Can(Run):
     """A run of the empty can, subtracted from a sample run."""
 
 
-class DirectBeamRun(Run):
+class DirectBeam(Run):
     """A run of the direct beam, without a sample."""
 
 
-class VanadiumRun(Run):
+class Vanadium(Run):
     """A run of vanadium, which a normalization is computed from."""
 
 
-class BackgroundRun(Run):
+class Background(Run):
     """A background run, subtracted from sample runs."""
 
 
-class ReferenceRun(Run):
+class Reference(Run):
     """A run of a reference, such as a supermirror, that a reflectivity divides by."""
 
 
@@ -158,7 +158,7 @@ Normalization = Annotated[
 
 class IofQParams(Data):
     reduction: Reduction = Field(default_factory=Reduction)
-    sample: SampleRun
+    sample: Sample
     beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
@@ -200,7 +200,7 @@ def _factor(
 
 
 class IofQCanParams(IofQParams):
-    can: CanRun
+    can: Can
 
 
 IOFQ_CAN = _spec('sans-iofq-can', IofQOutputs, params=IofQCanParams)
@@ -217,7 +217,7 @@ class ReductionV2(BaseModel):
 
 class IofQV2Params(Data):
     reduction: ReductionV2 = Field(default_factory=ReductionV2)
-    sample: SampleRun
+    sample: Sample
     beam_centre: BeamCentre | None = None
     normalization: Normalization | None = None
 
@@ -239,7 +239,7 @@ def iofq_v2(params: IofQV2Params) -> IofQOutputs:
 
 
 class BeamCentreParams(Data):
-    direct_beam: DirectBeamRun
+    direct_beam: DirectBeam
 
 
 class CentreOutputs(Data):
@@ -265,7 +265,7 @@ class Scaling(BaseModel):
 
 class VanadiumParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    vanadium: VanadiumRun
+    vanadium: Vanadium
 
 
 class VanadiumOutputs(Data):
@@ -286,7 +286,7 @@ def vanadium(params: VanadiumParams) -> VanadiumOutputs:
 
 class NormalizeParams(Data):
     scaling: Scaling = Field(default_factory=Scaling)
-    runs: list[SampleRun] = Field(min_length=1)
+    runs: list[Sample] = Field(min_length=1)
 
 
 class NormalizedOutputs(Data):
@@ -303,8 +303,8 @@ def normalize(runs: np.ndarray, scaling: Scaling) -> NormalizedOutputs:
 
 
 class BackgroundParams(Data):
-    sample_runs: list[SampleRun] = Field(min_length=1)
-    background_runs: list[BackgroundRun] = Field(min_length=1)
+    sample_runs: list[Sample] = Field(min_length=1)
+    background_runs: list[Background] = Field(min_length=1)
 
 
 class BackgroundOutputs(Data):
@@ -339,7 +339,7 @@ class Parts(Data):
 
 
 class ContributeParams(Data):
-    sample: SampleRun
+    sample: Sample
 
 
 class ContributeOutputs(Data):
@@ -422,11 +422,11 @@ class VolumeOutputs(Data):
 
 
 class AngleParams(Data):
-    sample: SampleRun
+    sample: Sample
 
 
 class RunsParams(Data):
-    runs: list[SampleRun] = Field(min_length=1)
+    runs: list[Sample] = Field(min_length=1)
 
 
 ANGLE = _spec('angle', VolumeOutputs, params=AngleParams)
@@ -463,8 +463,8 @@ def cut(params: CutParams) -> CutOutputs:
 
 
 class StitchParams(Data):
-    runs: list[SampleRun] = Field(min_length=1)
-    reference: ReferenceRun
+    runs: list[Sample] = Field(min_length=1)
+    reference: Reference
 
 
 class Reflectivity(Data):
@@ -512,7 +512,7 @@ class TimeRange(BaseModel):
 
 
 class SlicerParams(Data):
-    sample: SampleRun
+    sample: Sample
 
 
 class SlicerOutputs(Data):
@@ -531,7 +531,7 @@ def slicer(params: SlicerParams) -> SlicerOutputs:
 
 
 class SlicesParams(Data):
-    sample: SampleRun
+    sample: Sample
     time_range: list[TimeRange] = Field(min_length=1)
 
 
@@ -560,7 +560,7 @@ class Centre(BaseModel):
 
 
 class FindCentreParams(Data):
-    direct_beam: DirectBeamRun
+    direct_beam: DirectBeam
 
 
 class FoundCentre(Data):
@@ -574,7 +574,7 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
     return FoundCentre(centre=Centre(x=float(_counts(params.direct_beam.file).mean())))
 
 
-class SampleRunWithTransmission(SampleRun):
+class SampleWithTransmission(Sample):
     """A sample run and its transmission, or None: a group that holds a file."""
 
     transmission: Transmission | None
@@ -582,8 +582,8 @@ class SampleRunWithTransmission(SampleRun):
 
 class CentredParams(Data):
     centre: Centre
-    sample: list[SampleRunWithTransmission] = Field(min_length=1)
-    can: list[CanRun] = Field(min_length=1)
+    sample: list[SampleWithTransmission] = Field(min_length=1)
+    can: list[Can] = Field(min_length=1)
 
 
 class CentredOutputs(Data):

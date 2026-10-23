@@ -34,7 +34,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     ``make_pipeline`` may return a pipeline that it holds. Each parameter
     sets the sciline key of its type, without ``Annotated`` metadata, such as
     ``Reduction``; a list parameter, such as a table, sets the key of its type,
-    a list, to its list, ``list[Run]`` or ``list[BeamCentre | FindCentre]``.
+    a list, to its list, ``list[Run]`` or ``list[GivenCentre | FindCentre]``.
     A union of groups sets the key of the alternative that the value's tag
     names (see below). Each output is computed as the key of its type without
     ``| None``, since an optional output means that the graph may lack it,
@@ -51,9 +51,9 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
             pipeline = sciline.Pipeline(providers)
             if fixed['direct_beam'] is None:
-                pipeline[DirectBeam] = None  # its providers take None
+                pipeline[sans.DirectBeam] = None  # esssans' providers take None
             else:
-                pipeline[DirectBeamFilename] = fixed['direct_beam']
+                pipeline[sans.DirectBeamFilename] = fixed['direct_beam'].file
             return pipeline
 
         PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
@@ -68,18 +68,18 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         class IofQParams(BaseModel):
             sample: Sample
             beam_centre: Annotated[
-                BeamCentre | FindCentre, Field(discriminator='kind')
-            ] = BeamCentre()
+                GivenCentre | FindCentre, Field(discriminator='kind')
+            ] = GivenCentre()
 
-        def find_centre(settings: FindCentre, data: SampleData) -> BeamCentre: ...
+        def find_centre(settings: FindCentre, data: SampleData) -> GivenCentre: ...
 
         binding = PipelineBinding(
             IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq])
         )
-        binding.keys['beam_centre']  # (BeamCentre, FindCentre)
-        # tag 'given': pipeline[BeamCentre] = value, which replaces find_centre
+        binding.keys['beam_centre']  # (GivenCentre, FindCentre)
+        # tag 'given': pipeline[GivenCentre] = value, which replaces find_centre
         # tag 'find':  pipeline[FindCentre] = value, and find_centre computes
-        #              BeamCentre
+        #              GivenCentre
 
     Where the alternatives need different providers for one key,
     ``make_pipeline`` branches on the fixed value. That always works, since a

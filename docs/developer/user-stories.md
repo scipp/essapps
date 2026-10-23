@@ -14,31 +14,31 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 
 | Spec | Params | Outputs | Computes | Stands in for |
 |---|---|---|---|---|
-| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: SampleRun`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| PublishedNormalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`, read from its file if it is published; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
-| `IOFQ_CAN` | the params of `IOFQ`, and `can: CanRun` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
-| `BEAM_CENTRE` | `direct_beam: DirectBeamRun` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
-| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: VanadiumRun` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
-| `NORMALIZE` | `scaling: Scaling`, `runs: list[SampleRun]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
-| `BACKGROUND` | `sample_runs: list[SampleRun]`, `background_runs: list[BackgroundRun]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
-| `CONTRIBUTE` | `sample: SampleRun` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
+| `IOFQ` | `reduction: Reduction` (`bins=2`, `threshold=0.0`), `sample: Sample`, `beam_centre: BeamCentre \| None`, `normalization: ComputedNormalization \| PublishedNormalization \| None` | `iofq`, `masked` | the counts with values below `threshold` set to 0 (`masked`); minus `beam_centre.position`; divided by the normalization's `factor`, read from its file if it is published; summed into `bins` equal groups (`iofq`) | a SANS reduction without a can, of one run |
+| `IOFQ_CAN` | the params of `IOFQ`, and `can: Can` | `iofq`, `masked` | as `IOFQ`, of the counts minus the can's counts | a SANS reduction of one run with the can subtracted |
+| `BEAM_CENTRE` | `direct_beam: DirectBeam` | `centre: BeamCentre` | `BeamCentre(position=...)`, with the mean of the counts | beam-centre finding |
+| `VANADIUM` | `scaling: Scaling` (`scale=1.0`), `vanadium: Vanadium` | `normalization: ComputedNormalization` | `ComputedNormalization(factor=...)`, with the sum of the counts times `scale` | vanadium processing |
+| `NORMALIZE` | `scaling: Scaling`, `runs: list[Sample]`, a table | `normalized` | the counts summed over the runs, divided by their total, times `scale` | a sum of runs, such as a SANS I(Q) |
+| `BACKGROUND` | `sample_runs: list[Sample]`, `background_runs: list[Background]`, a table each | `subtracted` | summed sample counts minus summed background counts | a sum of two sets of runs |
+| `CONTRIBUTE` | `sample: Sample` | `parts: Parts` (`numerator`, `denominator`), `transmission: Transmission` | a copy of the counts and their total; `Transmission(fraction=...)`, with the first count divided by the total | a reduction of one run whose outputs another request sums |
 | `PARTS_SUM` | `parts: list[Parts]` | `numerator`, `denominator` | each field of `Parts` summed over the list | a sum of outputs of other records |
-| `ANGLE` | `sample: SampleRun` | `volume: Volume` | `Volume(counts=...)`, with a copy of the counts | a reduction of one run into a volume |
+| `ANGLE` | `sample: Sample` | `volume: Volume` | `Volume(counts=...)`, with a copy of the counts | a reduction of one run into a volume |
 | `CUT` | `position: Position` (`index`), `volume: Volume` | `cut` | the value of `volume.counts` at `index` | a cut through a volume, from another package |
-| `VOLUME` | `runs: list[SampleRun]`, a table | `volume: Volume` | `Volume(counts=...)`, with the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
-| `STITCH` | `runs: list[SampleRun]`, a table; `reference: ReferenceRun` | `stitched: Reflectivity` | `Reflectivity(curve=...)`, with each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
+| `VOLUME` | `runs: list[Sample]`, a table | `volume: Volume` | `Volume(counts=...)`, with the counts summed over the runs | a rotation scan reduced into one volume, one run per angle |
+| `STITCH` | `runs: list[Sample]`, a table; `reference: Reference` | `stitched: Reflectivity` | `Reflectivity(curve=...)`, with each run's counts divided by the reference's counts, times the factor that makes its first value equal the last value of the curve before it, with the first curve not scaled; these curves concatenated | a reflectometry reduction that stitches angles with scale factors fitted over all of them |
 | `EXPORT` | `result: Reflectivity` | `text: str` | the values of `result.curve`, separated by commas | writing a file for another program |
 | `IOFQ_V2` | `reduction: ReductionV2` (`bins=4`, `mask_below=0.0`), the others as `IOFQ` | `iofq`, `masked` | as `IOFQ` | version 2 of `IOFQ`: same name, `sans-iofq`, a renamed field of `reduction` and a new default |
-| `SLICER` | `sample: SampleRun` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the run's log | a first reduction that finds time slices in a log |
-| `SLICES` | `sample: SampleRun`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
-| `FIND_CENTRE` | `direct_beam: DirectBeamRun` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleRunWithTransmission]`, a table; `can: list[CanRun]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
+| `SLICER` | `sample: Sample` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the run's log | a first reduction that finds time slices in a log |
+| `SLICES` | `sample: Sample`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
+| `FIND_CENTRE` | `direct_beam: DirectBeam` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
+| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleWithTransmission]`, a table; `can: list[Can]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
 The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the row for a dict or a list that may be `None`, at a field of a group):
 
 | The type at a place | In the toy specs | Given as |
 |---|---|---|
-| a file: `Path` | the `file` of each run, such as `SampleRun.file` | a dataset reference |
-| a group, no field of which is a data value | the runs, such as `SampleRun` and `SampleRunWithTransmission`; `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre`, `PublishedNormalization` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
+| a file: `Path` | the `file` of each run, such as `Sample.file` | a dataset reference |
+| a group, no field of which is a data value | the runs, such as `Sample` and `SampleWithTransmission`; `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre`, `PublishedNormalization` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
 | a group with a field that is a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
 | a union of groups | `ComputedNormalization \| PublishedNormalization`, by the tag `kind` | an object of one alternative's fields, with its tag, as for a group, or a reference to an output that fits and holds no file |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element a place of type `X` |
@@ -46,14 +46,14 @@ The type at a place, the value of a parameter, an element of a list, or a field 
 | any other type, a *data value*, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
 
 Each parameter is a group, a union of groups, or a list of one; a file or a number is a field of a group.
-Each run is a group of its file, `file: Path`, with a class for each role: `SampleRun`, `CanRun`, `DirectBeamRun`, `VanadiumRun`, `BackgroundRun`, and `ReferenceRun`, each a subclass of `Run`:
+Each run is a group of its file, `file: Path`, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:
 
 ```python
 class Run(BaseModel):
     file: Path
 
-class SampleRun(Run): ...
-class CanRun(Run): ...
+class Sample(Run): ...
+class Can(Run): ...
 
 {'sample': {'file': run}, 'can': {'file': can}}   # IOFQ_CAN
 ```
@@ -63,12 +63,12 @@ An output without a type in the list of toy specs is a `sc.Variable`.
 `BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
 `ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` a file of it, `file: Path`; each has the tag `kind`.
 `Parts` is a group of two `sc.Variable`s.
-`SampleRunWithTransmission` is a `SampleRun` with `transmission: Transmission | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
+`SampleWithTransmission` is a `Sample` with `transmission: Transmission | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
 A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
-These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[SampleRun] = Field(min_length=1)`.
-`CENTRED_MULTI` has the params `centre: Centre`, `sample: list[SampleRunWithTransmission] = Field(min_length=1)`, and `can: list[CanRun] = Field(min_length=1)`, with `tables=('sample', 'can')`.
+These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
+`CENTRED_MULTI` has the params `centre: Centre`, `sample: list[SampleWithTransmission] = Field(min_length=1)`, and `can: list[Can] = Field(min_length=1)`, with `tables=('sample', 'can')`.
 So both `sample` and `can` are tables that need a row.
 `PARTS_SUM` declares no table, so its `parts` is a value like any other, given whole in a request.
 

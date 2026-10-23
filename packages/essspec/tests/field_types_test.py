@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+from dataclasses import dataclass
 from pathlib import Path, PosixPath
 from typing import Annotated, Any, Literal, NewType
 
@@ -8,13 +9,16 @@ import scipp as sc
 from pydantic import BaseModel
 
 from ess.spec.field_types import (
+    arguments,
     element,
+    fields_of,
     fits,
+    is_alias,
     is_file,
     is_single,
-    newtype_in,
     optional,
     plain,
+    reachable,
     type_name,
     value_type,
 )
@@ -112,12 +116,43 @@ def test_a_file_is_a_path_or_a_subclass_of_it() -> None:
     assert not is_file(list[Path])
 
 
-def test_newtype_in_finds_a_newtype_at_any_depth() -> None:
+def test_a_newtype_and_a_type_alias_are_aliases() -> None:
+    type Folder = Path
+    assert is_alias(NewType('SampleFile', Path))
+    assert is_alias(Folder)
+    assert not is_alias(Path)
+    assert not is_alias(list[Path])
+
+
+def test_arguments_are_the_type_arguments_at_any_depth() -> None:
     sample_file = NewType('SampleFile', Path)
-    assert newtype_in(sample_file) is sample_file
-    assert newtype_in(list[sample_file | None]) is sample_file
-    assert newtype_in(Annotated[dict[str, sample_file], 'a validator']) is sample_file
-    assert newtype_in(list[Parts | None]) is None
+    assert sample_file in list(arguments(list[sample_file | None]))
+    assert sc.DataArray not in list(arguments(Parts | None))  # not its fields
+
+
+def test_fields_of_a_model_a_dataclass_or_a_typeddict() -> None:
+    @dataclass
+    class Window:
+        start: float
+        stop: float
+
+    assert fields_of(Parts) == {'numerator': sc.DataArray, 'denominator': sc.DataArray}
+    assert fields_of(Window) == {'start': float, 'stop': float}
+    assert fields_of(Path) == {}
+    assert fields_of(list[Parts]) == {}
+
+
+class Node(BaseModel):
+    file: Path
+    children: list['Node'] = []
+
+
+def test_reachable_looks_through_arguments_and_fields_and_ends_on_recursion() -> None:
+    found = list(reachable(Annotated[list[Node] | None, 'a validator']))
+    assert Node in found
+    assert Path in found
+    assert 'a validator' not in found  # not the metadata
+    assert sc.DataArray in list(reachable(dict[str, SampleParts]))
 
 
 def test_type_name_is_the_name_of_the_class() -> None:

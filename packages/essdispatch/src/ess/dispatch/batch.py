@@ -12,6 +12,7 @@ ordered by their run number.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -43,25 +44,36 @@ class LastBefore:
 
 class Lookup:
     """
-    Rules that fill blanks per dataset, each at a file field of its blank, a
-    group, by place::
+    Rules that fill blanks per dataset, each at a field of its blank, a
+    group, keyed by that place; ``fields`` gives the other fields of each
+    blank, by blank, as :func:`apply` takes them::
 
         Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
 
-    Raises ``ValueError`` for a place that is not below a blank, or for two
-    places in one blank.
+    Raises ``ValueError`` for a place that is not a tuple of a blank and its
+    fields, for two places in one blank, and for fields of a blank that the
+    lookup does not fill, or that give a place the lookup fills.
     """
 
-    def __init__(self, rules: Mapping[tuple[str, ...], LastBefore]) -> None:
-        blanks = [place[0] for place in rules if len(place) > 1]
-        if len(blanks) != len(rules):
+    def __init__(
+        self,
+        rules: Mapping[tuple[str, ...], LastBefore],
+        fields: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        if bad := [p for p in rules if not isinstance(p, tuple) or len(p) < 2]:
             raise ValueError(
-                f'a lookup fills a field of a blank, such as (blank, field), not '
-                f'{[p for p in rules if len(p) < 2]}'
+                f'a lookup fills a field of a blank, such as (blank, field), not {bad}'
             )
+        blanks = [place[0] for place in rules]
         if len(set(blanks)) != len(blanks):
             raise ValueError(f'a lookup fills one place per blank, not {list(rules)}')
+        fields = dict(fields or {})
+        if other := sorted(set(fields) - set(blanks)):
+            raise ValueError(f'fields of {other}, which the lookup does not fill')
+        for place in rules:
+            holding(place, None, fields.get(place[0]))  # refuses a clash
         self.rules = dict(rules)
+        self.fields = fields
 
     @property
     def blanks(self) -> set[str]:
@@ -71,7 +83,7 @@ class Lookup:
     def fill(self, ref: DatasetRef, source: Datasets) -> dict[str, Any]:
         """Each blank the lookup fills, with the dataset found at its place."""
         return {
-            place[0]: holding(place, rule.find(ref, source))
+            place[0]: holding(place, rule.find(ref, source), self.fields.get(place[0]))
             for place, rule in self.rules.items()
         }
 
@@ -95,21 +107,31 @@ def dataset_place(
 
 
 def holding(
-    at: tuple[str, ...], ref: DatasetRef, fields: Mapping[str, Any] | None = None
-) -> Any:
+    at: tuple[str, ...], ref: Any, fields: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """
     The value that holds ``ref`` at the place ``at`` below the blank
-    ``at[0]``: of the blank, or of a row of it for a series, with ``fields``,
-    the blank's other fields. Raises ``ValueError`` if ``fields`` gives the
-    field that holds ``ref``.
+    ``at[0]``: of the blank, or of a row of it for a series, inside a copy of
+    ``fields``, the blank's other fields, at any depth::
+
+        holding(('sample', 'run', 'file'), ref, {'run': {'transmission': None}})
+        # {'run': {'transmission': None, 'file': ref}}
+
+    Raises ``ValueError`` if ``fields`` gives the place ``at``, or a value
+    that is not a dict on the way to it.
     """
-    value: Any = ref
-    for field in reversed(at[2:]):
-        value = {field: value}
-    fields = fields or {}
-    if at[1] in fields:
-        raise ValueError(f'{at[1]!r} holds the dataset; fields gives the others')
-    return {**fields, at[1]: value}
+    value = copy.deepcopy(dict(fields or {}))
+    inner = value
+    for i, field in enumerate(at[1:-1], start=2):
+        inner = inner.setdefault(field, {})
+        if not isinstance(inner, dict):
+            raise ValueError(
+                f'{at[:i]} holds the dataset at {at}; fields gives {inner!r} there'
+            )
+    if at[-1] in inner:
+        raise ValueError(f'{at} holds the dataset; fields gives it too')
+    inner[at[-1]] = ref
+    return value
 
 
 def apply(

@@ -376,8 +376,11 @@ class TotalAndMeanOutputs(BaseModel):
     mean: float | None = None
 
 
-def mean(counts: Counts) -> float:
-    return counts.mean()
+Mean = NewType('Mean', float)
+
+
+def mean(counts: Counts) -> Mean:
+    return Mean(counts.mean())
 
 
 @pytest.mark.parametrize(
@@ -393,9 +396,8 @@ def test_an_optional_output_is_none_where_the_pipeline_has_no_provider(
     binding = PipelineBinding(
         spec,
         lambda _: sciline.Pipeline(providers),
-        keys={'sample': (Run,), 'total': (Total,)},
+        keys={'sample': (Run,), 'total': (Total,), 'mean': (Mean,)},
     )
-    assert binding.keys['mean'] == (float,)  # the key of the output's type
     outputs = binding.compute(IofQParams(sample=samples[0], can=cans[0]))
     assert outputs == TotalAndMeanOutputs(total=2 * 12.0, mean=expected_mean)
 
@@ -461,20 +463,37 @@ class TwoRuns(BaseModel):
     second: SampleRun
 
 
+class DifferenceOutputs(BaseModel):
+    difference: float
+
+
 FirstRun = NewType('FirstRun', SampleRun)
 SecondRun = NewType('SecondRun', SampleRun)
+Difference = NewType('Difference', float)
 
 
-def test_two_parameters_of_one_class_need_a_key_each() -> None:
-    spec = _spec('twins', params=TwoRuns, outputs=TotalOutputs)
+def difference(first: FirstRun, second: SecondRun) -> Difference:
+    return Difference(np.loadtxt(first.file).sum() - np.loadtxt(second.file).sum())
+
+
+def test_two_parameters_of_one_class_need_a_key_each(
+    samples: list[SampleRun],
+) -> None:
+    spec = _spec('twins', params=TwoRuns, outputs=DifferenceOutputs)
     with pytest.raises(
         ValueError,
         match='twins: first and second have the key SampleRun; no two fields share',
     ):
-        PipelineBinding(spec, lambda _: sciline.Pipeline([load, total]))
+        PipelineBinding(spec, lambda _: sciline.Pipeline([difference]))
     keys = {'first': (FirstRun,), 'second': (SecondRun,)}
-    binding = PipelineBinding(spec, lambda _: sciline.Pipeline([total]), keys=keys)
+    binding = PipelineBinding(
+        spec,
+        lambda _: sciline.Pipeline([difference]),
+        keys={**keys, 'difference': (Difference,)},
+    )
     assert {n: binding.keys[n] for n in keys} == keys
+    params = TwoRuns(first=samples[0], second=samples[1])
+    assert binding.compute(params).difference == sum(SAMPLES[0]) - sum(SAMPLES[1])
 
 
 def test_two_outputs_of_one_type_need_keys(make_pipeline: MakePipeline) -> None:
@@ -505,10 +524,12 @@ class ShiftedOutputs(BaseModel):
 
 
 SHIFTED = _spec('shifted', params=OffsetParams, outputs=ShiftedOutputs)
+Shifted = NewType('Shifted', float)
+SHIFTED_KEYS = {'shifted': (Shifted,)}
 
 
-def shift(offset: Offset) -> float:
-    return offset.amount + 1.0
+def shift(offset: Offset) -> Shifted:
+    return Shifted(offset.amount + 1.0)
 
 
 @pytest.mark.parametrize('keys', [None, {'offset': (Offset,)}])
@@ -518,19 +539,25 @@ def test_an_optional_parameter_with_a_key_is_refused(
     with pytest.raises(
         ValueError, match=r"shifted: \['offset'\]: a parameter typed X \| None"
     ):
-        PipelineBinding(SHIFTED, lambda _: sciline.Pipeline([shift]), keys=keys)
+        PipelineBinding(
+            SHIFTED,
+            lambda _: sciline.Pipeline([shift]),
+            keys={**SHIFTED_KEYS, **(keys or {})},
+        )
 
 
 def test_an_optional_parameter_without_a_key_reaches_make_pipeline() -> None:
     def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
         pipeline = sciline.Pipeline([shift])
         if fixed['offset'] is None:
-            pipeline[float] = -1.0
+            pipeline[Shifted] = Shifted(-1.0)
         else:
             pipeline[Offset] = fixed['offset']
         return pipeline
 
-    binding = PipelineBinding(SHIFTED, make_pipeline, keys={'offset': ()})
+    binding = PipelineBinding(
+        SHIFTED, make_pipeline, keys={**SHIFTED_KEYS, 'offset': ()}
+    )
     assert binding.keys['offset'] == ()
     assert binding.compute(OffsetParams(offset=Offset(amount=2.0))).shifted == 3.0
     assert binding.compute(OffsetParams()).shifted == -1.0
@@ -543,18 +570,19 @@ class RequiredOffsetParams(BaseModel):
 def test_make_pipeline_may_return_a_pipeline_it_holds() -> None:
     spec = _spec('shifted', params=RequiredOffsetParams, outputs=ShiftedOutputs)
     base = sciline.Pipeline([shift])
-    binding = PipelineBinding(spec, lambda _: base)
+    binding = PipelineBinding(spec, lambda _: base, keys=SHIFTED_KEYS)
     for amount in (2.0, 5.0):
         params = RequiredOffsetParams(offset=Offset(amount=amount))
         assert binding.compute(params).shifted == amount + 1.0
     with pytest.raises(sciline.UnsatisfiedRequirement):
-        base.compute(float)
+        base.compute(Shifted)
 
 
 # A beam centre, given or found from the sample run. ``find_centre`` leads from
 # the key of one alternative, ``FindCentre``, to that of the other,
 # ``BeamCentre``, so one graph serves both. The output ``centre`` reports the
-# centre given or found, at a key of the workflow's own, ``UsedCentre``.
+# centre given or found, at a key of the workflow's own, ``UsedCentre``, and
+# ``centred`` at ``Centred``.
 
 
 class BeamCentre(BaseModel):
@@ -575,7 +603,8 @@ class RefinedCentre(BeamCentre):
 
 Centre = Annotated[BeamCentre | FindCentre, Field(discriminator='kind')]
 UsedCentre = NewType('UsedCentre', BeamCentre)
-CENTRE_KEYS = {'centre': (UsedCentre,)}
+Centred = NewType('Centred', float)
+CENTRE_KEYS = {'centred': (Centred,), 'centre': (UsedCentre,)}
 
 
 class CentredParams(BaseModel):
@@ -595,8 +624,8 @@ def load_counts(run: SampleRun) -> SampleCounts:
     return SampleCounts(np.loadtxt(run.file))
 
 
-def centred(counts: SampleCounts, centre: BeamCentre) -> float:
-    return counts.sum() - centre.x
+def centred(counts: SampleCounts, centre: BeamCentre) -> Centred:
+    return Centred(counts.sum() - centre.x)
 
 
 def used_centre(centre: BeamCentre) -> UsedCentre:
@@ -746,10 +775,13 @@ class CentredOnly(BaseModel):
 CentreSetting = NewType('CentreSetting', BaseModel)
 
 
-def centred_by_setting(counts: SampleCounts, setting: CentreSetting) -> float:
+CENTRED_ONLY_KEYS = {'centred': (Centred,)}
+
+
+def centred_by_setting(counts: SampleCounts, setting: CentreSetting) -> Centred:
     if isinstance(setting, BeamCentre):
-        return counts.sum() - setting.x
-    return counts.sum() - counts.mean() * setting.tolerance
+        return Centred(counts.sum() - setting.x)
+    return Centred(counts.sum() - counts.mean() * setting.tolerance)
 
 
 def test_a_union_may_set_one_key_for_both_alternatives(
@@ -758,7 +790,7 @@ def test_a_union_may_set_one_key_for_both_alternatives(
     binding = PipelineBinding(
         _spec('centred', params=CentredParams, outputs=CentredOnly),
         lambda _: sciline.Pipeline([load_counts, centred_by_setting]),
-        keys={'beam_centre': (CentreSetting, CentreSetting)},
+        keys={**CENTRED_ONLY_KEYS, 'beam_centre': (CentreSetting, CentreSetting)},
     )
     total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
 
@@ -776,7 +808,7 @@ def test_a_value_held_at_the_one_key_of_a_union_is_set_over(
         lambda _: sciline.Pipeline(
             [load_counts, centred_by_setting], params={CentreSetting: BeamCentre()}
         ),
-        keys={'beam_centre': (CentreSetting, CentreSetting)},
+        keys={**CENTRED_ONLY_KEYS, 'beam_centre': (CentreSetting, CentreSetting)},
     )
     total, mean = np.sum(SAMPLES[0]), np.mean(SAMPLES[0])
     given = CentredParams(sample=samples[0], beam_centre=BeamCentre(x=1.0))
@@ -793,9 +825,13 @@ def test_an_optional_union_with_a_key_is_refused() -> None:
     with pytest.raises(
         ValueError, match=r"\['beam_centre'\]: a parameter typed X \| None sets no"
     ):
-        PipelineBinding(spec, lambda _: sciline.Pipeline([centred]))
+        PipelineBinding(
+            spec, lambda _: sciline.Pipeline([centred]), keys=CENTRED_ONLY_KEYS
+        )
     keyless = PipelineBinding(
-        spec, lambda _: sciline.Pipeline([centred]), keys={'beam_centre': ()}
+        spec,
+        lambda _: sciline.Pipeline([centred]),
+        keys={**CENTRED_ONLY_KEYS, 'beam_centre': ()},
     )
     assert keyless.keys['beam_centre'] == ()
 
@@ -805,7 +841,9 @@ def test_a_list_of_unions_sets_the_key_of_its_type() -> None:
         centres: list[Centre] = []
 
     spec = _spec('centres', params=CentresParams, outputs=CentredOnly)
-    binding = PipelineBinding(spec, lambda _: sciline.Pipeline([centred]))
+    binding = PipelineBinding(
+        spec, lambda _: sciline.Pipeline([centred]), keys=CENTRED_ONLY_KEYS
+    )
     assert binding.keys['centres'] == (list[BeamCentre | FindCentre],)
 
 
@@ -844,6 +882,10 @@ class ShiftOutputs(BaseModel):
     shift: float
 
 
+CentreShift = NewType('CentreShift', float)
+SHIFT_KEYS = {'shift': (CentreShift,)}
+
+
 def find_sample_centre(
     settings: FindSampleCentre, counts: SampleCounts
 ) -> SampleCentre:
@@ -854,8 +896,8 @@ def find_can_centre(settings: FindCanCentre, counts: SampleCounts) -> CanCentre:
     return CanCentre(x=-counts.mean() * settings.tolerance)
 
 
-def shift_between(sample: SampleCentre, can: CanCentre) -> float:
-    return sample.x - can.x
+def shift_between(sample: SampleCentre, can: CanCentre) -> CentreShift:
+    return CentreShift(sample.x - can.x)
 
 
 def test_union_parameters_are_told_apart_by_the_classes_of_their_alternatives(
@@ -863,7 +905,9 @@ def test_union_parameters_are_told_apart_by_the_classes_of_their_alternatives(
 ) -> None:
     spec = _spec('shift', params=TwoCentresParams, outputs=ShiftOutputs)
     providers = [load_counts, find_sample_centre, find_can_centre, shift_between]
-    binding = PipelineBinding(spec, lambda _: sciline.Pipeline(providers))
+    binding = PipelineBinding(
+        spec, lambda _: sciline.Pipeline(providers), keys=SHIFT_KEYS
+    )
     assert binding.keys['sample_centre'] == (SampleCentre, FindSampleCentre)
     assert binding.keys['can_centre'] == (CanCentre, FindCanCentre)
 
@@ -887,18 +931,52 @@ CanCentreKey = NewType('CanCentreKey', BeamCentre)
 FindCanCentreKey = NewType('FindCanCentreKey', FindCentre)
 
 
-def test_two_union_parameters_of_one_type_need_keys() -> None:
+def find_sample_centre_key(
+    settings: FindSampleCentreKey, counts: SampleCounts
+) -> SampleCentreKey:
+    return SampleCentreKey(BeamCentre(x=counts.mean() * settings.tolerance))
+
+
+def find_can_centre_key(
+    settings: FindCanCentreKey, counts: SampleCounts
+) -> CanCentreKey:
+    return CanCentreKey(BeamCentre(x=-counts.mean() * settings.tolerance))
+
+
+def shift_between_keys(sample: SampleCentreKey, can: CanCentreKey) -> CentreShift:
+    return CentreShift(sample.x - can.x)
+
+
+def test_two_union_parameters_of_one_type_need_keys(
+    samples: list[SampleRun],
+) -> None:
     spec = _spec('shift', params=SameCentresParams, outputs=ShiftOutputs)
+    providers = [
+        load_counts,
+        find_sample_centre_key,
+        find_can_centre_key,
+        shift_between_keys,
+    ]
     with pytest.raises(
         ValueError,
         match='shift: sample_centre and can_centre have the key BeamCentre; ',
     ):
-        PipelineBinding(spec, lambda _: sciline.Pipeline([shift_between]))
+        PipelineBinding(spec, lambda _: sciline.Pipeline(providers), keys=SHIFT_KEYS)
     keys = {
         'sample_centre': (SampleCentreKey, FindSampleCentreKey),
         'can_centre': (CanCentreKey, FindCanCentreKey),
     }
     binding = PipelineBinding(
-        spec, lambda _: sciline.Pipeline([shift_between]), keys=keys
+        spec, lambda _: sciline.Pipeline(providers), keys={**SHIFT_KEYS, **keys}
     )
     assert {n: binding.keys[n] for n in keys} == keys
+
+    mean = np.mean(SAMPLES[0])
+    for sample_centre, can_centre, shift in (
+        (FindCentre(tolerance=0.5), BeamCentre(x=1.0), 0.5 * mean - 1.0),
+        (BeamCentre(x=1.0), FindCentre(tolerance=0.5), 1.0 + 0.5 * mean),
+    ):
+        request = SameCentresParams(
+            sample=samples[0], sample_centre=sample_centre, can_centre=can_centre
+        )
+        assert binding.compute(request).shift == shift

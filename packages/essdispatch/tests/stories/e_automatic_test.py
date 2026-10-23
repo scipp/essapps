@@ -44,9 +44,8 @@ def test_e1_series_grows_reduction_follows(
     user = connect()  # any client of the proposal
     latest = user.latest('reflectivity', member='si')
     assert len(user.records(label='reflectivity')) == 2
-    assert latest.request.params['runs'] == [
-        {'file': r} for r in (r2, r3, r4)
-    ]  # run order
+    # run order
+    assert latest.request.params['runs'] == [{'file': r} for r in (r2, r3, r4)]
     assert user.output(latest, 'stitched').curve.values.tolist() == [
         1.0,
         2.0,

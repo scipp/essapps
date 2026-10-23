@@ -55,11 +55,11 @@ written as its root value::
         mask: sc.DataArray             # a data value: the group is given by reference
 
     class Sample(BaseModel):
-        run: Path
+        file: Path
         mask: PixelMask | None = None  # None: no pixels masked
 
-    {'sample': {'run': dataset(run=101), 'mask': m.ref('mask')}}
-    {'sample': {'run': dataset(run=101)}}  # defaults for the rest
+    {'sample': {'file': dataset(run=101), 'mask': m.ref('mask')}}
+    {'sample': {'file': dataset(run=101)}}  # defaults for the rest
 
 A request lives in two phases. In the *request phase*, before any data is
 read, a value given by reference is a reference, and each place given
@@ -77,14 +77,14 @@ framework: what the framework needs, it reads from the field types (see
 
 - The names of params and outputs are distinct.
 - Each parameter is a group, a union of groups, or a list of one, possibly
-  optional; a value of another type, such as a file or a number, is a field
-  of a group. So a form shows a parameter as a group of fields, and a
-  binding keys it by its class.
+  typed ``X | None``; a value of another type, such as a file or a number, is
+  a field of a group. So a form shows a parameter as a group of fields, and
+  a ``PipelineBinding`` keys it by its class.
 - No type in the params or the outputs is a ``NewType``: a spec names a
   role by a class, and a binding maps it to a key of its own.
-- A file is at a place only, possibly optional or in a list: not inside a
-  tuple, a dict, or a dataclass, whose contents are not places, so no
-  dataset can give it.
+- A file is at a place only, possibly typed ``X | None`` or in a list: not
+  inside a tuple, a dict, or a dataclass, whose contents are not places, so
+  no dataset can give it.
 - A data value is a field of a group, not a parameter or the element of
   one, since no request writes it at a place of its own. No field of a group
   that holds a file is a data value: no reference stands for such a group,
@@ -122,7 +122,7 @@ framework: what the framework needs, it reads from the field types (see
   a check of one row belongs to the element type. A check of one value
   belongs to the value's type, such as a field validator of a group; so does
   its JSON form, which the framework stores and reads back.
-- Each output is a type, possibly optional, or a list or a dict of one.
+- Each output is a type, possibly typed ``X | None``, or a list or a dict of one.
 - Each table is a list parameter without a default.
 
 A check across parameters is the binding's or the driver's, and fails when
@@ -153,7 +153,15 @@ from __future__ import annotations
 import functools
 from collections.abc import Sequence
 from types import NoneType, UnionType
-from typing import Annotated, Any, Self, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Self,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
@@ -167,15 +175,19 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
 from .field_types import (
+    arguments,
     element,
+    fields_of,
     has_json_form,
     holds_file,
+    is_alias,
     is_file,
     is_group,
     is_list,
     is_single,
-    newtype_in,
     optional,
+    plain,
+    reachable,
     type_name,
     value_type,
 )
@@ -272,8 +284,8 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         default=NoParams,
         description=(
             "Pydantic model class of everything the workflow takes: each field "
-            "a type, possibly optional, or a list of one. Defaults to "
-            ":class:`NoParams`."
+            "a group, a union of groups, or a list of one, possibly typed "
+            "X | None. Defaults to :class:`NoParams`."
         ),
     )
     outputs: type[O] = Field(
@@ -356,12 +368,13 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
     schema names the type of each output. A union of groups is a ``oneOf``
     of the alternatives a request writes inline, with a ``discriminator``.
     A list is an array of these, and an optional value has ``null`` in
-    ``anyOf``::
+    ``anyOf``. The forms at three places, the parameter ``reduction`` and the
+    fields ``Sample.file`` and ``Reduction.bins``::
 
-        "file":      {"$ref": "#/$defs/DatasetRef", "dataType": "Path"}
         "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
                                 {"anyOf": [OutputRef, AccumulatorRef],
                                  "dataType": "Reduction"}]}
+        "file":      {"$ref": "#/$defs/DatasetRef", "dataType": "Path"}
         "bins":      {"type": "integer", "default": 10}
     """
 
@@ -423,13 +436,17 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
         where = f'{model.__name__}.{name}'
         tp = value_type(field.annotation)
         union = get_origin(tp) in (Union, UnionType)
-        if (newtype := newtype_in(field.annotation)) is not None:
-            problems.append(f'{where}: {_newtype_problem(newtype)}')
+        if aliases := _alias_problems(field.annotation):
+            problems.extend(f'{where}: {problem}' for problem in aliases)
             continue
         if not (_one_or_list(field.annotation) and (is_single(tp) or union)):
             problems.append(
-                f'{where}: a parameter is a type, possibly optional, or a list of one'
+                f'{where}: a parameter is a group, a union of groups, or a list of '
+                'one, possibly typed X | None'
             )
+            continue
+        if unions := _union_problems(field.annotation):
+            problems.extend(f'{where}: {problem}' for problem in unions)
             continue
         if _has_alias(field):
             problems.append(f'{where}: a parameter has no alias')
@@ -457,10 +474,48 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
     return problems
 
 
-def _newtype_problem(newtype: Any) -> str:
+def _alias_problems(annotation: Any) -> list[str]:
+    """
+    Refuse each ``NewType`` or type alias that ``annotation`` is made of (see
+    :func:`~ess.spec.field_types.reachable`), named by the field of the class
+    that holds it, if any: a spec names a role by a class.
+    """
+    found = [('', t) for t in arguments(annotation) if is_alias(t)]
+    for cls in dict.fromkeys(reachable(annotation)):
+        for name, tp in fields_of(cls).items():
+            found.extend(
+                (f'{cls.__name__}.{name}: ', t) for t in arguments(tp) if is_alias(t)
+            )
+    return [
+        f'{where}{alias.__name__} is '
+        f'{"a type alias" if isinstance(alias, TypeAliasType) else "a NewType"}; '
+        'a spec names a role by a class, such as a group, and a binding maps it '
+        'to a key of its own'
+        for where, alias in found
+    ]
+
+
+def _union_problems(annotation: Any) -> list[str]:
+    """
+    Refuse each field of a group that ``annotation`` is made of whose type
+    holds a union of groups at any depth, such as ``list[A | B] | None``: a
+    choice between ways is a parameter of its own.
+    """
+    return [
+        f'{group.__name__}.{name}: a union of groups is a parameter, never a '
+        'field of a group'
+        for group in dict.fromkeys(t for t in reachable(annotation) if is_group(t))
+        for name, tp in fields_of(group).items()
+        if any(_is_union_of_groups(t) for t in arguments(tp))
+    ]
+
+
+def _is_union_of_groups(tp: Any) -> bool:
+    members = [plain(a) for a in get_args(tp) if a is not NoneType]
     return (
-        f'{newtype.__name__} is a NewType; a spec names a role by a class, such '
-        'as a group, and a binding maps it to a key of its own'
+        get_origin(tp) in (Union, UnionType)
+        and len(members) > 1
+        and any(is_group(m) for m in members)
     )
 
 
@@ -492,8 +547,8 @@ def _place_problems(
         return [str(error)]
     if file_off_place(model, name):
         return [
-            'a file is at a place only, possibly optional or in a list: not in '
-            'a tuple, a dict, or a dataclass, where no dataset gives it'
+            'a file is at a place only, possibly typed X | None or in a list: '
+            'not in a tuple, a dict, or a dataclass, where no dataset gives it'
         ]
     problems = []
     for group in groups:
@@ -539,14 +594,8 @@ def _group_problems(
         tp, _ = optional(field.annotation)
         if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
-        elif (newtype := newtype_in(field.annotation)) is not None:
-            problems.append(f'{where}: {_newtype_problem(newtype)}')
         elif place := _place_problems(group, name, path, seen):
             problems.extend(f'{where}: {problem}' for problem in place)
-        elif len(groups_at(group, name)) > 1:
-            problems.append(
-                f'{where}: a union of groups is a parameter, never a field of a group'
-            )
         elif (
             not is_list(group, name)
             and element(tp) is not None
@@ -598,12 +647,12 @@ def _outputs_problems(model: type[BaseModel]) -> list[str]:
     problems = []
     for name, field in model.model_fields.items():
         where = f'{model.__name__}.{name}'
-        if (newtype := newtype_in(field.annotation)) is not None:
-            problems.append(f'{where}: {_newtype_problem(newtype)}')
+        if aliases := _alias_problems(field.annotation):
+            problems.extend(f'{where}: {problem}' for problem in aliases)
         elif not is_single(value_type(field.annotation)):
             problems.append(
-                f'{where}: an output is a type, possibly optional, or a list or a '
-                'dict of one'
+                f'{where}: an output is a type, possibly typed X | None, or a '
+                'list or a dict of one'
             )
     return problems
 

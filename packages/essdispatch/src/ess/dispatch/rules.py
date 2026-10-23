@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ess.spec import DatasetRef
@@ -59,7 +59,8 @@ class Rule:
     template references must be persisted for the same reason.
 
     Raises ``ValueError`` when made if no single blank is left for a dataset,
-    or ``at`` is not in it (see :func:`dataset_place`).
+    if ``at`` is not in it (see :func:`dataset_place`), or if ``fields``
+    gives the place ``at`` (see :func:`~ess.dispatch.batch.holding`).
     """
 
     name: str
@@ -67,14 +68,14 @@ class Rule:
     selector: Selector
     label: str
     at: tuple[str, ...]
-    fields: Mapping[str, Any] | None = field(default=None, hash=False)
+    fields: Mapping[str, Any] | None = None
     member_field: str = 'run'
     lookup: Lookup | None = None
     series: str | None = None
     persist: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        _ = self.place  # refuses a template or an ``at`` that no dataset fills
+        holding(self.place, None, self.fields)  # refuses an at that none fills
 
     @property
     def place(self) -> tuple[str, ...]:

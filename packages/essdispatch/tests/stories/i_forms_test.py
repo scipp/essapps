@@ -80,9 +80,8 @@ def test_i3_a_correction_computed_for_one_run_and_not_another(
 ) -> None:
     r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
     can = measure(620, [1.0, 1.0])
-    t611 = client.compute(
-        CONTRIBUTE, params={'sample': {'file': r611}}
-    )  # transmission 1/4
+    # transmission 1/4
+    t611 = client.compute(CONTRIBUTE, params={'sample': {'file': r611}})
     total = client.accumulator(
         Template(
             CENTRED_MULTI, params={'centre': Centre(x=0.0)}, blanks=('sample', 'can')

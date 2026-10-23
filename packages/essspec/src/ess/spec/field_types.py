@@ -33,6 +33,7 @@ from typing import (
     Annotated,
     Any,
     NewType,
+    TypeAliasType,
     Union,
     get_args,
     get_origin,
@@ -102,17 +103,50 @@ def value_type(annotation: Any) -> Any:
     return tp
 
 
-def newtype_in(tp: Any) -> Any | None:
+def reachable(tp: Any, seen: frozenset[type] = frozenset()) -> Iterator[Any]:
     """
-    The first ``NewType`` in the annotation ``tp``, at any depth of its
-    arguments, such as in ``list[X | None]``, or ``None`` if it has none.
+    ``tp`` and each type it is made of, at any depth: its type arguments, and
+    the field types of each model, dataclass, or ``TypedDict`` among them.
+    ``seen`` holds the classes looked into already, so that a recursive class
+    ends.
     """
-    if isinstance(tp, NewType):
-        return tp
-    return next(
-        (found for arg in get_args(tp) if (found := newtype_in(arg)) is not None),
-        None,
-    )
+    if get_origin(tp) is Annotated:
+        yield from reachable(get_args(tp)[0], seen)  # not the metadata
+        return
+    yield tp
+    if fields := fields_of(tp):
+        if tp not in seen:
+            for field in fields.values():
+                yield from reachable(field, seen | {tp})
+        return
+    for arg in get_args(tp):
+        yield from reachable(arg, seen)
+
+
+def arguments(tp: Any) -> Iterator[Any]:
+    """``tp`` and its type arguments, at any depth, not the fields of a class."""
+    yield tp
+    for arg in get_args(tp):
+        yield from arguments(arg)
+
+
+def is_alias(tp: Any) -> bool:
+    """Whether ``tp`` is a ``NewType`` or a type alias, ``type X = ...``."""
+    return isinstance(tp, NewType | TypeAliasType)
+
+
+def fields_of(tp: Any) -> dict[str, Any]:
+    """
+    The types of the fields of ``tp`` by name, a model, a dataclass, or a
+    ``TypedDict`` class; none of any other type.
+    """
+    if not isinstance(tp, type):
+        return {}
+    if _is_model(tp):
+        return {n: f.annotation for n, f in tp.model_fields.items()}
+    if dataclasses.is_dataclass(tp) or is_typeddict(tp):
+        return get_type_hints(tp)
+    return {}
 
 
 def is_single(tp: Any) -> bool:
@@ -153,15 +187,10 @@ def holds_file(tp: Any, seen: frozenset[type] = frozenset()) -> bool:
     """
     if is_file(tp):
         return True
-    if _is_model(tp) or dataclasses.is_dataclass(tp) or is_typeddict(tp):
+    if fields := fields_of(tp):
         if tp in seen:
             return False
-        fields = (
-            [f.annotation for f in tp.model_fields.values()]
-            if _is_model(tp)
-            else get_type_hints(tp).values()
-        )
-        return any(holds_file(f, seen | {tp}) for f in fields)
+        return any(holds_file(f, seen | {tp}) for f in fields.values())
     return any(holds_file(arg, seen) for arg in getattr(tp, '__args__', ()))
 
 
@@ -280,12 +309,10 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
       such as of a number that is not finite, which JSON holds as ``null``;
     - :class:`~ess.spec.refs.ParamsError` at each position inside the value,
       without ``name``, that holds a file, which is given by reference to a
-      dataset, or whose JSON form reads back as another value, such as a
-      field of a group whose validator changes a value it has validated
-      already;
-    - ``ValueError`` if its JSON form holds an object with the key
-      ``"@ref"`` at any depth, which reads as a reference (see
-      :func:`ess.spec.refs.positions`).
+      dataset, whose JSON form reads back as another value, such as a field
+      of a group whose validator changes a value it has validated already,
+      or whose JSON form is an object with the key ``"@ref"``, which reads
+      as a reference (see :func:`ess.spec.refs.positions`).
     """
     one = model_of(model, name, whole)
     if isinstance(value, BaseModel):
@@ -306,13 +333,16 @@ def inline(model: type[BaseModel], name: str, value: Any, whole: bool = False) -
         ) from None
     if again != made:
         raise ParamsError([(_differs((), made, again), _NO_JSON_FORM)])
-    if any(isinstance(v, dict) and '@ref' in v for _, v in positions((), stored)):
-        raise ValueError('has a JSON form that reads as a reference')
+    if refs := [
+        loc for loc, v in positions((), stored) if isinstance(v, dict) and '@ref' in v
+    ]:
+        raise ParamsError((loc, _READS_AS_REF) for loc in refs)
     return stored
 
 
 _FILE_INLINE = 'a file is given by reference to a dataset, dataset(path=...)'
 _NO_JSON_FORM = 'has no JSON form that reads back as the value'
+_READS_AS_REF = 'has a JSON form that reads as a reference'
 _NO_JSON_FORM_ERROR = PydanticCustomError('no_json_form', _NO_JSON_FORM)
 
 

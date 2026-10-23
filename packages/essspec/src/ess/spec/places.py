@@ -10,11 +10,11 @@ parameter, each element of a list, and each field of a group, at any depth::
 
     {
         'sample': {                                    # sample
-            'run': dataset(run=101),                   # sample.run
+            'file': dataset(run=101),                  # sample.file
             'transmission': t.ref('transmission'),     # sample.transmission
         },
         'reduction': {'bins': 50, 'mask': m.ref('mask')},  # reduction, .bins, .mask
-        'runs': [{'run': dataset(run=102)}],           # runs, runs[0], runs[0].run
+        'runs': [{'file': dataset(run=102)}],          # runs, runs[0], runs[0].file
     }
 
 The type at a place decides what the request writes there, with ``| None``
@@ -239,9 +239,7 @@ def _written(loc: Loc, group: type[BaseModel] | None) -> None:
         )
 
 
-def _written_inside(
-    loc: Loc, group: type[BaseModel] | None, value: Mapping[str, Any]
-) -> None:
+def _written_inside(loc: Loc, group: type[BaseModel], value: Mapping[str, Any]) -> None:
     """
     Refuse a group given by reference only at a place inside ``value``, the
     fields of ``group`` given inline, at any depth. Nothing is validated, so
@@ -249,28 +247,21 @@ def _written_inside(
     works; a value that is not what its place takes is left to validating
     ``group`` whole.
     """
-    if group is None:
-        return
     for name, given in value.items():
-        if name not in group.model_fields or not groups_at(group, name):
+        if name not in group.model_fields or not (groups := groups_at(group, name)):
             continue
-        slot = _Slot(group, name)
-        if not slot.is_list:
-            places = [((*loc, name), slot, given)]
+        (inner,) = groups  # a field of a group is never a union
+        if not is_list(group, name):
+            places = [((*loc, name), given)]
         elif isinstance(given, list):
-            places = [((*loc, name, i), slot.one, v) for i, v in enumerate(given)]
+            places = [((*loc, name, i), v) for i, v in enumerate(given)]
         else:
             continue
-        for at, one, item in places:
+        for at, item in places:
             fields = dict(item) if isinstance(item, BaseModel) else item
-            if not isinstance(fields, Mapping):
-                continue
-            try:
-                inner = _group(at, one, fields)
-            except ParamsError:
-                continue  # validating the group whole names the problem
-            _written(at, inner)
-            _written_inside(at, inner, fields)
+            if isinstance(fields, Mapping):
+                _written(at, inner)
+                _written_inside(at, inner, fields)
 
 
 def _fields(
@@ -421,8 +412,8 @@ def alternatives(
 ) -> tuple[str, dict[str, Any]] | None:
     """
     The tag and the alternatives, by the value of their tag, of the union of
-    groups that ``annotation``, possibly optional, is; ``None`` if it is not
-    a union with a group in it, such as ``int | str``. ``discriminator`` is
+    groups that ``annotation``, possibly typed ``X | None``, is; ``None`` if
+    it is not a union with a group in it, such as ``int | str``. ``discriminator`` is
     that of the field, if the annotation does not carry it. An alternative
     is as declared, without ``Annotated`` metadata. The alternatives are in
     the order of the union.
@@ -518,9 +509,11 @@ def unwritten(
         if is_file(tp):
             continue
         if groups := groups_at(group, name):
-            if not any(
-                not holds_file(g) or g in seen or unwritten(g, seen) is None
-                for g in groups
+            (inner,) = groups  # a field of a group is never a union
+            if (
+                holds_file(inner)
+                and inner not in seen
+                and unwritten(inner, seen) is not None
             ):
                 return name
         elif not has_json_form(group, name):
