@@ -31,7 +31,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `SLICER` | `sample: Sample` | `slices: list[TimeRange]` | a `TimeRange` (`start`, `stop`) for every two bins of the run's log | a first reduction that finds time slices in a log |
 | `SLICES` | `sample: Sample`, `time_range: list[TimeRange]`, a table | `sliced` | the sample's counts in each time range, summed | a reduction of one run sliced in time |
 | `FIND_CENTRE` | `direct_beam: DirectBeam` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
-| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleWithTransmission]`, a table; `can: list[Can]`, a table | `centred` | each sample run's counts times its transmission if given, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
+| `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleWithTransmission]`, a table; `can: list[Can]`, a table | `centred` | each sample run's counts times its transmission, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
 The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the row for a dict or a list that may be `None`, at a field of a group):
 
@@ -63,8 +63,8 @@ An output without a type in the list of toy specs is a `sc.Variable`.
 `BeamCentre`, `Transmission`, `Volume`, and `Reflectivity` are groups of one `sc.Variable` each, named by its role: `position`, `fraction`, `counts`, and `curve`.
 `ComputedNormalization` holds its `factor`, a `sc.Variable`, and `PublishedNormalization` a file of it, `file: Path`; each has the tag `kind`.
 `Parts` is a group of two `sc.Variable`s.
-`SampleWithTransmission` is a `Sample` with `transmission: Transmission | None`, without a default: a transmission correction is needed, so a row says `None` to leave it out.
-A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
+`SampleWithTransmission` is a `Sample` with `transmission: Transmission`, without a default: each row gives the transmission of its run.
+A reference to an output fits a place when the output's type fits the type at the place (README.md): `BEAM_CENTRE`'s `centre` fits `IOFQ`'s `beam_centre`, `VANADIUM`'s `normalization` fits `IOFQ`'s `normalization`, `FIND_CENTRE`'s `centre` fits `CENTRED_MULTI`'s `centre`, `CONTRIBUTE`'s `transmission` fits the field `transmission` of a `SampleWithTransmission`, `ANGLE`'s and `VOLUME`'s `volume` fit `CUT`'s `volume`, and `STITCH`'s `stitched` fits `EXPORT`'s `result`.
 `record.ref(output, key)` names one element of a list output, by its index as a string: `slicer.ref('slices', key='0')` is a `TimeRange`, and fits a row of `time_range`.
 The list parameters of `NORMALIZE`, `BACKGROUND`, `VOLUME`, and `STITCH` are tables, each with a run per row; that of `SLICES` has a time range per row.
 These specs declare their tables with `tables=`, and each table needs a row, with `Field(min_length=1)`, as in `runs: list[Sample] = Field(min_length=1)`.
@@ -815,49 +815,52 @@ Actor: user. Goal: give one multi-run spec a beam centre that a first reduction 
 
 ```python
 direct_beam = measure(600, [0.5, 1.5])
-samples = [measure(611, [3.0, 4.0]), measure(612, [5.0, 6.0])]
+sample = measure(611, [12.0, 36.0])
 can = measure(620, [1.0, 1.0])
 finder = client.compute(FIND_CENTRE, params={'direct_beam': {'file': direct_beam}})
+t611 = client.compute(CONTRIBUTE, params={'sample': {'file': sample}})   # transmission 1 / 4
 computed = client.accumulator(Template(CENTRED_MULTI, params={'centre': finder.ref('centre')},
                                        blanks=('sample', 'can')))
 typed = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=1.0)},
                                     blanks=('sample', 'can')))
 for accumulator in (computed, typed):
-    accumulator.push(sample=[{'file': sample, 'transmission': None} for sample in samples])
+    accumulator.push(sample=[{'file': sample, 'transmission': t611.ref('transmission')}])
     accumulator.push(can=[{'file': can}])
 
 assert client.output(finder, 'centre') == Centre(x=1.0)        # the mean of [0.5, 1.5]
 assert [client.output(a, 'centred').values.tolist() for a in (computed, typed)] == [
-    [6.0, 8.0], [6.0, 8.0]]                                     # [3, 4] + [5, 6] - [1, 1] - 1
-assert client.provenance(computed).records() == [finder]
+    [1.0, 7.0], [1.0, 7.0]]                                     # [12, 36] / 4 - [1, 1] - 1
+assert client.provenance(computed).records() == [finder, t611]
 assert client.provenance(typed).request.params['centre'] == {'x': 1.0}
 ```
 
 Both drivers get a `Centre`; neither sees whether it was typed in or computed.
 The record of the typed-in centre holds the inline value in its JSON form, and that of the computed one holds the reference, so its provenance reaches the finder.
+Both accumulators give the sample's transmission by reference to `t611`, as in I3.
 `IOFQ`'s `beam_centre`, a `BeamCentre`, has a field that is a data value, so it takes a reference only (C1).
 
-### I3. A correction computed for one run and not another
+### I3. A transmission computed for each run
 
-Actor: user. Goal: sum two runs, one with a transmission computed for it and one without.
+Actor: user. Goal: sum two runs, each with the transmission computed for it.
 
 ```python
-r611, r612 = measure(611, [1.0, 3.0]), measure(612, [2.0, 2.0])
+runs = [measure(611, [1.0, 3.0]), measure(612, [4.0, 4.0])]
 can = measure(620, [1.0, 1.0])
-t611 = client.compute(CONTRIBUTE, params={'sample': {'file': r611}})   # transmission 1 / 4
+t611, t612 = (client.compute(CONTRIBUTE, params={'sample': {'file': run}})   # transmissions 1 / 4 and 1 / 2
+              for run in runs)
 total = client.accumulator(Template(CENTRED_MULTI, params={'centre': Centre(x=0.0)},
                                     blanks=('sample', 'can')))
-total.push(sample=[{'file': r611, 'transmission': t611.ref('transmission')},
-                   {'file': r612, 'transmission': None}])
+total.push(sample=[{'file': run, 'transmission': t.ref('transmission')}
+                   for run, t in zip(runs, (t611, t612), strict=True)])
 total.push(can=[{'file': can}])
 
-assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]   # [1, 3] / 4 + [2, 2] - [1, 1]
-assert client.provenance(total).records() == [t611]
+assert client.output(total, 'centred').values.tolist() == [1.25, 1.75]   # [1, 3] / 4 + [4, 4] / 2 - [1, 1]
+assert client.provenance(total).records() == [t611, t612]
 ```
 
-A push gives each field of a row inline or by reference: here the transmission of run 611 by reference.
-Run 612 gives `None`: no transmission factor, and its record says so.
-`Transmission` has a field that is a data value, so a transmission takes a reference, or `None`, since it is typed `Transmission | None`.
+A push gives each field of a row inline or by reference: here the file of each run as a dataset reference, and its transmission by reference to the record computed for that run.
+`Transmission` has a field that is a data value, so a transmission takes a reference only.
+The provenance of the sum reaches both records.
 
 ## Open
 

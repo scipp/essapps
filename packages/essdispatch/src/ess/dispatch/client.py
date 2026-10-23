@@ -176,11 +176,10 @@ class Accumulator:
         Add rows to blank tables of the template, by the name of each, the
         rows entering one state in order::
 
-            no = {'transmission': None}
-            acc.push(sample=[{'file': dataset(run=611), **no},
-                             {'file': dataset(run=612), **no}])
-            acc.push(sample=[{'file': dataset(run=613), 'transmission': t.ref('t')}])
-            acc.push(sample=[{'file': dataset(run=615), **no}],
+            acc.push(sample=[{'file': dataset(run=611), 'transmission': t611.ref('t')},
+                             {'file': dataset(run=612), 'transmission': t612.ref('t')}])
+            acc.push(sample=[{'file': dataset(run=613), 'transmission': t613.ref('t')}])
+            acc.push(sample=[{'file': dataset(run=615), 'transmission': t615.ref('t')}],
                      can=[{'file': dataset(run=614)}])
 
         Each row is given inline, such as a group as a model or a dict, or by
@@ -327,7 +326,7 @@ class Client:
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
                                         'sample': {'file': dataset(run=60339),
-                                                   'transmission': None}})
+                                                   'transmission': t.ref('t')}})
 
         A stage takes the values of its blanks the same way. Requests may be
         one, a list, or a dict. The records come back pending, in the shape

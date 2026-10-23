@@ -78,9 +78,9 @@ class Run(BaseModel):
 
 
 class Sample(Run):
-    """A sample run, and its transmission; ``None``: no transmission correction."""
+    """A sample run, and its transmission."""
 
-    transmission: TransmissionFraction | None
+    transmission: TransmissionFraction
 
 
 class Can(Run):
@@ -272,9 +272,8 @@ def numerator(
 def sample_denominator(
     data: RunData[SampleRun], sample: Sample
 ) -> Denominator[SampleRun]:
-    given = sample.transmission
-    value = 1.0 if given is None else given.value
-    return Denominator[SampleRun](sc.scalar(data['monitor'] * value, unit='counts'))
+    value = data['monitor'] * sample.transmission.value
+    return Denominator[SampleRun](sc.scalar(value, unit='counts'))
 
 
 def can_denominator(data: RunData[CanRun]) -> Denominator[CanRun]:

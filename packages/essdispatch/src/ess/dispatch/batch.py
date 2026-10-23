@@ -114,8 +114,8 @@ def holding(
     ``at[0]``: of the blank, or of a row of it for a series, inside a copy of
     ``fields``, the blank's other fields, at any depth::
 
-        holding(('sample', 'run', 'file'), ref, {'run': {'transmission': None}})
-        # {'run': {'transmission': None, 'file': ref}}
+        holding(('sample', 'run', 'file'), ref, {'run': {'thickness': 0.2}})
+        # {'run': {'thickness': 0.2, 'file': ref}}
 
     Raises ``ValueError`` if ``fields`` gives the place ``at``, or a value
     that is not a dict on the way to it.
@@ -151,14 +151,14 @@ def apply(
     dataset fills the place ``at`` in the one blank the lookup leaves, a
     group: ``at`` names its file field. ``fields`` gives the group's other
     fields, the same for each dataset, and a field left out takes its
-    default; a field without a default, such as a correction that a request
-    writes as ``None`` to leave it out, is given so::
+    default; a field without a default, such as the thickness of a batch of
+    samples in one kind of cell, is given so::
 
         template = Template(IOFQ, blanks=('sample',))
         apply(template, runs, client.datasets, at=('sample', 'file'),
-              fields={'transmission': None})
+              fields={'thickness': 0.2})
         # {'101': Request(IOFQ, params={'sample': {'file': dataset(run=101),
-        #                                          'transmission': None}}),
+        #                                          'thickness': 0.2}}),
         #  ...}
 
     The requests are keyed by member: the value of the metadata field

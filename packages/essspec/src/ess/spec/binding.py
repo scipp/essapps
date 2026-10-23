@@ -30,8 +30,8 @@ or by reference: a group as the model, with a file in it as a local path and a
 data value as the object, and a table as the list of its rows::
 
     {'reduction': Reduction(bins=2), 'beam_centre': centre,
-     'sample': [Sample(file=path_611, transmission=None),
-                Sample(file=path_612, transmission=t)]}
+     'sample': [Sample(file=path_611, transmission=t_611),
+                Sample(file=path_612, transmission=t_612)]}
 
 Blanks name parameters, a table among them. An output that the spec declares
 optional is left out by being ``None``.

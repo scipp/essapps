@@ -17,7 +17,7 @@ A notebook without the framework:
 ```python
 curves = {}
 for run in (60339, 60340, 60341):
-    curves[run] = reduce_iofq(run, can=60338, bins=100)
+    curves[run] = reduce_iofq(run, can=60338, transmission=transmission, bins=100)
 ```
 
 The same with the framework:
@@ -26,7 +26,8 @@ The same with the framework:
 records = {}
 for run in (60339, 60340, 60341):
     records[run] = client.submit(IOFQ, params={'reduction': Reduction(bins=100),
-                                               'sample': {'file': dataset(run=run), 'transmission': None},
+                                               'sample': {'file': dataset(run=run),
+                                                          'transmission': t.ref('transmission')},
                                                'can': {'file': dataset(run=60338)}})
 client.wait(records)
 client.output(records[60339], 'iofq')
@@ -35,7 +36,7 @@ client.output(records[60339], 'iofq')
 `client` connects to the framework (see Client and backend).
 `IOFQ` is the spec of the I(Q) reduction, which names its params and outputs (see Specs and bindings).
 `dataset(run=run)` names the raw data of a run (see Datasets), here as the file of the parameter `sample`, and `dataset(run=60338)` the empty-can run that each reduction subtracts.
-`'transmission': None` reduces each run without a transmission correction.
+`t` is the record of a transmission reduction of the sample, and `t.ref('transmission')` gives its output, the sample's transmission, to each reduction (see Specs and bindings).
 `client.submit` returns a *record* at once.
 The three reductions run in parallel, possibly on another machine.
 `client.wait` blocks until they have finished, and `client.output` reads an output by name.
@@ -125,7 +126,7 @@ class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a tra
 
 class Sample(BaseModel):                          # a group that holds a file
     file: Path                                    # a NeXus file of a sample run
-    transmission: ComputedTransmission | None     # None: no transmission correction
+    transmission: ComputedTransmission            # by a transmission reduction of the run
 
 class Can(BaseModel):                             # the empty-can run
     file: Path
@@ -179,11 +180,12 @@ A data value that a request may leave out is wrapped as a group typed `| None`, 
 A group with a field `mask: sc.DataArray | None` is given by reference only, even where the value is `None`.
 
 A field of a group left out takes its default.
-`t611` is the record of a transmission reduction of run 611, whose output `transmission` is a `ComputedTransmission`, which fits the field `transmission` of a `Sample`:
+`TRANSMISSION` is the spec of a transmission reduction.
+It takes the parameters `run`, a group of the `file` of a sample's transmission run, and `empty_beam`, a group of the `file` of an empty-beam run, and returns `transmission: ComputedTransmission`.
+`t611` is the record of a `TRANSMISSION` request for sample run 611, whose output `transmission` fits the field `transmission` of a `Sample`:
 
 ```python
 {'sample': {'file': dataset(run=611), 'transmission': t611.ref('transmission')}}
-{'sample': {'file': dataset(run=611), 'transmission': None}}   # no transmission correction
 {'reduction': {'bins': 50}}                       # every field inline: the group's JSON form
 ```
 
@@ -225,7 +227,7 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 
 An error inside a union names its place without the tag, `beam_centre.tolerance`, in either phase.
 A union is never a field of a group: a choice between ways is a parameter of its own, which a generated UI shows as a choice.
-A correction that some rows of a table have and others lack is a group typed `X | None` in the row, such as the transmission of a `Sample`, and a choice of way for all rows is a parameter.
+A value given per row of a table, such as the transmission of a `Sample`, is a field of the row's group, and a choice of way for all rows is a parameter.
 
 `X | None` means *without X*: apply no mask, no direct-beam correction.
 A value obtained in one of several ways is a union that names each way.
@@ -260,7 +262,7 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one.
 - A file is at a place only, possibly typed `X | None` or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
 - A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag.
-- No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission | None`.
+- No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission`.
 - A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
 - A table has no default (see Combining runs: tables).
@@ -275,7 +277,7 @@ A binding may run the model validators, `IofQParams.model_validate(dict(params))
 **Defaults.** A request that leaves out a parameter, or a field of a group, never leaves out a correction that a correct reduction needs.
 `reduction` has a default, a setting.
 The can run has none, so a request or a template that leaves it out is refused, instead of computing I(Q) without the can subtracted.
-A correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, such as the transmission of a `Sample` or `direct_beam: DirectBeam | None`: the request writes `None` to leave it out, and its record says so.
+A correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, such as `direct_beam: DirectBeam | None`, where `None` means no direct-beam correction: the request writes `None` to leave it out, and its record says so.
 A mask, which a correct reduction does not need, may default to `None`.
 The output is I(Q) either way, and the params of its record say which corrections were applied.
 A step whose omission changes what a reader of the output must do with it, such as its unit or its dimensions, makes another output type, and so another spec.
@@ -309,7 +311,7 @@ A *request* is a spec and its params, given by keyword:
 
 ```python
 result = client.compute(IOFQ, params={'reduction': Reduction(bins=100),
-                                      'sample': {'file': dataset(run=60339), 'transmission': None},
+                                      'sample': {'file': dataset(run=60339), 'transmission': t.ref('transmission')},
                                       'can': {'file': dataset(run=60338)}})   # submit, then wait
 client.output(result, 'iofq')            # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})
@@ -381,7 +383,8 @@ A reference to a pending record is allowed, so a chain is submitted without wait
 The same beam centre is typed in by one user and computed by another:
 
 ```python
-runs = {'sample': {'file': dataset(run=60339), 'transmission': None}, 'can': {'file': dataset(run=60338)}}
+runs = {'sample': {'file': dataset(run=60339), 'transmission': t.ref('transmission')},
+        'can': {'file': dataset(run=60338)}}
 result = client.submit(IOFQ, params={**runs, 'beam_centre': BeamCentre(x=0.012, y=-0.003)})  # inline
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': {'file': dataset(run=60330)}})   # pending
 result = client.submit(IOFQ, params={**runs, 'beam_centre': centre.ref('centre')})          # a reference
@@ -418,8 +421,8 @@ Then the data fit when the output's type is the class at the place or a subclass
 | `BeamCentre` | `BeamCentre \| None` | yes |
 | `GivenCentre` | `GivenCentre \| FindCentre`, a union of groups | yes |
 | `list[TimeRange]`, with a key | `TimeRange`, a row of `time_range: list[TimeRange]` | yes |
-| `ComputedTransmission` | `ComputedTransmission \| None`, the field `transmission` of a `Sample` | yes |
-| `sc.DataArray` | `ComputedTransmission \| None` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
+| `ComputedTransmission` | `ComputedTransmission`, the field `transmission` of a `Sample` | yes |
+| `sc.DataArray` | `ComputedTransmission` | no: a reference stands for a group, so the workflow outputs `ComputedTransmission` |
 | a dataset | `Path`, the field `file` of a `Sample` | yes: a dataset fits a file only |
 
 ## Labels and members
@@ -429,7 +432,7 @@ A *member* names one part of a label, such as one sample or one temperature.
 Both are optional and given at submission, not in the request.
 
 ```python
-client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': {'file': run, 'transmission': None}, 'can': can},
+client.compute(IOFQ, params={'reduction': {'bins': 50}, 'sample': sample, 'can': can},
                label='iofq', member='250K')
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # dict keys become the members
 client.latest('iofq', member='250K')                  # the newest record of this member
@@ -497,7 +500,7 @@ So another client, even one in the same process, reads a value only once it is p
 
 ```python
 centre = client.compute(BEAM_CENTRE, params={'direct_beam': {'file': dataset(run=60330)}})
-result = client.submit(IOFQ, params={'sample': {'file': dataset(run=60339), 'transmission': None},
+result = client.submit(IOFQ, params={'sample': {'file': dataset(run=60339), 'transmission': t.ref('transmission')},
                                      'can': {'file': dataset(run=60338)}, 'beam_centre': centre.ref('centre')})
 client.release(centre)              # the pending request keeps the centre until it has run
 client.output(result, 'iofq')       # allowed: this client asked for the record
@@ -518,7 +521,7 @@ An output is *persisted* while a persist request names it and its write has not 
 
 ```python
 client.persist(result, 'iofq')     # the store keeps iofq too; every output if none is named
-client.submit(IOFQ, params={'sample': {'file': dataset(run=60341), 'transmission': None},
+client.submit(IOFQ, params={'sample': {'file': dataset(run=60341), 'transmission': t.ref('transmission')},
                             'can': {'file': dataset(run=60338)}},
               label='night', persist=('iofq',))             # only the store keeps iofq
 morning = connect(url, proposal='p1')                       # the next day, any process
@@ -584,19 +587,19 @@ The validators and constraints of the element type check each row.
 A request that gives every row is a plain request:
 
 ```python
-result = client.compute(IOFQ_MULTI, params={'sample': [{'file': dataset(run=611), 'transmission': None},
-                                                        {'file': dataset(run=612), 'transmission': None}],
+result = client.compute(IOFQ_MULTI, params={'sample': [{'file': dataset(run=611), 'transmission': t.ref('transmission')},
+                                                        {'file': dataset(run=612), 'transmission': t.ref('transmission')}],
                                              'can': [{'file': dataset(run=614)}]})
 ```
 
 **A row of several values.** A value that differs per run, such as a motor position, is in the run's file.
 A value that the file lacks or has wrong is a field of the row's group, next to the run, so the request and its record hold it.
 Each field of a row is given in its own form.
-Here the transmission of run 611 is the output of `t611`, and run 612 is reduced without a transmission correction:
+Here each run has its own transmission: that of run 611 is the output of `t611`, and that of run 612 the output of `t612`:
 
 ```python
 client.compute(IOFQ_MULTI, params={'sample': [{'file': dataset(run=611), 'transmission': t611.ref('transmission')},
-                                              {'file': dataset(run=612), 'transmission': None}],
+                                              {'file': dataset(run=612), 'transmission': t612.ref('transmission')}],
                                    'can': [{'file': dataset(run=614)}]})
 ```
 
@@ -624,7 +627,7 @@ A client keeps a stage or an accumulator until it releases it or ends.
 **Stage.** A *stage* is a template that the backend keeps for a client:
 
 ```python
-tune = client.stage(Template(IOFQ, params={'sample': {'file': dataset(run=60339), 'transmission': None},
+tune = client.stage(Template(IOFQ, params={'sample': {'file': dataset(run=60339), 'transmission': t.ref('transmission')},
                                            'can': {'file': dataset(run=60338)}},
                              blanks=('reduction',)))
 for bins in (50, 100, 200):
@@ -646,11 +649,11 @@ The backend keeps it for a client ([ADR 0006](adr/0006-the-unit-is-an-accumulati
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100)},
                                    blanks=('sample', 'can')))
-none = {'transmission': None}                                               # no transmission correction
-iofq.push(sample=[{'file': dataset(run=611), **none}])                      # one row
-iofq.push(sample=[{'file': dataset(run=612), **none},
-                  {'file': dataset(run=613), **none}])                      # two rows of one table
-iofq.push(sample=[{'file': dataset(run=617), **none}],
+computed = {'transmission': t.ref('transmission')}                         # the sample's transmission
+iofq.push(sample=[{'file': dataset(run=611), **computed}])                  # one row
+iofq.push(sample=[{'file': dataset(run=612), **computed},
+                  {'file': dataset(run=613), **computed}])                  # two rows of one table
+iofq.push(sample=[{'file': dataset(run=617), **computed}],
           can=[{'file': dataset(run=614)}])                                 # rows of two tables
 client.output(iofq, 'iofq')                                                 # the output of state 3
 ```
@@ -658,11 +661,11 @@ client.output(iofq, 'iofq')                                                 # th
 A push gives rows of one or more tables, by the name of each, as a list.
 Its rows enter one state, so states 1 and 2, which have no can row, are never read here.
 The tables of a push stand side by side, as in a request: rows of different tables have nothing to do with each other, and the first sample row is not paired with the first can row.
-Values that belong to one run are fields of one row, such as the transmission of run 615, the output of the record `t615`:
+Values that belong to one run are fields of one row, such as the transmissions of runs 615 and 616, the outputs of the records `t615` and `t616`:
 
 ```python
 iofq.push(sample=[{'file': dataset(run=615), 'transmission': t615.ref('transmission')},
-                  {'file': dataset(run=616), 'transmission': None}])   # 616 without a correction
+                  {'file': dataset(run=616), 'transmission': t616.ref('transmission')}])
 ```
 
 A push of no rows is refused.
@@ -714,7 +717,7 @@ So an inline value and a reference to an output whose value is equal are one row
 ```python
 slicer = client.compute(FIND_SLICES, params={'log': {'file': dataset(run=611)}})   # outputs slices: list[TimeRange]
 n = len(client.output(slicer, 'slices'))
-acc = client.accumulator(Template(SLICES, params={'sample': {'file': dataset(run=611), 'transmission': None},
+acc = client.accumulator(Template(SLICES, params={'sample': {'file': dataset(run=611), 'transmission': t611.ref('transmission')},
                                                   'can': {'file': dataset(run=614)}},
                                   blanks=('time_range',)))
 acc.push(time_range=[slicer.ref('slices', key=str(i)) for i in range(n)])
@@ -780,7 +783,7 @@ The client can keep it, persist it, or reference it from another template.
 **Releasing.** `client.release(acc)`, or ending its client, returns at once:
 
 ```python
-iofq.push(sample=[{'file': dataset(run=615), 'transmission': None}])
+iofq.push(sample=[{'file': dataset(run=615), 'transmission': t615.ref('transmission')}])
 exported = client.submit(EXPORT, params={'result': iofq.ref('iofq')})   # pins the state after this push
 client.release(iofq)                                           # the push is added, and the export runs
 ```
@@ -818,7 +821,7 @@ binding.compute(params)                            # Binding: a plain request
 call = binding.make_stage(fixed, blanks)           # StageBinding: at a stage's first call
 call({'reduction': Reduction(bins=50)})            # the blanks' values; once per call through the stage
 driver = binding.make_accumulator(fixed, blanks)   # AccumulatorBinding: when an accumulator opens
-driver.push('sample', [Sample(file=path_611, transmission=None)])   # once per table of a push: its rows
+driver.push('sample', [Sample(file=path_611, transmission=computed_611)])   # once per table of a push: its rows
 driver.outputs()                                   # once per state that is read
 ```
 
@@ -827,7 +830,7 @@ A stage or an accumulator is made from some values only, so `make_stage` and `ma
 
 ```python
 {'reduction': Reduction(bins=2), 'beam_centre': BeamCentre(x=0.012, y=-0.003),  # a group as the model
- 'sample': [Sample(file=path_611, transmission=None),
+ 'sample': [Sample(file=path_611, transmission=computed_611),
             Sample(file=path_612, transmission=computed_612)]}  # a table as the list of its rows; computed_612 a ComputedTransmission
 ```
 
@@ -999,26 +1002,28 @@ The binding of `VOLUME` is a driver that sums, so the loop holds one volume and 
 `client.output` waits for its record, so the loop shows each result before it takes the next dataset:
 
 ```python
-for run in client.datasets.watch(Selector(role='sample')):
-    record = client.submit(IOFQ, params={'sample': {'file': run, 'transmission': None},
-                                         'can': {'file': dataset(run=60338)}})
-    show(client.output(record, 'iofq'))
+for run in client.datasets.watch(Selector(role='transmission')):
+    record = client.submit(TRANSMISSION, params={'run': {'file': run},
+                                                 'empty_beam': {'file': dataset(run=60336)}})
+    show(client.output(record, 'transmission'))
 ```
 
 ## Batch and automatic reduction
 
 [automatic-reduction.md](automatic-reduction.md) states these rules in full.
-`apply` fills a template once per dataset: the dataset is the value at the place `at`, a file field of the template's blank, such as `('sample', 'file')`, and `fields` gives the blank's other fields, the same for each dataset, or they take their defaults.
-A *lookup* fills further blanks, each at a field of its blank, such as the latest can run before each sample run at `('can', 'file')`.
-The lookup's `fields` gives the other fields of each blank it fills, by blank, as `apply` takes them: `Lookup(rules, fields={'can': {...}})`.
+The examples reduce transmission runs with `TRANSMISSION` (see Specs and bindings), whose parameters are groups of a file only.
+`apply` fills a template once per dataset: the dataset is the value at the place `at`, a file field of the template's blank, such as `('run', 'file')`.
+`fields` gives the blank's other fields, the same for each dataset, or they take their defaults.
+A blank whose group has a field `thickness: float` takes `fields={'thickness': 0.2}` for a batch of samples in one kind of cell.
+A *lookup* fills further blanks, each at a field of its blank, such as the latest empty-beam run before each transmission run at `('empty_beam', 'file')`.
+The lookup's `fields` gives the other fields of each blank it fills, by blank, as `apply` takes them: `Lookup(rules, fields={'empty_beam': {...}})`.
 `apply` returns the requests keyed by the value of a metadata field (`member_field`):
 
 ```python
-cans = Lookup({('can', 'file'): LastBefore(Selector(role='can'))})
-requests = apply(Template(IOFQ, blanks=('sample', 'can')), samples, client.datasets,
-                 at=('sample', 'file'), fields={'transmission': None}, member_field='temperature',
-                 lookup=cans)
-client.submit(requests, label='iofq', persist=True)
+empty_beams = Lookup({('empty_beam', 'file'): LastBefore(Selector(role='empty-beam'))})
+requests = apply(Template(TRANSMISSION, blanks=('run', 'empty_beam')), runs, client.datasets,
+                 at=('run', 'file'), member_field='sample', lookup=empty_beams)
+client.submit(requests, label='transmission', persist=True)
 ```
 
 A *rule* is plain data: a name, a template, a selector, a label, the place `at`, and optionally the blank's other `fields`, a `member_field`, a `lookup`, a `series`, and `persist`, the outputs it persists.

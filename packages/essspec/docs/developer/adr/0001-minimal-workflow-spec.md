@@ -140,7 +140,7 @@ group has no inline form and is given by reference only, as
 `ComputedTransmission` below. No field of a group that holds a file is a data
 value: no reference stands for such a group, so a request writes it field by
 field. A group in it that holds no file may have a field that is a data value,
-as in `Sample.transmission: ComputedTransmission | None`.
+as in `Sample.transmission: ComputedTransmission`.
 
 A data value that a request may leave out is wrapped as a group typed
 `| None`, such as `mask: PixelMask | None`, with the array a field of
@@ -184,7 +184,7 @@ class ComputedTransmission(BaseModel, arbitrary_types_allowed=True):  # by a tra
 
 class Sample(BaseModel):                          # a group that holds a file
     file: Path                                    # a NeXus file of a sample run
-    transmission: ComputedTransmission | None     # None: no transmission correction
+    transmission: ComputedTransmission            # by a transmission reduction of the run
 
 class Can(BaseModel):
     file: Path
@@ -282,10 +282,10 @@ A request that leaves out a parameter, or a field of a group, never leaves out
 a correction that a correct reduction needs. The default of `reduction` is a
 setting. The can run has no default, so a request or a template that leaves it
 out is refused. A correction that a correct reduction needs, but that a
-request may still leave out, is typed `X | None` with no default, such as the
-transmission of a `Sample` or `direct_beam: DirectBeam | None`: the request
-writes `None`, and its record says so. The output is I(Q) either way, and the params of its record
-say which corrections were applied. A step whose omission changes what a
+request may still leave out, is typed `X | None` with no default, such as
+`direct_beam: DirectBeam | None`: the request writes `None`, and its record
+says so. The output is I(Q) either way, and the params of its record say
+which corrections were applied. A step whose omission changes what a
 reader of the output must do with it, such as a normalization without which
 I(Q) is in counts, makes another output type, and so another spec. What
 `None` means, and when a union names the ways instead, is
@@ -417,10 +417,9 @@ group `Angle` of the run's `file: Path`.
 The runs of one sum are reduced with one set of settings. A value that differs
 per run, such as a motor position, is in the run's file. A value that the file
 lacks or has wrong is given next to the run, as a field of the row's group,
-so the request and its record hold it. Such a field takes
-a reference to a computed value in one row and an inline value in another, as
-a transmission computed for one run and `None` for another. A blank of a template is a
-whole parameter, and a group is one key of a sciline pipeline. So a stage of
+so the request and its record hold it. Such a field takes a value of its own
+in each row, as each run's transmission, computed by a transmission reduction
+of that run. A blank of a template is a whole parameter, and a group is one key of a sciline pipeline. So a stage of
 the single-run spec that tunes a transmission has `sample` as its blank, and
 reads the run again at each call.
 
@@ -577,9 +576,9 @@ output, and dims and units of an output for a UI.
   sections of the groups.
 - **A union inside a group**, such as a transmission that is taken from each
   run's file or computed, for one field of a row of a table. A generated UI
-  would show a choice inside a section; a correction that some rows have is a
-  group typed `X | None` instead, and a choice of way for all rows a
-  parameter.
+  would show a choice inside a section. A table whose rows are a union gives
+  each row that choice instead, a correction that some rows have is a group
+  typed `X | None`, and a choice of way for all rows is a parameter.
 - **A reference to a whole list** filling a list parameter. The table rules,
   such as distinct rows, could then be checked only in the call phase.
 - **References at a few places only**, the top of a value, of an element of a

@@ -575,9 +575,9 @@ def find_centre(params: FindCentreParams) -> FoundCentre:
 
 
 class SampleWithTransmission(Sample):
-    """A sample run and its transmission, or None: a group that holds a file."""
+    """A sample run and its transmission: a group that holds a file."""
 
-    transmission: Transmission | None
+    transmission: Transmission
 
 
 class CentredParams(Data):
@@ -600,13 +600,11 @@ CENTRED_MULTI = _spec(
 
 def centred(params: CentredParams) -> CentredOutputs:
     """
-    The sample runs, each times its transmission if given, minus the cans,
-    minus the centre.
+    The sample runs, each times its transmission, minus the cans, minus the
+    centre.
     """
     samples = sum(
-        _counts(s.file)
-        * (1.0 if s.transmission is None else s.transmission.fraction.value)
-        for s in params.sample
+        _counts(s.file) * s.transmission.fraction.value for s in params.sample
     )
     cans = sum((_counts(c.file) for c in params.can), 0.0)
     return CentredOutputs(centred=_array(samples - cans - params.centre.x))

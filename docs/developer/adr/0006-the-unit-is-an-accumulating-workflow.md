@@ -62,7 +62,7 @@ Suppose each sample run had its own transmission run, unlike in esssans, given t
 ```python
 class Sample(BaseModel):
     file: Path                   # the sample run's file
-    transmission: Path | None    # the file of its transmission run; None: no transmission correction
+    transmission: Path           # the file of its transmission run
 ```
 
 In the multi-run spec, each row of the table `sample` is such a group.
@@ -92,10 +92,10 @@ Masks per run type would fix this in esssans.
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, blanks=('sample', 'can')))
-iofq.push(sample=[{'file': dataset(run=611), 'transmission': None}])   # no transmission correction
+iofq.push(sample=[{'file': dataset(run=611), 'transmission': dataset(run=610)}])
 iofq.push(can=[{'file': dataset(run=614)}])
-iofq.push(sample=[{'file': dataset(run=613), 'transmission': None},
-                  {'file': dataset(run=615), 'transmission': None}])    # one push, one state
+iofq.push(sample=[{'file': dataset(run=613), 'transmission': dataset(run=612)},
+                  {'file': dataset(run=615), 'transmission': dataset(run=616)}])   # one push, one state
 ```
 
 ## Alternatives considered
