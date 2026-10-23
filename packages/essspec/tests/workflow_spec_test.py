@@ -115,6 +115,19 @@ class ByRun(BaseModel):
     run: SampleFile
 
 
+class ByWindow(BaseModel):
+    """An alternative with a group field."""
+
+    mode: Literal['window'] = 'window'
+    window: TimeRange
+
+
+class Undiscriminated(BaseModel):
+    """A group that holds a union of groups without a discriminator."""
+
+    by: ByMonitor | ByTime
+
+
 @pydantic.dataclasses.dataclass
 class RunFiles:
     """A dataclass, whose fields are not places."""
@@ -188,6 +201,12 @@ class ByCentre(BaseModel, arbitrary_types_allowed=True):
 
     mode: Literal['centre'] = 'centre'
     centre: CentreArray
+
+
+class Centring(BaseModel):
+    """A group given inline, with a place for a group given by reference only."""
+
+    centre: BeamCentre | None = None
 
 
 @pydantic.dataclasses.dataclass(
@@ -332,7 +351,7 @@ class TestMetadata:
         assert _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
 
     @pytest.mark.parametrize('tp', [BeamCentre, SampleFile, list[SampleFile | None]])
-    def test_a_file_or_a_group_of_a_data_value_takes_no_inline_value(
+    def test_a_file_or_a_group_that_holds_a_data_value_takes_no_inline_value(
         self, tp: Any
     ) -> None:
         assert not _takes_inline(spec(params=model('P', value=(tp, ...))), 'value')
@@ -500,6 +519,19 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
+                        centring=(
+                            Centring,
+                            Centring(centre=BeamCentre(position=sc.scalar(1.0))),
+                        ),
+                    )
+                },
+                f'P.centring: {NOT_A_VALUE}: centring.centre: BeamCentre is given by '
+                'reference: no request writes its field position, of CentreArray',
+            ),
+            (
+                {
+                    'params': model(
+                        'P',
                         x=(float, {'@ref': 'output', 'record': 'r1', 'output': 'x'}),
                     )
                 },
@@ -518,6 +550,7 @@ class TestModelRules:
                 )
                 for centre, where in (
                     ({'centre': (CentreArray, ...)}, 'Run.centre'),
+                    ({'centre': (CentreArray | None, None)}, 'Run.centre'),
                     ({'shifts': (list[CentreArray], [])}, 'Run.shifts'),
                     (
                         {
@@ -615,6 +648,15 @@ class TestModelRules:
                     )
                 },
                 'P.n: N.by: a union of groups has a discriminator',
+            ),
+            (
+                {
+                    'params': model(
+                        'P', a=(Undiscriminated, ...), b=(Undiscriminated, ...)
+                    )
+                },
+                'P.a: Undiscriminated.by: a union of groups has a discriminator.*; '
+                'P.b: Undiscriminated.by: a union of groups has a discriminator',
             ),
             (
                 {
@@ -1079,7 +1121,7 @@ class TestSerialization:
             'title': 'Time',
         }
 
-    def test_a_file_or_a_group_of_a_data_value_is_a_reference_to_its_type(
+    def test_a_file_or_a_group_that_holds_a_data_value_is_a_reference_to_its_type(
         self,
     ) -> None:
         schema = IOFQ.serialize().params_schema
@@ -1095,7 +1137,9 @@ class TestSerialization:
         }
         assert 'BeamCentre' not in schema['$defs']
 
-    def test_a_union_leaves_out_an_alternative_of_a_data_value_inline(self) -> None:
+    def test_a_union_offers_inline_only_the_alternatives_without_a_data_value(
+        self,
+    ) -> None:
         by = Annotated[ByMonitor | ByTime | ByCentre, Field(discriminator='mode')]
         schema = spec(params=model('P', by=(by, ...))).serialize().params_schema
         assert schema['properties']['by'] == {
@@ -1232,6 +1276,7 @@ class TestSerialization:
             'P',
             reduction=(Reduction, Reduction()),
             normalization=(Normalization, ...),
+            gate=(Annotated[ByMonitor | ByWindow, Field(discriminator='mode')], ...),
             sample=(run, ...),
         )
         schema = spec(params=params).serialize().params_schema
@@ -1240,6 +1285,7 @@ class TestSerialization:
         request = {
             'reduction': ref,
             'normalization': {'by': ref},
+            'gate': {'mode': 'window', 'window': ref},  # in an alternative
             'sample': {'file': DatasetRef(dataset='run:loki/1'), 'geometry': ref},
         }
         jsonschema.validate(to_jsonable_python(request), schema)
@@ -1247,6 +1293,7 @@ class TestSerialization:
             {'reduction': {'bins': ref}},  # a number is given inline only
             {'normalization': {'by': {'mode': 'time', 'seconds': ref}}},
             {'normalization': {'by': {'mode': ref, 'seconds': 1.0}}},  # at a tag
+            {'gate': {'mode': 'window', 'window': {'start': ref, 'stop': 1.0}}},
             {
                 'sample': {
                     'file': DatasetRef(dataset='run:loki/1'),

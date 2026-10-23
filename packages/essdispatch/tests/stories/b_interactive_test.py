@@ -74,13 +74,13 @@ def test_b2_add_a_run_to_a_sum_then_start_over_without_one(
 
 def test_b4_explore_a_4d_volume(client: Client, measure: Measure) -> None:
     run = measure(1, [1.0, 2.0, 3.0, 4.0])
-    volume = client.compute(ANGLE, params={'sample': run})
-    cuts = [client.output(volume, 'volume', select={'q': i}) for i in range(4)]
+    angle = client.compute(ANGLE, params={'sample': run})
+    cuts = [client.output(angle, 'volume', select={'q': i}) for i in range(4)]
     fit = client.compute(
         CUT,
-        params={'position': Position(index=2), 'volume': volume.ref('volume')},
+        params={'position': Position(index=2), 'volume': angle.ref('volume')},
     )
 
     assert [c.counts.value for c in cuts] == [1.0, 2.0, 3.0, 4.0]
     assert client.output(fit, 'cut').value == 3.0
-    assert client.records() == [volume, fit]  # the selections made no record
+    assert client.records() == [angle, fit]  # the selections made no record

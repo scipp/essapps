@@ -18,7 +18,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any, NewType
+from typing import Annotated, Any, Literal, NewType
 
 import numpy as np
 import pytest
@@ -107,17 +107,34 @@ class Reduction(BaseModel):
 
 class BeamCentre(Data):
     """
-    The beam centre found by ``BEAM_CENTRE``, as a position. It holds a data
-    value, so a request gives it by reference only; compare :class:`Centre`.
+    The beam centre that ``BEAM_CENTRE`` finds, as a position: a group that
+    holds a data value, so a request gives it by reference only (C1). Compare
+    :class:`Centre`, a beam centre that a request may also type in (I2).
     """
 
     position: sc.Variable
 
 
-class Normalization(Data):
-    """The normalization computed by ``VANADIUM`` from a vanadium run."""
+class ComputedNormalization(Data):
+    """
+    The normalization that ``VANADIUM`` computes from a vanadium run: a group
+    that holds a data value, so a request gives it by reference only.
+    """
 
+    kind: Literal['computed'] = 'computed'
     factor: sc.Variable
+
+
+class PublishedNormalization(Data):
+    """A normalization published to the catalogue, as a file of its factor (C2)."""
+
+    kind: Literal['published'] = 'published'
+    file: Path
+
+
+Normalization = Annotated[
+    ComputedNormalization | PublishedNormalization, Field(discriminator='kind')
+]
 
 
 class IofQParams(Data):
@@ -145,12 +162,22 @@ def _reduce(params: IofQParams, counts: np.ndarray) -> IofQOutputs:
     masked = np.where(counts < reduction.threshold, 0.0, counts)
     centre = params.beam_centre
     reduced = masked - (0.0 if centre is None else centre.position.value)
-    norm = params.normalization
-    reduced = reduced / (1.0 if norm is None else norm.factor.value)
+    reduced = reduced / _factor(params.normalization)
     return IofQOutputs(
         iofq=IofQ(_array(reduced.reshape(reduction.bins, -1).sum(axis=1))),
         masked=Masked(_array(masked)),
     )
+
+
+def _factor(
+    normalization: ComputedNormalization | PublishedNormalization | None,
+) -> float:
+    """The factor of a normalization, read from its file if it is published."""
+    if normalization is None:
+        return 1.0
+    if isinstance(normalization, PublishedNormalization):
+        return float(read_dataset(normalization.file))
+    return normalization.factor.value
 
 
 class IofQCanParams(IofQParams):
@@ -221,7 +248,7 @@ class VanadiumParams(Data):
 
 
 class VanadiumOutputs(Data):
-    normalization: Normalization
+    normalization: ComputedNormalization
 
 
 VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
@@ -230,7 +257,9 @@ VANADIUM = _spec('vanadium', VanadiumOutputs, params=VanadiumParams)
 def vanadium(params: VanadiumParams) -> VanadiumOutputs:
     total = float(_counts(params.vanadium).sum())
     return VanadiumOutputs(
-        normalization=Normalization(factor=sc.scalar(total * params.scaling.scale))
+        normalization=ComputedNormalization(
+            factor=sc.scalar(total * params.scaling.scale)
+        )
     )
 
 
@@ -523,7 +552,11 @@ def sliced(params: SlicesParams) -> SlicedOutputs:
 
 
 class Centre(BaseModel):
-    """A beam centre as plain data: typed in, or found by ``FIND_CENTRE``."""
+    """
+    A beam centre as a number, so a request may type it in, or give it by
+    reference to the output of ``FIND_CENTRE`` (I2). Compare
+    :class:`BeamCentre`, which a request gives by reference only (C1).
+    """
 
     x: float
 

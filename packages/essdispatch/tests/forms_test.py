@@ -25,7 +25,6 @@ from ess.dispatch.testing import FakeDatasets, StagedFunction, kept_rows, read_d
 from ess.spec import OutputRef, WorkflowSpec, function_binding
 
 SampleFile = NewType('SampleFile', Path)
-Offset = NewType('Offset', float)
 
 
 class Blob:
@@ -43,7 +42,7 @@ class MeasuredTransmission(BaseModel, arbitrary_types_allowed=True):
     """A group that holds a data value, so is given by reference only."""
 
     kind: Literal['measured'] = 'measured'
-    transmission: Blob
+    fraction: Blob
 
 
 class AssumedTransmission(BaseModel):
@@ -77,7 +76,7 @@ class Run(BaseModel, arbitrary_types_allowed=True):
 
     file: SampleFile
     shift: Shift = Field(default_factory=Shift)
-    offset: Offset | None = None
+    offset: float | None = None
     weights: list[float] = Field(default_factory=list, max_length=3)
     transmission: MeasuredTransmission | None = None
 
@@ -101,7 +100,7 @@ class LoadOutputs(BaseModel):
 
 class AddParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-    offset: Offset | None = None
+    offset: float | None = None
     transmission: MeasuredTransmission | None = None
     pair: tuple[float, float] = (0.0, 0.0)
     terms: list[float] = Field(default_factory=list)
@@ -281,6 +280,22 @@ class CorrectedParams(BaseModel):
     ] = AssumedTransmission()
 
 
+class Correction(BaseModel):
+    """
+    A group that holds no data value, so is given inline, with places for a
+    group given by reference only: through a union, and in a list.
+    """
+
+    transmission: Annotated[
+        MeasuredTransmission | AssumedTransmission, Field(discriminator='kind')
+    ] = AssumedTransmission()
+    bands: list[MeasuredTransmission] = Field(default_factory=list)
+
+
+class CorrectionParams(BaseModel):
+    correction: Correction = Field(default_factory=Correction)
+
+
 DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
@@ -289,6 +304,7 @@ STEPS = _spec('steps', StepsParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 CORRECTED = _spec('corrected', CorrectedParams, Value)
+CORRECTION = _spec('correction', CorrectionParams, Value)
 
 
 def load(params: LoadParams) -> LoadOutputs:
@@ -298,7 +314,7 @@ def load(params: LoadParams) -> LoadOutputs:
         shift=Shift(offset=value),
         labelled=LabelledShift(offset=value, label='first'),
         shifts=[Shift(offset=value), Shift(offset=2.0)],
-        transmission=MeasuredTransmission(transmission=Blob(value)),
+        transmission=MeasuredTransmission(fraction=Blob(value)),
         point=Point(x=value),
         values=[value, 2.0],
         run=Run(file=params.sample),
@@ -310,7 +326,7 @@ def add(params: AddParams) -> Value:
     return Value(
         value=params.shift.offset
         + (params.offset or 0.0)
-        + (0.0 if transmission is None else transmission.transmission.value)
+        + (0.0 if transmission is None else transmission.fraction.value)
         + sum(params.pair)
         + sum(params.terms)
     )
@@ -323,7 +339,7 @@ def runs(params: RunsParams) -> Value:
             read_dataset(run.file)
             + run.shift.offset
             + (run.offset or 0.0)
-            + (0.0 if run.transmission is None else run.transmission.transmission.value)
+            + (0.0 if run.transmission is None else run.transmission.fraction.value)
             for run in rows
         )
     )
@@ -340,7 +356,7 @@ def deep(params: DeepParams) -> Value:
     return Value(
         value=params.reduction.bins
         + centre
-        + (0.0 if transmission is None else transmission.transmission.value)
+        + (0.0 if transmission is None else transmission.fraction.value)
     )
 
 
@@ -359,7 +375,7 @@ def find(params: LoadParams) -> CentreOutputs:
 def corrected(params: CorrectedParams) -> Value:
     transmission = params.transmission
     if isinstance(transmission, MeasuredTransmission):
-        return Value(value=transmission.transmission.value)
+        return Value(value=transmission.fraction.value)
     return Value(value=transmission.value)
 
 
@@ -387,6 +403,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
             function_binding(CORRECTED, corrected),
+            function_binding(CORRECTION, lambda p: Value(value=0.0)),
         ],
     )
     yield Client(backend, proposal='p1', submitter='anna')
@@ -416,11 +433,11 @@ def test_a_group_is_given_by_value_or_by_reference(
 
 
 @pytest.mark.parametrize(
-    ('params', 'place', 'tp'),
+    ('params', 'place'),
     [
-        (lambda ref: {'offset': ref}, 'offset', 'Offset'),
-        (lambda ref: {'terms': [ref]}, 'terms[0]', 'float'),
-        (lambda ref: {'shift': {'offset': ref}}, 'shift.offset', 'float'),
+        (lambda ref: {'offset': ref}, 'offset'),
+        (lambda ref: {'terms': [ref]}, 'terms[0]'),
+        (lambda ref: {'shift': {'offset': ref}}, 'shift.offset'),
     ],
 )
 def test_a_reference_at_a_number_is_refused(
@@ -428,7 +445,6 @@ def test_a_reference_at_a_number_is_refused(
     loaded: Record,
     params: Callable[[OutputRef], dict[str, Any]],
     place: str,
-    tp: str,
 ) -> None:
     # A float names no role: every output of type float would fit.
     ref = loaded.ref('value')
@@ -436,7 +452,7 @@ def test_a_reference_at_a_number_is_refused(
     with pytest.raises(SubmitError) as raised:
         client.submit(ADD, params=params(ref))
     assert str(raised.value) == (
-        f'{place}: {ref}: {tp} is given inline; a reference stands for a group or '
+        f'{place}: {ref}: float is given inline; a reference stands for a group or '
         'a file only'
     )
 
@@ -881,12 +897,54 @@ def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
     assert client.output(computed, 'value') == 1.0
     ref, null = ADD.serialize().params_schema['properties']['transmission']['anyOf']
     assert (ref['dataType'], null) == ('MeasuredTransmission', {'type': 'null'})
-    with pytest.raises(
-        SubmitError,
-        match=r'^transmission: MeasuredTransmission is given by reference: no '
-        r'request writes its field transmission, of Blob$',
-    ):
-        client.submit(ADD, params={'transmission': {'transmission': 1.0}})
+    for inline in ({'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))):
+        with pytest.raises(
+            SubmitError,
+            match=r'^transmission: MeasuredTransmission is given by reference: no '
+            r'request writes its field fraction, of Blob$',
+        ):
+            client.submit(ADD, params={'transmission': inline})
+
+
+@pytest.mark.parametrize(
+    ('spec', 'params', 'place'),
+    [
+        (
+            DEEP,
+            lambda t: {'reduction': {'bins': 2, 'transmission': t}},
+            ('reduction', 'transmission'),
+        ),
+        (
+            CORRECTION,
+            lambda t: {'correction': {'transmission': t}},
+            ('correction', 'transmission'),
+        ),
+        (
+            CORRECTION,
+            lambda t: {'correction': {'bands': [t]}},
+            ('correction', 'bands', 0),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    'inline',
+    [{'kind': 'measured', 'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))],
+)
+def test_a_group_given_by_reference_only_is_refused_inside_an_inline_group(
+    client: Client,
+    spec: WorkflowSpec[Any, Any],
+    params: Callable[[Any], dict[str, Any]],
+    place: tuple[str | int, ...],
+    inline: Any,
+) -> None:
+    with pytest.raises(SubmitError) as raised:
+        client.submit(spec, params=params(inline))
+    (error,) = raised.value.errors
+    assert error.loc == place
+    assert error.msg == (
+        'MeasuredTransmission is given by reference: no request writes its field '
+        'fraction, of Blob'
+    )
 
 
 def test_an_alternative_that_holds_a_data_value_is_given_by_reference(
@@ -904,11 +962,11 @@ def test_an_alternative_that_holds_a_data_value_is_given_by_reference(
     with pytest.raises(
         SubmitError,
         match=r'^transmission: MeasuredTransmission is given by reference: no '
-        r'request writes its field transmission, of Blob$',
+        r'request writes its field fraction, of Blob$',
     ):
         client.submit(
             CORRECTED,
-            params={'transmission': {'kind': 'measured', 'transmission': 1.0}},
+            params={'transmission': {'kind': 'measured', 'fraction': 1.0}},
         )
 
 

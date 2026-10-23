@@ -47,8 +47,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
 
 
 @pytest.mark.xfail(
-    reason='publish, scicat, and datasets.add_published are not implemented; '
-    'loading a dataset as the object a parameter takes is deferred'
+    reason='publish, scicat, and datasets.add_published are not implemented'
 )
 def test_c2_vanadium_from_the_catalogue(
     client: Client, measure: Measure, datasets: FakeDatasets
@@ -61,8 +60,9 @@ def test_c2_vanadium_from_the_catalogue(
     published = datasets.add_published(scicat.entries[pid])
 
     sample = measure(2, [4.0, 8.0])
+    normalization = {'kind': 'published', 'file': dataset(pid=pid)}
     result = client.compute(
-        IOFQ, params={'sample': sample, 'normalization': dataset(pid=pid)}
+        IOFQ, params={'sample': sample, 'normalization': normalization}
     )
 
     assert client.output(result, 'iofq').values.tolist() == [1.0, 2.0]
@@ -78,8 +78,8 @@ def test_c4_reflectometry_angle_series(client: Client, measure: Measure) -> None
         measure(13, [4.0, 2.0], angle=2.0),
         measure(14, [2.0, 0.5], angle=4.0),
     ]
-    stitched = client.submit(STITCH, params={'runs': angles, 'reference': reference})
-    exported = client.compute(EXPORT, params={'result': stitched.ref('stitched')})
+    series = client.submit(STITCH, params={'runs': angles, 'reference': reference})
+    exported = client.compute(EXPORT, params={'result': series.ref('stitched')})
 
     assert client.output(exported, 'text') == '4.0,2.0,2.0,1.0,1.0,0.5,0.5,0.125'
     assert set(client.provenance(exported).datasets()) == {reference, *angles}

@@ -50,16 +50,17 @@ from ess.spec import (
 
 type Spec = WorkflowSpec[Any, Any]
 
-# The toy specs over numbers. A reference stands for a group only, so a
-# number that one workflow outputs and another takes is a Number.
+# The toy specs over numbers. A reference stands for a group or a file only,
+# so a number that one workflow outputs and another takes is the field of a
+# group, Amount.
 
 
-class Number(BaseModel):
+class Amount(BaseModel):
     value: float
 
 
-def _add(a: Number, b: Number) -> Number:
-    return Number(value=a.value + b.value)
+def _add(a: Amount, b: Amount) -> Amount:
+    return Amount(value=a.value + b.value)
 
 
 SampleFile = NewType('SampleFile', Path)
@@ -79,21 +80,21 @@ class Sample(BaseModel):
 
 
 class Value(BaseModel):
-    value: Number
+    value: Amount
 
 
 class LoadOutputs(BaseModel):
-    value: Number
-    extra: Number
+    value: Amount
+    extra: Amount
 
 
 class ShiftParams(BaseModel):
     shift: Shift = Field(default_factory=Shift)
-    source: Number
+    source: Amount
 
 
 class ShiftOutputs(BaseModel):
-    value: Number
+    value: Amount
 
 
 class ScaleParams(BaseModel):
@@ -102,7 +103,7 @@ class ScaleParams(BaseModel):
 
 
 class Parts(BaseModel):
-    parts: list[Number] = Field(min_length=1)
+    parts: list[Amount] = Field(min_length=1)
 
 
 def _spec(
@@ -149,7 +150,7 @@ class SumParams(BaseModel):
     scale: Factor = Field(default_factory=Factor)
     labels: Labels = Field(default_factory=Labels)
     runs: list[TaggedRun]
-    offset: Number | None = None
+    offset: Amount | None = None
 
 
 SUM = _spec('sum', params=SumParams, tables=('runs',))
@@ -174,8 +175,8 @@ WEIGHTED = _spec('weighted', params=WeightedParams, tables=('runs',))
 
 
 class MeanAndSpread(BaseModel):
-    mean: Number
-    spread: Number | None = None
+    mean: Amount
+    spread: Amount | None = None
 
 
 SPREAD = _spec('spread', params=Parts, outputs=MeanAndSpread, tables=('parts',))
@@ -187,8 +188,8 @@ class Reference(BaseModel):
 
 class StitchParams(BaseModel):
     reference: Reference
-    low: list[Number]
-    high: list[Number]
+    low: list[Amount]
+    high: list[Amount]
 
 
 class Curve(BaseModel):
@@ -273,16 +274,16 @@ NORMALIZED = _spec('normalized', params=NormalizedParams)
 
 
 def _value(value: float) -> Value:
-    return Value(value=Number(value=value))
+    return Value(value=Amount(value=value))
 
 
 def load_run(params: Sample) -> LoadOutputs:
     run = read_dataset(params.sample)
-    return LoadOutputs(value=Number(value=run), extra=Number(value=-run))
+    return LoadOutputs(value=Amount(value=run), extra=Amount(value=-run))
 
 
 def shift(params: ShiftParams) -> ShiftOutputs:
-    return ShiftOutputs(value=Number(value=params.source.value + params.shift.offset))
+    return ShiftOutputs(value=Amount(value=params.source.value + params.shift.offset))
 
 
 def scale(params: ScaleParams) -> Value:
@@ -300,15 +301,15 @@ def stitch(params: StitchParams) -> Curve:
     values, low ones first, scaled together so that they sum to the reference
     total.
     """
-    values = [number.value for number in (*params.low, *params.high)]
+    values = [amount.value for amount in (*params.low, *params.high)]
     total = params.reference.total
     return Curve(curve=[total * value / sum(values) for value in values])
 
 
-def append_digit(number: Number, digit: Number) -> Number:
+def append_digit(number: Amount, digit: Amount) -> Amount:
     """An order-sensitive combination, slow enough for pushes to overlap."""
     time.sleep(0.001)
-    return Number(value=number.value * 10 + digit.value)
+    return Amount(value=number.value * 10 + digit.value)
 
 
 class Fold:
@@ -356,7 +357,7 @@ class Averaging:
         self._count += len(rows)
 
     def outputs(self) -> MeanAndSpread:
-        return MeanAndSpread(mean=Number(value=self._total / self._count))
+        return MeanAndSpread(mean=Amount(value=self._total / self._count))
 
 
 class _ScaledTotal:
@@ -541,7 +542,9 @@ def test_calls_through_a_stage_are_staged_once(
         params={'shift': Shift(offset=1.5), 'source': load.ref('value')},
     )
 
-    assert [client.output(r, 'value').value for r in shifted] == [1.5, 2.5]
+    assert [client.output(r, 'value') for r in shifted] == [
+        Amount(value=v) for v in (1.5, 2.5)
+    ]
     assert shifted[1].request == plain.request
     assert shifting.staged == [('shift',)]  # the plain request makes no stage
 
@@ -555,7 +558,9 @@ def test_concurrent_calls_through_a_stage_stage_it_once(
     loading.set()
     client.wait(pending)
 
-    assert [client.output(r, 'value').value for r in pending] == [2.0, 3.0, 4.0, 5.0]
+    assert [client.output(r, 'value') for r in pending] == [
+        Amount(value=v) for v in (2.0, 3.0, 4.0, 5.0)
+    ]
     assert shifting.staged == [('shift',)]
 
 
@@ -571,7 +576,7 @@ def test_a_released_stage_takes_no_calls_and_runs_those_made_before(
     with pytest.raises(SubmitError, match='the stage was released'):
         _shift(client, stage, 2.0)
     assert client.wait(pending) is Status.COMPLETED
-    assert client.output(pending, 'value').value == 3.0
+    assert client.output(pending, 'value') == Amount(value=3.0)
     assert shifting.staged == [('shift',)]
 
 
@@ -586,7 +591,9 @@ def test_a_stage_keeps_what_its_template_references_until_it_has_staged(
 
     shifted = [_shift(client, stage, x) for x in (1.0, 2.0)]
     client.wait(shifted)
-    assert [client.output(r, 'value').value for r in shifted] == [3.0, 4.0]
+    assert [client.output(r, 'value') for r in shifted] == [
+        Amount(value=v) for v in (3.0, 4.0)
+    ]
     with pytest.raises(SubmitError, match='not kept by this client'):
         client.submit(_read(load))
 
@@ -619,7 +626,9 @@ def test_a_stage_keeps_the_dataset_its_name_resolved_to_when_it_was_made(
     assert datasets.resolve(dataset(run=1)) != run
     assert stage.template.params == {'sample': run}
     assert after.request == before.request
-    assert [client.output(r, 'value').value for r in (before, after)] == [2.0, 2.0]
+    assert [client.output(r, 'value') for r in (before, after)] == [
+        Amount(value=v) for v in (2.0, 2.0)
+    ]
     assert scaling.staged == [('scaling',)]
 
 
@@ -713,7 +722,7 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
         'sample: unknown dataset run:9': Template(
             SCALE, params={'sample': dataset(run=9)}, blanks=('scaling',)
         ),
-        r'source: dataset .* does not fit Number': Template(
+        r'source: dataset .* does not fit Amount': Template(
             SHIFT, params={'source': dataset(run=1)}, blanks=('shift',)
         ),
         f'source: record {cancelled.id} cancelled': Template(
@@ -776,8 +785,8 @@ def test_a_discriminator_is_kept_though_it_is_a_default(
             NORMALIZED, params={'normalization': {'by': {'mode': 'time', 'seconds': 2}}}
         )
 
-        assert client.output(timed, 'value').value == 2.0
-        assert client.output(as_dict, 'value').value == 2.0
+        assert client.output(timed, 'value') == Amount(value=2.0)
+        assert client.output(as_dict, 'value') == Amount(value=2.0)
 
 
 def test_a_discriminator_in_a_list_of_unions_is_kept() -> None:
@@ -828,9 +837,9 @@ def test_the_framework_never_calls_a_model_validator(datasets: FakeDatasets) -> 
         rows = client.accumulator(Template(UNCHECKED_ROWS, blanks=('steps',)))
         rows.push(steps=[Step(size=3.0)])
 
-        assert client.output(plain, 'value').value == 1.0
-        assert client.output(staged, 'value').value == 4.0
-        assert client.output(rows, 'value').value == 3.0
+        assert client.output(plain, 'value') == Amount(value=1.0)
+        assert client.output(staged, 'value') == Amount(value=4.0)
+        assert client.output(rows, 'value') == Amount(value=3.0)
 
 
 def test_a_template_and_its_calls_take_models(client: Client) -> None:
@@ -841,8 +850,8 @@ def test_a_template_and_its_calls_take_models(client: Client) -> None:
     )
     tuned = client.compute(_stage_shift(client, load), params={'shift': half})
 
-    assert client.output(client.compute(stage), 'value').value == 1.5
-    assert client.output(tuned, 'value').value == 1.5
+    assert client.output(client.compute(stage), 'value') == Amount(value=1.5)
+    assert client.output(tuned, 'value') == Amount(value=1.5)
 
 
 def test_a_group_with_a_field_its_model_lacks_is_refused(client: Client) -> None:
@@ -887,7 +896,7 @@ def test_a_pending_request_reads_a_value_released_after_its_submission(
     client.release(first)
     loading.set()
 
-    assert client.output(total, 'value').value == 3.0
+    assert client.output(total, 'value') == Amount(value=3.0)
     with pytest.raises(NotReadable, match='not kept'):  # read, then dropped
         client.output(first, 'value')
 
@@ -921,7 +930,7 @@ def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
     with pytest.raises(SubmitError, match=not_kept):  # however far it has run
         client.submit(_read(load))
     loading.set()
-    assert client.output(shifted, 'value').value == 2.0
+    assert client.output(shifted, 'value') == Amount(value=2.0)
     assert client.status(load) is Status.COMPLETED
 
 
@@ -988,7 +997,7 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         with pytest.raises(NotReadable, match='is not kept by this client'):
             released()
     with pytest.raises(SubmitError, match='is not kept by this client'):
-        total.push(parts=[Number(value=1.0)])  # a push is refused, not read
+        total.push(parts=[Amount(value=1.0)])  # a push is refused, not read
     for unknown in (
         lambda: client.output(unknown_load, 'value'),
         lambda: client.output(unknown_total),
@@ -1001,7 +1010,7 @@ def test_a_client_releases_only_what_it_keeps(backend: Backend, client: Client) 
     load = client.compute(_load(1))
     Client(backend, proposal='p1', submitter='bob').release(load)
 
-    assert client.output(load, 'value').value == 1.0
+    assert client.output(load, 'value') == Amount(value=1.0)
 
 
 def test_every_call_of_a_closed_client_raises_client_ended(client: Client) -> None:
@@ -1103,7 +1112,9 @@ def test_a_reference_names_the_record_of_the_state_pinned_at_submission(
     second = client.compute(_read(total))
 
     states = [_state(client, r) for r in (first, second)]
-    assert [client.output(r, 'value').value for r in (first, second)] == [3.0, 6.0]
+    assert [client.output(r, 'value') for r in (first, second)] == [
+        Amount(value=v) for v in (3.0, 6.0)
+    ]
     assert [r.request.params['source'] for r in (first, second)] == [
         state.ref('value') for state in states
     ]
@@ -1137,7 +1148,9 @@ def test_a_submission_makes_one_record_of_each_state_its_requests_read(
     assert state.request == Request(TOTAL, params=_parts(load))
     assert (state.label, state.member, state.submitter) == (None, None, 'anna')
     assert client.records(label='shifted') == list(reads.values())
-    assert [client.output(r, 'value').value for r in reads.values()] == [1.0, 2.0]
+    assert [client.output(r, 'value') for r in reads.values()] == [
+        Amount(value=v) for v in (1.0, 2.0)
+    ]
 
 
 def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
@@ -1159,9 +1172,11 @@ def test_an_accumulator_waits_for_its_fixed_values_and_reads_them_once(
     plain = client.compute(SUM, params={'runs': runs, **fixed})
 
     assert (
-        client.output(read, 'value').value == client.output(plain, 'value').value == 5.0
+        client.output(read, 'value')
+        == client.output(plain, 'value')
+        == Amount(value=5.0)
     )
-    opened = {'scale': Factor(), 'labels': Labels(), 'offset': Number(value=2.0)}
+    opened = {'scale': Factor(), 'labels': Labels(), 'offset': Amount(value=2.0)}
     assert scaled_sum.opened == [opened] * 2  # the accumulator and the plain request
     assert total.template == Template(SUM, params=fixed, blanks=('runs',))
     state = _state(client, read)
@@ -1184,7 +1199,9 @@ def test_an_accumulator_may_output_other_fields_than_it_takes(client: Client) ->
     plain = client.compute(SPREAD, params=_parts(*loads))
 
     assert (
-        client.output(read, 'value').value == client.output(plain, 'mean').value == 1.5
+        client.output(read, 'value')
+        == client.output(plain, 'mean')
+        == Amount(value=1.5)
     )
 
 
@@ -1198,7 +1215,9 @@ def test_a_field_validator_gives_the_driver_the_plain_request_s_values(
     plain = client.compute(WALK, params={**flipped, 'steps': steps})
 
     assert (
-        client.output(walk, 'value').value == client.output(plain, 'value').value == 6.0
+        client.output(walk, 'value')
+        == client.output(plain, 'value')
+        == Amount(value=6.0)
     )
     assert plain.request.params['scale'] == {'factor': 2.0}  # made positive
 
@@ -1220,7 +1239,7 @@ def test_field_validators_apply_at_the_opening_and_table_rules_at_reads(
         client.freeze(walk)
     walk.push(steps=[Step(size=2.0)])
 
-    assert client.output(walk, 'value').value == 6.0
+    assert client.output(walk, 'value') == Amount(value=6.0)
 
 
 def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
@@ -1236,7 +1255,7 @@ def test_a_table_that_needs_two_rows_takes_them_one_push_at_a_time(
             client.output(walk)
         walk.push(steps=[Step(size=2.0)])
 
-        assert client.output(walk, 'value').value == 3.0
+        assert client.output(walk, 'value') == Amount(value=3.0)
 
 
 def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
@@ -1248,7 +1267,7 @@ def test_an_accumulator_s_values_reach_the_driver_as_the_log_holds_them(
     acc.push(runs=[{'file': dataset(run=1), 'tag': Tag(tags=('c', 'd'))}])
     read = client.compute(_read(acc))
 
-    assert client.output(read, 'value').value == 1.0
+    assert client.output(read, 'value') == Amount(value=1.0)
     assert acc.template.params == {'labels': {'tags': ['a', 'b']}}  # JSON has no tuple
     (run,) = _state(client, read).request.params['runs']
     assert run['tag'] == {'tags': ['c', 'd']}
@@ -1263,7 +1282,7 @@ def test_an_optional_output_left_out_is_not_read(client: Client) -> None:
     spread.push(**parts)
     reading = client.compute(_read(spread, 'spread'))
 
-    assert client.output(record) == client.output(spread) == {'mean': Number(value=1.5)}
+    assert client.output(record) == client.output(spread) == {'mean': Amount(value=1.5)}
     for read in (
         lambda: client.output(record, 'spread'),
         lambda: client.output(spread, 'spread'),
@@ -1289,9 +1308,9 @@ def test_a_state_with_nothing_pushed_is_read_as_the_plain_request_over_no_rows(
         client.submit(TOTAL, params={'parts': []})
 
     assert (
-        client.output(summed, 'value').value
-        == client.output(plain, 'value').value
-        == 0.0
+        client.output(summed, 'value')
+        == client.output(plain, 'value')
+        == Amount(value=0.0)
     )
     assert client.provenance(summed).request == plain.request
     with pytest.raises(NotReadable, match=f'^{re.escape(str(refused.value))}$'):
@@ -1305,8 +1324,8 @@ def test_every_output_of_a_record_or_an_accumulator_is_read_without_a_name(
     total = _total(client)
     total.push(parts=[load.ref('value')])
 
-    one = Number(value=1.0)
-    assert client.output(load) == {'value': one, 'extra': Number(value=-1.0)}
+    one = Amount(value=1.0)
+    assert client.output(load) == {'value': one, 'extra': Amount(value=-1.0)}
     assert client.output(total) == {'value': one}
     assert load.refs() == {name: load.ref(name) for name in ('value', 'extra')}
     assert total.refs() == {'value': total.ref('value')}
@@ -1424,7 +1443,9 @@ def test_a_push_takes_rows_as_a_request_does(client: Client) -> None:
     plain = client.compute(WEIGHTED, params={'runs': rows})
 
     assert (
-        client.output(read, 'value').value == client.output(plain, 'value').value == 5.0
+        client.output(read, 'value')
+        == client.output(plain, 'value')
+        == Amount(value=5.0)
     )
     state = _state(client, read)
     assert state.request == plain.request
@@ -1465,7 +1486,7 @@ def test_a_reference_in_a_push_must_fit_its_field(client: Client) -> None:
     weighted = client.accumulator(Template(WEIGHTED, blanks=('runs',)))
 
     with pytest.raises(
-        SubmitError, match=r'^runs\[0\]\.weight: .*, of type Number, does not fit'
+        SubmitError, match=r'^runs\[0\]\.weight: .*, of type Amount, does not fit'
     ):
         weighted.push(runs=[{'file': dataset(run=1), 'weight': load.ref('value')}])
 
@@ -1486,7 +1507,7 @@ def test_a_reference_to_an_accumulator_is_checked_as_one_to_a_record(
         client.submit(SHIFT, params={'source': extra})
     with pytest.raises(SubmitError, match=r'^shift: .* does not fit Shift'):
         client.submit(
-            SHIFT, params={'shift': total.ref('value'), 'source': Number(value=1.0)}
+            SHIFT, params={'shift': total.ref('value'), 'source': Amount(value=1.0)}
         )
     with pytest.raises(
         SubmitError, match=r'^source: no accumulator .* in proposal p2$'
@@ -1523,7 +1544,7 @@ def test_only_a_request_reads_an_accumulator_and_no_client_its_state(
     with pytest.raises(SubmitError, match=rf'^source: {refusals[state]}'):
         client.submit(SHIFT, params={'source': state})
     loading.set()
-    assert client.output(read, 'value').value == 3.0
+    assert client.output(read, 'value') == Amount(value=3.0)
 
 
 def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
@@ -1541,7 +1562,7 @@ def test_a_push_takes_a_pending_record_and_refuses_one_that_did_not_complete(
 
     state = _state(client, read)
     assert [r.id for r in client.provenance(read).records()] == [state.id, pending.id]
-    assert client.output(read, 'value').value == 1.0
+    assert client.output(read, 'value') == Amount(value=1.0)
 
 
 def test_a_record_that_a_push_waits_for_and_that_fails_stops_the_accumulator(
@@ -1581,7 +1602,7 @@ def test_concurrent_pushes_add_in_the_order_they_are_logged(
     pushed = _state(client, read).request.params  # in the order they were logged
     plain = client.compute(DIGITS, params=pushed)
 
-    assert client.output(read, 'value').value == client.output(plain, 'value').value
+    assert client.output(read, 'value') == client.output(plain, 'value')
 
 
 def test_a_push_is_added_after_a_request_that_has_not_started(
@@ -1600,8 +1621,10 @@ def test_a_push_is_added_after_a_request_that_has_not_started(
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)  # the push waits for summed
     loading.set()
-    assert read.result(timeout=5).value == 3.0
-    assert client.output(summed, 'value').value == 3.0  # read 1.0 before the push
+    assert read.result(timeout=5) == Amount(value=3.0)
+    assert client.output(summed, 'value') == Amount(
+        value=3.0
+    )  # read 1.0 before the push
 
 
 def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
@@ -1620,7 +1643,7 @@ def test_cancelling_a_request_that_has_not_started_lets_the_push_be_added(
     with pytest.raises(TimeoutError):
         read.result(timeout=0.05)
     client.cancel(summed)
-    assert read.result(timeout=5).value == 3.0
+    assert read.result(timeout=5) == Amount(value=3.0)
     assert client.status([pending, summed]) == [Status.PENDING, Status.CANCELLED]
     loading.set()
 
@@ -1705,12 +1728,12 @@ def test_an_accumulator_adds_each_row_once(
     for n in (3, 4):
         datasets.measure(n, float(n))
     total = _total(client)
-    values = []
+    sums = []
     for n in (1, 2, 3, 4):
         total.push(parts=[client.compute(_load(n)).ref('value')])
-        values.append(client.output(client.submit(_read(total)), 'value').value)
+        sums.append(client.output(client.submit(_read(total)), 'value'))
 
-    assert values == [1.0, 3.0, 6.0, 10.0]
+    assert sums == [Amount(value=v) for v in (1.0, 3.0, 6.0, 10.0)]
     assert summing.pushed == 4
 
 
@@ -1739,7 +1762,7 @@ def test_a_push_that_fails_to_add_stops_the_accumulator(
     for read in (lambda: client.output(total), lambda: client.provenance(total)):
         with pytest.raises(NotReadable, match=f'^{stopped}$'):
             read()
-    assert client.output(before, 'value').value == 1.0
+    assert client.output(before, 'value') == Amount(value=1.0)
 
 
 def _refuse(fixed: Mapping[str, Any]) -> Fold:
@@ -1824,7 +1847,7 @@ def test_a_released_accumulator_adds_the_pushes_up_to_the_last_state_read(
     client.release(total)
     summing.go.set()
 
-    assert client.output(read, 'value').value == 3.0
+    assert client.output(read, 'value') == Amount(value=3.0)
     assert summing.pushed == 2  # the last push was dropped
 
 
@@ -2746,11 +2769,18 @@ def test_a_stopped_driver_is_dropped_before_the_accumulator_is_released(
 # Selections
 
 
+class Axis(Data):
+    """The bin edges of a grid along x: a group in a group."""
+
+    edges: sc.Variable
+
+
 class Grid(Data):
-    """Counts on an x-y grid, their sum over y, and a label."""
+    """Counts on an x-y grid, their sum over y, its x axis, and a label."""
 
     counts: sc.Variable
     profile: sc.Variable
+    axis: Axis
     label: str
 
 
@@ -2760,8 +2790,9 @@ class Label(BaseModel):
 
 class GridOutputs(Data):
     grid: Grid
-    counts: sc.Variable  # an array output, which no request references
+    background: sc.Variable  # an array output, which no request references
     label: Label
+    peak: float
 
 
 class GridParts(Data):
@@ -2779,10 +2810,12 @@ GRID_TOTAL = _spec('grid-total', params=GridParts, outputs=GridTotal, tables=('p
 def grid(params: Sample) -> GridOutputs:
     values = np.arange(6.0).reshape(3, 2) * read_dataset(params.sample)
     counts = sc.array(dims=['x', 'y'], values=values)
+    axis = Axis(edges=sc.array(dims=['x'], values=[0.0, 1.0, 2.0, 3.0]))
     return GridOutputs(
-        grid=Grid(counts=counts, profile=counts.sum('y'), label='a'),
-        counts=counts.copy(),
+        grid=Grid(counts=counts, profile=counts.sum('y'), axis=axis, label='a'),
+        background=sc.array(dims=['x', 'y'], values=np.arange(6.0).reshape(3, 2) + 10),
         label=Label(text='a'),
+        peak=counts.max().value,
     )
 
 
@@ -2790,6 +2823,7 @@ def _add_grids(total: Grid, part: Grid) -> Grid:
     return Grid(
         counts=total.counts + part.counts,
         profile=total.profile + part.profile,
+        axis=total.axis,
         label=total.label,
     )
 
@@ -2815,13 +2849,13 @@ def test_a_selection_copies_part_of_an_output_and_makes_no_record(
 ) -> None:
     client = grids
     record = _grid(client, 1)
-    row = client.output(record, 'counts', select={'x': 1})
-    corner = client.output(record, 'counts', select={'x': slice(0, 2), 'y': 1})
+    row = client.output(record, 'background', select={'x': 1})
+    corner = client.output(record, 'background', select={'x': slice(0, 2), 'y': 1})
     row.values[0] = 99.0
 
     assert row.dims == ('y',)
-    assert corner.values.tolist() == [1.0, 3.0]
-    assert client.output(record, 'counts')['x', 1].values.tolist() == [2.0, 3.0]
+    assert corner.values.tolist() == [11.0, 13.0]
+    assert client.output(record, 'background')['x', 1].values.tolist() == [12.0, 13.0]
     assert client.records() == [record]
 
 
@@ -2839,6 +2873,18 @@ def test_a_selection_of_a_group_slices_its_arrays_and_copies_its_other_fields(
     again = client.output(record, 'grid', select={'x': 1})
     assert (again.counts.values.tolist(), again.profile.value) == ([2.0, 3.0], 5.0)
     assert client.records() == [record]
+
+
+def test_a_selection_of_a_group_copies_a_group_in_it_whole(grids: Client) -> None:
+    client = grids
+    record = _grid(client, 1)
+    row = client.output(record, 'grid', select={'x': 1})
+    edges = row.axis.edges.values.tolist()
+    row.axis.edges.values[0] = 99.0
+
+    assert edges == [0.0, 1.0, 2.0, 3.0]  # has x, yet not sliced
+    again = client.output(record, 'grid', select={'x': 1})
+    assert again.axis.edges.values.tolist() == [0.0, 1.0, 2.0, 3.0]
 
 
 def test_a_selection_of_a_group_copies_whole_an_array_without_the_dimension(
@@ -2888,14 +2934,17 @@ def test_a_selection_of_a_group_by_a_dimension_no_array_has_is_refused(
             client.output(reader, 'grid', select={'z': 0})
 
 
-def test_a_selection_is_refused_for_an_output_not_declared_as_an_array(
+def test_a_selection_is_refused_for_an_output_that_declares_no_array(
     grids: Client,
 ) -> None:
     client = grids
     record = _grid(client, 1)
 
-    with pytest.raises(ValueError, match='needs an array, or a group with an array'):
-        client.output(record, 'label', select={'x': 0})  # a group without one
+    for name in ('label', 'peak'):  # a group without an array, and a number
+        with pytest.raises(
+            ValueError, match='needs an array, or a group with an array'
+        ):
+            client.output(record, name, select={'x': 0})
     with pytest.raises(ValueError, match='name of an output'):
         client.output(record, select={'x': 0})
 
@@ -2913,7 +2962,7 @@ def test_a_selection_the_output_cannot_take_raises_what_the_slice_raises(
     with pytest.raises(IndexError):
         client.output(total, 'grid', select={'x': 3})
     with pytest.raises(sc.DimensionError):
-        client.output(record, 'counts', select={'z': 0})
+        client.output(record, 'background', select={'z': 0})
     total.push(parts=[other.ref('grid')])  # the reads let go of the state
     selected = client.output(total, 'grid', select={'x': 2})
     assert selected.counts.values.tolist() == [12.0, 15.0]

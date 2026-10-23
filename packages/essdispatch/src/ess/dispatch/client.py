@@ -527,7 +527,7 @@ class Client:
         ``{'q': slice(0, 10)}``, and copies only that part. Of a group output,
         it picks that part of each array field that has the dimension, as
         ``sc.DataGroup`` slices its items, and copies the other fields whole:
-        ``client.output(volume, 'volume', select={'q': 0})``. It is refused
+        ``client.output(scan, 'volume', select={'q': 0})``. It is refused
         without ``name``, and for an output declared neither as an array nor
         as a group with an array field. A dimension that an array lacks, or an
         index out of range, raises what the slice raises; a dimension that no

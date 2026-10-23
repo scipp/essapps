@@ -39,10 +39,10 @@ def test_e1_series_grows_reduction_follows(
     loop.step()
 
     user = connect()  # any client of the proposal
-    curve = user.latest('reflectivity', member='si')
+    latest = user.latest('reflectivity', member='si')
     assert len(user.records(label='reflectivity')) == 2
-    assert curve.request.params['runs'] == [r2, r3, r4]  # run order
-    assert user.output(curve, 'stitched').curve.values.tolist() == [
+    assert latest.request.params['runs'] == [r2, r3, r4]  # run order
+    assert user.output(latest, 'stitched').curve.values.tolist() == [
         1.0,
         2.0,
         2.0,
