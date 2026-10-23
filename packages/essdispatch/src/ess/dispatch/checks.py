@@ -23,11 +23,13 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Places.* A request writes a value or a reference at each place: the
   value of a parameter, an element of a list, or a field of a group, at any
   depth, through a union of groups by its tag (see :mod:`ess.spec.places`).
-  A reference anywhere else, such as in a tuple, at a tag, or for a whole
-  list, is refused. A group is written as an object of its fields; a field
+  A reference anywhere else, such as in a tuple, at a tag, for a whole
+  list, or at a place whose type is not a group, a union of groups, or a
+  file, is refused. A group is written as an object of its fields; a field
   left out takes its default.
 - *Inline values.* An inline value is allowed where the type at the place
-  has a JSON form, and ``None`` where it is optional; so a file given as a
+  has a JSON form, a group where no field of it, at any depth, is given by
+  reference only, and ``None`` where it is optional; so a file given as a
   string is refused: a file is given as ``dataset(path=...)``. Each inline
   value is validated alone, by its field, or for an element of a list by its
   element type, from its JSON form, and a field that a model lacks is
@@ -41,8 +43,9 @@ The checks of a request; a template, a push, and a state check part of these:
   change a value they validated already (see
   :func:`ess.spec.field_types.inline`). A list parameter that is not a table
   meets its length constraints.
-- *References.* A file is given by reference to a dataset, and only a file
-  is (see :func:`ess.spec.field_types.is_file`): the dataset source checks
+- *References.* A reference stands for a group, a union of groups, or a
+  file. A file is given by reference to a dataset, and only a file is (see
+  :func:`ess.spec.field_types.is_file`): the dataset source checks
   that the proposal may read it, and the record holds its identity, to
   which its name is resolved, so it must be known. A reference to a record
   or an accumulator is checked by the backend, which knows what the client

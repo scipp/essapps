@@ -8,8 +8,7 @@ elsewhere, or inline: an output of an earlier record, a dataset the
 framework did not compute, or, in a request not yet accepted, an output of an
 accumulator that the framework holds. A *place* is the value of a parameter,
 an element of a list, or a field of a group, at any depth (see
-:mod:`ess.spec.places`). A reference stands for a group or a file only,
-never for a whole list.
+:mod:`ess.spec.places`). A reference stands for a group or a file only.
 A reference is what a request names and what a record keeps; turning it into
 the data a workflow takes, a local path or an object, is the business of
 whatever runs the workflow.

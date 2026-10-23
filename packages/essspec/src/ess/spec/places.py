@@ -11,7 +11,7 @@ parameter, each element of a list, and each field of a group, at any depth::
     {
         'sample': {                                    # sample
             'run': dataset(run=101),                   # sample.run
-            'transmission': t_record.ref('fraction'),  # sample.transmission
+            'transmission': t.ref('transmission'),     # sample.transmission
         },
         'reduction': {'bins': 50, 'mask': m.ref('mask')},  # reduction, .bins, .mask
         'runs': [{'run': dataset(run=102)}],           # runs, runs[0], runs[0].run
@@ -49,8 +49,9 @@ found beam centre, and a data value is a field of one::
         kind: Literal['computed'] = 'computed'
         transmission: sc.DataArray  # a data value: given by reference only
 
-A group that holds a file is given field by field, so it holds no data
-value (see :func:`unwritten`).
+No field of a group that holds a file is a data value: no reference stands
+for such a group, so a request writes it field by field (see
+:func:`unwritten`).
 
 The contents of a tuple, a set, a dict, a list that may be ``None``, a
 ``TypedDict``, or a dataclass are not places: such a value is written
@@ -208,22 +209,15 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 'of its fields',
             )
         group = _group(loc, slot, fields)
-        if group is not None and (data := unwritten(group)) is not None:
-            held_type = type_name(group.model_fields[data].annotation)
-            raise _refused(
-                loc,
-                f'{type_name(group)} is given by reference: no request writes '
-                f'its field {data}, of {held_type}',
-            )
+        _written(loc, group)
         if any(ref_at(at, v) is not None for at, v in positions(loc, fields)):
             return _fields(loc, group, fields, on_ref)
+        _written_inside(loc, group, fields)
         return _inline(loc, slot, value)
     if is_file(tp):
         raise _refused(
             loc, f'{value!r} is not a dataset; a file is given as dataset(path=...)'
         )
-    if not has_json_form(slot.model, slot.name):
-        raise _refused(loc, f'{value!r}: {type_name(tp)} has no JSON form')
     for at, item in positions(loc, value):
         if (inner := ref_at(at, item)) is not None:
             raise _refused(
@@ -233,6 +227,51 @@ def _held(loc: Loc, slot: _Slot, value: Any, on_ref: OnRef) -> Any:
                 'None are not places',
             )
     return _inline(loc, slot, value)
+
+
+def _written(loc: Loc, group: type[BaseModel] | None) -> None:
+    """Refuse ``group`` written at ``loc`` if it is given by reference only."""
+    if group is not None and (data := unwritten(group)) is not None:
+        held_type = type_name(optional(group.model_fields[data].annotation)[0])
+        raise _refused(
+            loc,
+            f'{type_name(group)} is given by reference: no request writes its '
+            f'field {data}, of {held_type}',
+        )
+
+
+def _written_inside(
+    loc: Loc, group: type[BaseModel] | None, value: Mapping[str, Any]
+) -> None:
+    """
+    Refuse a group given by reference only at a place inside ``value``, the
+    fields of ``group`` given inline, at any depth. Nothing is validated, so
+    that a validator of ``group`` that widens what a field accepts still
+    works; a value that is not what its place takes is left to validating
+    ``group`` whole.
+    """
+    if group is None:
+        return
+    for name, given in value.items():
+        if name not in group.model_fields or not groups_at(group, name):
+            continue
+        slot = _Slot(group, name)
+        if not slot.is_list:
+            places = [((*loc, name), slot, given)]
+        elif isinstance(given, list):
+            places = [((*loc, name, i), slot.one, v) for i, v in enumerate(given)]
+        else:
+            continue
+        for at, one, item in places:
+            fields = dict(item) if isinstance(item, BaseModel) else item
+            if not isinstance(fields, Mapping):
+                continue
+            try:
+                inner = _group(at, one, fields)
+            except ParamsError:
+                continue  # validating the group whole names the problem
+            _written(at, inner)
+            _written_inside(at, inner, fields)
 
 
 def _fields(
@@ -477,7 +516,7 @@ def unwritten(
     The first field of ``group`` at which a request writes nothing, ``None``
     aside, or ``None`` if there is none. Such a field is a data value, which
     has no JSON form and takes no reference, or a group that holds a file
-    and a field so. A group with such a field is given by reference only.
+    and such a field. A group with such a field is given by reference only.
     ``seen`` holds the groups looked into already, so that a group at a
     place inside itself ends.
     """

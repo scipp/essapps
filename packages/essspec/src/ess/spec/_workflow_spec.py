@@ -83,8 +83,9 @@ framework: what the framework needs, it reads from the field types (see
   tuple, a dict, or a dataclass, whose contents are not places, so no
   dataset can give it.
 - A data value is a field of a group, not a parameter or the element of
-  one, since no request writes it at a place of its own. A group that holds
-  a file holds no data value: the file makes it given field by field.
+  one, since no request writes it at a place of its own. No field of a group
+  that holds a file is a data value: no reference stands for such a group,
+  so a request writes it field by field.
 - A union of groups, a parameter or inside a group, is discriminated by the
   name of its tag field, not by a callable, so that the tag of a value tells
   its alternative. The tag field of each alternative is a ``Literal`` of one
@@ -431,7 +432,7 @@ def _params_problems(model: type[BaseModel]) -> list[str]:
                 f'{where}: a list parameter carries only length constraints, '
                 f'not {other}; a check of one row belongs to the element type'
             )
-        if place := _place_problems(model, name, (), set()):
+        if place := _place_problems(model, name, (), {}):
             problems.extend(f'{where}: {problem}' for problem in place)
         elif not (is_file(tp) or groups_at(model, name) or has_json_form(model, name)):
             problems.append(
@@ -459,7 +460,7 @@ def _place_problems(
     model: type[BaseModel],
     name: str,
     path: tuple[type[BaseModel], ...],
-    seen: set[type[BaseModel]],
+    seen: dict[type[BaseModel], list[str]],
 ) -> list[str]:
     """
     Refuse a field of ``model`` whose places a request cannot write: a file
@@ -467,8 +468,8 @@ def _place_problems(
     take apart by a value's tag, a group at a place inside itself, and the problems
     of each group at its places, each named by its group (see
     :func:`_group_problems`). ``path`` holds the groups that hold the field,
-    and ``seen`` the groups checked already, so that a group at several
-    places is checked once.
+    and ``seen`` the problems of the groups checked already, so that a group
+    at several places is checked once, and its problems named at each.
     """
     try:
         groups = groups_at(model, name)
@@ -485,16 +486,19 @@ def _place_problems(
             problems.append(
                 f'{group.__name__}: a group is not at a place inside itself'
             )
-        elif group not in seen:
-            seen.add(group)
-            problems.extend(_group_problems(group, (*path, group), seen))
+        elif group in seen:
+            problems.extend(seen[group])
+        else:
+            seen[group] = []
+            seen[group] = _group_problems(group, (*path, group), seen)
+            problems.extend(seen[group])
     return problems
 
 
 def _group_problems(
     group: type[BaseModel],
     path: tuple[type[BaseModel], ...],
-    seen: set[type[BaseModel]],
+    seen: dict[type[BaseModel], list[str]],
 ) -> list[str]:
     """
     Refuse a group whose fields a request cannot write each at its place: a
@@ -505,8 +509,9 @@ def _group_problems(
     not a value, since a field left out holds its default. Field and model
     validators of any mode are allowed: they run whenever the group is
     validated whole (see :mod:`ess.spec.places`). A group that holds a file
-    and a data value is refused too: the file makes it given field by field,
-    and no request writes the data value (see :func:`~ess.spec.places.unwritten`).
+    is refused if a field of it is a data value: a request writes the group
+    field by field, and the data value it cannot write (see
+    :func:`~ess.spec.places.unwritten`).
     ``path`` holds the groups that hold ``group`` and itself.
     """
     problems = []

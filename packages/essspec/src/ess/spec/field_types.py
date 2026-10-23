@@ -213,10 +213,9 @@ def fits(data: Any, field: Any) -> bool:
     or when ``field``, with its ``NewType``s removed, reaches ``data`` or a
     superclass of it. Data of one type fit a union when they fit one of its
     members: a ``BeamCentre`` fits ``BeamCentre | FindCentre``. Other generic
-    aliases, such as ``list[int]``, fit only themselves. So with ``IofQ`` and
-    ``Transmission`` ``NewType``s of ``sc.DataArray``, an ``IofQ`` fits
-    ``sc.DataArray``, a plain ``sc.DataArray`` fits ``Transmission`` (a role
-    narrows a general output), and an ``IofQ`` does not fit ``Transmission``.
+    aliases, such as ``list[int]``, fit only themselves. So a
+    ``ComputedTransmission`` fits ``FromFile | ComputedTransmission``, and an
+    instance of a subclass of a group fits the group.
     """
     data, _ = optional(data)
     field, _ = optional(field)

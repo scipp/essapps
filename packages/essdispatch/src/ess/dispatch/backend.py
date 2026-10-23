@@ -187,9 +187,9 @@ reader of its state is done, since no push comes to drop them.
 
 A selection reads part of an array output of a record or an accumulator's
 state by dimension name, and copies only that part; of a group output, the
-part of each array field that has the dimension, as scipp slices the items
-of a dataset. A read of an
-accumulator's state still has the state's outputs computed whole.
+part of each array field that has the dimension, as ``sc.DataGroup`` slices
+its items. A read of an accumulator's state still has the state's outputs
+computed whole.
 """
 
 from __future__ import annotations
@@ -296,9 +296,9 @@ def _selected(value: Any, select: Selection) -> Any:
     ``value[dim, index]``, such as a scipp variable or data array. A
     dimension it lacks, or an index out of range, raises what the slice
     raises. Of a group, each dimension slices the array fields that have
-    it, as scipp slices the items of a dataset, and every other field is
-    copied whole, a group in it too; a dimension that no array field has
-    raises ``ValueError``.
+    it, as ``sc.DataGroup`` slices its items, and every other field is
+    copied whole, a group in it too. Unlike a ``sc.DataGroup``, a group
+    refuses a dimension that no array field has, with ``ValueError``.
     """
     if not isinstance(value, BaseModel):
         for dim, index in select.items():
@@ -306,26 +306,20 @@ def _selected(value: Any, select: Selection) -> Any:
         return value.copy()
     fields = dict(value)
     for dim, index in select.items():
-        sliced = {n: v[dim, index] for n, v in fields.items() if dim in _dims(v)}
+        sliced = {
+            n: v[dim, index] for n, v in fields.items() if dim in getattr(v, 'dims', ())
+        }
         if not sliced:
             raise ValueError(
                 f'{type(value).__name__} has no array field with dimension {dim!r}'
             )
         fields |= sliced
-    return value.model_copy(
-        update={
-            n: v.copy() if _dims(v) else copy.deepcopy(v) for n, v in fields.items()
-        }
-    )
-
-
-def _dims(value: Any) -> tuple[str, ...]:
-    """The dimensions of an array, or none of another value."""
-    return () if isinstance(value, type) else tuple(getattr(value, 'dims', ()))
+    # A deep copy of a slice copies the slice only.
+    return value.model_copy(update=copy.deepcopy(fields))
 
 
 def _is_array(tp: Any) -> bool:
-    """Whether ``tp`` is a type with named dimensions, ``dims``."""
+    """Whether ``tp``, possibly optional, is a type with named dimensions."""
     tp = base(optional(tp)[0])
     return isinstance(tp, type) and hasattr(tp, 'dims')
 
