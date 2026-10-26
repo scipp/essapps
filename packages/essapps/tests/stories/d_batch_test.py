@@ -1,0 +1,218 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""Section D of docs/developer/user-stories.md: batch reduction."""
+
+from collections.abc import Callable
+from dataclasses import replace
+from itertools import islice
+
+import pytest
+
+from ess.apps import Client, Request, Selector, SubmitError, Template, apply
+
+from .conftest import IOFQ, IOFQ_V2, VOLUME, Measure, Reduction, ReductionV2
+
+
+def test_d1_temperature_scan(
+    client: Client,
+    measure: Measure,
+    corrupt: Callable[..., None],
+) -> None:
+    temperatures = ['250K', '260K', '270K', '280K', '290K']
+    runs = [
+        measure(n, [float(n)] * 4, temperature=t)
+        for n, t in enumerate(temperatures, start=1)
+    ]
+    corrupt(runs[1])
+    template = Template(
+        IOFQ,
+        params={'reduction': Reduction(bins=1), 'normalization': None},
+        blanks=('sample',),
+    )
+    requests = apply(
+        template,
+        runs,
+        client.datasets,
+        at=('sample', 'file'),
+        member_field='temperature',
+    )
+    scan = client.compute(requests, label='scan', persist=True)
+
+    assert [
+        client.output(scan[t], 'iofq').values.tolist() for t in ('250K', '270K', '290K')
+    ] == [[4.0], [12.0], [20.0]]
+    assert client.wait(scan) == {
+        '250K': 'completed',
+        '260K': 'failed',
+        '270K': 'completed',
+        '280K': 'completed',
+        '290K': 'completed',
+    }
+    assert {r.member: r for r in client.records(label='scan')} == scan
+
+
+def test_d2_overnight_cluster_batch(
+    client: Client,
+    connect: Callable[..., Client],
+    measure: Measure,
+    corrupt: Callable[..., None],
+    repair: Callable[..., None],
+) -> None:
+    runs = {str(n): measure(n, [float(n)] * 4) for n in range(1, 31)}
+    corrupt(runs['7'])
+    for member, run in runs.items():
+        client.submit(
+            IOFQ,
+            params={'sample': {'file': run}, 'normalization': None},
+            label='night',
+            member=member,
+            persist=True,
+        )
+    client.close()  # the laptop is closed; the persisted runs go on
+
+    morning = connect()
+    night = {r.member: r for r in morning.records(label='night')}
+    failed = [night[m] for m, s in morning.wait(night).items() if s == 'failed']
+    reasons = morning.failure(failed)
+    repair(runs['7'])
+    reruns = [
+        morning.submit(
+            r.request.spec,
+            params=r.request.params,
+            label=r.label,
+            member=r.member,
+            persist=True,
+        )
+        for r in failed
+    ]
+    morning.wait(reruns)
+
+    assert [r.member for r in failed] == ['7']
+    assert reasons == ['OSError: file signature not found']
+    assert reruns[0].request == failed[0].request
+    assert morning.latest('night', member='7') == reruns[0]
+    assert morning.output(night['1'], 'iofq').values.tolist() == [2.0, 2.0]
+    assert morning.output(reruns[0], 'iofq').values.tolist() == [14.0, 14.0]
+    assert morning.status(failed) == ['failed']
+    assert len(morning.records(label='night')) == 31
+
+
+def test_d3_cancel_and_resubmit(client: Client, measure: Measure) -> None:
+    runs = [measure(n, [1.0, 1.0, 1.0, 1.0]) for n in range(1, 501)]
+    wrong = Template(
+        IOFQ,
+        params={'reduction': Reduction(threshold=20.0), 'normalization': None},
+        blanks=('sample',),
+    )
+    first = client.submit(
+        apply(wrong, runs, client.datasets, at=('sample', 'file'), member_field='run'),
+        label='scan',
+        persist=True,
+    )
+    client.cancel(first)
+    fixed = replace(
+        wrong,
+        params={'reduction': Reduction(threshold=0.5), 'normalization': None},
+    )
+    second = client.compute(
+        apply(fixed, runs, client.datasets, at=('sample', 'file'), member_field='run'),
+        label='scan',
+        persist=True,
+    )
+
+    assert set(client.wait(first).values()) <= {'completed', 'cancelled'}
+    assert [
+        client.output(r, 'iofq').values.tolist() for r in second.values()
+    ] == 500 * [[2.0, 2.0]]
+    assert len(client.records(label='scan')) == 1000
+
+
+def test_d4_typo_caught_before_500_failures(client: Client, measure: Measure) -> None:
+    runs = [measure(n, [1.0, 1.0]) for n in range(1, 501)]
+    typo = Template(
+        IOFQ,
+        params={'reduction': {'threshold': '2,5'}, 'normalization': None},
+        blanks=('sample',),
+    )
+    requests = apply(
+        typo, runs, client.datasets, at=('sample', 'file'), member_field='run'
+    )
+
+    with pytest.raises(SubmitError, match=r'reduction\.threshold'):
+        client.submit(requests, label='scan')
+    assert client.records() == []
+
+
+def test_d6_rerun_a_batch_with_a_new_workflow_version(
+    client: Client, measure: Measure
+) -> None:
+    template = Template(
+        IOFQ,
+        params={'reduction': Reduction(threshold=1.5), 'normalization': None},
+        blanks=('sample',),
+    )
+    runs = [measure(n, [1.0, 2.0, 3.0, 4.0]) for n in (1, 2, 3)]
+    client.compute(
+        apply(
+            template, runs, client.datasets, at=('sample', 'file'), member_field='run'
+        ),
+        label='scan',
+        persist=True,
+    )
+
+    before = client.records(label='scan')
+    runs = [r.request.params['sample']['file'] for r in before]
+    renamed = apply(
+        replace(template, spec=IOFQ_V2),
+        runs,
+        client.datasets,
+        at=('sample', 'file'),
+        member_field='run',
+    )
+    with pytest.raises(SubmitError, match=r'reduction\.threshold: Extra inputs'):
+        client.submit(renamed, label='scan')
+    moved = replace(
+        template,
+        spec=IOFQ_V2,
+        params={'reduction': ReductionV2(mask_below=1.5), 'normalization': None},
+    )
+    requests = apply(
+        moved, runs, client.datasets, at=('sample', 'file'), member_field='run'
+    )
+    after = list(client.compute(requests, label='scan', persist=True).values())
+
+    assert [
+        client.output(r, 'iofq').values.tolist() for r in (before[0], after[0])
+    ] == [
+        [2.0, 7.0],
+        [0.0, 2.0, 3.0, 4.0],
+    ]
+    assert [r.request.params['reduction']['bins'] for r in (before[0], after[0])] == [
+        2,
+        4,
+    ]
+    assert len(client.records(label='scan')) == 6
+
+
+def test_d7_rotation_scan_over_three_hundred_angles(
+    client: Client, measure: Measure
+) -> None:
+    for n in range(1, 301):
+        measure(n, [1.0, float(n)], scan='17')
+        if n == 150:
+            measure(5, [1.0, 5.0], scan='17')
+
+    cuts, pushed = [], []
+    scan = client.accumulator(Template(VOLUME, blanks=('runs',)))
+    for run in islice(client.datasets.watch(Selector(scan='17')), 300):
+        scan.push(runs=[{'file': run}])  # added once the previous cut is copied
+        pushed.append({'file': run})
+        cuts.append(client.output(scan, 'volume', select={'q': 0}))  # no record
+    total = client.freeze(scan, persist=True)
+
+    assert [c.counts.value for c in cuts] == [float(k) for k in range(1, 301)]
+    assert client.output(total, 'volume').counts.values.tolist() == [300.0, 45150.0]
+    assert total.request == Request(VOLUME, params={'runs': pushed})  # push order
+    assert client.records() == [total]  # the cuts made no record
+    provenance = client.provenance(total)
+    assert len(provenance.datasets()) == 300  # run 5, measured again, once

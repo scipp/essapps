@@ -50,7 +50,7 @@ What the framework adds to the plain loop:
 
 ## Terms
 
-The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this repository.
+The framework is essapps (`ess.apps`) and essspec (`ess.spec`), in this repository.
 
 | Term | What it is |
 |---|---|

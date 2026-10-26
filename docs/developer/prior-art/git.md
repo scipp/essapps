@@ -101,7 +101,7 @@ Git is distributed with no single writer; here one process writes a proposal's h
 
 [cg]: https://github.com/git/git/blob/6de20f6092dcf9bdb1c8efe03db4b70c82b423dd/Documentation/technical/commit-graph.adoc?plain=1#L40-L96
 [rlo]: https://github.com/git/git/blob/6de20f6092dcf9bdb1c8efe03db4b70c82b423dd/Documentation/rev-list-options.adoc?plain=1#L887-L891
-[latest]: ../../../packages/essdispatch/src/ess/dispatch/client.py
+[latest]: ../../../packages/essapps/src/ess/apps/client.py
 [sm]: https://github.com/git/git/blob/6de20f6092dcf9bdb1c8efe03db4b70c82b423dd/Documentation/gitsubmodules.adoc?plain=1#L37-L38
 [revdate]: https://github.com/git/git/blob/6de20f6092dcf9bdb1c8efe03db4b70c82b423dd/Documentation/revisions.adoc?plain=1#L90-L100
 [revname]: https://github.com/git/git/blob/6de20f6092dcf9bdb1c8efe03db4b70c82b423dd/Documentation/revisions.adoc?plain=1#L27-L33

@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""Section E of docs/developer/user-stories.md: automatic reduction."""
+
+# ruff: noqa: F821
+
+from collections.abc import Callable
+from dataclasses import replace
+
+import pytest
+
+from ess.apps import Client, Rule, Selector, Template, TriggerLoop
+from ess.apps.testing import FakeDatasets
+
+from .conftest import IOFQ, IOFQ_V2, STITCH, Measure, Reduction
+
+NO_PUBLISH = 'publication is not implemented'
+
+
+def test_e1_series_grows_reduction_follows(
+    client: Client, connect: Callable[..., Client], measure: Measure
+) -> None:
+    reference = measure(1, [1.0, 1.0], role='reference')
+    template = Template(
+        STITCH, params={'reference': {'file': reference}}, blanks=('runs',)
+    )
+    rule = Rule(
+        'reflectivity',
+        template,
+        selector=Selector(role='sample'),
+        series='sample',
+        at=('runs', 'file'),
+        label='reflectivity',
+    )
+    loop = TriggerLoop(client, rules=[rule])
+
+    r2 = measure(2, [1.0, 2.0], role='sample', sample='si')
+    loop.step()
+    r4 = measure(4, [4.0, 8.0], role='sample', sample='si')
+    r3 = measure(3, [1.0, 1.0], role='sample', sample='si')
+    measure(2, [1.0, 2.0], role='sample', sample='si')
+    loop.step()
+
+    user = connect()  # any client of the proposal
+    latest = user.latest('reflectivity', member='si')
+    assert len(user.records(label='reflectivity')) == 2
+    # run order
+    assert latest.request.params['runs'] == [{'file': r} for r in (r2, r3, r4)]
+    assert user.output(latest, 'stitched').curve.values.tolist() == [
+        1.0,
+        2.0,
+        2.0,
+        2.0,
+        2.0,
+        4.0,
+    ]
+
+
+def test_e2_automatic_reduction_goes_quiet(
+    upgrade: Callable[..., Client], measure: Measure
+) -> None:
+    rule = Rule(
+        'auto-iofq',
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
+        at=('sample', 'file'),
+        selector=Selector(role='sample'),
+        label='iofq',
+    )
+    upgraded = upgrade(specs=[IOFQ_V2])  # a backend without version 1
+    loop = TriggerLoop(upgraded, rules=[rule])
+    measure(1, [1.0, 1.0], role='sample')
+
+    assert loop.step() == []
+    assert loop.status(rule).reason == '1: unknown spec sans-iofq/v1'
+
+
+@pytest.mark.xfail(reason=NO_PUBLISH)
+def test_e3_reduction_of_our_own_output(
+    client: Client, measure: Measure, datasets: FakeDatasets
+) -> None:
+    rule = Rule(
+        'auto-iofq',
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
+        at=('sample', 'file'),
+        selector=Selector(),
+        label='iofq',
+    )
+    loop = TriggerLoop(client, rules=[rule])
+    measure(1, [1.0, 2.0, 3.0, 4.0])
+    (reduced,) = loop.step()
+    pid = client.publish(reduced.ref('iofq'), 'scicat')
+    datasets.add_published(scicat.entries[pid])
+
+    assert loop.step() == []
+
+
+def test_e4_template_improved_during_a_beamtime(
+    client: Client, connect: Callable[..., Client], measure: Measure
+) -> None:
+    rule = Rule(
+        'auto-iofq',
+        Template(IOFQ, params={'normalization': None}, blanks=('sample',)),
+        at=('sample', 'file'),
+        selector=Selector(role='sample'),
+        label='iofq',
+    )
+    first = measure(1, [1.0, 2.0, 3.0, 4.0], role='sample')
+    (before,) = TriggerLoop(client, rules=[rule]).step()
+
+    improved = replace(
+        rule,
+        template=replace(
+            rule.template,
+            params={'reduction': Reduction(threshold=1.5), 'normalization': None},
+        ),
+    )
+    second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
+    (after,) = TriggerLoop(client, rules=[improved]).step()
+
+    user = connect()  # any client of the proposal
+    assert after.request.datasets() == [second]
+    assert [user.output(r, 'iofq').values.tolist() for r in (before, after)] == [
+        [3.0, 7.0],
+        [2.0, 7.0],
+    ]
+    stale = [
+        r
+        for r in user.records(label='iofq')
+        if r.request.params['reduction']['threshold'] != 1.5
+    ]
+    assert [r.request.datasets() for r in stale] == [[first]]

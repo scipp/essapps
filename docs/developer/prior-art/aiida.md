@@ -21,7 +21,7 @@ If a story asks for it, AiiDA's answer fits [ADR 0004](../adr/0004-history-is-ap
 
 **UUIDs when data leaves the database.** Every node has a per-database integer key and a UUID.
 The docs ask for UUIDs whenever data is shared, and import deduplicates by UUID ([share_data.rst L46, L110][share]).
-Our record IDs are random UUIDs already (`ess.dispatch.backend`), so `client.publish` can carry them into a SciCat entry unchanged.
+Our record IDs are random UUIDs already (`ess.apps.backend`), so `client.publish` can carry them into a SciCat entry unchanged.
 
 **Software versions on every process node.** A process stores the versions of aiida-core and its plugin on its node when it starts ([process.py L786-789][version]).
 There, the worker that creates the node also runs it.

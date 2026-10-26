@@ -208,7 +208,7 @@ class IofQOutputs(BaseModel):
 IOFQ = WorkflowSpec(name='sans-iofq', version=1, ..., params=IofQParams, outputs=IofQOutputs)
 ```
 
-Two requests, written with essdispatch: `client` connects to a backend,
+Two requests, written with essapps: `client` connects to a backend,
 `dataset(...)` names a dataset, and `finder` is the record of a request that
 finds the beam centre, so `finder.ref('centre')` names its output `centre`;
 `t` is the record of a transmission reduction:
