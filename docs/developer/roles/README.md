@@ -9,3 +9,5 @@ Three notebooks, one per kind of author, on one running example: `toy_sans.py`, 
 | [framework-promises.ipynb](framework-promises.ipynb) | authors of the framework | the promises of the other two seen at work, and what keeping each costs in the user's process and on the service |
 
 They run in this folder, with the packages installed as `pip install -e packages/essspec -e 'packages/essdispatch[test]'`.
+
+[spec-form.ipynb](spec-form.ipynb) shows the app of `ess.dispatchpanel` on a client: a form generated from each spec's pydantic models. It needs the Panel package as well, `pip install -e packages/essdispatchpanel`, and Jupyter to show the app.
