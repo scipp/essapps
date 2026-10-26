@@ -199,10 +199,15 @@ from .field_types import (
     value_type,
 )
 from .places import (
-    alternatives,
+    File,
+    Place,
+    Rows,
+    Value,
+    Ways,
     file_off_place,
     groups_at,
     held,
+    place,
     unwritten,
     validated,
 )
@@ -735,56 +740,39 @@ def _ref_form(tp: Any) -> Any:
 def _field_forms(model: type[BaseModel], name: str) -> Any:
     """
     The type of the field ``name`` of ``model`` with the type at each of its
-    places replaced by the forms it takes (see :func:`_forms`).
+    places replaced by the forms it takes (see :func:`_forms`); the
+    constraints of a list, whose elements are places, on the list.
     """
-    info = model.model_fields[name]
-    metadata = list(info.metadata)
-    if info.discriminator is not None:
-        metadata.append(Field(discriminator=info.discriminator))
-    return _forms(info.annotation, metadata, is_list(model, name))
-
-
-def _forms(tp: Any, metadata: Sequence[Any], rows: bool) -> Any:
-    """
-    ``tp``, the type at a place, replaced by the forms it takes: a file by a
-    reference to a dataset; a group by the forms of its fields (see
-    :func:`_group_forms`), unless a request writes nothing at one of them
-    (see :func:`~ess.spec.places.unwritten`), and by a reference to an
-    output, unless it holds a file; a union of groups by the forms of the
-    fields of each alternative only, since no reference fits a union; any
-    other type by itself, inline only. The elements of a list are places if
-    ``rows``; the contents of any other list or dict are not, so it is given
-    inline only. ``metadata``, the constraints of the field, goes to the list
-    if ``tp`` is one, else to the value, so that a constraint of a number,
-    say, is not put on a reference.
-    """
-    origin, args = get_origin(tp), get_args(tp)
-    if origin is Annotated:
-        return _forms(args[0], [*metadata, *tp.__metadata__], rows)
-    if origin is list and rows:
-        row = _forms(args[0], [], rows=False)
+    described = place(model, name)
+    if isinstance(described, Rows):
+        row = _forms(described.element)
         listed: Any = list[row]  # type: ignore[valid-type]
-        return Annotated[listed, *metadata] if metadata else listed
-    if origin in (Union, UnionType) and NoneType in args:
-        rest = tuple(arg for arg in args if arg is not NoneType)
-        inner = rest[0] if len(rest) == 1 else Union[rest]  # noqa: UP007
-        return Union[_forms(inner, metadata, rows), None]  # noqa: UP007
-    value = Annotated[tp, *metadata] if metadata else tp
-    if element(tp) is not None:
-        return value
-    if is_file(tp):
-        return _ref_form(tp)
-    if (union := alternatives(value)) is not None:
-        tag, groups = union
-        return _inline_form([_group_forms(g, tag) for g in groups.values()], metadata)
-    if not is_group(tp):
-        return value
-    forms = []
-    if unwritten(tp) is None:
-        forms.append(_inline_form([_group_forms(tp)], metadata))
-    if not holds_file(tp):
-        forms.append(_ref_form(tp))
-    return Union[tuple(forms)]  # noqa: UP007
+        return Annotated[listed, *described.metadata] if described.metadata else listed
+    return _forms(described)
+
+
+def _forms(described: Place) -> Any:
+    """
+    The forms a place takes, as :func:`~ess.spec.places.place` describes it:
+    a file a reference to a dataset; a group or a union the forms of the
+    fields of each group written inline (see :func:`_group_forms`), and a
+    reference to an output if one fits; any other value itself, inline
+    only, with its constraints, which are never put on a reference.
+    """
+    match described:
+        case File():
+            form = _ref_form(described.type)
+        case Value(type=tp, metadata=metadata):
+            form = Annotated[tp, *metadata] if metadata else tp
+        case Ways(tag=tag, inline=inline, record=record):
+            forms = []
+            if inline:
+                groups = [_group_forms(g, tag) for g in inline.values()]
+                forms.append(_inline_form(groups, described.metadata))
+            if record is not None:
+                forms.append(_ref_form(record))
+            form = Union[tuple(forms)]  # noqa: UP007
+    return Union[form, None] if described.none else form  # noqa: UP007
 
 
 def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
