@@ -26,10 +26,14 @@ two it takes, with ``| None`` removed:
 The type at a place                    Inline      By reference
 =====================================  ==========  ===========================
 a file: ``Path``                       no          to a dataset
-a group, or a union of groups          its fields  to an output that fits and
+a group                                its fields  to an output that fits and
                                        unless one  holds no file
                                        is a data
                                        value
+a union of groups                      the fields  no
+                                       of one
+                                       alternative,
+                                       with its tag
 a list, ``list[X]``                    each        no
                                        element a
                                        place
@@ -97,9 +101,11 @@ framework: what the framework needs, it reads from the field types (see
   alternative is a ``Literal`` of one string, its own, such as
   ``Literal['find']``, without an alias. A union that holds a group holds
   groups only, not ``GivenCentre | float``: a value of a type that is not a
-  group has no tag. A field of a group that is a dict, or a list that may be
-  ``None``, has a JSON form, since its contents are not places and no
-  reference stands for a whole one.
+  group has no tag. A union is written inline only, and no reference fits
+  it, so that a producer need not output a tagged class. So no field of an
+  alternative is a data value. A field of a group that is a dict, or a list
+  that may be ``None``, has a JSON form, since its contents are not places
+  and no reference stands for a whole one.
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
@@ -326,9 +332,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         The params schema has the value at each place in the forms it takes:
         a file as a reference to a dataset; a group as ``anyOf`` the object of
         its fields, each so, and a reference to an output, or one of them
-        only; any other value as its JSON schema. A reference's schema is the
-        ``@ref`` object of each kind it may be, with the name of the data type
-        it must fit in ``dataType``, as the outputs schema has each output.
+        only; a union of groups as ``oneOf`` the object of the fields of each
+        alternative, never a reference; any other value as its JSON schema.
+        A reference's schema is the ``@ref`` object of each kind it may be,
+        with the name of the data type it must fit in ``dataType``, as the
+        outputs schema has each output.
         The projection is one-way: pydantic validators do not survive it, so
         a consumer of the serialized form can validate only optimistically.
         """
@@ -362,15 +370,18 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
                                         holds a data value)
     both                                the group's fields, and a choice
                                         to pick a record instead
+    a ``oneOf`` with a                  a choice of the alternatives of a
+    ``discriminator``                   union, each with its fields
     any other schema                    a widget for the value, inline
     ==================================  =================================
 
     ``dataType`` names the type of the data a picker takes, as the outputs
     schema names the type of each output. A union of groups is a ``oneOf``
-    of the alternatives a request writes inline, with a ``discriminator``.
-    A list is an array of these, and an optional value has ``null`` in
-    ``anyOf``. The forms at three places, the parameter ``reduction`` and the
-    fields ``Sample.file`` and ``Reduction.bins``::
+    of its alternatives, each the object of its fields with its tag, and has
+    no reference form, since no reference fits a union. A list is an array
+    of these, and an optional value has ``null`` in ``anyOf``. The forms at
+    three places, the parameter ``reduction`` and the fields ``Sample.file``
+    and ``Reduction.bins``::
 
         "reduction": {"anyOf": [{"$ref": "#/$defs/Reduction", ...},
                                 {"anyOf": [OutputRef, AccumulatorRef],
@@ -536,8 +547,8 @@ def _place_problems(
     """
     Refuse a field of ``model`` whose places a request cannot write: a file
     at a position that is not a place, a union that the framework cannot
-    take apart by a value's tag, a group at a place inside itself, and the problems
-    of each group at its places, each named by its group (see
+    take apart by a value's tag, a group at a place inside itself, the
+    problems of each group at its places, each named by its group (see
     :func:`_group_problems`). ``path`` holds the groups that hold the field,
     and ``seen`` the problems of the groups checked already, so that a group
     at several places is checked once, and its problems named at each.
@@ -739,9 +750,9 @@ def _forms(tp: Any, metadata: Sequence[Any], rows: bool) -> Any:
     reference to a dataset; a group by the forms of its fields (see
     :func:`_group_forms`), unless a request writes nothing at one of them
     (see :func:`~ess.spec.places.unwritten`), and by a reference to an
-    output, unless it holds a file; a union of groups so, by those of its
-    alternatives, and by a reference that fits one without a file; any other
-    type by itself, inline only. The elements of a list are places if
+    output, unless it holds a file; a union of groups by the forms of the
+    fields of each alternative only, since no reference fits a union; any
+    other type by itself, inline only. The elements of a list are places if
     ``rows``; the contents of any other list or dict are not, so it is given
     inline only. ``metadata``, the constraints of the field, goes to the list
     if ``tp`` is one, else to the value, so that a constraint of a number,
@@ -763,27 +774,28 @@ def _forms(tp: Any, metadata: Sequence[Any], rows: bool) -> Any:
         return value
     if is_file(tp):
         return _ref_form(tp)
-    if is_group(tp):
-        tag, members = None, (tp,)
-    elif (union := alternatives(value)) is not None:
-        tag, members = union[0], tuple(union[1].values())
-    else:
+    if (union := alternatives(value)) is not None:
+        tag, groups = union
+        return _inline_form([_group_forms(g, tag) for g in groups.values()], metadata)
+    if not is_group(tp):
         return value
     forms = []
-    if inline := tuple(_group_forms(m, tag) for m in members if unwritten(m) is None):
-        # Only an object reads as a reference; JSON Schema's ``required``
-        # holds for any other value, so ``not`` would refuse it.
-        forms.append(
-            Annotated[
-                Union[inline],  # noqa: UP007
-                *metadata,
-                Field(json_schema_extra=_not_a_ref),
-            ]
-        )
-    # An output fits the union if it fits an alternative without a file.
-    if fileless := tuple(m for m in members if not holds_file(m)):
-        forms.append(_ref_form(Union[fileless]))  # noqa: UP007
+    if unwritten(tp) is None:
+        forms.append(_inline_form([_group_forms(tp)], metadata))
+    if not holds_file(tp):
+        forms.append(_ref_form(tp))
     return Union[tuple(forms)]  # noqa: UP007
+
+
+def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:
+    """The object of the fields of one of ``groups``, inline, never a reference."""
+    # Only an object reads as a reference; JSON Schema's ``required`` holds
+    # for any other value, so ``not`` would refuse it.
+    return Annotated[
+        Union[tuple(groups)],  # noqa: UP007
+        *metadata,
+        Field(json_schema_extra=_not_a_ref),
+    ]
 
 
 @functools.cache

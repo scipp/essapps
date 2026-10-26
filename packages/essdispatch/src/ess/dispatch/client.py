@@ -319,9 +319,11 @@ class Client:
         its type allows (see :mod:`ess.spec.places`):
 
         - a file, by reference to a dataset;
-        - a group, or a union of groups, as a model or a dict of its fields,
-          unless a field is a data value; or by reference to an output that
-          fits and holds no file;
+        - a group, as a model or a dict of its fields, unless a field is a
+          data value; or by reference to an output that fits and holds no
+          file;
+        - a union of groups, as a model or a dict of the fields of one
+          alternative, with its tag, never by reference;
         - any other type, inline::
 
             client.submit(IOFQ, params={'reduction': Reduction(bins=4),
@@ -338,11 +340,11 @@ class Client:
         in place of the spec gets the same checks. A request that cannot run
         raises ``SubmitError``: an invalid value, an unknown spec or dataset,
         an inline group with a field that is a data value, a reference where
-        none may stand, such as at a number or to a whole list, a reference
-        the client may not read, or one whose data do not fit its field. Each of its
-        ``errors`` names the field at fault by its place, ``loc``, and the
-        request by its key or index, ``entry``, if several are given (see
-        :class:`~ess.dispatch.errors.FieldError`)::
+        none may stand, such as at a number, at a union, or to a whole list,
+        a reference the client may not read, or one whose data do not fit its
+        field. Each of its ``errors`` names the field at fault by its place,
+        ``loc``, and the request by its key or index, ``entry``, if several
+        are given (see :class:`~ess.dispatch.errors.FieldError`)::
 
             except SubmitError as error:
                 for e in error.errors:

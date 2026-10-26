@@ -231,15 +231,11 @@ def fits(data: Any, field: Any) -> bool:
     Whether data of type ``data`` can be the value of a field of type ``field``.
 
     ``| None`` is removed on both sides. Then the data fit when ``data`` is
-    ``field`` or a subclass of it, and data of one type fit a union when they
-    fit one of its members: a ``ComputedTransmission`` fits
-    ``FromFile | ComputedTransmission``. Other generic aliases, such as
-    ``list[int]``, fit only themselves.
+    ``field`` or a subclass of it. A generic alias, such as ``list[int]``,
+    fits only itself.
     """
     data, _ = optional(data)
     field, _ = optional(field)
-    if get_origin(data) is None and get_origin(field) in (Union, UnionType):
-        return any(fits(data, member) for member in get_args(field))
     if get_origin(data) is not None or get_origin(field) is not None:
         return data == field
     return data is field or (

@@ -39,13 +39,7 @@ class Shift(BaseModel):
 class MeasuredTransmission(BaseModel, arbitrary_types_allowed=True):
     """A group that holds a data value, so is given by reference only."""
 
-    kind: Literal['measured'] = 'measured'
     fraction: Blob
-
-
-class AssumedTransmission(BaseModel):
-    kind: Literal['assumed'] = 'assumed'
-    value: float = 1.0
 
 
 class Point(BaseModel):
@@ -271,22 +265,17 @@ class FindCentre(BaseModel):
         return tolerance
 
 
+Centre = Annotated[BeamCentre | FindCentre, Field(discriminator='kind')]
+
+
 class CentredParams(BaseModel):
-    beam_centre: Annotated[BeamCentre | FindCentre, Field(discriminator='kind')] = (
-        BeamCentre()
-    )
+    beam_centre: Centre = BeamCentre()
+    can_centre: Centre | None = None
+    centres: list[Centre] = Field(default_factory=list)
 
 
 class CentreOutputs(BaseModel):
     centre: BeamCentre
-
-
-class CorrectedParams(BaseModel):
-    """A union, an alternative of which holds a data value."""
-
-    transmission: Annotated[
-        MeasuredTransmission | AssumedTransmission, Field(discriminator='kind')
-    ] = AssumedTransmission()
 
 
 class Correction(BaseModel):
@@ -309,7 +298,6 @@ LENGTH = _spec('length', LengthParams, Value)
 STEPS = _spec('steps', StepsParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
-CORRECTED = _spec('corrected', CorrectedParams, Value)
 CORRECTION = _spec('correction', CorrectionParams, Value)
 
 
@@ -378,13 +366,6 @@ def find(params: LoadParams) -> CentreOutputs:
     return CentreOutputs(centre=BeamCentre(x=read_dataset(params.sample.file)))
 
 
-def corrected(params: CorrectedParams) -> Value:
-    transmission = params.transmission
-    if isinstance(transmission, MeasuredTransmission):
-        return Value(value=transmission.fraction.value)
-    return Value(value=transmission.value)
-
-
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[Client]:
     datasets = FakeDatasets(proposal='p1', directory=tmp_path)
@@ -408,7 +389,6 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(STEPS, lambda p: Value(value=sum(p.ramp.steps.root))),
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
-            function_binding(CORRECTED, corrected),
             function_binding(CORRECTION, lambda p: Value(value=0.0)),
         ],
     )
@@ -813,18 +793,30 @@ def test_a_union_parameter_takes_either_alternative(client: Client) -> None:
     assert found.request.params['beam_centre'] == {**find, 'run': run}
 
 
-def test_an_output_that_fits_an_alternative_feeds_a_union(
-    client: Client, loaded: Record
+@pytest.mark.parametrize(
+    ('params', 'place'),
+    [
+        (lambda ref: {'beam_centre': ref}, ('beam_centre',)),
+        (lambda ref: {'can_centre': ref}, ('can_centre',)),  # typed U | None
+        (lambda ref: {'centres': [BeamCentre(), ref]}, ('centres', 1)),
+    ],
+)
+def test_no_reference_fits_a_union(
+    client: Client,
+    params: Callable[[OutputRef], dict[str, Any]],
+    place: tuple[str | int, ...],
 ) -> None:
+    # Not even an output of an alternative's type.
     centre = client.compute(FIND, params={'sample': {'file': dataset_ref(run=2)}})
-    computed = client.compute(CENTRED, params={'beam_centre': centre.ref('centre')})
-
-    assert client.output(computed, 'value') == 2.0
-    with pytest.raises(
-        SubmitError,
-        match=r'^beam_centre: .* of type float, does not fit BeamCentre \| FindCentre$',
-    ):
-        client.submit(CENTRED, params={'beam_centre': loaded.ref('value')})
+    ref = centre.ref('centre')
+    with pytest.raises(SubmitError) as raised:
+        client.submit(CENTRED, params=params(ref))
+    (error,) = raised.value.errors
+    assert error.loc == place
+    assert error.msg == (
+        f'{ref}: a union of groups is written inline, with the tag of an '
+        'alternative; a reference stands for a group or a file only'
+    )
 
 
 def test_an_error_inside_a_union_names_its_place_without_the_tag(
@@ -846,18 +838,21 @@ def test_an_error_inside_a_union_names_its_place_without_the_tag(
     )
 
 
-def test_the_schema_of_a_union_offers_a_reference_to_an_alternative() -> None:
-    # FindCentre holds a file, so no output of it may be referenced.
-    centre = CENTRED.serialize().params_schema['properties']['beam_centre']
-    inline, ref = centre['anyOf']
+def test_the_schema_of_a_union_has_no_reference_form() -> None:
+    properties = CENTRED.serialize().params_schema['properties']
+    inline = {k: v for k, v in properties['beam_centre'].items() if k != 'default'}
+    can, null = properties['can_centre']['anyOf']
 
-    assert inline['discriminator']['propertyName'] == 'kind'
-    assert ref['dataType'] == 'BeamCentre'
+    assert inline == {**can, 'title': 'Beam Centre'}
+    assert null == {'type': 'null'}
+    assert properties['centres']['items'] == can
+    assert 'dataType' not in can
+    assert can['discriminator']['propertyName'] == 'kind'
 
 
 def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
     schema = CENTRED.serialize().params_schema
-    inline, _ = schema['properties']['beam_centre']['anyOf']
+    inline = schema['properties']['beam_centre']
 
     for alternative in inline['oneOf']:
         form = schema['$defs'][alternative['$ref'].rsplit('/', 1)[1]]
@@ -957,7 +952,7 @@ def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
 )
 @pytest.mark.parametrize(
     'inline',
-    [{'kind': 'measured', 'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))],
+    [{'fraction': 1.0}, MeasuredTransmission(fraction=Blob(1.0))],
 )
 def test_a_group_given_by_reference_only_is_refused_inside_an_inline_group(
     client: Client,
@@ -974,41 +969,6 @@ def test_a_group_given_by_reference_only_is_refused_inside_an_inline_group(
         'MeasuredTransmission is given by reference: no request writes its field '
         'fraction, of Blob'
     )
-
-
-def test_an_alternative_that_holds_a_data_value_is_given_by_reference(
-    client: Client, loaded: Record
-) -> None:
-    measured = client.compute(
-        CORRECTED, params={'transmission': loaded.ref('transmission')}
-    )
-    assumed = client.compute(
-        CORRECTED, params={'transmission': {'kind': 'assumed', 'value': 0.5}}
-    )
-
-    assert client.output(measured, 'value') == 1.0
-    assert client.output(assumed, 'value') == 0.5
-    for inline in (
-        {'kind': 'measured', 'fraction': 1.0},
-        MeasuredTransmission(fraction=Blob(1.0)),
-    ):
-        with pytest.raises(
-            SubmitError,
-            match=r'^transmission: MeasuredTransmission is given by reference: no '
-            r'request writes its field fraction, of Blob$',
-        ):
-            client.submit(CORRECTED, params={'transmission': inline})
-
-
-def test_the_schema_of_a_union_offers_inline_the_alternatives_a_request_writes() -> (
-    None
-):
-    inline, ref = CORRECTED.serialize().params_schema['properties']['transmission'][
-        'anyOf'
-    ]
-
-    assert inline['oneOf'] == [{'$ref': '#/$defs/AssumedTransmission'}]
-    assert ref['dataType'] == 'MeasuredTransmission | AssumedTransmission'
 
 
 @pytest.mark.parametrize(
