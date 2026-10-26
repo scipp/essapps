@@ -8,7 +8,9 @@ typed in or from a record. ``REDUCE`` also takes a group with defaults, a
 group with a file and no default, and a union of groups. It divides the
 counts of its sample run by the sample's thickness, so a thickness of 0
 fails the record. ``OPTIONS`` takes a value of each type that has an input,
-and a group typed ``X | None`` without a default.
+and a group typed ``X | None`` without a default. ``SUBTRACT`` takes a group
+with such a group as a field, a ``BeamCentre``, which an output of ``FIND``
+fits.
 """
 
 from collections.abc import Iterator
@@ -95,6 +97,15 @@ class OptionsParams(BaseModel):
     direct_beam: Run | None
 
 
+class Background(BaseModel):
+    scale: float = 1.0
+    centre: BeamCentre | None
+
+
+class SubtractParams(BaseModel):
+    background: Background
+
+
 type Spec = WorkflowSpec[Any, Any]
 
 FIND: Spec = WorkflowSpec(
@@ -121,6 +132,14 @@ OPTIONS: Spec = WorkflowSpec(
     params=OptionsParams,
     outputs=ReduceOutputs,
 )
+SUBTRACT: Spec = WorkflowSpec(
+    name='subtract',
+    version=1,
+    title='Subtract',
+    description='The scale of the background, shifted by its centre.',
+    params=SubtractParams,
+    outputs=ReduceOutputs,
+)
 
 
 def find(params: FindParams) -> FindOutputs:
@@ -134,6 +153,12 @@ def reduce(params: ReduceParams) -> ReduceOutputs:
 
 def options(params: OptionsParams) -> ReduceOutputs:
     return ReduceOutputs(total=Total(value=params.settings.count))
+
+
+def subtract(params: SubtractParams) -> ReduceOutputs:
+    centre = params.background.centre
+    shift = 0.0 if centre is None else centre.x
+    return ReduceOutputs(total=Total(value=params.background.scale + shift))
 
 
 @pytest.fixture
@@ -152,6 +177,7 @@ def client(datasets: FakeDatasets) -> Iterator[Client]:
         function_binding(FIND, find),
         function_binding(REDUCE, reduce),
         function_binding(OPTIONS, options),
+        function_binding(SUBTRACT, subtract),
     ]
     with local(proposal='p1', datasets=datasets, bind=bind) as client:
         yield client
@@ -170,3 +196,8 @@ def reduce_spec() -> Spec:
 @pytest.fixture
 def options_spec() -> Spec:
     return OPTIONS
+
+
+@pytest.fixture
+def subtract_spec() -> Spec:
+    return SUBTRACT

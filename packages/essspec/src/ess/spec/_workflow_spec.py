@@ -87,9 +87,18 @@ framework: what the framework needs, it reads from the field types (see
   a ``PipelineBinding`` keys it by its class.
 - No type in the params or the outputs is a ``NewType``: a spec names a
   role by a class, and a binding maps it to a key of its own.
-- A file is at a place only, possibly typed ``X | None`` or in a list: not
-  inside a tuple, a dict, or a dataclass, whose contents are not places, so
-  no dataset can give it.
+- A file is at a place only, possibly in a list: not inside a tuple, a
+  dict, or a dataclass, whose contents are not places, so no dataset can
+  give it.
+- At a field of a group, at any depth, or at an element of a list there,
+  ``X`` in ``X | None`` is a group, such as ``range: WavelengthRange | None``,
+  not ``start: float | None`` and ``stop: float | None``. A UI shows
+  ``X | None`` as a toggle over the fields of a group. So a value that a
+  request may leave out is a field of such a group: an optional file is the
+  ``file`` of a run, ``transmission: TransmissionRun | None``, and an
+  optional data value is a field of a group given by reference,
+  ``mask: PixelMask | None``. A value written whole that may be empty is
+  ``[]`` or ``()``, not ``None``.
 - A data value is a field of a group, not a parameter or the element of
   one, since no request writes it at a place of its own. No field of a group
   that holds a file is a data value: no reference stands for such a group,
@@ -103,9 +112,9 @@ framework: what the framework needs, it reads from the field types (see
   groups only, not ``GivenCentre | float``: a value of a type that is not a
   group has no tag. A union is written inline only, and no reference fits
   it, so that a producer need not output a tagged class. So no field of an
-  alternative is a data value. A field of a group that is a dict, or a list
-  that may be ``None``, has a JSON form, since its contents are not places
-  and no reference stands for a whole one.
+  alternative is a data value.
+- A field of a group that is a dict has a JSON form, since its contents are
+  not places and no reference stands for a whole one.
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
@@ -115,7 +124,7 @@ framework: what the framework needs, it reads from the field types (see
   accepts works only for a group written without references. It is not at
   a place inside itself, at any depth, such as a tree with
   ``children: list[Node]``, since the schema of the forms at its places
-  would not end; a tree is written whole, ``children: list[Node] | None``.
+  would not end; a tree is written whole, ``children: tuple[Node, ...]``.
 - A default is a value, never a reference: what a request may write at the
   place, in a JSON form that reads back as the value, with no ``@ref``
   object at any depth; of a type without a JSON form, ``None`` or an empty
@@ -516,7 +525,7 @@ def _alias_problems(annotation: Any) -> list[str]:
 def _union_problems(annotation: Any) -> list[str]:
     """
     Refuse each field of a group that ``annotation`` is made of whose type
-    holds a union of groups at any depth, such as ``list[A | B] | None``: a
+    holds a union of groups at any depth, such as ``list[A | B]``: a
     choice between ways is a parameter of its own.
     """
     return [
@@ -565,8 +574,8 @@ def _place_problems(
         return [str(error)]
     if file_off_place(model, name):
         return [
-            'a file is at a place only, possibly typed X | None or in a list: '
-            'not in a tuple, a dict, or a dataclass, where no dataset gives it'
+            'a file is at a place only, possibly in a list: not in a tuple, a '
+            'dict, or a dataclass, where no dataset gives it'
         ]
     problems = []
     for group in groups:
@@ -591,10 +600,11 @@ def _group_problems(
     """
     Refuse a group whose fields a request cannot write each at its place: a
     serializer or a computed field, which would make the group's JSON form
-    differ from the object of its places, a field with an alias, a dict or a
-    list that may be ``None`` without a JSON form, whose contents are not
-    places, the problems of the places of its fields, and a default that is
-    not a value, since a field left out holds its default. Field and model
+    differ from the object of its places, a field with an alias, a field, or
+    an element of one, typed ``X | None`` with ``X`` not a group (see
+    :func:`_optional_value`), a dict without a JSON form, whose contents are
+    not places, the problems of the places of its fields, and a default that
+    is not a value, since a field left out holds its default. Field and model
     validators of any mode are allowed: they run whenever the group is
     validated whole (see :mod:`ess.spec.places`). A field of a group is not a
     ``NewType`` and not a union of groups: a choice between ways is a
@@ -614,14 +624,16 @@ def _group_problems(
             problems.append(f'{where}: a field of a group has no alias')
         elif place := _place_problems(group, name, path, seen):
             problems.extend(f'{where}: {problem}' for problem in place)
-        elif (
-            not is_list(group, name)
-            and element(tp) is not None
-            and not has_json_form(group, name)
-        ):
+        elif _optional_value(group, name):
             problems.append(
-                f'{where}: a field of a group that is a dict, or a list that may '
-                'be None, has a JSON form; its contents are not places'
+                f'{where}: typed X | None with X not a group; a value that a request '
+                'may leave out is a field of a group typed X | None, such as '
+                'range: WavelengthRange | None'
+            )
+        elif get_origin(tp) is dict and not has_json_form(group, name):
+            problems.append(
+                f'{where}: a field of a group that is a dict has a JSON form; its '
+                'contents are not places'
             )
         elif field.default_factory_takes_validated_data:
             problems.append(
@@ -636,6 +648,18 @@ def _group_problems(
             'holds a file is given field by field, never by reference'
         )
     return problems
+
+
+def _optional_value(group: type[BaseModel], name: str) -> bool:
+    """
+    Whether the field ``name`` of ``group``, or each element of it if it is a
+    list, is typed ``X | None`` with ``X`` not a group. A UI shows ``X | None``
+    as a toggle over the fields of a group, so a field is
+    ``range: WavelengthRange | None``, not ``start: float | None``.
+    """
+    annotation = group.model_fields[name].annotation
+    one = get_args(annotation)[0] if is_list(group, name) else annotation
+    return optional(one)[1] and not groups_at(group, name)
 
 
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
@@ -765,7 +789,7 @@ def _forms(described: Place) -> Any:
             form = _ref_form(described.type)
         case Value(type=tp, metadata=metadata):
             form = Annotated[tp, *metadata] if metadata else tp
-        case Ways(tag=tag, inline=inline, record=record):
+        case Ways(tag=tag, inline=inline, record=record, none=none):
             forms = []
             if inline:
                 groups = [_group_forms(g, tag) for g in inline.values()]
@@ -773,7 +797,9 @@ def _forms(described: Place) -> Any:
             if record is not None:
                 forms.append(_ref_form(record))
             form = Union[tuple(forms)]  # noqa: UP007
-    return Union[form, None] if described.none else form  # noqa: UP007
+            if none:
+                form = Union[form, None]  # noqa: UP007
+    return form
 
 
 def _inline_form(groups: Sequence[Any], metadata: Sequence[Any]) -> Any:

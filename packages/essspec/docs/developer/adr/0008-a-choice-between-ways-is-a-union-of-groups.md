@@ -146,6 +146,15 @@ A toggle that is off reads as "without X", so `None` must mean that.
 That `None` means *without X* is a guideline, not a rule the framework checks.
 It has no exception for data values: `None` in `transmission: ComputedTransmission | None` does not mean "the one in the run's file".
 
+**At a field of a group, `X` in `X | None` is a group.**
+This holds at any depth, and at an element of a list there: `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`.
+So each toggle is over the fields of a group, as in esslivedata's dashboard, which shows `range_filter: TOARange | None` as a card with a switch (scipp/esslivedata#1426).
+A value that a request may leave out is a field of such a group: an optional file is a run, `transmission: TransmissionRun | None`, and an optional data value is a group of it, `mask: PixelMask | None`.
+A value written whole that may be empty is `[]` or `()`, not `None`.
+A parameter is a group or a union of groups already, so the rule changes nothing there.
+A union stays a parameter only, while a group typed `X | None` may be a field of a group.
+A union sets one sciline key per alternative; `None` sets no key, so a group typed `X | None` inside a group loses nothing.
+
 **A default never leaves out a correction that a correct reduction needs.**
 A request that forgets a parameter, or a field of a group, must not get a reduction with a step silently left out.
 So a correction that a correct reduction needs, but that a request may still leave out, is typed `X | None` with no default, `direct_beam: DirectBeam | None`, and the request writes `None`.
@@ -202,7 +211,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 
 ## Consequences
 
-- A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`. A toggle is the choice between two alternatives, one of them empty. A UI offers no reference at the place of a union, since no reference stands for its value, but it offers one at a field of an alternative that takes one, as at any place.
+- A UI generator needs two components beyond a plain group: a choice between the alternatives of a union, and a toggle for a type `X | None`, whose `X` is a group or a union of groups, never a single input. A toggle is the choice between two alternatives, one of them empty. A UI offers no reference at the place of a union, since no reference stands for its value, but it offers one at a field of an alternative that takes one, as at any place.
 - An output carries no tag. A workflow's output fits each place typed by its class, in any spec, without a class per consumer.
 - No reference stands for the value of a union, so the spec author picks a group, which takes a record's output, or a union, whose alternatives a request writes inline. "A record, or another way" is a group given by reference, plus a workflow that outputs the group from the other way.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces it with a provider, `pipeline.insert(adapter)`, such as an adapter from `GivenCentre` to esssans' `BeamCenter`. Mapping the alternatives to other keys with `keys=` does not help while the held value stays further down the graph.
@@ -219,6 +228,7 @@ A value held at a key that a parameter's key leads to has the same effect, but t
 - **A tag owned by the framework**, through a pydantic callable discriminator: `Annotated[BeamCentre | FindCentre, Choice()]`, where a request names the alternative by its class name under a reserved key, `{'@kind': 'FindCentre', 'file': ..., 'tolerance': 0.05}`, and no group has a tag field. An untagged `BeamCentre` output then fits the union, and plain pydantic validates and dumps it. But it adds an annotation that the framework owns, makes class names part of a spec's interface, and differs from the pydantic-native `kind` fields that esslivedata uses. With no reference at a union, a tag field that the author writes serves.
 - **An exception for data values**, whose `None` could mean something else when the field's description says what, such as `transmission: ComputedTransmission | None` with `None` for the one in the run's file. A UI shows the description, but the toggle still reads "without X" when off, and a guideline with an exception is one more thing to teach.
 - **No type `X | None` in the spec**, with an empty list, an `enabled` flag, or an empty alternative such as `NoMask` in its place. Every place that may go without a value would be a union, and a request that goes without it would write a tagged object, also at a field of a group, such as a mask for one run of a table and not another. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share: they get `None` as a plain value.
+- **`X | None` at any field**, such as `offset: float | None` or `run: Path | None`. A UI would show a second kind of toggle, next to a single input or a dataset picker. Each such case is written as well as a group, `range: WavelengthRange | None` or `transmission: TransmissionRun | None`, whose class also names the role. A list or a dict that may be `None` has two empty values, `None` and `[]`.
 - **`X | None` keyed like a union**, with `None` setting nothing. `make_pipeline` would not set the key by hand. But `None` would then mean whatever the graph does without a value at `X`, typically "compute X", and nothing makes the author say otherwise.
 - **`X | None` setting `pipeline[X] = None`.** It replaces a provider of `X` with `None`, so every provider that takes `X` must accept `None`.
 - **A framework `NotSet` type as an alternative.** One type for many parameters would be one key for all of them, which `PipelineBinding` refuses; a generic `NotSet[Mask]` is an empty alternative such as `NoMask`, written by the author with no new type.

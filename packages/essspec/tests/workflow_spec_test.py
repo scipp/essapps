@@ -72,7 +72,7 @@ class WholeTree(BaseModel):
     """A recursive group whose children are not places: written whole."""
 
     name: str
-    children: list['WholeTree'] | None = None
+    children: tuple['WholeTree', ...] = ()
 
 
 class Tree(BaseModel):
@@ -411,11 +411,6 @@ class TestModelRules:
             {'params': model('P', reduction=(Reduction, Reduction(bins=3)))},
             {'params': model('P', runs=(list[SampleRun], []))},
             {'params': model('P', run=(model('Run', path=(Path, ...)), ...))},
-            {
-                'params': model(
-                    'P', run=(list[model('Run', path=(Path | None, None))], [])
-                )
-            },
             {'params': model('P', runs=(list[SampleRun | None], []))},
             {'params': model('P', parts=(BaseModel, ...))},
             {'params': model('P', a=(SampleRun, ...), b=(list[CanRun], []))},
@@ -479,7 +474,7 @@ class TestModelRules:
             },
             {
                 'params': model(
-                    'P', reduction=(model('R', mask=(sc.Variable | None, None)), ...)
+                    'P', reduction=(model('R', centre=(BeamCentre | None, None)), ...)
                 )
             },
             {
@@ -613,9 +608,10 @@ class TestModelRules:
                                     model(
                                         'Run',
                                         parts=(
-                                            list[model('Inner', file=(SampleFile, ...))]
-                                            | None,
-                                            None,
+                                            list[
+                                                model('Inner', file=(SampleFile, ...))
+                                            ],
+                                            [],
                                         ),
                                     ),
                                     ...,
@@ -751,7 +747,6 @@ class TestModelRules:
                 )
                 for centre, where in (
                     ({'centre': (sc.Variable, ...)}, 'Run.centre'),
-                    ({'centre': (sc.Variable | None, None)}, 'Run.centre'),
                     ({'shifts': (list[sc.Variable], [])}, 'Run.shifts'),
                     (
                         {
@@ -881,7 +876,7 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
-                        run=(model('Run', files=(dict[str, Path] | None, None)), ...),
+                        run=(model('Run', files=(dict[str, Path], {})), ...),
                     )
                 },
                 'P.run: Run.files: a file is at a place only',
@@ -893,8 +888,7 @@ class TestModelRules:
                         run=(model('Run', shifts=(dict[str, sc.Variable], {})), ...),
                     )
                 },
-                'P.run: Run.shifts: a field of a group that is a dict, or a list '
-                'that may be None, has a JSON form',
+                'P.run: Run.shifts: a field of a group that is a dict has a JSON form',
             ),
             *(
                 (
@@ -1146,6 +1140,86 @@ class TestModelRules:
         )
         with pytest.raises(ValueError, match=r'P\.centre: .*; P\.sample: '):
             spec(params=params)
+
+
+class Bounds(TypedDict):
+    start: float
+    stop: float
+
+
+OPTIONAL_VALUE = re.escape('typed X | None with X not a group')
+
+
+def _group_with(tp: Any) -> type[BaseModel]:
+    """A group with the field ``value`` of type ``tp``, and a tag."""
+    return model('G', mode=(Literal['g'], 'g'), value=(tp, ...))
+
+
+class TestOptionalFields:
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            int | None,
+            str | None,
+            Mode | None,
+            Literal['a', 'b'] | None,
+            Path | None,
+            list[float] | None,
+            list[Reduction] | None,
+            dict[str, float] | None,
+            Bounds | None,
+            sc.DataArray | None,
+            RootModel[list[float]] | None,
+            list[float | None],
+            list[Path | None],
+        ],
+    )
+    def test_a_field_of_a_group_is_typed_x_or_none_only_where_x_is_a_group(
+        self, tp: Any
+    ) -> None:
+        with pytest.raises(ValueError, match=f'P.g: G.value: {OPTIONAL_VALUE}'):
+            spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize(
+        ('params', 'where'),
+        [
+            (lambda g: model('P', g=(g, ...)), 'P.g: G.value'),
+            (lambda g: model('P', g=(g | None, None)), 'P.g: G.value'),
+            (lambda g: model('P', rows=(list[g], [])), 'P.rows: G.value'),
+            (
+                lambda g: model(
+                    'P', by=(Annotated[g | ByTime, By.__metadata__[0]], ...)
+                ),
+                'P.by: G.value',
+            ),
+            (
+                lambda g: model('P', o=(model('O', inner=(g | None, None)), ...)),
+                'P.o: O.inner: G.value',
+            ),
+            (
+                lambda g: model('P', o=(model('O', rows=(list[g], [])), ...)),
+                'P.o: O.rows: G.value',
+            ),
+        ],
+    )
+    def test_x_or_none_is_refused_at_a_field_of_a_group_at_any_depth(
+        self, params: Any, where: str
+    ) -> None:
+        with pytest.raises(ValueError, match=f'{where}: {OPTIONAL_VALUE}'):
+            spec(params=params(_group_with(float | None)))
+
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            Reduction | None,
+            list[Reduction | None],
+            list[SampleRun | None],
+            Annotated[TimeRange | None, 'a note'],
+        ],
+    )
+    def test_a_group_typed_x_or_none_is_a_field_of_a_group(self, tp: Any) -> None:
+        spec(params=model('P', g=(_group_with(tp), ...)))
+        spec(params=model('P', rows=(list[_group_with(tp)], [])))
 
 
 class TestTables:

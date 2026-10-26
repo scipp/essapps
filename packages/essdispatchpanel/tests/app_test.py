@@ -13,7 +13,7 @@ def app(client: Client) -> App:
 
 
 def test_the_app_has_a_form_per_spec_and_shows_the_one_picked(app: App) -> None:
-    assert list(app.forms) == ['Find centre', 'Reduce', 'Options']
+    assert list(app.forms) == ['Find centre', 'Reduce', 'Options', 'Subtract']
     assert app.form is app.forms['Find centre']
     app.picker.value = 'Reduce'
     assert app.form is app.forms['Reduce']

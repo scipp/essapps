@@ -158,7 +158,7 @@ The type at the place decides which of the two it accepts, with `| None` removed
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups, as a parameter or the element of a list parameter | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| at a field of a group: `list[X] \| None`, or a dict, with a JSON form | `list[float] \| None` | yes, whole: its contents are not places | no |
+| at a field of a group: a dict with a JSON form | `dict[str, float]` | yes, whole: its contents are not places | no |
 | any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
 | any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
 
@@ -177,7 +177,7 @@ transmission: sc.DataArray                        # refused by WorkflowSpec: a p
 ```
 
 A data value that a request may leave out is wrapped as a group typed `| None`, `mask: PixelMask | None`, with the array a field of `PixelMask`.
-A group with a field `mask: sc.DataArray | None` is given by reference only, even where the value is `None`.
+A field `mask: sc.DataArray | None` is refused, since at a field of a group `X` in `X | None` is a group (see Rules).
 
 A field of a group left out takes its default.
 `TRANSMISSION` is the spec of a transmission reduction.
@@ -236,6 +236,7 @@ A value given per row of a table, such as the transmission of a `Sample`, is a f
 `X | None` means *without X*: apply no mask, no direct-beam correction.
 A value obtained in one of several ways that a request writes inline is a union that names each way, not `None` for one of them.
 A UI shows a group as its fields or a record, a union as a choice between its alternatives, and `X | None` as a toggle that adds `None` to either.
+At a field of a group, `X` in `X | None` is a group, so that each toggle is over the fields of a group: `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`.
 So a toggle that is off must read as what `None` does:
 
 ```python
@@ -266,10 +267,11 @@ A value *round-trips* when its JSON form reads back as the value.
 - Each parameter is a group, a union of groups, or a list of one, possibly typed `X | None`; a list parameter is not typed `X | None`. A value of another type, such as a file, a number, or a data value, is a field of a group.
 - No type in the params or the outputs is a `NewType`, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one.
-- A file is at a place only, possibly typed `X | None` or in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
+- A file is at a place only, possibly in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
+- At a field of a group, at any depth, or at an element of a list there, `X` in `X | None` is a group, such as `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`. A UI shows `X | None` as a toggle over the fields of a group. So a value that a request may leave out is a field of such a group: an optional file is the `file` of a run, `transmission: TransmissionRun | None`, and an optional data value is a field of a group given by reference, `mask: PixelMask | None`. A value written whole that may be empty is `[]` or `()`, not `None`.
 - A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No field of an alternative is a data value: a request writes a union inline.
 - No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission`.
-- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: list[Node] | None`.
+- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: tuple[Node, ...] = ()`.
 - A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
