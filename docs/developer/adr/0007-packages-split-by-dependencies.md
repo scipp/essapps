@@ -63,8 +63,7 @@ frontends/
 ```
 
 The *framework* is `essspec` and `essapps`; the *core* is the plain install of `essapps`, without extras.
-`essspec` exists.
-`essapps` exists under the name `essdispatch` (`ess.dispatch`), and `ess.apps.panel` as the distribution `essdispatchpanel` (`ess.dispatchpanel`); the renames are decided and not done.
+Of these, `essspec`, `essapps`, and `ess.apps.panel` exist.
 Each of the others is created with its first module, so none is an empty scaffold.
 
 ```text
@@ -108,7 +107,7 @@ essapps run loki-iofq/1 --sample-file run:loki/4711 --url https://reduce.example
 
 ## Alternatives considered
 
-- **The HTTP layer, the GUIs, and the service as distributions of their own**, such as `essdispatchpanel` next to `essdispatch`. Each would pin a narrow range of the core and be released with it, and each name would repeat the core's.
+- **The HTTP layer, the GUIs, and the service as distributions of their own**, such as `essappspanel` next to `essapps`. Each would pin a narrow range of the core and be released with it, and each name would repeat the core's.
 - **Client and in-process backend as separate distributions.** They have the same dependencies, and apps on VISA use `local()`, so the split installs nothing less. The client imports the concrete `Backend`; a protocol for it comes with the remote backend.
 - **The instruments' specs and bindings in `essapps`**, as `ess.apps.loki`. A fix to one instrument would ship whatever changed in the core. Since `ess.apps` is a regular package, moving an instrument out later renames every import of it.
 - **The instruments' specs in `essspec`, with the bindings behind extras such as `essspec[loki]`.** `essspec[loki]` would depend on esssans, which will depend on `essspec` once it writes bindings. The vocabulary would carry this application's glue to every consumer, such as esslivedata, which has its own, and each instrument fix would be a release of the distribution that all of them pin.

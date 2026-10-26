@@ -8,6 +8,6 @@ Three notebooks, one per kind of author, on one running example: `toy_sans.py`, 
 | [client-authors.ipynb](client-authors.ipynb) | authors of notebooks, apps, and programs | the client API: what client code relies on, and what it owes |
 | [framework-promises.ipynb](framework-promises.ipynb) | authors of the framework | the promises of the other two seen at work, and what keeping each costs in the user's process and on the service |
 
-They run in this folder, with the packages installed as `pip install -e packages/essspec -e 'packages/essdispatch[test]'`.
+They run in this folder, with the packages installed as `pip install -e packages/essspec -e 'packages/essapps[test]'`.
 
-[spec-form.ipynb](spec-form.ipynb) shows the app of `ess.dispatchpanel` on a client: a form generated from each spec's pydantic models. It needs the Panel package as well, `pip install -e packages/essdispatchpanel`, and Jupyter to show the app.
+[spec-form.ipynb](spec-form.ipynb) shows the app of `ess.apps.panel` on a client: a form generated from each spec's pydantic models. It needs Panel, which the extra `[test]` installs through `[panel]`, and Jupyter to show the app.
