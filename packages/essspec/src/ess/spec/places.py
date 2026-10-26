@@ -505,6 +505,20 @@ def place(model: type[BaseModel], name: str) -> Place | Rows:
     return _described(info.annotation, metadata)
 
 
+def title(name: str, info: FieldInfo) -> str:
+    """
+    The title of a field with ``info``: its own, or ``name`` in words,
+    ``beam_centre`` as ``Beam Centre``. A form and the params schema of a
+    spec label each place so. An alternative of a union is labelled by its
+    tag field, titled by the tag's value rather than the field's name, which
+    is that of every alternative::
+
+        title('beam_centre', info)  # 'Beam Centre'
+        title('find', group.model_fields['kind'])  # 'Find', unless titled
+    """
+    return info.title or name.replace('_', ' ').title()
+
+
 def _described(annotation: Any, metadata: tuple[Any, ...]) -> Place:
     """The description of a place of type ``annotation`` with ``metadata``."""
     tp, inner, none = _unwrapped(annotation)
