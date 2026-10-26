@@ -276,10 +276,10 @@ def test_one_row_fails_if_the_outputs_differ() -> None:
         )
 
 
-class Measured(BaseModel):
+class Measured(BaseModel, arbitrary_types_allowed=True):
     """A measurement: a numpy array, a variable, or a data array."""
 
-    array: object
+    array: np.ndarray | sc.Variable | sc.DataArray
 
 
 class DataParams(BaseModel):

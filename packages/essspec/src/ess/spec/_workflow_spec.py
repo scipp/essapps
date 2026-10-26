@@ -37,11 +37,13 @@ a union of groups                      the fields  no
 a list, ``list[X]``                    each        no
                                        element a
                                        place
-has a *JSON form*: pydantic makes a    yes         no
-JSON schema of it, with the config of
-its model, and it holds no file
-anything else, a *data value*, such    no          no: it is a field of a
-as a scipp array                                   group
+a *scalar*: ``int``, ``float``,        yes         no
+``str``, ``bool``, an enum, or a
+``Literal``
+has no *JSON form*, a *data value*,    no          no: it is a field of a
+such as a scipp array: pydantic makes              group
+no JSON schema of it, with the config
+of its model
 =====================================  ==========  ===========================
 
 A reference stands for a group or a file only, since a number or a scipp
@@ -52,8 +54,7 @@ outputs, such as a found beam centre.
 An *inline value* is the value itself in the request, held in its JSON form;
 a reference is described in :mod:`ess.spec.refs`. A *group* is a model, such
 as ``Reduction``, written as an object of its fields, each a place, so a
-file in it comes from a dataset; a ``RootModel`` is not a group, but a type
-written as its root value::
+file in it comes from a dataset; a ``RootModel`` is not a group::
 
     class PixelMask(BaseModel, arbitrary_types_allowed=True):
         mask: sc.DataArray             # a data value: the group is given by reference
@@ -88,8 +89,7 @@ framework: what the framework needs, it reads from the field types (see
 - No type in the params or the outputs is a ``NewType``: a spec names a
   role by a class, and a binding maps it to a key of its own.
 - A file is at a place only, possibly in a list: not inside a tuple, a
-  dict, or a dataclass, whose contents are not places, so no dataset can
-  give it.
+  dict, or a dataclass, where no dataset gives it.
 - At a field of a group, at any depth, or at an element of a list there,
   ``X`` in ``X | None`` is a group, such as ``range: WavelengthRange | None``,
   not ``start: float | None`` and ``stop: float | None``. A UI shows
@@ -97,8 +97,8 @@ framework: what the framework needs, it reads from the field types (see
   request may leave out is a field of such a group: an optional file is the
   ``file`` of a run, ``transmission: TransmissionRun | None``, and an
   optional data value is a field of a group given by reference,
-  ``mask: PixelMask | None``. A value written whole that may be empty is
-  ``[]`` or ``()``, not ``None``.
+  ``mask: PixelMask | None``. A list that may be empty is ``[]``, not
+  ``None``.
 - A data value is a field of a group, not a parameter or the element of
   one, since no request writes it at a place of its own. No field of a group
   that holds a file is a data value: no reference stands for such a group,
@@ -113,8 +113,13 @@ framework: what the framework needs, it reads from the field types (see
   group has no tag. A union is written inline only, and no reference fits
   it, so that a producer need not output a tagged class. So no field of an
   alternative is a data value.
-- A field of a group that is a dict has a JSON form, since its contents are
-  not places and no reference stands for a whole one.
+- A field of a group, at any depth, is a file, a group, a data value, or a
+  scalar, possibly with constraints, ``Annotated[float, Gt(0)]``, or a list
+  of one. A form has a widget for each scalar, and none for another type
+  with a JSON form, such as a tuple, a dict, a set, a ``TypedDict``, a
+  dataclass, or a ``RootModel``. No spec needs one: a value of several
+  parts is a group, ``range: WavelengthRange``, not
+  ``limits: tuple[float, float]``.
 - A group has no serializers, computed fields, or aliases: the record holds
   a group as the object of its places, each in the JSON form of its own
   type, and these would make the group's own JSON form differ from it. It
@@ -124,13 +129,13 @@ framework: what the framework needs, it reads from the field types (see
   accepts works only for a group written without references. It is not at
   a place inside itself, at any depth, such as a tree with
   ``children: list[Node]``, since the schema of the forms at its places
-  would not end; a tree is written whole, ``children: tuple[Node, ...]``.
+  would not end.
 - A default is a value, never a reference: what a request may write at the
   place, in a JSON form that reads back as the value, with no ``@ref``
   object at any depth; of a type without a JSON form, ``None`` or an empty
   list. It is the value that validating it gives, since pydantic does not
   validate a default: a group's default is an instance, not the object of
-  its fields, and a tuple's a tuple, not a list.
+  its fields, and an enum's a member, not its value.
 - No parameter sees another: each is validated alone, in every phase. So
   the params model has no field validators, serializers, computed fields, or
   aliases, and no ``default_factory`` that takes the other values. A list
@@ -168,10 +173,12 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Sequence
+from enum import Enum
 from types import NoneType, UnionType
 from typing import (
     Annotated,
     Any,
+    Literal,
     Self,
     TypeAliasType,
     Union,
@@ -348,7 +355,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
         a file as a reference to a dataset; a group as ``anyOf`` the object of
         its fields, each so, and a reference to an output, or one of them
         only; a union of groups as ``oneOf`` the object of the fields of each
-        alternative, never a reference; any other value as its JSON schema.
+        alternative, never a reference; a scalar as its JSON schema.
         A reference's schema is the ``@ref`` object of each kind it may be,
         with the name of the data type it must fit in ``dataType``, as the
         outputs schema has each output.
@@ -387,7 +394,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
                                         to pick a record instead
     a ``oneOf`` with a                  a choice of the alternatives of a
     ``discriminator``                   union, each with its fields
-    any other schema                    a widget for the value, inline
+    any other schema, a scalar's        an input for the value, inline
     ==================================  =================================
 
     ``dataType`` names the type of the data a picker takes, as the outputs
@@ -602,9 +609,9 @@ def _group_problems(
     serializer or a computed field, which would make the group's JSON form
     differ from the object of its places, a field with an alias, a field, or
     an element of one, typed ``X | None`` with ``X`` not a group (see
-    :func:`_optional_value`), a dict without a JSON form, whose contents are
-    not places, the problems of the places of its fields, and a default that
-    is not a value, since a field left out holds its default. Field and model
+    :func:`_optional_value`), or of a type that a form cannot show (see
+    :func:`_unshown`), the problems of the places of its fields, and a default
+    that is not a value, since a field left out holds its default. Field and model
     validators of any mode are allowed: they run whenever the group is
     validated whole (see :mod:`ess.spec.places`). A field of a group is not a
     ``NewType`` and not a union of groups: a choice between ways is a
@@ -619,7 +626,6 @@ def _group_problems(
         problems.append(f'{group.__name__}: no serializers or computed fields, {found}')
     for name, field in group.model_fields.items():
         where = f'{group.__name__}.{name}'
-        tp, _ = optional(field.annotation)
         if _has_alias(field):
             problems.append(f'{where}: a field of a group has no alias')
         elif place := _place_problems(group, name, path, seen):
@@ -630,10 +636,13 @@ def _group_problems(
                 'may leave out is a field of a group typed X | None, such as '
                 'range: WavelengthRange | None'
             )
-        elif get_origin(tp) is dict and not has_json_form(group, name):
+        elif (unshown := _unshown(group, name)) is not None:
             problems.append(
-                f'{where}: a field of a group that is a dict has a JSON form; its '
-                'contents are not places'
+                f'{where}: {type_name(unshown)} is not a scalar; a field of a group '
+                'holds a file, a group, a data value, or a scalar (int, float, str, '
+                'bool, an enum, or a Literal), or a list of one; a value of several '
+                'parts is a group, such as range: WavelengthRange, not '
+                'limits: tuple[float, float]'
             )
         elif field.default_factory_takes_validated_data:
             problems.append(
@@ -657,9 +666,41 @@ def _optional_value(group: type[BaseModel], name: str) -> bool:
     as a toggle over the fields of a group, so a field is
     ``range: WavelengthRange | None``, not ``start: float | None``.
     """
+    return optional(_one(group, name))[1] and not groups_at(group, name)
+
+
+def _unshown(group: type[BaseModel], name: str) -> Any | None:
+    """
+    The type of the field ``name`` of ``group``, or of each element of it if
+    it is a list, with ``| None`` removed, if a form cannot show it, else
+    ``None``. A form shows a file, a group, and a scalar: ``int``, ``float``,
+    ``str``, ``bool``, an enum, or a ``Literal``, possibly with constraints,
+    ``Annotated[float, Gt(0)]``. A *data value*, a type without a JSON form
+    but a dict, such as ``sc.DataArray``, no request writes: the group is
+    given by reference. Any other type, such as a tuple, a dict, a set, a
+    ``TypedDict``, a dataclass, or a ``RootModel`` with a JSON form, is
+    refused: no spec needs it, and its parts are a group's fields.
+    """
+    tp, _ = optional(_one(group, name))
+    if is_file(tp) or is_group(tp) or _is_scalar(tp):
+        return None
+    if get_origin(tp) is not dict and not has_json_form(group, name):
+        return None  # a data value
+    return tp
+
+
+def _is_scalar(tp: Any) -> bool:
+    return (
+        tp in (int, float, str, bool)
+        or get_origin(tp) is Literal
+        or (isinstance(tp, type) and issubclass(tp, Enum))
+    )
+
+
+def _one(group: type[BaseModel], name: str) -> Any:
+    """The type at one place of the field ``name``: an element, if it is a list."""
     annotation = group.model_fields[name].annotation
-    one = get_args(annotation)[0] if is_list(group, name) else annotation
-    return optional(one)[1] and not groups_at(group, name)
+    return get_args(annotation)[0] if is_list(group, name) else annotation
 
 
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
@@ -781,8 +822,8 @@ def _forms(described: Place) -> Any:
     The forms a place takes, as :func:`~ess.spec.places.place` describes it:
     a file a reference to a dataset; a group or a union the forms of the
     fields of each group written inline (see :func:`_group_forms`), and a
-    reference to an output if one fits; any other value itself, inline
-    only, with its constraints, which are never put on a reference.
+    reference to an output if one fits; a scalar itself, inline only, with
+    its constraints, which are never put on a reference.
     """
     match described:
         case File():

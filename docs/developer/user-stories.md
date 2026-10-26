@@ -34,7 +34,7 @@ Reductions take runs directly, and `CUT` and `EXPORT` read results; a separate r
 | `FIND_CENTRE` | `direct_beam: DirectBeam` | `centre: Centre` | `Centre(x=...)`, with the mean of the counts | beam-centre finding, with the centre as a group |
 | `CENTRED_MULTI` | `centre: Centre`; `sample: list[SampleWithTransmission]`, a table; `can: list[Can]`, a table | `centred` | each sample run's counts times its transmission, summed; minus the cans' counts, summed; minus `centre.x` | a SANS reduction of several runs, with a beam centre typed in or computed and a transmission per run |
 
-The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the rows for a union of groups, and for a dict at a field of a group):
+The type at a place, the value of a parameter, an element of a list, or a field of a group at any depth, decides how a request gives its value (README.md, Specs and bindings, which also has the row for a union of groups):
 
 | The type at a place | In the toy specs | Given as |
 |---|---|---|
@@ -42,8 +42,8 @@ The type at a place, the value of a parameter, an element of a list, or a field 
 | a group, no field of which is a data value | the runs, such as `Sample` and `SampleWithTransmission`; `Reduction`, `Scaling`, `Position`, `TimeRange`, `Centre`, `PublishedNormalization` | an object of its fields, each a place, or a reference to an output that fits and holds no file |
 | a group with a field that is a data value | `BeamCentre`, `ComputedNormalization`, `Transmission`, `Parts`, `Volume`, `Reflectivity` | a reference to an output that fits |
 | a list, `list[X]` | each list parameter, such as `runs` and `parts` | a list, each element a place of type `X` |
-| any other type with a JSON form | `int`, `float`, as in `bins` and `scale` | an inline value |
-| any other type, a *data value*, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
+| a scalar: `int`, `float`, `str`, `bool`, an enum, or a `Literal` | `int`, `float`, as in `bins` and `scale` | an inline value |
+| a type without a JSON form, a *data value*, such as `sc.Variable` | the fields of the groups above, such as `Volume.counts` | nothing: it is a field of a group |
 
 Each parameter is a group, a union of groups, or a list of one; a file or a number is a field of a group.
 Each run is a group of its file, `file: Path`, with a class for each role: `Sample`, `Can`, `DirectBeam`, `Vanadium`, `Background`, and `Reference`, each a subclass of `Run`:

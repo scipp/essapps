@@ -44,12 +44,13 @@ class SampleRun(BaseModel):
     file: Path
 
 
-class Selection(BaseModel):
-    window: tuple[float, float] = (0.0, 1.0)
+class Window(BaseModel):
+    start: float = 0.0
+    stop: float = 1.0
 
 
 class LoadParams(BaseModel):
-    selection: Selection = Field(default_factory=Selection)
+    window: Window = Field(default_factory=Window)
     sample: SampleRun
 
 
@@ -129,10 +130,10 @@ def start(
     backends: list[Backend] = []
 
     def load(params: LoadParams) -> ValueOutputs:
-        low, high = window = params.selection.window
+        window = params.window
         windows.append(window)
         loading.wait(timeout=5)
-        value = read_dataset(params.sample.file) * (high - low)
+        value = read_dataset(params.sample.file) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
 
     def start(path: Path) -> Client:
@@ -225,15 +226,16 @@ def test_values_are_the_same_after_a_restart_and_typed_for_the_binding(
 ) -> None:
     first = start(tmp_path / 'log')
     load = first.compute(
-        LOAD, params={'selection': {'window': (1.0, 2.0)}, **_sample(3)}
+        LOAD, params={'window': Window(start=1.0, stop=2.0), **_sample(3)}
     )
 
     again = restart(tmp_path / 'log')
     rerun = again.compute(LOAD, params=load.request.params)
 
     assert again.records()[0] == load
-    assert load.request.params['selection']['window'] == [1.0, 2.0]  # as JSON holds it
-    assert windows == [(1.0, 2.0), (1.0, 2.0)]  # as the params model declares it
+    # The log holds the JSON form; the binding gets the type the params declare.
+    assert load.request.params['window'] == {'start': 1.0, 'stop': 2.0}
+    assert windows == [Window(start=1.0, stop=2.0)] * 2
     assert again.output(rerun, 'value') == Amount(value=3.0)
 
 
@@ -374,7 +376,7 @@ def test_the_log_holds_submissions_finished_records_accumulators_and_pushes_only
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
-    client.stage(Template(LOAD, params=_sample(1), blanks=('selection',)))
+    client.stage(Template(LOAD, params=_sample(1), blanks=('window',)))
     total = _total(client)
     load = client.compute(LOAD, params=_sample(1))
     total.push(part=[load.ref('value')])

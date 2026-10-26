@@ -23,12 +23,12 @@ The checks of a request; a template, a push, and a state check part of these:
 - *Places.* A request writes a value or a reference at each place: the
   value of a parameter, an element of a list, or a field of a group, at any
   depth, through a union of groups by its tag (see :mod:`ess.spec.places`).
-  A reference anywhere else, such as in a tuple, at a tag, for a whole
-  list, or at a place whose type is not a group or a file, such as a union
-  of groups, is refused. A group is written as an object of its fields; a
-  field left out takes its default.
+  A reference at a tag, for a whole list, or at a place whose type is not a
+  group or a file, such as a scalar or a union of groups, is refused. A
+  group is written as an object of its fields; a field left out takes its
+  default.
 - *Inline values.* An inline value is allowed where the type at the place
-  has a JSON form, a group where no field of it, at any depth, is given by
+  is a scalar, a group where no field of it, at any depth, is given by
   reference only, and ``None`` where it is optional; so a file given as a
   string is refused: a file is given as ``dataset(path=...)``. Each inline
   value is validated alone, by its field, or for an element of a list by its

@@ -23,7 +23,6 @@ class Sample(BaseModel):
 
 class Reduction(BaseModel):
     bins: int = Field(50, ge=1)
-    scales: dict[str, float] = {}
     limits: Annotated[float, Gt(0)] = Field(1.0, ge=1)
     angles: list[float] = []
 
@@ -51,9 +50,8 @@ def test_a_file_takes_a_dataset() -> None:
     assert place(Sample, 'file') == File(Path)
 
 
-def test_a_value_is_written_inline_whole_with_its_constraints() -> None:
+def test_a_scalar_is_written_inline_with_its_constraints() -> None:
     assert place(Reduction, 'bins') == Value(int, (Ge(1),))
-    assert place(Reduction, 'scales') == Value(dict[str, float], ())
 
 
 def test_a_value_has_the_constraints_of_its_field_then_of_its_type() -> None:

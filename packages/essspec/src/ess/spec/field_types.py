@@ -43,6 +43,7 @@ from typing import (
 
 from pydantic import BaseModel, Field, RootModel, ValidationError, create_model
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError
+from pydantic.json_schema import GenerateJsonSchema, JsonSchemaWarningKind
 from pydantic_core import PydanticCustomError, from_json, to_json
 
 from .refs import Loc, ParamsError, positions
@@ -170,7 +171,7 @@ def is_file(tp: Any) -> bool:
 def is_group(tp: Any) -> bool:
     """
     Whether ``tp`` is a group: a pydantic model, but not a ``RootModel``,
-    which is written as its root value, not as an object of its fields.
+    whose JSON form is its root value, not an object of its fields.
     """
     return _is_model(tp) and not issubclass(tp, RootModel)
 
@@ -199,8 +200,8 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
     """
     Whether the type of the field ``name`` of ``model``, with ``| None``
     removed and for a list its element type taken, has a JSON form: pydantic
-    makes a JSON schema of it, with the config of ``model``, and it holds no
-    file.
+    makes a JSON schema of it, with the config of ``model``, of each member
+    of a union too, and it holds no file.
     """
     tp = value_type(model.model_fields[name].annotation)
     if holds_file(tp):
@@ -210,10 +211,23 @@ def has_json_form(model: type[BaseModel], name: str) -> bool:
         # TypeAdapter refuses for a model type.
         create_model(
             'Value', __config__=model.model_config, value=(tp, ...)
-        ).model_json_schema()
+        ).model_json_schema(schema_generator=_EveryMember)
     except (PydanticInvalidForJsonSchema, PydanticSchemaGenerationError):
         return False
     return True
+
+
+class _EveryMember(GenerateJsonSchema):
+    """
+    Refuses a union with a member without a JSON schema, which pydantic
+    leaves out of the union's schema: ``sc.Variable | sc.DataArray`` has
+    none, not ``anyOf: []``.
+    """
+
+    def emit_warning(self, kind: JsonSchemaWarningKind, detail: str) -> None:
+        if kind == 'skipped-choice':
+            raise PydanticInvalidForJsonSchema(detail)
+        super().emit_warning(kind, detail)
 
 
 def type_name(tp: Any) -> str:

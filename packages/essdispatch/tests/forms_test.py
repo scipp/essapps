@@ -3,6 +3,7 @@
 """The value at each place given inline or by reference, as the request chooses."""
 
 from collections.abc import Callable, Iterator
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -10,14 +11,11 @@ import pytest
 from pydantic import (
     AfterValidator,
     BaseModel,
-    ConfigDict,
     Field,
-    RootModel,
     ValidationInfo,
     field_validator,
     model_validator,
 )
-from pydantic.dataclasses import dataclass
 
 from ess.dispatch import Backend, Client, Record, Status, SubmitError, Template
 from ess.dispatch import dataset as dataset_ref
@@ -52,11 +50,10 @@ class LabelledShift(Shift):
     label: str = ''
 
 
-@dataclass(config=ConfigDict(validate_by_name=True))
-class Kind:
-    """A value, not a group, whose JSON form holds the key ``@ref``."""
+class Tagged(Enum):
+    """An enum whose JSON form is an object with the key ``@ref``."""
 
-    kind: str = Field(alias='@ref')
+    output = {'@ref': 'output'}  # noqa: RUF012
 
 
 class SampleRun(BaseModel):
@@ -101,9 +98,8 @@ class Terms(BaseModel):
     """
 
     offset: float = 0.0
-    pair: tuple[float, float] = (0.0, 0.0)
     values: list[float] = Field(default_factory=list)
-    kinds: list[Kind] = Field(default_factory=list)
+    kinds: list[Tagged] = Field(default_factory=list)
 
 
 class AddParams(BaseModel):
@@ -154,7 +150,6 @@ RUNS = _spec('runs', RunsParams, Value, tables=('runs',))
 class Reduction(BaseModel):
     bins: int = 1
     transmission: MeasuredTransmission | None = None
-    limits: tuple[float, float] = (0.0, 1.0)
 
 
 class ByRun(BaseModel):
@@ -230,18 +225,6 @@ class AnnotatedMillimetres(BaseModel):
     value: Annotated[float, AfterValidator(lambda value: value / 1000)]
 
 
-class Steps(RootModel[list[float]]):
-    """Not a group: written as its root value."""
-
-
-class Ramp(BaseModel):
-    steps: Steps
-
-
-class StepsParams(BaseModel):
-    ramp: Ramp
-
-
 class LengthParams(BaseModel):
     by_decorator: Millimetres | None = None
     by_type: AnnotatedMillimetres | None = None
@@ -295,7 +278,6 @@ DEEP = _spec('deep', DeepParams, Value)
 RANGE = _spec('range', RangeParams, Value)
 EDGES = _spec('edges', EdgesParams, Value, tables=('edges',))
 LENGTH = _spec('length', LengthParams, Value)
-STEPS = _spec('steps', StepsParams, Value)
 CENTRED = _spec('centred', CentredParams, Value)
 FIND = _spec('find', LoadParams, CentreOutputs)
 CORRECTION = _spec('correction', CorrectionParams, Value)
@@ -321,7 +303,6 @@ def add(params: AddParams) -> Value:
         value=params.shift.offset
         + terms.offset
         + (0.0 if transmission is None else transmission.fraction.value)
-        + sum(terms.pair)
         + sum(terms.values)
     )
 
@@ -386,7 +367,6 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(RANGE, lambda p: Value(value=p.range.stop.x)),
             function_binding(EDGES, lambda p: Value(value=p.edges[0].values[0])),
             function_binding(LENGTH, lambda p: Value(value=0.0)),
-            function_binding(STEPS, lambda p: Value(value=sum(p.ramp.steps.root))),
             function_binding(CENTRED, centred),
             function_binding(FIND, find),
             function_binding(CORRECTION, lambda p: Value(value=0.0)),
@@ -606,7 +586,6 @@ def test_a_reference_is_allowed_at_a_group_at_any_depth(
     assert params['reduction'] == {
         'bins': 2,
         'transmission': loaded.ref('transmission'),
-        'limits': [0.0, 1.0],
     }
     (run,) = computed.request.datasets()
     assert params['centre'] == {'kind': 'run', 'run': run}
@@ -680,18 +659,6 @@ def test_a_reference_in_an_alternative_fits_its_field(
         client.submit(
             DEEP, params={'centre': {'kind': 'given', 'shift': loaded.ref('value')}}
         )
-
-
-def test_a_reference_inside_an_inline_value_at_depth_is_refused(
-    client: Client, loaded: Record
-) -> None:
-    reduction = {'limits': [0.0, loaded.ref('value')]}
-
-    with pytest.raises(SubmitError) as raised:
-        client.submit(DEEP, params={'reduction': reduction})
-    (error,) = raised.value.errors
-    assert error.loc == ('reduction', 'limits', 1)
-    assert 'is inside a value of tuple, given inline, whole' in error.msg
 
 
 def test_a_group_without_a_reference_is_validated_whole_when_submitted(
@@ -860,20 +827,6 @@ def test_the_schema_of_a_union_requires_the_tag_of_each_alternative() -> None:
         assert 'default' not in form['properties']['kind']
 
 
-def test_a_root_model_is_written_as_its_root_value(client: Client) -> None:
-    schema = STEPS.serialize().params_schema
-    steps = schema['$defs']['Ramp']['properties']['steps']
-    assert schema['$defs'][steps['$ref'].rsplit('/', 1)[1]]['type'] == 'array'
-
-    computed = client.compute(STEPS, params={'ramp': {'steps': [1.0, 2.0]}})
-    assert computed.request.params == {'ramp': {'steps': [1.0, 2.0]}}
-    assert client.output(computed, 'value') == 3.0
-    with pytest.raises(
-        SubmitError, match=r'^ramp\.steps: Input should be a valid array'
-    ):
-        client.submit(STEPS, params={'ramp': {'steps': {'root': [1.0, 2.0]}}})
-
-
 def test_the_schema_of_a_group_that_holds_a_file_is_its_fields() -> None:
     schema = RUNS.serialize().params_schema
     row, run = schema['properties']['runs']['items'], schema['$defs']['Run']
@@ -911,7 +864,7 @@ def test_a_value_whose_json_form_reads_as_a_reference_is_refused(
         SubmitError,
         match=r'^terms\.kinds\[0\]: has a JSON form that reads as a reference$',
     ):
-        client.submit(ADD, params={'terms': {'kinds': [Kind(kind='output')]}})
+        client.submit(ADD, params={'terms': {'kinds': [Tagged.output]}})
 
 
 def test_a_group_that_holds_a_data_value_is_given_by_reference_only(
@@ -992,13 +945,6 @@ def test_a_dataset_fits_a_file_only(client: Client) -> None:
         SubmitError, match=r'^shift: dataset run:1 does not fit Shift, which is not'
     ):
         client.submit(ADD, params={'shift': dataset_ref(run=1)})
-
-
-def test_a_reference_inside_a_value_is_refused(client: Client, loaded: Record) -> None:
-    with pytest.raises(
-        SubmitError, match=r'^terms\.pair\[1\]: .* is inside a value of tuple'
-    ):
-        client.submit(ADD, params={'terms': {'pair': [1.0, loaded.ref('value')]}})
 
 
 def test_a_reference_to_a_whole_list_is_refused(client: Client, loaded: Record) -> None:

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 import re
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Literal, NewType, TypedDict
@@ -8,6 +9,7 @@ from typing import Annotated, Any, Literal, NewType, TypedDict
 import pydantic
 import pytest
 import scipp as sc
+from annotated_types import Ge, Gt
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -68,13 +70,6 @@ class Node(BaseModel):
     children: list['Node'] = []
 
 
-class WholeTree(BaseModel):
-    """A recursive group whose children are not places: written whole."""
-
-    name: str
-    children: tuple['WholeTree', ...] = ()
-
-
 class Tree(BaseModel):
     """A group that holds itself through another group."""
 
@@ -86,12 +81,6 @@ class Branch(BaseModel):
 
 
 Tree.model_rebuild()
-
-
-class Scale(BaseModel):
-    """A group that holds a union, not of groups."""
-
-    factor: int | float = 1
 
 
 class ByMonitor(BaseModel):
@@ -155,13 +144,13 @@ class CentredRun(BaseModel, arbitrary_types_allowed=True):
 
 @pydantic.dataclasses.dataclass
 class RunFiles:
-    """A dataclass, whose fields are not places."""
+    """A dataclass that holds a file."""
 
     sample: Path
 
 
 class RunPaths(TypedDict):
-    """A TypedDict, whose fields are not places."""
+    """A TypedDict that holds a file."""
 
     sample: Path
 
@@ -277,8 +266,10 @@ class Loose(BaseModel, extra='allow'):
     """A group that takes any field, ``@ref`` among them."""
 
 
-Kind = TypedDict('Kind', {'@ref': str})
-"""A value whose JSON form holds the key ``@ref``."""
+class Tagged(Enum):
+    """An enum whose JSON form is an object with the key ``@ref``."""
+
+    a = {'@ref': 'a'}  # noqa: RUF012
 
 
 def spec(**fields: Any) -> WorkflowSpec[Any, Any]:
@@ -353,9 +344,9 @@ class TestMetadata:
 
     @pytest.mark.parametrize(
         'tp',
-        [float, Mode, list[float], tuple[Reduction, Reduction], Reduction | None],
+        [float, Mode, list[float], Reduction | None],
     )
-    def test_a_group_with_a_number_an_enum_or_a_tuple_field_takes_an_inline_value(
+    def test_a_group_with_a_number_an_enum_or_a_list_field_takes_an_inline_value(
         self, tp: Any
     ) -> None:
         group = model('Group', value=(tp, ...))
@@ -450,7 +441,6 @@ class TestModelRules:
                     both=(model('Both', a=(Reduction, ...), b=(Reduction, ...)), ...),
                 )
             },
-            {'params': model('P', scale=(Scale, ...))},
             {'params': model('P', by=(By, ByMonitor(mode='monitor')))},
             {
                 'params': model(
@@ -496,7 +486,6 @@ class TestModelRules:
                     by=(Annotated[ByTime | ByPeak, Field(discriminator='mode')], ...),
                 )
             },
-            {'params': model('P', tree=(WholeTree, ...))},
         ],
     )
     def test_accepted(self, fields: dict[str, Any]) -> None:
@@ -881,15 +870,6 @@ class TestModelRules:
                 },
                 'P.run: Run.files: a file is at a place only',
             ),
-            (
-                {
-                    'params': model(
-                        'P',
-                        run=(model('Run', shifts=(dict[str, sc.Variable], {})), ...),
-                    )
-                },
-                'P.run: Run.shifts: a field of a group that is a dict has a JSON form',
-            ),
             *(
                 (
                     {
@@ -963,10 +943,11 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
-                        r=(model('R', limits=(tuple[float, float], [0.0, 1.0])), ...),
+                        r=(model('R', mode=(Mode, 'fast')), ...),
                     )
                 },
-                r'P.r: R.limits: the default \[0.0, 1.0\] is not the value validating',
+                r"P.r: R.mode: the default 'fast' is not the value validating it "
+                'gives, <Mode.fast',
             ),
             (
                 {
@@ -1040,13 +1021,13 @@ class TestModelRules:
                 'Extra inputs are not permitted',
             ),
             (
-                {'params': model('P', r=(model('R', kind=(Kind, {'@ref': 'a'})), ...))},
+                {'params': model('P', r=(model('R', kind=(str, {'@ref': 'a'})), ...))},
                 f'P.r: R.kind: {NOT_A_VALUE}: kind: .*is not a kind of reference',
             ),
             (
                 {
                     'params': model(
-                        'P', r=(model('R', kind=(Kind, {'@ref': 'dataset'})), ...)
+                        'P', r=(model('R', kind=(str, {'@ref': 'dataset'})), ...)
                     )
                 },
                 f'P.r: R.kind: {NOT_A_VALUE}: kind: .*not a reference to dataset',
@@ -1055,7 +1036,7 @@ class TestModelRules:
                 {
                     'params': model(
                         'P',
-                        r=(model('R', kind=(list[Kind], [{'@ref': 'output'}])), ...),
+                        r=(model('R', kind=(list[str], [{'@ref': 'output'}])), ...),
                     )
                 },
                 rf'P.r: R.kind: {NOT_A_VALUE}: kind\[0\]: .*not a reference to output',
@@ -1063,22 +1044,18 @@ class TestModelRules:
             (
                 {
                     'params': model(
-                        'P',
-                        r=(
-                            model('R', kinds=(tuple[Kind, Kind], ({'@ref': 'a'},) * 2)),
-                            ...,
-                        ),
+                        'P', r=(model('R', kinds=(list[Tagged], [Tagged.a])), ...)
                     )
                 },
                 rf'P.r: R.kinds: {NOT_A_VALUE}: kinds\[0\]: has a JSON form that '
-                r'reads as a reference; kinds\[1\]: has a JSON form',
+                'reads as a reference',
             ),
             (
                 {
                     'params': model(
                         'P',
                         run=(
-                            model('Run', path=(Path, ...), kind=(Kind, {'@ref': 'a'})),
+                            model('Run', path=(Path, ...), kind=(str, {'@ref': 'a'})),
                             ...,
                         ),
                     )
@@ -1142,11 +1119,6 @@ class TestModelRules:
             spec(params=params)
 
 
-class Bounds(TypedDict):
-    start: float
-    stop: float
-
-
 OPTIONAL_VALUE = re.escape('typed X | None with X not a group')
 
 
@@ -1166,10 +1138,7 @@ class TestOptionalFields:
             Path | None,
             list[float] | None,
             list[Reduction] | None,
-            dict[str, float] | None,
-            Bounds | None,
             sc.DataArray | None,
-            RootModel[list[float]] | None,
             list[float | None],
             list[Path | None],
         ],
@@ -1220,6 +1189,108 @@ class TestOptionalFields:
     def test_a_group_typed_x_or_none_is_a_field_of_a_group(self, tp: Any) -> None:
         spec(params=model('P', g=(_group_with(tp), ...)))
         spec(params=model('P', rows=(list[_group_with(tp)], [])))
+
+
+class Limits(TypedDict):
+    start: float
+    stop: float
+
+
+@pydantic.dataclasses.dataclass
+class Pair:
+    start: float
+    stop: float
+
+
+NOT_A_SCALAR = re.escape(
+    'is not a scalar; a field of a group holds a file, a group, a data value, or a '
+    'scalar (int, float, str, bool, an enum, or a Literal), or a list of one'
+)
+
+
+class TestFieldKinds:
+    @pytest.mark.parametrize(
+        ('tp', 'name'),
+        [
+            (dict[str, float], 'dict'),
+            (dict[str, sc.DataArray], 'dict'),
+            (tuple[float, float], 'tuple'),
+            (set[float], 'set'),
+            (frozenset[Mode], 'frozenset'),
+            (Limits, 'Limits'),
+            (Pair, 'Pair'),
+            (RootModel[list[float]], re.escape('RootModel[list[float]]')),
+            (int | float, re.escape('int | float')),
+            (datetime, 'datetime'),
+            (Any, 'Any'),
+            (list[list[float]], 'list'),
+            (list[tuple[float, float]], 'tuple'),
+            (list[Limits], 'Limits'),
+        ],
+    )
+    def test_a_field_of_a_group_holds_only_what_a_form_shows(
+        self, tp: Any, name: str
+    ) -> None:
+        with pytest.raises(ValueError, match=f'P.g: G.value: {name} {NOT_A_SCALAR}'):
+            spec(params=model('P', g=(_group_with(tp), ...)))
+
+    @pytest.mark.parametrize(
+        ('params', 'where'),
+        [
+            (lambda g: model('P', rows=(list[g], [])), 'P.rows: G.value'),
+            (
+                lambda g: model(
+                    'P', by=(Annotated[g | ByTime, By.__metadata__[0]], ...)
+                ),
+                'P.by: G.value',
+            ),
+            (
+                lambda g: model('P', o=(model('O', inner=(g | None, None)), ...)),
+                'P.o: O.inner: G.value',
+            ),
+            (
+                lambda g: model('P', o=(model('O', rows=(list[g], [])), ...)),
+                'P.o: O.rows: G.value',
+            ),
+        ],
+    )
+    def test_a_value_of_several_parts_is_refused_at_any_depth(
+        self, params: Any, where: str
+    ) -> None:
+        with pytest.raises(ValueError, match=f'{where}: tuple {NOT_A_SCALAR}'):
+            spec(params=params(_group_with(tuple[float, float])))
+
+    @pytest.mark.parametrize(
+        'tp',
+        [
+            int,
+            float,
+            str,
+            bool,
+            Mode,
+            Literal['a', 'b'],
+            Annotated[float, Gt(0)],
+            list[float],
+            list[Annotated[int, Ge(0)]],
+            list[Mode],
+            Path,
+            list[Path],
+            Reduction,
+            Reduction | None,
+            list[Reduction],
+            sc.DataArray,
+            list[sc.DataArray],
+            sc.Variable | sc.DataArray,
+        ],
+    )
+    def test_a_field_of_a_group_holds_a_file_a_group_a_scalar_or_a_data_value(
+        self, tp: Any
+    ) -> None:
+        spec(params=model('P', g=(_group_with(tp), ...)))
+
+    def test_a_group_with_a_data_value_takes_no_inline_value(self) -> None:
+        params = model('P', g=(_group_with(sc.Variable | sc.DataArray), ...))
+        assert not _takes_inline(spec(params=params), 'g')
 
 
 class TestTables:

@@ -61,8 +61,9 @@ The framework is essdispatch (`ess.dispatch`) and essspec (`ess.spec`), in this 
 | parameter | a field of the params model |
 | inline value | the value itself in the request, such as `Reduction(bins=100)`; the record holds its JSON form. A request gives each value in one of two forms: inline, or by reference. A type has a *JSON form* when it is not a file, holds no file, and pydantic makes a JSON schema of it with the params model's config. |
 | reference | names data that exist elsewhere: a dataset, an output of a record, or an output of an accumulator |
-| group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. A `RootModel` is not a group: a request writes it as its root value. |
+| group | a pydantic model, such as `Reduction`, the settings of one reduction step, or `Sample`, a run and the values given next to it. A request writes a group as an object of its fields. A `RootModel` is not a group. |
 | place | the value of a parameter, an element of a list, or a field of a group, at any depth, such as `sample.file`. The type at a place decides what a request writes there: a value, a reference, or, at a data value, nothing (see Specs and bindings). |
+| scalar | an `int`, `float`, `str`, `bool`, an enum, or a `Literal`, possibly with constraints, such as `Annotated[float, Gt(0)]`. A form has a widget for each; a request writes it inline. |
 | data value | a value of a type that is neither a file, a group, a union of groups, a list, nor a dict, and has no JSON form, such as a scipp array. It is a field of a group, which a request gives by reference only. |
 | fits | a reference fits a place when the type of the data it names can be the value at the place (see References) |
 | binding | what the backend calls to compute a spec's requests (see What a binding provides) |
@@ -158,9 +159,18 @@ The type at the place decides which of the two it accepts, with `| None` removed
 | a group | `Reduction`, `Sample`, `ComputedTransmission` | no, if a field is a data value; else an object of its fields, each a place | to an output that fits and holds no file |
 | a union of groups, as a parameter or the element of a list parameter | `GivenCentre \| FindCentre` | an object of one alternative's fields, with its tag, as for a group | no |
 | a list, `list[X]` | a list parameter | a list, each element a place of type `X` | no |
-| at a field of a group: a dict with a JSON form | `dict[str, float]` | yes, whole: its contents are not places | no |
-| any other type with a JSON form | `int`, `float`, an enum, `tuple[float, float]` | yes | no |
-| any other type, a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
+| a scalar: `int`, `float`, `str`, `bool`, an enum, or a `Literal` | the field `bins` of a `Reduction` | yes | no |
+| a *data value* | `sc.DataArray`, as the field `transmission` of `ComputedTransmission` | no: nothing is written at it | no: it is a field of a group, which is given by reference |
+
+A field of a group holds nothing else, since a form has a widget for these only.
+A value of several parts is a group, so that each part is a place with a widget of its own:
+
+```python
+limits: tuple[float, float]                       # refused by WorkflowSpec: not a scalar
+range: WavelengthRange                            # a group of start and stop
+scales: dict[str, float]                          # refused by WorkflowSpec: not a scalar
+scales: list[BankScale]                           # a list of groups of bank and scale
+```
 
 A file is given by reference to a dataset only, so that the dataset source checks access and the record holds the dataset's identity.
 For the same reason a reference to an output whose type holds a file, such as an output of type `Sample`, is refused.
@@ -203,7 +213,6 @@ No type in the params or the outputs is a `NewType`, at any depth: a class names
 A sample run and a can run both hold a file, and each is a class of its own, `Sample` and `Can`, since a `PipelineBinding` keys a parameter by its class.
 `NewType`s, and other sciline keys such as esssans' `Filename[SampleRun]`, live in the workflow package and in the binding (see What a binding provides), never in the spec.
 
-The contents of a tuple, a set, a dict, a `TypedDict`, or a dataclass are not places: such a value is written whole, inline, such as `'limits': [0.1, 0.5]` for `tuple[float, float]`.
 A parameter, or the element of a list parameter, may be a discriminated union of groups, `Annotated[A | B, Field(discriminator='kind')]`, in which each alternative has the *tag* field `kind`, typed as a `Literal` of one string, its own, such as `Literal['find']`.
 The request writes the fields of one alternative with its tag, inline, since the tag says which alternative's fields the object has.
 It writes the tag even where the alternative has a default for it, and the params schema requires it:
@@ -268,11 +277,12 @@ A value *round-trips* when its JSON form reads back as the value.
 - No type in the params or the outputs is a `NewType`, at any depth: a spec names a role by a class, and a binding maps it to a key of its own.
 - Each output is a type, possibly typed `X | None`, or a list or a dict of one.
 - A file is at a place only, possibly in a list: not inside a tuple, a dict, or a dataclass, where no dataset can give it.
-- At a field of a group, at any depth, or at an element of a list there, `X` in `X | None` is a group, such as `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`. A UI shows `X | None` as a toggle over the fields of a group. So a value that a request may leave out is a field of such a group: an optional file is the `file` of a run, `transmission: TransmissionRun | None`, and an optional data value is a field of a group given by reference, `mask: PixelMask | None`. A value written whole that may be empty is `[]` or `()`, not `None`.
+- A field of a group, at any depth, is a file, a group, a data value, or a scalar, or a list of one. No other type, such as a tuple, a dict, a set, a `TypedDict`, a dataclass, or a `RootModel`, is at a field of a group: a form has no widget for it, and its parts are the fields of a group.
+- At a field of a group, at any depth, or at an element of a list there, `X` in `X | None` is a group, such as `range: WavelengthRange | None`, not `start: float | None` and `stop: float | None`. A UI shows `X | None` as a toggle over the fields of a group. So a value that a request may leave out is a field of such a group: an optional file is the `file` of a run, `transmission: TransmissionRun | None`, and an optional data value is a field of a group given by reference, `mask: PixelMask | None`. A list that may be empty is `[]`, not `None`.
 - A union of groups is a parameter, or the element of a list parameter, never a field of a group. It is discriminated by the name of its tag field, not by a callable. The tag field of each alternative is a `Literal` of one string, its own, without an alias. A union that holds a group holds groups only, not `GivenCentre | float`: a value of a type that is not a group has no tag. No field of an alternative is a data value: a request writes a union inline.
 - No field of a group that holds a file is a data value: no reference stands for such a group, so a request writes it field by field, and no request writes a data value. A group in it that holds no file may have a field that is a data value, since a request gives that group by reference, as in `Sample.transmission: ComputedTransmission`.
-- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`; a tree is written whole, `children: tuple[Node, ...] = ()`.
-- A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields.
+- A group has no serializers, computed fields, or aliases: the record holds a group as the object of its places, each in the JSON form of its own type, and these would make the group's own JSON form differ from it. A group may have field and model validators of any mode, which run when the group is validated whole (see Requests and records, Validation). It is not at a place inside itself, at any depth, such as a tree with `children: list[Node]`, since the params schema of its places would not end.
+- A default is a value, never a reference: what a request may write at the place, which round-trips and holds no `@ref` object at any depth; of a type without a JSON form, `None` or `[]`. It is the value that validating it gives, since pydantic does not validate a default: a group's default is an instance, not the object of its fields, and an enum's a member, not its value.
 - A table has no default (see Combining runs: tables).
 - The params model has no field validators, serializers, computed fields, or aliases, and no `default_factory` that takes the other values. A list parameter carries only length constraints, such as `Field(min_length=2)`. The params model may have model validators, but the framework never calls them.
 
@@ -408,7 +418,7 @@ A file is always given by reference: `dataset(path=...)` names a file by its pat
 `record.ref(output, key)` names one element of a list or dict output: by its index for a list, `key='2'`, and by its key for a dict.
 A key that the output lacks fails in the call phase.
 
-A reference stands for the value at a place whose type is a group or a file, such as `beam_centre`, `sample.file`, or `sample[2].transmission`: never for a union of groups, a value of another type, a whole list, a tag of a union, or a position inside a value given inline, such as an element of a tuple.
+A reference stands for the value at a place whose type is a group or a file, such as `beam_centre`, `sample.file`, or `sample[2].transmission`: never for a union of groups, a value of another type, a whole list, or a tag of a union.
 Its JSON form is an object with the key `@ref`, which names its kind:
 
 ```json
@@ -419,7 +429,7 @@ Its JSON form is an object with the key `@ref`, which names its kind:
 
 The key `@ref` is reserved at every depth: an object with it is a reference.
 So the framework finds the references of a request without the spec, in every array and every object.
-With the spec, it refuses an `@ref` object that is not at a place, such as an element of a `tuple`, and an inline value or a default whose JSON form holds the key `@ref`.
+With the spec, it refuses an inline value or a default whose JSON form holds the key `@ref`.
 
 A reference *fits* a place when the type of the data it names can be the value at the place.
 `| None` is removed on both sides.

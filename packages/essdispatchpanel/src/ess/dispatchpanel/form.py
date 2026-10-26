@@ -20,7 +20,8 @@ Place                      Widget
                            inline, an output of a record that fits
                            ``Ways.record``, and ``None``. A record is offered
                            while an output fits.
-:class:`Value`             an input for the value
+:class:`Value`             an input for the scalar, or a picker of its
+                           values
 =========================  ================================================
 
 A record's output fits if its type, from the record's spec, fits the place,
@@ -44,7 +45,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Literal, get_args, get_origin
+from typing import Any, get_args
 
 import panel as pn
 from pydantic import BaseModel
@@ -204,9 +205,10 @@ class _File:
 
 class _Scalar:
     """
-    A value written inline, such as a number: an input that may be unset. A
-    choice of a few values, such as a ``bool``, is a picker with an option
-    for none, so that it may start unset.
+    A scalar, the value at any place of a valid spec that is not a file, a
+    group, or a union: an ``int``, ``float``, or ``str`` input that may be
+    unset, or for a ``bool``, an enum, or a ``Literal``, a picker of its
+    values with an option for none, so that it may start unset.
     """
 
     def __init__(self, label: str, info: FieldInfo, tp: Any) -> None:
@@ -228,10 +230,8 @@ class _Scalar:
             self.widget = self._picker({'True': True, 'False': False}, options)
         elif isinstance(tp, type) and issubclass(tp, Enum):
             self.widget = self._picker({m.name: m for m in tp}, options)
-        elif get_origin(tp) is Literal:
+        else:  # a Literal
             self.widget = self._picker({str(v): v for v in get_args(tp)}, options)
-        else:
-            raise NotImplementedError(f'{label}: no widget for {tp}')
         self.set(UNSET)
 
     @staticmethod
