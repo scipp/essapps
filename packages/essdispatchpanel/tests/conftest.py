@@ -1,0 +1,172 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+Toy specs with each kind of place, bound on a client of ``local()``.
+
+``FIND`` outputs a ``BeamCentre``, a plain group, which ``REDUCE`` takes
+typed in or from a record. ``REDUCE`` also takes a group with defaults, a
+group with a file and no default, and a union of groups. It divides the
+counts of its sample run by the sample's thickness, so a thickness of 0
+fails the record. ``OPTIONS`` takes a value of each type that has an input,
+and a group typed ``X | None`` without a default.
+"""
+
+from collections.abc import Iterator
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+import pytest
+from pydantic import BaseModel, Field
+
+from ess.dispatch import Client, local
+from ess.dispatch.testing import FakeDatasets, read_dataset
+from ess.spec import DatasetRef, WorkflowSpec, function_binding
+
+
+class Run(BaseModel):
+    file: Path
+
+
+class BeamCentre(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+
+
+class FindParams(BaseModel):
+    run: Run
+
+
+class FindOutputs(BaseModel):
+    centre: BeamCentre
+
+
+class Norm(StrEnum):
+    monitor = 'monitor'
+    none = 'none'
+
+
+class Reduction(BaseModel):
+    bins: int = Field(default=2, gt=0)
+    norm: Norm = Norm.monitor
+
+
+class Sample(BaseModel):
+    file: Path
+    thickness: float
+
+
+class Front(BaseModel):
+    kind: Literal['front'] = 'front'
+    distance: float = 1.0
+
+
+class Rear(BaseModel):
+    kind: Literal['rear'] = Field('rear', title='Rear bank')
+    tilt: float = 0.0
+
+
+class ReduceParams(BaseModel):
+    reduction: Reduction = Field(default_factory=Reduction)
+    sample: Sample
+    beam_centre: BeamCentre = Field(default_factory=BeamCentre)
+    detector: Annotated[Front | Rear, Field(discriminator='kind')] = Front()
+
+
+class Total(BaseModel):
+    value: float
+
+
+class ReduceOutputs(BaseModel):
+    total: Total
+
+
+class Settings(BaseModel):
+    flag: bool
+    verbose: bool = False
+    name: str = 'run'
+    note: str = ''
+    count: int
+    mode: Literal['fast', 'slow'] = 'fast'
+
+
+class OptionsParams(BaseModel):
+    settings: Settings
+    direct_beam: Run | None
+
+
+type Spec = WorkflowSpec[Any, Any]
+
+FIND: Spec = WorkflowSpec(
+    name='find',
+    version=1,
+    title='Find centre',
+    description='The beam centre in a run.',
+    params=FindParams,
+    outputs=FindOutputs,
+)
+REDUCE: Spec = WorkflowSpec(
+    name='reduce',
+    version=1,
+    title='Reduce',
+    description='The counts of a sample run per thickness.',
+    params=ReduceParams,
+    outputs=ReduceOutputs,
+)
+OPTIONS: Spec = WorkflowSpec(
+    name='options',
+    version=1,
+    title='Options',
+    description='The count of the settings.',
+    params=OptionsParams,
+    outputs=ReduceOutputs,
+)
+
+
+def find(params: FindParams) -> FindOutputs:
+    return FindOutputs(centre=BeamCentre(x=read_dataset(params.run.file)['x']))
+
+
+def reduce(params: ReduceParams) -> ReduceOutputs:
+    counts = read_dataset(params.sample.file)['counts']
+    return ReduceOutputs(total=Total(value=counts / params.sample.thickness))
+
+
+def options(params: OptionsParams) -> ReduceOutputs:
+    return ReduceOutputs(total=Total(value=params.settings.count))
+
+
+@pytest.fixture
+def datasets(tmp_path: Path) -> FakeDatasets:
+    return FakeDatasets('p1', tmp_path)
+
+
+@pytest.fixture
+def run(datasets: FakeDatasets) -> DatasetRef:
+    return datasets.measure(101, {'counts': 6.0, 'x': 1.5}, role='sample')
+
+
+@pytest.fixture
+def client(datasets: FakeDatasets) -> Iterator[Client]:
+    bind = [
+        function_binding(FIND, find),
+        function_binding(REDUCE, reduce),
+        function_binding(OPTIONS, options),
+    ]
+    with local(proposal='p1', datasets=datasets, bind=bind) as client:
+        yield client
+
+
+@pytest.fixture
+def find_spec() -> Spec:
+    return FIND
+
+
+@pytest.fixture
+def reduce_spec() -> Spec:
+    return REDUCE
+
+
+@pytest.fixture
+def options_spec() -> Spec:
+    return OPTIONS
